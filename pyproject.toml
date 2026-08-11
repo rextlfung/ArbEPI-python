@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arbepi"
+version = "0.1.0"
+description = "Python/pypulseq port of ArbEPI: 3D-EPI sequences from arbitrary ky-kz sampling masks"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pypulseq>=1.5.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.5",
+    "hdf5storage>=0.2",
+    "numba>=0.66.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools]
+py-modules = ["params", "trap4ge", "mask2epi", "plotting", "ge_export"]
+
+[tool.setuptools.packages.find]
+include = ["sampling*", "lib*", "sequences*"]
