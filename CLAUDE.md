@@ -115,16 +115,29 @@ the Python port must `copy.deepcopy(sys)` first (see
 `lib/make_readout_grads.py`, `sequences/arbepi.py`'s `sys_seq`) to avoid
 mutating the shared system object.
 
-**GE hardware constants duplicate `Params.sys`, and don't auto-sync.**
-`g_max`/`slew_max` (G/cm, G/cm/ms — used only by `ge_export.py`'s
-`pge2.check` via `PNSwt`) are separate fields from `sys.max_grad`/
-`sys.max_slew` (T/m, T/m/s — used for `.seq` generation). Changing one
-without the other silently produces a `.seq` file that builds and passes
-`seq.check_timing()` fine, then fails MATLAB's `pge2.check` at `--ge`
-export time with a hardware- or PNS-limit error (`g_max` uses a *different
-unit* than `sys.max_grad`: `1 G/cm = 10 mT/m`). PNS is a physiological
-(not hardware) limit — don't silently raise `PNSwt` to make an error go
-away; `PNSwt = [0, 0, 0]` is only valid for phantom/non-human scanning.
+**Hardware limits come from one place: `scanners.py`'s `ScannerSpec`.**
+`load_params(scanner=...)` looks up a `ScannerSpec` (currently `'GE_MR750'`
+or `'GE_UHP'`) and derives *both* `sys.max_grad`/`sys.max_slew` (T/m, T/m/s
+— used for `.seq` generation) and `g_max`/`slew_max` (G/cm, G/cm/ms — used
+only by `ge_export.py`'s `pge2.check`) from the same `spec.max_grad`/
+`spec.max_slew` numbers, so they cannot drift out of sync the way they
+used to (see git history for the bug this replaced: `slew_max` had been
+hand-set to a value 25% higher than `sys.max_slew` actually specified).
+`ScannerSpec.ge_coil` (e.g. `'xrm'`, `'hrmbuhp'`) is passed straight
+through to MATLAB's `pge2.opts(...)` and `check_grad_acoustics(...)`,
+which each carry their own more detailed per-coil tables (PNS SAFE-model
+chronaxie/rheobase/alpha, and acoustic resonance frequencies respectively)
+keyed off that same string — see `../PulCeq/matlab/+pge2/opts.m`'s header
+comment for the authoritative table if adding a new scanner. `PNSwt`
+stays a separate `Params` field (not part of `ScannerSpec`) since it's
+scan-context — phantom vs. human — not a hardware constant; PNS is a
+physiological limit, so don't silently raise `PNSwt` to make an error go
+away — `PNSwt = [0, 0, 0]` is only valid for phantom/non-human scanning.
+`ge_export.check_ge_feasibility()` runs MATLAB's hardware/PNS/acoustic
+checks (`pge2.check` + `check_grad_acoustics`) without writing a `.pge`
+file — `main.py --ge` calls it on all four sequences before exporting any
+of them, so infeasibility surfaces immediately rather than after several
+full exports have already run.
 
 **`calc_te_tr_delays.py` only warns, never raises**, if the prescribed
 `TE`/`TR` are unachievable — it silently falls back to zero padding delay,

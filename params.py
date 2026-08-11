@@ -12,6 +12,8 @@ from dataclasses import dataclass
 import numpy as np
 import pypulseq as pp
 
+from scanners import SCANNERS
+
 
 @dataclass
 class FatsatParams:
@@ -85,13 +87,17 @@ class Params:
     # Output
     output_dir: str
 
-    # GE MR750 hardware constants (unused for .seq generation; kept for a
-    # future .pge-export bridge, see arbepi/ge_export.py)
+    # GE hardware constants, derived from the selected ScannerSpec (see
+    # scanners.py) -- unused for .seq generation except g_max/slew_max/
+    # ge_coil, which are used only by ge_export.py's GE feasibility check
+    # and .pge export, not by pypulseq .seq generation (that uses `sys`
+    # above, built from the same ScannerSpec so the two can't drift apart).
     psd_rf_wait: float
     psd_grd_wait: float
     b1_max: float
     g_max: float
     slew_max: float
+    ge_coil: str
     PNSwt: np.ndarray
     pislquant: int
 
@@ -103,13 +109,20 @@ class Params:
     rand_gaussian_sigma: np.ndarray | None
 
 
-def load_params(output_dir: str = 'output') -> Params:
+def load_params(scanner: str = 'GE_UHP', output_dir: str = 'output') -> Params:
+    """
+    scanner : one of scanners.SCANNERS' keys (currently 'GE_MR750',
+        'GE_UHP') -- selects the gradient/RF hardware limits used both to
+        build the .seq file and, if `--ge` is used, to check/export it for
+        GE. See scanners.py for where these values come from.
+    """
+    spec = SCANNERS[scanner]
     rf_ringdown_margin = 200e-6  # s
 
     sys = pp.Opts(
-        max_grad=100, # only true for UHP
+        max_grad=spec.max_grad,
         grad_unit='mT/m',
-        max_slew=200,
+        max_slew=spec.max_slew,
         slew_unit='T/m/s',
         rf_dead_time=100e-6,
         rf_ringdown_time=60e-6 + rf_ringdown_margin,
@@ -176,14 +189,18 @@ def load_params(output_dir: str = 'output') -> Params:
 
     Ncoils = 32
 
-    # GE MR750 hardware parameters (reserved for future .pge export)
-    psd_rf_wait = 150e-6
-    psd_grd_wait = 120e-6
-    b1_max = 0.25
-    g_max = 10
-    slew_max = 25
+    # GE hardware parameters, derived from `spec` (see scanners.py) so
+    # they can't drift out of sync with `sys.max_grad`/`sys.max_slew`
+    # above -- g_max/slew_max convert mT/m -> G/cm and T/m/s -> G/cm/ms
+    # (1 G/cm = 10 mT/m, 1 G/cm/ms = 10 T/m/s).
+    psd_rf_wait = spec.psd_rf_wait
+    psd_grd_wait = spec.psd_grd_wait
+    b1_max = spec.b1_max
+    g_max = spec.max_grad / 10
+    slew_max = spec.max_slew / 10
+    ge_coil = spec.ge_coil
     PNSwt = np.array([0.0, 0.0, 0.0]) # zero for phantom
-    pislquant = 10
+    pislquant = spec.pislquant
 
     # Sampling mask parameters
     sampling_method = 'pd'
@@ -243,6 +260,7 @@ def load_params(output_dir: str = 'output') -> Params:
         b1_max=b1_max,
         g_max=g_max,
         slew_max=slew_max,
+        ge_coil=ge_coil,
         PNSwt=PNSwt,
         pislquant=pislquant,
         sampling_method=sampling_method,

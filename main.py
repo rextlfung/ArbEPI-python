@@ -12,14 +12,15 @@ import os
 
 from params import load_params
 from sampling.gen_sampling_masks import gen_sampling_masks
+from scanners import SCANNERS
 from sequences.arbepi import generate_arbepi
 from sequences.epical import generate_epical
 from sequences.gre import generate_gre
 from sequences.noise import generate_noise
 
 
-def main(export_ge: bool = False, plot: bool = False):
-    params = load_params()
+def main(scanner: str = 'GE_UHP', export_ge: bool = False, plot: bool = False):
+    params = load_params(scanner=scanner)
 
     # 1. Generate sampling masks and main EPI sequence
     omegas = gen_sampling_masks(params.R, params)
@@ -37,14 +38,22 @@ def main(export_ge: bool = False, plot: bool = False):
     if export_ge:
         # Requires a local MATLAB install with pulseq/toppe/PulCeq/ArbEPI
         # checked out as sibling directories — see ge_export.py / README.
-        from ge_export import export_to_ge
+        from ge_export import check_ge_feasibility, export_to_ge
 
-        for name in ('ArbEPI', 'EPIcal', 'GRE', 'noise'):
-            export_to_ge(
-                os.path.join(params.output_dir, f'{name}.seq'),
-                os.path.join(params.output_dir, name),
-                params,
-            )
+        seq_paths = {
+            name: os.path.join(params.output_dir, f'{name}.seq')
+            for name in ('ArbEPI', 'EPIcal', 'GRE', 'noise')
+        }
+
+        # Check all four sequences for GE hardware/PNS/acoustic-resonance
+        # feasibility before writing any .pge file, so an infeasible
+        # sequence is caught up front rather than after several full
+        # exports have already run.
+        for seq_path in seq_paths.values():
+            check_ge_feasibility(seq_path, params)
+
+        for name, seq_path in seq_paths.items():
+            export_to_ge(seq_path, os.path.join(params.output_dir, name), params)
 
     if plot:
         # Diagnostic sampling-mask/trajectory/PSF plots — see plot_last_run.py.
@@ -56,6 +65,11 @@ def main(export_ge: bool = False, plot: bool = False):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        '--scanner', choices=list(SCANNERS), default='GE_UHP',
+        help='scanner to build the sequence for (see scanners.py); determines both the '
+             '.seq gradient/RF hardware limits and the --ge export target (default: GE_UHP)',
+    )
+    parser.add_argument(
         '--ge', action='store_true', dest='export_ge',
         help='also export each sequence to GE .pge format via a local MATLAB install',
     )
@@ -64,4 +78,4 @@ if __name__ == '__main__':
         help='also write diagnostic sampling-mask/trajectory/PSF plots (see plot_last_run.py)',
     )
     args = parser.parse_args()
-    main(export_ge=args.export_ge, plot=args.plot)
+    main(scanner=args.scanner, export_ge=args.export_ge, plot=args.plot)

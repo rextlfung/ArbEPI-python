@@ -129,16 +129,19 @@ end-to-end on a small test sequence and on a full-scale default-params run
 the real `seq2ceq`/`pge2.check`/`pge2.writeceq` toolchain — no MATLAB-side
 errors on either.
 
-**If you change `params.py`'s `sys.max_grad`/`sys.max_slew`** (used for
-`.seq` generation), also check `g_max`/`slew_max`/`PNSwt` (separate fields,
-used only here, by MATLAB's `pge2.check`) — they don't auto-sync, and note
-the unit difference: `g_max` is in G/cm, `sys.max_grad` in mT/m
-(`1 G/cm = 10 mT/m`). A `.seq` file can build and pass
-`seq.check_timing()` cleanly and still fail `pge2.check` at export time
-with a hardware-limit or PNS error if these have drifted out of sync with
-each other. PNS is a physiological safety limit, not a hardware one —
-`PNSwt = [0, 0, 0]` disables it and is only appropriate for phantom/
-non-human scanning.
+**Hardware limits are keyed off `--scanner`** (`GE_MR750` or `GE_UHP`, see
+`scanners.py`): `load_params(scanner=...)` derives *both* the `sys.max_grad`/
+`sys.max_slew` used for `.seq` generation and the `g_max`/`slew_max`/
+`ge_coil` used by MATLAB's `pge2.check` from the same `ScannerSpec`, so
+they can't drift out of sync with each other. `main.py --ge` also calls
+`ge_export.check_ge_feasibility()` on all four sequences — running
+`pge2.check` + `check_grad_acoustics` without writing a `.pge` — *before*
+exporting any of them, so a hardware-limit, PNS, or acoustic-resonance
+infeasibility surfaces immediately instead of after several full exports.
+PNS is a physiological safety limit, not a hardware one — `PNSwt` (a
+separate `Params` field, not part of `ScannerSpec`, since it's
+phantom-vs-human scan context) defaults to `[0, 0, 0]`, which disables the
+PNS check and is only appropriate for phantom/non-human scanning.
 
 ## Architecture
 
