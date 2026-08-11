@@ -13,7 +13,7 @@ from typing import Sequence
 
 import pypulseq as pp
 
-from trap4ge import trap4ge
+from lib.trap4ge import trap4ge
 
 
 @dataclass

@@ -57,7 +57,7 @@ def main(scanner: str = 'GE_UHP', export_ge: bool = False, plot: bool = False):
 
     if plot:
         # Diagnostic sampling-mask/trajectory/PSF plots — see plot_last_run.py.
-        from plot_last_run import plot_last_run
+        from plotting.plot_last_run import plot_last_run
 
         plot_last_run(params)
 

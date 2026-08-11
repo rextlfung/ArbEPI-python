@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from mask2epi import _center_out, mask2epi
+from lib.mask2epi import _center_out, mask2epi
 from sampling.caipi_sample import caipi_sample
 
 

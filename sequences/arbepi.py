@@ -5,7 +5,7 @@ Outputs: <output_dir>/ArbEPI.seq (Pulseq format), <output_dir>/samp_locs.mat
 
 GE `.pge` export (write_to_ge.m) and the trailing MATLAB plotting figures
 are intentionally not ported here — see ge_export.py (stage 8 of the
-port plan) and plotting.py respectively.
+port plan) and plotting/plotting.py respectively.
 """
 
 import copy
@@ -22,7 +22,7 @@ from lib.make_fatsat_rf import make_fatsat_rf
 from lib.make_prephasers import make_prephasers
 from lib.make_readout_grads import make_readout_grads
 from lib.make_spoilers import make_spoilers
-from mask2epi import mask2epi
+from lib.mask2epi import mask2epi
 from params import Params
 
 

@@ -6,9 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Python/pypulseq port of [../ArbEPI](../ArbEPI) (MATLAB/Pulseq). Generates
 fast, vendor-agnostic 3D-EPI MRI pulse sequences from arbitrary 2D
-`(ky, kz)` sampling masks in the phase-encode-partition plane. Layout is
-flat (no top-level package directory) to mirror `../ArbEPI`, which also has
-`params.m`/`main.m` at its repo root alongside `src/`/`lib/`.
+`(ky, kz)` sampling masks in the phase-encode-partition plane. Only entry
+points and global config (`main.py`, `params.py`, `scanners.py`,
+`ge_export.py`) sit at the repo root, mirroring `../ArbEPI` having
+`params.m`/`main.m` directly at its own root — everything else lives under
+`lib/`/`sequences/`/`sampling/`/`plotting/`, matching `../ArbEPI`'s
+`src/`/`lib/` split (see README.md's Architecture section for the full
+layout).
 
 ## Commands
 
@@ -16,7 +20,7 @@ flat (no top-level package directory) to mirror `../ArbEPI`, which also has
 uv sync --extra test               # install deps into .venv (see uv.lock)
 uv run python main.py              # generate all 4 sequences into output/ using params.py defaults
 uv run python main.py --ge         # also export each sequence to GE .pge via a local MATLAB install
-uv run python main.py --plot       # also write diagnostic plots (see plot_last_run.py) into output/
+uv run python main.py --plot       # also write diagnostic plots (see plotting/plot_last_run.py) into output/
 uv run pytest tests/               # run the unit test suite
 uv run pytest tests/test_mask2epi.py -v   # run a single test file
 ```
@@ -57,7 +61,7 @@ params.py (load_params())  ──►  gen_sampling_masks(R, params)  ──►  
 `sequences/gre.generate_gre()` (coil sensitivity maps) is independent — it
 doesn't touch `samp_locs.mat`.
 
-### Index convention — read this before touching mask2epi.py or the sequence files
+### Index convention — read this before touching lib/mask2epi.py or the sequence files
 
 Internal computation is **0-based** throughout (`mask2epi`'s `schedule`,
 sampling masks, etc.) — a deliberate departure from the 1-based MATLAB
@@ -77,7 +81,7 @@ touching these files, never `scipy.io`.
 
 ### Key design decisions (carried over from ../ArbEPI, still apply here)
 
-**`mask2epi`** (`mask2epi.py`) is the core algorithm. It partitions a 2D
+**`mask2epi`** (`lib/mask2epi.py`) is the core algorithm. It partitions a 2D
 `(Ny, Nz)` sampling mask into `Nshots` EPI trajectories, each of length
 `ETL`. Ordering constraints: samples near ky = 0 are spread center-out
 across shots (via `_center_out`, an `fftshift`-based interleave — MATLAB's
@@ -99,7 +103,7 @@ exactly (same `make_readout_grads` call, same schedule-derived
 `max_ky_step`/`max_kz_step`) but sets all blip scale factors to 0, so it
 acquires unencoded lines at k-space center for EPI ghost correction.
 
-**`trap4ge.py`** (ported from `../PulCeq/matlab/trap4ge.m`) rounds every
+**`lib/trap4ge.py`** (ported from `../PulCeq/matlab/trap4ge.m`) rounds every
 gradient's rise/flat/fall times up to `params.crt` (20µs, the common raster
 of Siemens' 10µs and GE's 4µs). Every gradient in the sequence passes
 through it before being added to a block — this is a GE-hardware-timing
@@ -150,7 +154,7 @@ don't hand-derive feasibility, call `calc_te_tr_delays` directly (or scan
 across candidate `ETL` values) to check.
 
 **`mask2epi`'s `Nshots*ETL` must exactly equal the sampling mask's total
-sample count** (`mask2epi.py:71`'s assertion) — `Nshots = ceil(Ny*Nz/R/ETL)`
+sample count** (`lib/mask2epi.py:71`'s assertion) — `Nshots = ceil(Ny*Nz/R/ETL)`
 doesn't guarantee this holds for an arbitrary `ETL`; picking a new `ETL`
 without also checking this divides-evenly constraint will crash `mask2epi`,
 not just produce a suboptimal schedule.
@@ -174,7 +178,7 @@ not just produce a suboptimal schedule.
   `lib/make_fatsat_rf.py` uses pypulseq's built-in `make_gauss_pulse`
   instead — simpler, less sharp spectral profile, no bit-exact-waveform
   requirement.
-- **Plotting** (`plotting.py`): static, non-interactive matplotlib
+- **Plotting** (`plotting/plotting.py`): static, non-interactive matplotlib
   equivalents of the sampling-mask/trajectory/PSF plots. The interactive
   scroll/slider mask viewer from the MATLAB repo is not ported — no
   algorithmic content worth preserving there. `plot_one_tr` is an
@@ -189,7 +193,7 @@ not just produce a suboptimal schedule.
   per-frame breakdown) rather than the fine continuous line — see that
   function's docstring for why (a sub-sequence block-extraction approach
   was tried and abandoned after finding an unexplained ~16-22 m^-1
-  discrepancy on the readout axis). `plot_last_run.py` drives all four
+  discrepancy on the readout axis). `plotting/plot_last_run.py` drives all four
   plotting functions against the most recent `output/` run and is wired
   into `main.py --plot`.
 - **Poisson-disc sampling** (`sampling/pd_sample.py`): a local

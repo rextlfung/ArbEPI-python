@@ -21,7 +21,7 @@ dependencies = [
 test = ["pytest"]
 
 [tool.setuptools]
-py-modules = ["params", "trap4ge", "mask2epi", "plotting", "ge_export"]
+py-modules = ["params", "scanners", "ge_export"]
 
 [tool.setuptools.packages.find]
-include = ["sampling*", "lib*", "sequences*"]
+include = ["sampling*", "lib*", "sequences*", "plotting*"]

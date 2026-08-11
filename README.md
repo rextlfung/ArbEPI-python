@@ -20,17 +20,18 @@ the original MATLAB repo are handled differently — see below.
   `toppe.utils.rf.makeslr` (min-phase SLR), which has no Python equivalent.
   This port uses pypulseq's built-in `make_gauss_pulse` instead — a simpler
   design with a less sharp spectral profile.
-- **Plotting** (`plotting.py`) covers the sampling mask, k-space trajectory,
+- **Plotting** (`plotting/plotting.py`) covers the sampling mask, k-space trajectory,
   point-spread-function, and single-TR pulse-diagram plots. The interactive
   scroll/slider mask viewer from the MATLAB repo is not ported. The
   single-TR plot (`plot_one_tr`) isn't a custom pulse-diagram renderer —
   it's a thin wrapper around pypulseq's own `Sequence.plot()`. Mask/PSF/
   trajectory plots take an optional `frame_idx` to select one frame out of
-  a multi-frame run; see `plotting.py`'s module docstring for why the
+  a multi-frame run; see `plotting/plotting.py`'s module docstring for why the
   per-frame trajectory plot draws through exact-sliced ADC samples rather
   than the fine continuous line pypulseq's `calculate_kspace()` returns
-  for the whole sequence. `plot_last_run.py` drives all of this against
-  the most recent `output/` run (`python main.py --plot`, or standalone).
+  for the whole sequence. `plotting/plot_last_run.py` drives all of this against
+  the most recent `output/` run (`python main.py --plot`, or standalone via
+  `python -m plotting.plot_last_run`).
 - **Poisson-disc sampling** (`sampling/pd_sample.py`) is a local
   reimplementation, not a dependency on [SigPy](https://github.com/mikgroup/sigpy)
   (whose `sigpy.mri.poisson` both `../ArbEPI/lib/pd_sample.m` and this
@@ -97,7 +98,7 @@ and numba (see `pyproject.toml`; versions pinned in `uv.lock`).
    they load `output/samp_locs.mat`. All outputs go to `params.output_dir`
    (default `output/`, gitignored).
 3. Add `--plot` to also write diagnostic plots (`mask.png`, `psf.png`,
-   `trajectory.png`, `one_tr.png`) via `plot_last_run.py`, and/or `--ge` to
+   `trajectory.png`, `one_tr.png`) via `plotting/plot_last_run.py`, and/or `--ge` to
    also export each sequence to GE `.pge` (see [GE export](#ge-export-pge)
    below):
    ```
@@ -145,23 +146,27 @@ PNS check and is only appropriate for phantom/non-human scanning.
 
 ## Architecture
 
-Mirrors the original MATLAB repo's structure — no top-level package
-directory, matching `../ArbEPI` having `params.m`/`main.m` directly at its
-repo root alongside `src/` and `lib/`:
+Only entry points and tightly-coupled global config sit at the repo root —
+mirroring `../ArbEPI` having `params.m`/`main.m` directly at its repo root
+— everything else lives in a subpackage grouped by role:
 
 ```
-params.py                Params dataclass + load_params() (replaces params.m)
-trap4ge.py                GE-raster trapezoid rounding (from ../PulCeq)
-mask2epi.py                Core algorithm: partitions a 2D mask into EPI trajectories
+params.py                   Params dataclass + load_params() (replaces params.m)
+scanners.py                 ScannerSpec hardware profiles (GE_MR750, GE_UHP)
+ge_export.py                Python -> MATLAB bridge for GE feasibility checking / .pge export
+main.py                     Generate all 4 sequences, mirrors ArbEPI/main.m; --scanner/--plot/--ge flags
 sampling/                   Sampling mask generators (caipi, ticaipi, pd, rand)
-lib/                        RF/gradient helpers, TE/TR delay calculation
+lib/
+  mask2epi.py                Core algorithm: partitions a 2D mask into EPI trajectories
+  trap4ge.py                 GE-raster trapezoid rounding (from ../PulCeq)
+  (RF/gradient helpers, TE/TR delay calculation)
 sequences/                  ArbEPI, EPIcal, GRE, noise sequence assembly
-plotting.py                 Diagnostic plots (mask/PSF/trajectory/single-TR)
-plot_last_run.py            Drives plotting.py against the most recent output/ run
-ge_export.py                Python -> MATLAB bridge for .pge export
+plotting/
+  plotting.py                Diagnostic plots (mask/PSF/trajectory/single-TR)
+  plot_last_run.py           Drives plotting.py against the most recent output/ run
 matlab/
   write_to_ge_from_seq.m    MATLAB-side GE export, called by ge_export.py
-main.py                     Generate all 4 sequences, mirrors ArbEPI/main.m; --plot/--ge flags
+  ge_feasibility_check.m    MATLAB-side GE feasibility check (no .pge write), called by ge_export.py
 tests/                       Unit tests (pytest)
 ```
 
