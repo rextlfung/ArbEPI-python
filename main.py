@@ -10,7 +10,7 @@ generate_noise load samp_locs.mat that it produces.
 import argparse
 import os
 
-from params import load_params
+from params import DEFAULT_SCANNER, load_params
 from sampling.gen_sampling_masks import gen_sampling_masks
 from scanners import SCANNERS
 from sequences.arbepi import generate_arbepi
@@ -19,7 +19,7 @@ from sequences.gre import generate_gre
 from sequences.noise import generate_noise
 
 
-def main(scanner: str = 'GE_UHP', export_ge: bool = False, plot: bool = False):
+def main(scanner: str = DEFAULT_SCANNER, export_ge: bool = False, plot: bool = False):
     params = load_params(scanner=scanner)
 
     # 1. Generate sampling masks and main EPI sequence
@@ -63,9 +63,10 @@ def main(scanner: str = 'GE_UHP', export_ge: bool = False, plot: bool = False):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        '--scanner', choices=list(SCANNERS), default='GE_UHP',
+        '--scanner', choices=list(SCANNERS), default=DEFAULT_SCANNER,
         help='scanner to build the sequence for (see scanners.py); determines both the '
-             '.seq gradient/RF hardware limits and the --ge export target (default: GE_UHP)',
+             f'.seq gradient/RF hardware limits and the --ge export target '
+             f'(default: {DEFAULT_SCANNER})',
     )
     parser.add_argument(
         '--ge', action='store_true', dest='export_ge',

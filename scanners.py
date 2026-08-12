@@ -8,8 +8,13 @@ that scanner's actual limits (see the `g_max`/`slew_max` unit-drift bug
 this module replaces, described in CLAUDE.md/README.md history).
 
 `max_grad`/`max_slew` here are the values used to build the `.seq` file
-itself (via `pp.Opts`); `seq2ge/ge_export.py` derives GE's G/cm-based `g_max`/
-`slew_max` from these same two numbers rather than storing them twice.
+itself (via `params.py`'s `pp.Opts` construction, which reads every one of
+`pp.Opts`'s kwargs straight off the selected `ScannerSpec` rather than
+hard-coding any of them there); `seq2ge/ge_export.py` derives GE's
+G/cm-based `g_max`/`slew_max` from these same two numbers rather than
+storing them twice. `ScannerSpec` intentionally holds only plain data (no
+`pypulseq` import here) -- `params.py` is the one place that converts it
+into a `pp.Opts`.
 
 `ge_coil` is the coil identifier string passed through to MATLAB's
 `pge2.opts(...)`/`check_grad_acoustics(...)` when using the MATLAB export
@@ -36,6 +41,17 @@ class ScannerSpec:
     chronaxie: float  # s, PNS SAFE-model nerve impulse response time constant
     rheobase: float  # stimulation threshold for constant slew of infinite duration
     alpha: float  # effective coil length (dimensionless); s_min = rheobase / alpha
+    # Remaining fields feed pp.Opts (via params.py) 1:1; kept here rather
+    # than hard-coded in params.py so every pp.Opts kwarg traces back to
+    # this single source of truth, same as max_grad/max_slew above.
+    rf_dead_time: float  # s
+    rf_ringdown_time: float  # s (hardware ringdown + safety margin)
+    adc_dead_time: float  # s
+    adc_raster_time: float  # s
+    rf_raster_time: float  # s
+    grad_raster_time: float  # s
+    block_duration_raster: float  # s
+    B0: float  # T
 
 
 SCANNERS: dict[str, ScannerSpec] = {
@@ -55,6 +71,14 @@ SCANNERS: dict[str, ScannerSpec] = {
         chronaxie=334e-6,
         rheobase=23.4,
         alpha=0.333,
+        rf_dead_time=100e-6,
+        rf_ringdown_time=260e-6,  # 60us hardware ringdown + 200us safety margin
+        adc_dead_time=20e-6,
+        adc_raster_time=2e-6,
+        rf_raster_time=2e-6,
+        grad_raster_time=4e-6,
+        block_duration_raster=4e-6,
+        B0=3.0,
     ),
     # max_grad/max_slew/chronaxie/rheobase/alpha from
     # ../PulCeq/matlab/+pge2/opts.m's 'hrmbuhp' table row.
@@ -74,5 +98,13 @@ SCANNERS: dict[str, ScannerSpec] = {
         chronaxie=359e-6,
         rheobase=26.5,
         alpha=0.370,
+        rf_dead_time=100e-6,
+        rf_ringdown_time=260e-6,  # 60us hardware ringdown + 200us safety margin
+        adc_dead_time=20e-6,
+        adc_raster_time=2e-6,
+        rf_raster_time=2e-6,
+        grad_raster_time=4e-6,
+        block_duration_raster=4e-6,
+        B0=3.0,
     ),
 }

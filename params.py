@@ -26,7 +26,6 @@ class FatsatParams:
 @dataclass
 class Params:
     sys: pp.Opts
-    rf_ringdown_margin: float  # s
     crt: float  # common raster time (s)
     dwell: float  # s, ADC sample time
 
@@ -106,7 +105,10 @@ class Params:
     rand_gaussian_sigma: np.ndarray | None
 
 
-def load_params(scanner: str = 'GE_UHP', output_dir: str = 'output') -> Params:
+DEFAULT_SCANNER = 'GE_UHP'
+
+
+def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> Params:
     """
     scanner : one of scanners.SCANNERS' keys (currently 'GE_MR750',
         'GE_UHP') -- selects the gradient/RF hardware limits used both to
@@ -114,21 +116,20 @@ def load_params(scanner: str = 'GE_UHP', output_dir: str = 'output') -> Params:
         GE. See scanners.py for where these values come from.
     """
     spec = SCANNERS[scanner]
-    rf_ringdown_margin = 200e-6  # s
 
     sys = pp.Opts(
         max_grad=spec.max_grad,
         grad_unit='mT/m',
         max_slew=spec.max_slew,
         slew_unit='T/m/s',
-        rf_dead_time=100e-6,
-        rf_ringdown_time=60e-6 + rf_ringdown_margin,
-        adc_dead_time=20e-6,
-        adc_raster_time=2e-6,
-        rf_raster_time=2e-6,
-        grad_raster_time=4e-6,
-        block_duration_raster=4e-6,
-        B0=3.0,
+        rf_dead_time=spec.rf_dead_time,
+        rf_ringdown_time=spec.rf_ringdown_time,
+        adc_dead_time=spec.adc_dead_time,
+        adc_raster_time=spec.adc_raster_time,
+        rf_raster_time=spec.rf_raster_time,
+        grad_raster_time=spec.grad_raster_time,
+        block_duration_raster=spec.block_duration_raster,
+        B0=spec.B0,
     )
 
     crt = 20e-6  # s, common raster time (Siemens 10us, GE 4us)
@@ -147,7 +148,7 @@ def load_params(scanner: str = 'GE_UHP', output_dir: str = 'output') -> Params:
     Nshots = math.ceil(Ny * Nz / R / ETL)
 
     # Decay parameters
-    TE = 30.5e-3
+    TE = 30e-3
     volume_tr = 2
     TR = volume_tr / Nshots
     T1 = 1.3
@@ -190,7 +191,8 @@ def load_params(scanner: str = 'GE_UHP', output_dir: str = 'output') -> Params:
     # "Open finding" for why this was zero (disabling the PNS check
     # entirely) until now, and that this default now correctly blocks
     # `main.py --ge` for EPIcal/ArbEPI/GRE until slew/blip timing changes.
-    PNSwt = np.array([0.8, 1.0, 0.7])
+    PNSwt = np.array([0.8, 1.0, 0.7]) # human
+    # PNSwt = np.array([0.0, 0.0, 0.0]) # phantom
 
     # Sampling mask parameters
     sampling_method = 'pd'
@@ -201,7 +203,6 @@ def load_params(scanner: str = 'GE_UHP', output_dir: str = 'output') -> Params:
 
     return Params(
         sys=sys,
-        rf_ringdown_margin=rf_ringdown_margin,
         crt=crt,
         dwell=dwell,
         res=res,
