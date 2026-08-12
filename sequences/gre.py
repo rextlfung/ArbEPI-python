@@ -20,8 +20,8 @@ import numpy as np
 import pypulseq as pp
 
 from lib.make_fatsat_rf import make_fatsat_rf
-from params import FatsatParams, Params
 from lib.trap4ge import trap4ge
+from params import FatsatParams, Params
 
 
 def generate_gre(params: Params, seqname: str = 'GRE') -> pp.Sequence:

@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pypulseq as pp
 
+from params import Params
 from seq2ge.check import FeasibilityReport
 from seq2ge.check import check_ge_feasibility as _check_ge_feasibility
 from seq2ge.seq2ceq import seq2ceq
 from seq2ge.writeceq import write_ceq
-from params import Params
 
 
 def check_ge_feasibility(seq_path: str, params: Params) -> FeasibilityReport:

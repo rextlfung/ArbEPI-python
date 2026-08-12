@@ -14,8 +14,8 @@ from pathlib import Path
 import pypulseq as pp
 import pytest
 
-from seq2ge.check import PNS_NORMAL_MODE_THRESHOLD, FeasibilityReport, check_ge_feasibility
 from scanners import SCANNERS
+from seq2ge.check import PNS_NORMAL_MODE_THRESHOLD, FeasibilityReport, check_ge_feasibility
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / 'output'
 

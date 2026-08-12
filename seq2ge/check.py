@@ -33,12 +33,12 @@ from dataclasses import dataclass
 import numpy as np
 import pypulseq as pp
 
+from scanners import ScannerSpec
 from seq2ge.acoustics import THRESHOLD as ACOUSTICS_THRESHOLD
 from seq2ge.acoustics import check_grad_acoustics
 from seq2ge.ceq import Ceq
 from seq2ge.pns import pns
 from seq2ge.seq2ceq import seq2ceq
-from scanners import ScannerSpec
 
 # checksegment.m throws at PNS > 80% ("exceeds normal mode"), a stricter
 # gate than the 100% ("first controlled mode") figure that shows up most

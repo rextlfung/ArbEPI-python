@@ -15,7 +15,7 @@ import numpy as np
 import pypulseq as pp
 
 from params import Params, load_params
-from plotting.plotting import plot_sampling_mask, plot_trajectory, plot_psf, plot_one_tr
+from plotting.plotting import plot_one_tr, plot_psf, plot_sampling_mask, plot_trajectory
 
 
 def plot_last_run(params: Params, frame_idx: int = 0) -> None:

@@ -23,6 +23,8 @@ uv run python main.py --ge         # also export each sequence to GE .pge (pure 
 uv run python main.py --plot       # also write diagnostic plots (see plotting/plot_last_run.py) into output/
 uv run pytest tests/               # run the unit test suite
 uv run pytest tests/test_mask2epi.py -v   # run a single test file
+uv sync --extra lint               # install Ruff
+uv run ruff check .                # lint (see pyproject.toml's [tool.ruff])
 ```
 
 Dependency management is via `uv` (`pyproject.toml` + `uv.lock`), not
@@ -30,7 +32,10 @@ Dependency management is via `uv` (`pyproject.toml` + `uv.lock`), not
 not a local path — verify no local patch is needed there before ever
 switching it back to a `file://` dependency.
 
-There is no lint/format config in this repo. No MATLAB-based end-to-end
+Linting is via Ruff, configured in `pyproject.toml`'s `[tool.ruff]`
+(`select = ["E", "F", "I"]` — pycodestyle, pyflakes, import sorting;
+`matlab_reference/` is excluded since it holds `.m` files, not Python).
+No MATLAB-based end-to-end
 comparison suite exists either — no MATLAB install was available during the
 initial port, so correctness is validated by: (a) unit tests on algorithm
 invariants (exact sample counts, ky-non-decreasing ordering, full k-space
