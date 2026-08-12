@@ -56,18 +56,28 @@ surface and its own multi-year-stale PyPI release).
 """
 
 import math
-from typing import Sequence, Tuple
+from typing import Sequence
 
 import numba as nb
 import numpy as np
 
 
-def _calib_bounds(n: int, calib_n: float) -> Tuple[int, int]:
-    """0-based [start, stop) bounds of a centered calibration region of
-    width `calib_n` along a dimension of length `n`."""
-    start = max(0, math.floor(n / 2 - calib_n / 2))
-    stop = min(n, math.floor(n / 2 + calib_n / 2))
-    return start, stop
+def _rho_grid(ny: int, nx: int) -> np.ndarray:
+    """(ny, nx) grid of radial distance from center, normalized so the
+    ellipse inscribed in the full (ny, nx) rectangle sits at rho == 1."""
+    Y, X = np.meshgrid(np.arange(ny), np.arange(nx), indexing='ij')
+    yn = (Y - ny / 2) / (ny / 2)
+    xn = (X - nx / 2) / (nx / 2)
+    return np.sqrt(yn**2 + xn**2)
+
+
+def _calib_rho(target_samples: int, nx: int, ny: int, calib_frac: float) -> float:
+    """Radius (in the normalized units of `_rho_grid`) of a centered,
+    aspect-matched ellipse whose pixel area is `calib_frac * target_samples`."""
+    if calib_frac <= 0:
+        return 0.0
+    rho_calib = math.sqrt(4 * calib_frac * target_samples / (math.pi * nx * ny))
+    return min(rho_calib, 0.999)
 
 
 @nb.njit(cache=True)
@@ -77,14 +87,10 @@ def _poisson_disc_core_jit(
     max_attempts: int,
     radius_x: np.ndarray,
     radius_y: np.ndarray,
-    y_start: int,
-    y_stop: int,
-    x_start: int,
-    x_stop: int,
+    calib_mask: np.ndarray,
     seed: int,
 ) -> np.ndarray:
-    mask = np.zeros((ny, nx))
-    mask[y_start:y_stop, x_start:x_stop] = 1
+    mask = calib_mask.copy()
 
     # numba's np.random is its own internal generator, independent of both
     # numpy's legacy global state and the numpy.random.Generator instances
@@ -160,14 +166,11 @@ def _poisson_disc_core(
     max_attempts: int,
     radius_x: np.ndarray,
     radius_y: np.ndarray,
-    calib: Sequence[float],
+    calib_mask: np.ndarray,
     seed: int,
 ) -> np.ndarray:
-    calib_y, calib_x = calib[0], calib[1]
-    y_start, y_stop = _calib_bounds(ny, calib_y)
-    x_start, x_stop = _calib_bounds(nx, calib_x)
     return _poisson_disc_core_jit(
-        nx, ny, max_attempts, radius_x, radius_y, y_start, y_stop, x_start, x_stop, seed
+        nx, ny, max_attempts, radius_x, radius_y, calib_mask.astype(np.float64), seed
     )
 
 
@@ -175,7 +178,7 @@ def pd_sample(
     img_shape: Sequence[int],
     accel: float,
     rng: np.random.Generator,
-    calib: Sequence[float] = (0, 0),
+    calib_frac: float = 0.0,
     dtype: str = 'logical',
     crop_corner: bool = True,
     max_attempts: int = 30,
@@ -192,7 +195,10 @@ def pd_sample(
         front and reused (fixed) across every binary-search iteration --
         see module docstring point 1; `rng` itself is used directly for
         the exact-count prune/fill step below.
-    calib : (calib_y, calib_x) fully-sampled calibration region size.
+    calib_frac : fraction of the target sample budget (floor(ny*nx/accel))
+        to place in a fully-sampled calibration region: a centered ellipse,
+        aspect-matched to (ny, nx), sized so its pixel area equals
+        `calib_frac * target_samples`. 0 = no calibration region.
     dtype : 'logical', 'double', or 'complex'.
     crop_corner : whether to crop sampling corners (elliptical mask).
     max_attempts : max attempts to generate a point per active point.
@@ -213,15 +219,11 @@ def pd_sample(
     total_pixels = nx * ny
     target_samples = math.floor(total_pixels / accel)
 
-    Y, X = np.meshgrid(np.arange(ny), np.arange(nx), indexing='ij')
+    rho = _rho_grid(ny, nx)
+    rho_calib = _calib_rho(target_samples, nx, ny, calib_frac)
+    calib_mask = rho <= rho_calib
 
-    x_dist = np.maximum(np.abs(X - nx / 2) - calib[1] / 2, 0)
-    x_dist = x_dist / x_dist.max()
-
-    y_dist = np.maximum(np.abs(Y - ny / 2) - calib[0] / 2, 0)
-    y_dist = y_dist / y_dist.max()
-
-    r = np.sqrt(x_dist**2 + y_dist**2)
+    r = np.maximum(rho - rho_calib, 0) / max(1 - rho_calib, 1e-6)
 
     # Binary search for the density slope. Target a slightly higher density
     # (lower accel) than requested, to ensure enough points to prune later.
@@ -241,10 +243,10 @@ def pd_sample(
 
         # Reseed to the same fixed value every iteration -- see module
         # docstring point 1.
-        mask = _poisson_disc_core(nx, ny, max_attempts, radius_x, radius_y, calib, seed)
+        mask = _poisson_disc_core(nx, ny, max_attempts, radius_x, radius_y, calib_mask, seed)
 
         if crop_corner:
-            mask = mask * (r <= 1)
+            mask = mask * (rho <= 1)
 
         num_samples = mask.sum()
         current_accel = total_pixels / num_samples
@@ -260,11 +262,6 @@ def pd_sample(
     # Enforce exact acceleration via random pruning/filling.
     mask = mask.astype(bool)
     current_samples = int(mask.sum())
-
-    calib_mask = np.zeros((ny, nx), dtype=bool)
-    y_start, y_stop = _calib_bounds(ny, calib[0])
-    x_start, x_stop = _calib_bounds(nx, calib[1])
-    calib_mask[y_start:y_stop, x_start:x_stop] = True
 
     if current_samples > target_samples:
         num_to_remove = current_samples - target_samples

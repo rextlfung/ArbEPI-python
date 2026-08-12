@@ -63,7 +63,7 @@ def gen_sampling_masks(
                 [Ny, Nz],
                 R,
                 frame_rng,
-                calib=params.pd_calib,
+                calib_frac=params.pd_calib_frac,
                 crop_corner=params.pd_crop_corner,
                 decay=params.pd_decay,
             )

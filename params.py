@@ -99,7 +99,7 @@ class Params:
 
     # Sampling mask parameters
     sampling_method: str
-    pd_calib: np.ndarray
+    pd_calib_frac: float
     pd_crop_corner: bool
     pd_decay: float
     rand_gaussian_sigma: np.ndarray | None
@@ -196,7 +196,10 @@ def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> P
 
     # Sampling mask parameters
     sampling_method = 'pd'
-    pd_calib = np.array([9, 6])
+    # Fully-sampled central calibration region: a centered ellipse,
+    # aspect-matched to (Ny, Nz), sized to hold 30% of the R-dependent
+    # sample budget (floor(Ny*Nz/R) -- see sampling/pd_sample.py).
+    pd_calib_frac = 0.3
     pd_crop_corner = True
     pd_decay = 1.4
     rand_gaussian_sigma = None
@@ -249,7 +252,7 @@ def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> P
         spec=spec,
         PNSwt=PNSwt,
         sampling_method=sampling_method,
-        pd_calib=pd_calib,
+        pd_calib_frac=pd_calib_frac,
         pd_crop_corner=pd_crop_corner,
         pd_decay=pd_decay,
         rand_gaussian_sigma=rand_gaussian_sigma,

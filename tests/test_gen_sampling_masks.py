@@ -34,7 +34,7 @@ def test_gen_sampling_masks_ticaipi_frames_differ():
 
 
 def test_gen_sampling_masks_seed_per_frame_reproducible():
-    params = replace(_small_caipi_params(), Ny=20, Nz=16, sampling_method='pd', pd_calib=np.array([2, 2]))
+    params = replace(_small_caipi_params(), Ny=20, Nz=16, sampling_method='pd', pd_calib_frac=0.1)
     omegas1 = gen_sampling_masks(4, params, seed_per_frame=True)
     omegas2 = gen_sampling_masks(4, params, seed_per_frame=True)
     assert np.array_equal(omegas1, omegas2)
