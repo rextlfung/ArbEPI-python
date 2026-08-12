@@ -36,9 +36,7 @@ def main(scanner: str = 'GE_UHP', export_ge: bool = False, plot: bool = False):
     generate_noise(params)
 
     if export_ge:
-        # Requires a local MATLAB install with pulseq/toppe/PulCeq/ArbEPI
-        # checked out as sibling directories — see ge_export.py / README.
-        from ge_export import check_ge_feasibility, export_to_ge
+        from seq2ge.ge_export import check_ge_feasibility, export_to_ge
 
         seq_paths = {
             name: os.path.join(params.output_dir, f'{name}.seq')
@@ -71,7 +69,7 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--ge', action='store_true', dest='export_ge',
-        help='also export each sequence to GE .pge format via a local MATLAB install',
+        help='also export each sequence to GE .pge format (see seq2ge/ge_export.py)',
     )
     parser.add_argument(
         '--plot', action='store_true',

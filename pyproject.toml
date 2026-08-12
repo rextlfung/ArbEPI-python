@@ -21,7 +21,7 @@ dependencies = [
 test = ["pytest"]
 
 [tool.setuptools]
-py-modules = ["params", "scanners", "ge_export"]
+py-modules = ["params", "scanners"]
 
 [tool.setuptools.packages.find]
-include = ["sampling*", "lib*", "sequences*", "plotting*"]
+include = ["sampling*", "lib*", "sequences*", "plotting*", "seq2ge*"]

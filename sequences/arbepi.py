@@ -4,7 +4,7 @@ Outputs: <output_dir>/ArbEPI.seq (Pulseq format), <output_dir>/samp_locs.mat
 (schedules and partition map for reconstruction).
 
 GE `.pge` export (write_to_ge.m) and the trailing MATLAB plotting figures
-are intentionally not ported here — see ge_export.py (stage 8 of the
+are intentionally not ported here — see seq2ge/ge_export.py (stage 8 of the
 port plan) and plotting/plotting.py respectively.
 """
 

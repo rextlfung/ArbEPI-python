@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 import pypulseq as pp
 
-from scanners import SCANNERS
+from scanners import SCANNERS, ScannerSpec
 
 
 @dataclass
@@ -87,19 +87,16 @@ class Params:
     # Output
     output_dir: str
 
-    # GE hardware constants, derived from the selected ScannerSpec (see
-    # scanners.py) -- unused for .seq generation except g_max/slew_max/
-    # ge_coil, which are used only by ge_export.py's GE feasibility check
-    # and .pge export, not by pypulseq .seq generation (that uses `sys`
-    # above, built from the same ScannerSpec so the two can't drift apart).
-    psd_rf_wait: float
-    psd_grd_wait: float
-    b1_max: float
-    g_max: float
-    slew_max: float
-    ge_coil: str
+    # The selected ScannerSpec itself (see scanners.py) -- seq2ge/ge_export.py's
+    # pure-Python feasibility check/export reads max_grad/max_slew/b1_max/
+    # chronaxie/rheobase/alpha/ge_coil/pislquant straight from this, so
+    # they can't drift out of sync with `sys` above (both come from the
+    # same ScannerSpec instance).
+    spec: ScannerSpec
+    # PNS is a physiological safety limit, not a hardware one -- kept
+    # separate from ScannerSpec since it's phantom-vs-human scan context,
+    # not a scanner constant.
     PNSwt: np.ndarray
-    pislquant: int
 
     # Sampling mask parameters
     sampling_method: str
@@ -189,18 +186,11 @@ def load_params(scanner: str = 'GE_UHP', output_dir: str = 'output') -> Params:
 
     Ncoils = 32
 
-    # GE hardware parameters, derived from `spec` (see scanners.py) so
-    # they can't drift out of sync with `sys.max_grad`/`sys.max_slew`
-    # above -- g_max/slew_max convert mT/m -> G/cm and T/m/s -> G/cm/ms
-    # (1 G/cm = 10 mT/m, 1 G/cm/ms = 10 T/m/s).
-    psd_rf_wait = spec.psd_rf_wait
-    psd_grd_wait = spec.psd_grd_wait
-    b1_max = spec.b1_max
-    g_max = spec.max_grad / 10
-    slew_max = spec.max_slew / 10
-    ge_coil = spec.ge_coil
-    PNSwt = np.array([0.0, 0.0, 0.0]) # zero for phantom
-    pislquant = spec.pislquant
+    # IEC 60601-2-33:2022-recommended PNS channel weights -- see CLAUDE.md's
+    # "Open finding" for why this was zero (disabling the PNS check
+    # entirely) until now, and that this default now correctly blocks
+    # `main.py --ge` for EPIcal/ArbEPI/GRE until slew/blip timing changes.
+    PNSwt = np.array([0.8, 1.0, 0.7])
 
     # Sampling mask parameters
     sampling_method = 'pd'
@@ -255,14 +245,8 @@ def load_params(scanner: str = 'GE_UHP', output_dir: str = 'output') -> Params:
         Tpre=Tpre,
         Ncoils=Ncoils,
         output_dir=output_dir,
-        psd_rf_wait=psd_rf_wait,
-        psd_grd_wait=psd_grd_wait,
-        b1_max=b1_max,
-        g_max=g_max,
-        slew_max=slew_max,
-        ge_coil=ge_coil,
+        spec=spec,
         PNSwt=PNSwt,
-        pislquant=pislquant,
         sampling_method=sampling_method,
         pd_calib=pd_calib,
         pd_crop_corner=pd_crop_corner,
