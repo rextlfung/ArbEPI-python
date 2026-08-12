@@ -15,6 +15,7 @@ dependencies = [
     "matplotlib>=3.5",
     "hdf5storage>=0.2",
     "numba>=0.66.0",
+    "tqdm>=4.66",
 ]
 
 [project.optional-dependencies]

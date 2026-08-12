@@ -15,6 +15,7 @@ from typing import Tuple
 import hdf5storage
 import numpy as np
 import pypulseq as pp
+from tqdm import tqdm
 
 from lib.calc_te_tr_delays import calc_te_tr_delays
 from lib.make_excitation_pulse import make_excitation_pulse
@@ -91,8 +92,7 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     rf_count = 1
     Ny, Nz = params.Ny, params.Nz
 
-    for frame in range(params.Nframes):
-        print(f'Writing frame {frame + 1}')
+    for frame in tqdm(range(params.Nframes), desc='Writing frames'):
 
         for shot in range(params.Nshots):
             # Fat-sat (label first block in each unique section with TRID for GE)

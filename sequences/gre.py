@@ -18,6 +18,7 @@ import os
 
 import numpy as np
 import pypulseq as pp
+from tqdm import tqdm
 
 from lib.make_fatsat_rf import make_fatsat_rf
 from lib.trap4ge import trap4ge
@@ -111,9 +112,10 @@ def generate_gre(params: Params, seqname: str = 'GRE') -> pp.Sequence:
     # iZ > 0: image acquisition
     rf_count = 1
 
-    for iZ in range(-params.Ndummy_zloops, params.Nz_gre + 1):
+    for iZ in tqdm(
+        range(-params.Ndummy_zloops, params.Nz_gre + 1), desc='z encode'
+    ):
         is_dummy_tr = iZ < 0
-        print(f'z encode {iZ} of {params.Nz_gre}')
 
         # Fat-sat
         TRID = 1 if is_dummy_tr else 2
