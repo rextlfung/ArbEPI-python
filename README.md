@@ -132,19 +132,24 @@ Diagnostic plots from a default-params run (`main.py --plot`; see
 
 `epi_trajectory` selects how `mask2epi_*` partitions that mask into each
 shot's echo train — `'laminar'` (ky non-decreasing rows) vs. `'radial'`
-(every shot a spoke through k-space center). Both plots below are from the
+(every shot a spoke through k-space center). Everything below is from the
 same `params.seed` (so the same sampling mask), one run per
-`epi_trajectory` value; `main.py --plot` always writes `trajectory.png` for
-whichever setting was active, renamed here for side-by-side comparison:
+`epi_trajectory` value; `main.py --plot` always writes `trajectory.png`/
+`one_tr.png` for whichever setting was active, renamed here for
+side-by-side comparison:
 
 | `epi_trajectory = 'laminar'` | `epi_trajectory = 'radial'` |
 |---|---|
 | ![Laminar trajectory](docs/demo/trajectory_laminar.png) | ![Radial trajectory](docs/demo/trajectory_radial.png) |
 
-And a single-TR pulse diagram (`plot_one_tr`, a thin wrapper around
-pypulseq's own `Sequence.plot()`):
+And the single-TR pulse diagram (`plot_one_tr`, a thin wrapper around
+pypulseq's own `Sequence.plot()`) for one shot under each ordering — note
+`radial`'s larger, single-echo Gy blip spike (~t=38ms) vs. `laminar`'s
+comparatively even blip sizes throughout the train:
 
-![Single-TR pulse diagram](docs/demo/one_tr.png)
+| `epi_trajectory = 'laminar'` | `epi_trajectory = 'radial'` |
+|---|---|
+| ![Laminar single-TR pulse diagram](docs/demo/one_tr_laminar.png) | ![Radial single-TR pulse diagram](docs/demo/one_tr_radial.png) |
 
 ## GE export (`.pge`)
 

@@ -218,7 +218,7 @@ def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> P
     # from MATLAB). 'radial' = mask2epi_radial (each shot sweeps through
     # k-space center as one spoke, this repo's own addition) -- see
     # lib/mask2epi.py's module docstring for the tradeoffs between them.
-    epi_trajectory = 'laminar'
+    epi_trajectory = 'radial'
 
     return Params(
         sys=sys,
