@@ -55,7 +55,8 @@ params.py (load_params())  ──►  gen_sampling_masks(R, params)  ──►  
                                                                         │
                                                                         ▼
                                                           sequences/arbepi.generate_arbepi(omegas, params)
-                                                            │  mask2epi() called per frame
+                                                            │  mask2epi_{laminar,radial}() called per
+                                                            │  frame (params.epi_trajectory selects)
                                                             │  schedules: Nframes×Nshots×ETL×2
                                                             │  saved to output/samp_locs.mat
                                                             ▼
@@ -86,15 +87,26 @@ touching these files, never `scipy.io`.
 
 ### Key design decisions (carried over from ../ArbEPI, still apply here)
 
-**`mask2epi`** (`lib/mask2epi.py`) is the core algorithm. It partitions a 2D
-`(Ny, Nz)` sampling mask into `Nshots` EPI trajectories, each of length
-`ETL`. Ordering constraints: samples near ky = 0 are spread center-out
-across shots (via `_center_out`, an `fftshift`-based interleave — MATLAB's
-`fftshift` and `np.fft.fftshift` disagree for odd-length inputs, so
-`_center_out` reimplements the left-rotate manually rather than calling
-`np.fft.fftshift` directly; do not "simplify" this back to `np.fft.fftshift`
-without re-deriving the odd-N case); ky is non-decreasing within each echo
-train.
+**`lib/mask2epi.py`** holds the core partitioning algorithm, now as two
+interchangeable variants that both turn a 2D `(Ny, Nz)` sampling mask into
+`Nshots` EPI trajectories of length `ETL`: `mask2epi_laminar` (the
+original) and `mask2epi_radial` (added later). `sequences/arbepi.py`
+selects between them via `params.epi_trajectory` (`'laminar'` or
+`'radial'`, default `'laminar'`, set in `params.py`'s "Sampling
+trajectory" section) — a config choice, not a hardcoded call.
+`mask2epi_laminar`'s ordering
+constraints: samples near ky = 0 are spread center-out across shots (via
+`_center_out`, an `fftshift`-based interleave — MATLAB's `fftshift` and
+`np.fft.fftshift` disagree for odd-length inputs, so `_center_out`
+reimplements the left-rotate manually rather than calling
+`np.fft.fftshift` directly; do not "simplify" this back to
+`np.fft.fftshift` without re-deriving the odd-N case); ky is non-decreasing
+within each echo train. `mask2epi_radial` instead gives every shot a spoke
+through k-space center (deliberately giving up ky-non-decreasing — see its
+own docstring for why that's safe for the reference-scan-based Nyquist
+ghost correction this repo relies on, and for how it forces the
+k-space-center sample to land at echo index `(ETL - 1) // 2`, matching
+`calc_te_tr_delays.py`'s definition of the nominal TE echo).
 
 **`lib/make_readout_grads.py`** returns a `ReadoutGrads` dataclass with
 pre-built gradient objects. Blips (`gy_blip`, `gz_blip`) are stored at *unit
@@ -158,11 +170,12 @@ blip requirements (which depend on the sampling mask, not just `ETL`) —
 don't hand-derive feasibility, call `calc_te_tr_delays` directly (or scan
 across candidate `ETL` values) to check.
 
-**`mask2epi`'s `Nshots*ETL` must exactly equal the sampling mask's total
-sample count** (`lib/mask2epi.py:71`'s assertion) — `Nshots = ceil(Ny*Nz/R/ETL)`
-doesn't guarantee this holds for an arbitrary `ETL`; picking a new `ETL`
-without also checking this divides-evenly constraint will crash `mask2epi`,
-not just produce a suboptimal schedule.
+**`mask2epi_laminar`/`mask2epi_radial`'s `Nshots*ETL` must exactly equal
+the sampling mask's total sample count** (asserted at the top of each) —
+`Nshots = ceil(Ny*Nz/R/ETL)` doesn't guarantee this holds for an arbitrary
+`ETL`; picking a new `ETL` without also checking this divides-evenly
+constraint will crash either function, not just produce a suboptimal
+schedule.
 
 ### GE `.pge` export -- fully ported to Python, no MATLAB round trip
 
@@ -312,9 +325,19 @@ re-deriving this port's validation record.
   per-frame breakdown) rather than the fine continuous line — see that
   function's docstring for why (a sub-sequence block-extraction approach
   was tried and abandoned after finding an unexplained ~16-22 m^-1
-  discrepancy on the readout axis). `plotting/plot_last_run.py` drives all four
-  plotting functions against the most recent `output/` run and is wired
-  into `main.py --plot`.
+  discrepancy on the readout axis). `plot_trajectory`'s per-frame case also
+  marks each shot's first ADC sample (a black-edged dot, same size as the
+  rest) so where each echo train actually begins is visible at a glance —
+  most informative for `mask2epi_radial`, where starts scatter around the
+  spoke ends rather than clustering near one corner of k-space like
+  `mask2epi_laminar`'s raster order. `plotting/plot_last_run.py` drives all
+  four plotting functions against the most recent `output/` run and is
+  wired into `main.py --plot`, which now runs *before* the `--ge` export
+  step (both independently depend only on `samp_locs.mat`/`ArbEPI.seq`, not
+  on each other) so the diagnostic plots are still written even if `--ge`
+  fails. `docs/demo/` holds static copies of one `--plot` run's output,
+  embedded in README's Demo section — not regenerated automatically, so
+  re-copy from `output/` by hand if the plots change materially.
 - **Poisson-disc sampling** (`sampling/pd_sample.py`): a local
   reimplementation of `sigpy.mri.poisson`'s algorithm, not a dependency on
   the `sigpy` package — see README's Scope section for the three

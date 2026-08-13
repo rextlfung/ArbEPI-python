@@ -23,12 +23,26 @@ from lib.make_fatsat_rf import make_fatsat_rf
 from lib.make_prephasers import make_prephasers
 from lib.make_readout_grads import make_readout_grads
 from lib.make_spoilers import make_spoilers
-from lib.mask2epi import mask2epi
+from lib.mask2epi import mask2epi_laminar, mask2epi_radial
 from params import Params
 
+_MASK2EPI = {
+    'laminar': mask2epi_laminar,
+    'radial': mask2epi_radial,
+}
 
-def _compute_schedules(omegas: np.ndarray, ETL: int, Nshots: int) -> Tuple[np.ndarray, np.ndarray]:
-    """Run mask2epi per frame. Returns 0-based schedules/parts (see mask2epi)."""
+
+def _compute_schedules(
+    omegas: np.ndarray, ETL: int, Nshots: int, trajectory: str
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Run mask2epi_{trajectory} per frame (see params.Params.epi_trajectory).
+    Returns 0-based schedules/parts (see lib/mask2epi.py)."""
+    if trajectory not in _MASK2EPI:
+        raise ValueError(
+            f'Unknown epi_trajectory {trajectory!r}; expected one of {sorted(_MASK2EPI)}'
+        )
+    mask2epi = _MASK2EPI[trajectory]
+
     Ny, Nz, Nframes = omegas.shape
     schedules = np.zeros((Nframes, Nshots, ETL, 2), dtype=int)
     parts = np.zeros((Ny, Nz, Nframes), dtype=int)
@@ -60,7 +74,7 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     rfsat = make_fatsat_rf(params.fatsat, sys, params.fat_offres_freq)
 
     # Generate EPI sampling schedule from mask
-    schedules, parts = _compute_schedules(omegas, params.ETL, params.Nshots)
+    schedules, parts = _compute_schedules(omegas, params.ETL, params.Nshots, params.epi_trajectory)
 
     # Infer maximum ky and kz blip steps across all frames and shots
     max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))

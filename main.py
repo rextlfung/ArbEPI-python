@@ -10,6 +10,8 @@ generate_noise load samp_locs.mat that it produces.
 import argparse
 import os
 
+import numpy as np
+
 from params import DEFAULT_SCANNER, load_params
 from sampling.gen_sampling_masks import gen_sampling_masks
 from scanners import SCANNERS
@@ -22,8 +24,10 @@ from sequences.noise import generate_noise
 def main(scanner: str = DEFAULT_SCANNER, export_ge: bool = False, plot: bool = False):
     params = load_params(scanner=scanner)
 
-    # 1. Generate sampling masks and main EPI sequence
-    omegas = gen_sampling_masks(params.R, params)
+    # 1. Generate sampling masks and main EPI sequence. params.seed is
+    # None by default (np.random.default_rng(None) is unseeded, same as
+    # gen_sampling_masks' own fallback) -- set it for a reproducible mask.
+    omegas = gen_sampling_masks(params.R, params, rng=np.random.default_rng(params.seed))
     generate_arbepi(omegas, params)
 
     # 2. Calibration sequence (ghost correction + receiver gain)
@@ -34,6 +38,15 @@ def main(scanner: str = DEFAULT_SCANNER, export_ge: bool = False, plot: bool = F
 
     # 4. Noise prescan (noise covariance)
     generate_noise(params)
+
+    if plot:
+        # Diagnostic sampling-mask/trajectory/PSF plots — see plot_last_run.py.
+        # Written before GE export (only depends on samp_locs.mat/ArbEPI.seq,
+        # both already on disk by this point) so they're available even if
+        # export_ge fails below.
+        from plotting.plot_last_run import plot_last_run
+
+        plot_last_run(params)
 
     if export_ge:
         from seq2ge.ge_export import check_ge_feasibility, export_to_ge
@@ -52,12 +65,6 @@ def main(scanner: str = DEFAULT_SCANNER, export_ge: bool = False, plot: bool = F
 
         for name, seq_path in seq_paths.items():
             export_to_ge(seq_path, os.path.join(params.output_dir, name), params)
-
-    if plot:
-        # Diagnostic sampling-mask/trajectory/PSF plots — see plot_last_run.py.
-        from plotting.plot_last_run import plot_last_run
-
-        plot_last_run(params)
 
 
 if __name__ == '__main__':

@@ -136,6 +136,19 @@ def plot_trajectory(
             color = cmap(shot / params.Nshots)
             ax.plot(shot_traj[1, :], shot_traj[2, :], '-', linewidth=0.7, color=color, label=f'shot {shot}')
             ax.plot(shot_traj[1, :], shot_traj[2, :], '.', markersize=4, color=color)
+            # Mark each echo train's first sample distinctly from the rest
+            # of its points, so where each shot begins (vs. wanders through
+            # afterward) is visible at a glance -- most useful for
+            # mask2epi_radial, where every shot starts at one end of its
+            # spoke rather than at a shared corner of k-space.
+            ax.plot(
+                shot_traj[1, 0], shot_traj[2, 0], 'o', markersize=4,
+                markerfacecolor=color, markeredgecolor='k', markeredgewidth=0.8, zorder=5,
+            )
+        ax.plot(
+            [], [], 'o', markersize=4, markerfacecolor='none', markeredgecolor='k',
+            markeredgewidth=0.8, label='echo train start',
+        )
         ax.legend(fontsize=6, loc='upper right', ncol=2)
         title = f'3D-EPI trajectory, frame {frame_idx}. R = {round(R)}'
 

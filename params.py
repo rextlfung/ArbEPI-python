@@ -103,6 +103,10 @@ class Params:
     pd_crop_corner: bool
     pd_decay: float
     rand_gaussian_sigma: np.ndarray | None
+    seed: int | None  # passed to gen_sampling_masks' rng; None = unseeded (fresh mask each run)
+
+    # Sampling trajectory
+    epi_trajectory: str  # 'laminar' (mask2epi_laminar) or 'radial' (mask2epi_radial)
 
 
 DEFAULT_SCANNER = 'GE_UHP'
@@ -191,10 +195,10 @@ def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> P
     # "Open finding" for why this was zero (disabling the PNS check
     # entirely) until now, and that this default now correctly blocks
     # `main.py --ge` for EPIcal/ArbEPI/GRE until slew/blip timing changes.
-    PNSwt = np.array([0.8, 1.0, 0.7]) # human
-    # PNSwt = np.array([0.0, 0.0, 0.0]) # phantom
+    # PNSwt = np.array([0.8, 1.0, 0.7]) # human
+    PNSwt = np.array([0.0, 0.0, 0.0]) # phantom
 
-    # Sampling mask parameters
+    # Sampling mask
     sampling_method = 'pd'
     # Fully-sampled central calibration region: a centered ellipse,
     # aspect-matched to (Ny, Nz), sized to hold 30% of the R-dependent
@@ -203,6 +207,18 @@ def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> P
     pd_crop_corner = True
     pd_decay = 1.4
     rand_gaussian_sigma = None
+    # None = a fresh unseeded rng each run (current default behavior). Set
+    # to an int for a reproducible mask, e.g. to compare epi_trajectory
+    # settings against the same sampling mask -- main.py passes this
+    # straight to gen_sampling_masks(..., rng=np.random.default_rng(seed)).
+    seed = 0
+
+    # Sampling trajectory: which mask2epi_* variant orders each shot's echo
+    # train. 'laminar' = mask2epi_laminar (ky non-decreasing rows, ported
+    # from MATLAB). 'radial' = mask2epi_radial (each shot sweeps through
+    # k-space center as one spoke, this repo's own addition) -- see
+    # lib/mask2epi.py's module docstring for the tradeoffs between them.
+    epi_trajectory = 'laminar'
 
     return Params(
         sys=sys,
@@ -256,4 +272,6 @@ def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> P
         pd_crop_corner=pd_crop_corner,
         pd_decay=pd_decay,
         rand_gaussian_sigma=rand_gaussian_sigma,
+        seed=seed,
+        epi_trajectory=epi_trajectory,
     )

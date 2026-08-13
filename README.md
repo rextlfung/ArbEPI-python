@@ -75,7 +75,10 @@ and numba (see `pyproject.toml`; versions pinned in `uv.lock`).
 
 1. Edit `params.py` (`load_params()`) to configure the experiment — scan
    geometry, timing, sampling method (`sampling_method`: `'caipi'`,
-   `'ticaipi'`, `'pd'`, or `'rand'`).
+   `'ticaipi'`, `'pd'`, or `'rand'`), echo-train ordering (`epi_trajectory`:
+   `'laminar'` or `'radial'`, see [Demo](#demo) below), and `seed` (an int
+   for a reproducible sampling mask across runs, or `None` for a fresh one
+   each time).
 2. Run `main.py` to generate all four sequences:
    ```
    uv run python main.py
@@ -116,6 +119,32 @@ assembled sequence and confirms it matches the sampling schedule).
 configuration to sanity-check by hand. (The separate GE `.pge` export path
 below *was* validated against real MATLAB output, once a MATLAB install
 became available — see the GE export section and `CLAUDE.md`.)
+
+## Demo
+
+Diagnostic plots from a default-params run (`main.py --plot`; see
+`plotting/plot_last_run.py`), R = 9, `sampling_method='pd'`:
+
+| | |
+|---|---|
+| ![Sampling mask](docs/demo/mask.png) | ![Point spread function](docs/demo/psf.png) |
+| 2D Poisson-disc `(ky, kz)` sampling mask, one frame | Point spread function for that mask |
+
+`epi_trajectory` selects how `mask2epi_*` partitions that mask into each
+shot's echo train — `'laminar'` (ky non-decreasing rows) vs. `'radial'`
+(every shot a spoke through k-space center). Both plots below are from the
+same `params.seed` (so the same sampling mask), one run per
+`epi_trajectory` value; `main.py --plot` always writes `trajectory.png` for
+whichever setting was active, renamed here for side-by-side comparison:
+
+| `epi_trajectory = 'laminar'` | `epi_trajectory = 'radial'` |
+|---|---|
+| ![Laminar trajectory](docs/demo/trajectory_laminar.png) | ![Radial trajectory](docs/demo/trajectory_radial.png) |
+
+And a single-TR pulse diagram (`plot_one_tr`, a thin wrapper around
+pypulseq's own `Sequence.plot()`):
+
+![Single-TR pulse diagram](docs/demo/one_tr.png)
 
 ## GE export (`.pge`)
 
@@ -181,6 +210,7 @@ main.py                     Generate all 4 sequences, mirrors ArbEPI/main.m; --s
 sampling/                   Sampling mask generators (caipi, ticaipi, pd, rand)
 lib/
   mask2epi.py                Core algorithm: partitions a 2D mask into EPI trajectories
+                              (mask2epi_laminar / mask2epi_radial, selected by params.epi_trajectory)
   trap4ge.py                 GE-raster trapezoid rounding (from ../PulCeq)
   (RF/gradient helpers, TE/TR delay calculation)
 sequences/                  ArbEPI, EPIcal, GRE, noise sequence assembly
@@ -206,6 +236,7 @@ matlab_reference/            One-off scripts for re-validating seq2ge/ against a
   dump_acoustics_test.m      Dumps a check_grad_acoustics.m reference for seq2ge/acoustics.py's validation
   dump_acoustics_blockrange.m  Dumps the former MATLAB export path's exact acoustics blockRange check
 tests/                       Unit tests (pytest)
+docs/demo/                   Static images embedded in this README's Demo section
 ```
 
 Index convention: internal computation is 0-based throughout (mask2epi's
