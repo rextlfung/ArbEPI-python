@@ -33,9 +33,14 @@ _MASK2EPI = {
 
 
 def _compute_schedules(
-    omegas: np.ndarray, ETL: int, Nshots: int, trajectory: str
+    omegas: np.ndarray, ETL: int, Nshots: int, trajectory: str, deltak: Tuple[float, float]
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Run mask2epi_{trajectory} per frame (see params.Params.epi_trajectory).
+    `deltak` = (deltak_y, deltak_z), i.e. (1/fov_y, 1/fov_z) -- weights
+    mask2epi's pass-2 bottleneck-blip ordering so a ky index step and a kz
+    index step are compared in physical k-space units, matching how
+    make_readout_grads.py sizes the two blip axes independently (see
+    lib/mask2epi.py's module docstring).
     Returns 0-based schedules/parts (see lib/mask2epi.py)."""
     if trajectory not in _MASK2EPI:
         raise ValueError(
@@ -47,7 +52,7 @@ def _compute_schedules(
     schedules = np.zeros((Nframes, Nshots, ETL, 2), dtype=int)
     parts = np.zeros((Ny, Nz, Nframes), dtype=int)
     for frame in range(Nframes):
-        schedules[frame], parts[:, :, frame] = mask2epi(omegas[:, :, frame], ETL, Nshots)
+        schedules[frame], parts[:, :, frame] = mask2epi(omegas[:, :, frame], ETL, Nshots, deltak)
     return schedules, parts
 
 
@@ -74,7 +79,10 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     rfsat = make_fatsat_rf(params.fatsat, sys, params.fat_offres_freq)
 
     # Generate EPI sampling schedule from mask
-    schedules, parts = _compute_schedules(omegas, params.ETL, params.Nshots, params.epi_trajectory)
+    schedules, parts = _compute_schedules(
+        omegas, params.ETL, params.Nshots, params.epi_trajectory,
+        deltak=(1 / params.fov[1], 1 / params.fov[2]),
+    )
 
     # Infer maximum ky and kz blip steps across all frames and shots
     max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))

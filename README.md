@@ -151,6 +151,166 @@ comparatively even blip sizes throughout the train:
 |---|---|
 | ![Laminar single-TR pulse diagram](docs/demo/one_tr_laminar.png) | ![Radial single-TR pulse diagram](docs/demo/one_tr_radial.png) |
 
+## Algorithms (`lib/mask2epi.py`)
+
+`mask2epi_laminar`/`mask2epi_radial` turn a 2D `(ky, kz)` sampling mask
+(`Ny × Nz` booleans, `n` of them `True`) into `Nshots` EPI echo trains of
+`ETL` samples each (`Nshots * ETL == n`), i.e. a partition of the sampled
+points into `Nshots` groups plus, within each group, a visiting order — the
+sequence in which the readout gradient steps from one `(ky, kz)` sample to
+the next. This splits into two genuinely different sub-problems:
+**partitioning** (which shot does each point belong to) and **ordering**
+(the sequence within a shot). Partitioning is sampling-pattern design and
+differs completely between the two variants (below); ordering is a
+path-optimization problem shared by both, and is the more interesting half
+algorithmically.
+
+### Why ordering is a *bottleneck* problem, not an ordinary shortest-path one
+
+`lib/make_readout_grads.py` builds each shot's phase-encode "blip" gradients
+(the small pulses that step `k`-space between readout lines) as a single
+unit-amplitude waveform, scaled per step by that step's actual `(dky, dkz)`.
+Critically, the y- and z-blip *waveforms themselves* — their duration and
+peak amplitude — are each sized once, from the single **largest** step seen
+on that axis across the whole shot. So the quantity that determines whether
+a shot is achievable on real gradient hardware (and stays under peripheral
+nerve stimulation limits) is the worst individual step, not the total
+distance traveled. In graph terms: given the `ETL` sampled points as
+vertices of a complete weighted graph (edge weight = a physical step cost,
+defined below), we want an open Hamiltonian path minimizing the *maximum*
+edge weight, not the path with minimum *total* edge weight. The two
+objectives can disagree — a path that revisits a large gap several times
+can still beat, on the max-edge objective, a path that takes one enormous
+detour to avoid it once — and the max-edge version is the **bottleneck
+traveling salesman path problem** (a.k.a. the bottleneck Hamiltonian path /
+bottleneck wandering salesperson problem): NP-hard, and — because it isn't
+a sum of independent terms — not amenable to the usual shortest-path or
+sum-based TSP toolbox. (For metric edge weights, the best possible
+polynomial-time approximation ratio is 2; nothing better exists unless
+P = NP.)
+
+The edge weight used throughout is a **physically weighted Chebyshev
+distance**:
+
+```
+weighted_step(dy, dz) = max(|dy| * Δky, |dz| * Δkz),   Δk = (1/FOVy, 1/FOVz)
+```
+
+not raw index distance `max(|dy|, |dz|)`. This repo's FOV is anisotropic
+(216 mm in y, 40.5 mm in z), so one index-step in `kz` corresponds to about
+5× the physical gradient area of one index-step in `ky`; an unweighted
+metric would let the optimizer "save" index-distance by trading a cheap
+`ky` step for an expensive `kz` step, optimizing the wrong quantity
+entirely.
+
+### Partitioning
+
+- **`mask2epi_laminar`** (ported from the MATLAB original): sweeps `kz`
+  columns outer, `ky` rows inner in *center-out* order (`_center_out`, an
+  `fftshift`-based interleave: `0, N-1, 1, N-2, ...` roughly, so ky = 0 is
+  spread across every shot rather than clustering all of it in shot 1),
+  filling each shot to exactly `ETL` samples before starting the next. This
+  guarantees `ky` is non-decreasing along the resulting echo train — a
+  constraint inherited from the original design, not re-derived here.
+- **`mask2epi_radial`** (this port's own addition): instead of rows, folds
+  every point's angle about `(ky, kz) = (0, 0)` into `[0, π)`
+  (`θ mod π`), so a point and its 180°-antipodal point land in the same
+  bucket, then sorts by that folded angle and cuts the sorted list into
+  `Nshots` contiguous chunks of exactly `ETL`. Each shot ends up an "opposite
+  wedge pair" — a spoke through k-space center — rather than a raster row.
+  This deliberately gives up `ky` non-decreasing, which is safe here because
+  the Nyquist/odd-even ghost-correction reference scan (`sequences/epical.py`)
+  is keyed to readout-gradient polarity alternation, not to `ky` adjacency
+  between consecutive echoes.
+
+### Ordering: a three-pass optimization
+
+Given a shot's point set (fixed by partitioning above), what visiting order
+minimizes the bottleneck objective? Three passes, each building on the last:
+
+**Pass 1 — min-sum construction.** Minimizing the *bottleneck* directly from
+scratch is hard to search (accepting only strictly-max-improving moves
+creates huge plateaus — most candidate moves don't touch the current worst
+edge at all). So pass 1 first builds a tour minimizing ordinary *total*
+weighted length instead — a much better-behaved objective, since almost
+every candidate move changes it by a nonzero amount, giving local search
+something to descend on everywhere. This total-length tour also turns out
+to matter for its own sake, not just as a warm start: a path that's long in
+total tends to have many needlessly-large steps scattered throughout, most
+of which don't happen to be *the* worst step and so are invisible to a
+bottleneck-only search.
+- Radial (an unconstrained 2D point-ordering problem): nearest-neighbor
+  construction, refined by ordinary 2-opt (edge-swap local search on the
+  *sum* objective) — `_sum_optimized_order`.
+- Laminar is more constrained and admits an *exact* algorithm here rather
+  than a heuristic: within one `ky` row, the set of consecutive-gap sizes
+  along `kz` is the same regardless of which end you start from (reversing
+  a sweep just reverses the order the same gaps are visited in), so the only
+  real decision per row is which of its two ends connects to the *next*
+  row's chosen entry point. That's a chain of binary decisions where each
+  choice only interacts with its immediate neighbor — a textbook 2-state
+  dynamic program (`_dp_row_directions`, state = "which end does this row
+  exit from," O(number of rows), exact — not an approximation).
+
+**Pass 2 — bottleneck refinement.** Starting from pass 1's tour (not from
+scratch), locally reduce the *worst* remaining step:
+- Radial: best-improvement 2-opt (`_bottleneck_2opt_order`) where a move is
+  accepted only if it strictly lowers the current maximum edge. A single
+  segment-reversal move only ever changes two edges, so re-evaluating a
+  candidate move in O(1) is possible by tracking just the top three largest
+  edges beforehand (at most two can be removed by any one move, so the
+  third-largest is always still present as a bound on "everything else").
+  This is also where a cheap **optimality certificate** appears: the
+  bottleneck value of *any* Hamiltonian path can never beat the bottleneck
+  value of the minimum bottleneck spanning tree over the same points (a
+  Hamiltonian path is itself a spanning tree), and that lower bound is just
+  Prim's algorithm's largest added edge (`_mst_bottleneck`). Whenever the
+  achieved path matches that bound, it's provably globally optimal —
+  despite the underlying problem being NP-hard in general.
+- Laminar: since each row's decision is binary, pass 2 is a greedy
+  hill-climb that flips one row's direction at a time, keeping the flip
+  only if it strictly reduces the current worst inter-row link
+  (`_hillclimb_row_directions_max`) — provably never worse than pass 1's
+  tour alone, though (unlike the pass-1 DP) not guaranteed globally optimal,
+  since it's a local search over a warm-started starting point rather than
+  an exhaustive search of the 2^(rows) state space.
+
+Radial additionally pins two things before searching, neither of which
+laminar needs (its row structure already fixes them implicitly): the sample
+nearest `(ky, kz) = (0, 0)` is fixed at echo index `(ETL - 1) // 2` —
+matching where `calc_te_tr_delays.py` places the nominal TE — and each half
+(before/after center) separately pins its own farthest-from-center point at
+the outer end, so the echo train visibly sweeps periphery → center →
+periphery like an actual radial spoke rather than an unconstrained tour
+that happens to wander near center at either end. Both passes 1 and 2 treat
+these as fixed endpoints of an open path and only reorder the interior.
+
+**Pass 3 — crossing cleanup (radial only).** Passes 1-2 optimize the
+weighted-Chebyshev metric above, whose unit ball is a square rather than a
+smooth curve — it is *not strictly convex*. The classical argument that any
+self-crossing in a tour can always be "uncrossed" to strictly shorten it
+depends on strict convexity (the crossing quadrilateral's diagonals must be
+*strictly* longer than its sides); under a non-strictly-convex metric this
+can become an equality instead, so a crossing-removing move is a tie under
+the weighted metric and a strict-improvement-only search will never take
+it, even though nothing about the underlying hardware objective favors
+keeping the crossing. `_euclidean_uncross_refine` fixes this over the
+*whole* assembled shot (not each half independently — some crossings
+straddle the seam at the pinned center sample) in two stages, both capped
+so no edge may exceed the shot's already-achieved bottleneck value: first,
+2-opt reversal and pairwise-exchange moves minimizing weighted *Euclidean*
+length instead (strictly convex, so the same uncrossing argument now goes
+through cleanly); second, for the rare residual crossing where even the
+fixing move is an exact tie in Euclidean length too (a swap across the
+pinned center position, where the two new edges are just a relabeling of
+the two removed ones), directly detect the geometric crossing and apply
+whichever available fixing move keeps every edge within the cap.
+
+Full derivation, empirical results (bottleneck-only vs. two-pass vs.
+three-pass path length and crossing-count comparisons), and pointers to
+the brute-force-verified unit tests live in `lib/mask2epi.py`'s module and
+per-function docstrings.
+
 ## GE export (`.pge`)
 
 Pure Python, no MATLAB install or sibling-repo checkouts required:
@@ -257,4 +417,7 @@ v7.3 at all — use `hdf5storage.loadmat` (or `h5py` directly) to read these
 files from Python, not `scipy.io.loadmat`.
 
 See [../ArbEPI/README.md](../ArbEPI/README.md) for background on the
-sampling methods and the `mask2epi` algorithm design.
+sampling methods and `mask2epi_laminar`'s original (MATLAB) partitioning
+design — see [Algorithms](#algorithms-libmask2epipy) above for the
+ordering optimization and `mask2epi_radial`, both this port's own addition
+with no MATLAB counterpart.

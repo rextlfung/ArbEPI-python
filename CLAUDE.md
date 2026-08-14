@@ -16,17 +16,6 @@ for the full layout).
 
 ## Commands
 
-```
-uv sync --extra test               # install deps into .venv (see uv.lock)
-uv run python main.py              # generate all 4 sequences into output/ using params.py defaults
-uv run python main.py --ge         # also export each sequence to GE .pge (pure Python, no MATLAB)
-uv run python main.py --plot       # also write diagnostic plots (see plotting/plot_last_run.py) into output/
-uv run pytest tests/               # run the unit test suite
-uv run pytest tests/test_mask2epi.py -v   # run a single test file
-uv sync --extra lint               # install Ruff
-uv run ruff check .                # lint (see pyproject.toml's [tool.ruff])
-```
-
 Dependency management is via `uv` (`pyproject.toml` + `uv.lock`), not
 `pip`/`venv` directly. `pypulseq` is pulled from PyPI (`pypulseq>=1.5.0`),
 not a local path — verify no local patch is needed there before ever
@@ -107,6 +96,14 @@ own docstring for why that's safe for the reference-scan-based Nyquist
 ghost correction this repo relies on, and for how it forces the
 k-space-center sample to land at echo index `(ETL - 1) // 2`, matching
 `calc_te_tr_delays.py`'s definition of the nominal TE echo).
+
+**Ordering within each shot** (both variants) is a two-pass optimization —
+pass 1 minimizes total weighted path length (min-sum TSP), pass 2 refines
+that tour to minimize the worst-case single step (bottleneck/min-max) —
+plus a third crossing-cleanup pass for radial only. See
+`lib/mask2epi.py`'s module docstring and `_bottleneck_2opt_order`'s /
+`_euclidean_uncross_refine`'s own docstrings for the full derivation,
+empirical results, and the literature this design is based on.
 
 **`lib/make_readout_grads.py`** returns a `ReadoutGrads` dataclass with
 pre-built gradient objects. Blips (`gy_blip`, `gz_blip`) are stored at *unit
