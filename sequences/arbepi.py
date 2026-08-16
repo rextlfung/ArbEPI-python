@@ -197,6 +197,27 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
         fmt='7.3',
     )
 
+    # Snapshot the scan scalars preprocessing/ needs (see
+    # preprocessing/config.py's load_seq_params) -- MATLAB's preprocess.m
+    # gets these by run()-ing a per-acquisition params.m into its workspace,
+    # which has no Python equivalent. Rather than requiring pypulseq/
+    # scanners.py in the (separate, GE-SDK-constrained) preprocessing venv
+    # just to read a handful of scalars, export them as a durable data
+    # snapshot instead, same mechanism/location as samp_locs.mat above.
+    hdf5storage.savemat(
+        os.path.join(params.output_dir, 'params.mat'),
+        {
+            'Nx': params.Nx, 'Ny': params.Ny, 'Nz': params.Nz,
+            'ETL': params.ETL, 'R': params.R,
+            'fov': params.fov,
+            'volume_tr': params.volume_tr,
+            'discard_duration': params.discard_duration,
+            'Nx_gre': params.Nx_gre, 'Ny_gre': params.Ny_gre, 'Nz_gre': params.Nz_gre,
+            'fov_gre': params.fov_gre,
+        },
+        fmt='7.3',
+    )
+
     # Write Pulseq .seq file
     seq.set_definition('FOV', params.fov)
     seq.set_definition('Name', seqname)

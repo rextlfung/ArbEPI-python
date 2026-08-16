@@ -21,12 +21,27 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest"]
 lint = ["ruff>=0.6"]
+# Stage 1/2 preprocessing+recon pipeline (preprocessing/). Deliberately excludes
+# BART and hmriutils: coil whitening/compression are plain numpy, ESPIRiT smaps
+# and the regularized SENSE recon use sigpy instead of BART's pics/ecalib (see
+# preprocessing/ docs for why). Raw ScanArchive reading needs GE's proprietary
+# GERecon SDK, which is NOT pip-installable and NOT listed here -- it must be
+# installed separately by the user (see preprocessing/raw_io.py), and its
+# compiled extension is ABI-locked to Python 3.10 with numpy<2.0, so this extra
+# will typically need its own dedicated 3.10 venv rather than sharing the main
+# sequence-generation environment.
+preprocessing = [
+    "sigpy>=0.1.26",
+    "h5py>=3.10",
+    "scipy>=1.10",
+    "nibabel>=5.0",
+]
 
 [tool.setuptools]
 py-modules = ["params", "scanners"]
 
 [tool.setuptools.packages.find]
-include = ["sampling*", "lib*", "sequences*", "plotting*", "seq2ge*"]
+include = ["sampling*", "lib*", "sequences*", "plotting*", "seq2ge*", "preprocessing*"]
 
 [tool.ruff]
 line-length = 100

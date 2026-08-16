@@ -342,5 +342,178 @@ re-deriving this port's validation record.
   SigPy) that motivated this, and why `numba` (narrowly, for just this one
   function) is still a dependency.
 
+### `preprocessing/` -- raw scanner data -> zero-filled k-space, ported from `../epi-preprocessing`
+
+`preprocessing/` is a from-scratch Python port of the companion MATLAB repo
+`../epi-preprocessing`: raw scanner data -> reconstructed images, the
+consumer of `samp_locs.mat`/`kxoe<Nx>.mat` this repo's sequence-generation
+side produces. It's a separate `pyproject.toml` optional-dependency group
+(`preprocessing`), deliberately kept out of the main sequence-generation
+dependency set -- see below for why it also needs its own venv.
+
+**Two-stage pipeline, same structure as the MATLAB original**: Stage 1
+(`preprocess.py`, ported from `preprocess.m`) reads raw ScanArchives,
+whitens/coil-compresses/grids/phase-corrects, and writes a zero-filled
+k-space volume. Stage 2 (`recon_frames.py` + `run_rss.py`/`run_recon_sigpy.py`,
+ported from `recon_frames.m` and two of its driver scripts) reconstructs
+every frame via RSS or combined L1-wavelet+TV regularized SENSE -- these two
+are wired up as sanity checks for validating Stage 1's output against real
+acquired data, not the final production reconstruction (a separate, more
+advanced Julia pipeline; CG-SENSE is also planned here but not yet added).
+
+**Raw ScanArchive reading needs GE's proprietary Orchestra SDK
+(`GERecon`), isolated to one module (`raw_io.py`).** This is not optional --
+`h5dump -H` on a real `.h5` ScanArchive shows the k-space payload is an
+opaque `H5T_STD_U8LE` byte blob with no structured type info, and even the
+MRI community's own `ge_to_ismrmrd` converter still links Orchestra's own
+Boost/HDF5 libraries to decode it, so reimplementing this independently
+isn't realistic. `GERecon` is *not* pip-installable and its compiled
+extension is *not* committed to this repo (proprietary, ~100MB, and
+ABI-locked to Python 3.10 with `numpy<2.0.0`) -- install it separately from
+GE's SDK distribution (`pip install <SDK>/GERecon`) into its own venv
+(`uv venv --python 3.10`), not the main sequence-generation environment,
+which resolves `numpy>=2.0` and would conflict. Verified working end to end
+against real project data: `GERecon.Archive(path).Metadata()` and
+`.NextFrame()` both function correctly, and `.NextFrame()`'s exhaustion
+(`RuntimeError` containing "No next frame available") is what `raw_io.
+ArchiveReader` converts to a normal `StopIteration` for Python's iterator
+protocol. Every other module in `preprocessing/` avoids importing
+`raw_io`/`GERecon` at module level (`preprocess.py` and
+`calibrate_delay.py` both import it lazily, inside the one function that
+needs it) specifically so the rest of the package -- and its tests --
+stay importable without the SDK installed.
+
+**BART and hmriutils/MIRT are dropped entirely, replaced by plain numpy +
+sigpy** (explicit user decision, not a fallback forced by unavailability --
+BART itself is installed and working locally). Noise whitening and PCA
+coil compression (`coils.py`) are a few lines of numpy (Cholesky
+decorrelation, eigendecomposition) with no need for BART's `whiten`/`cc`/
+`ccapply` at all. ESPIRiT sensitivity maps (`smaps.py`) use
+`sigpy.mri.app.EspiritCalib` in place of `bart ecalib` (sigpy only supports
+outputting one map set, unlike BART, which simplifies `process_smaps`'s
+port slightly -- no `emaps(...,end)`-style selection among several map sets
+is needed). The 1D NUFFT ramp-sample regridding (`epi_gridding.py`, ported
+from hmriutils' `rampsampepi2cart.m`/`rampsamp2cart.m`/`reconecho.m`) uses
+`sigpy.nufft_adjoint` with the same gradient-magnitude density
+compensation (`dcf = |diff(kx)| / max(...)`) in place of MIRT's `Gmri`. The
+combined L1-wavelet+TV regularized reconstruction (`recon_sigpy.py`,
+replacing `run_bart.m`'s `bart pics -R W:... -R T:...`) is sigpy's standard
+multi-regularizer pattern: `G = Vstack([Wavelet, FiniteDifference])`,
+`proxg = prox.Stack([L1Reg(...,lamb_l1), L1Reg(...,lamb_tv)])`, solved via
+`PrimalDualHybridGradient` -- the same structure `sigpy.mri.app.
+L1WaveletRecon`/`TotalVariationRecon` each use individually, just combined.
+**Accepted, disclosed tradeoff**: none of this claims numerical parity with
+BART/MIRT (unlike `seq2ge/`'s float-ULP-level MATLAB validation) --
+verification here is algorithm-invariant instead (round-trip/convergence
+tests against synthetic data with known ground truth), the same philosophy
+this repo already uses for sequence generation where no MATLAB comparison
+is available (see Commands section above).
+
+**Validated end to end against real acquired data**: `preprocess.py` ->
+`run_rss.py` was run on a real acquisition (`wb_2.4mm`, GE_UHP hardware) and
+compared against a real MATLAB/BART reference reconstruction
+(`wb_2.4mm_recon_rss.mat`) -- 0.19% relative L2 error, Pearson r = 0.999997
+(after fitting a single overall scale factor, since RSS's own coil
+normalization differs by convention), with metadata (`Nvcoils`, `Nframes`,
+matrix size, TR) matching exactly. This confirms the whole Stage 1 pipeline
+(whitening, coil compression, EPI gridding, odd/even phase correction,
+k-space scatter) end to end, not just its individual building blocks in
+isolation. Every building block was also independently verified before
+that: `raw_io.py` against real `ScanArchive` files (`Archive`/`NextFrame`
+reading real cal/EPI data), `epi_gridding.py`/`oephase.py`/`recon_sigpy.py`
+via synthetic round-trip/convergence tests, and the trickiest piece of
+`preprocess.py` -- the MATLAB column-major
+`permute`/`reshape` chain that scatters gridded k-space into the correct
+`(ky, kz)` zero-filled-volume slot -- has a dedicated location-encoding
+test (`scatter_frame` in `test_preprocessing_preprocess.py`: each
+(shot, echo) is given a unique decodable value, and the test asserts it
+lands at exactly the schedule's location, catching any flatten-order
+mismatch a shape-only check would miss). Every MATLAB `permute`/`reshape`
+in this port is translated mechanically (`permute(A,[p...])` ->
+`A.transpose(p_0based...)`, `reshape(A,dims)` -> `A.reshape(dims,
+order='F')`, since MATLAB `reshape` is always column-major over the whole
+array, exactly numpy's `order='F'`) -- not re-derived by hand, to avoid
+introducing exactly this class of bug.
+
+**Per-acquisition scan parameters travel as a `.mat` snapshot, not a copied
+script.** MATLAB's `preprocess.m` gets `Nx`/`Ny`/`ETL`/`fov`/etc. by
+`run()`-ing a per-acquisition `params.m` into its workspace, injecting
+variables -- no Python equivalent of that pattern exists, and copying the
+whole `params.py` module was considered and rejected (it would require
+`pypulseq`/`scanners.py` in the GERecon-constrained preprocessing venv just
+to read a handful of scalars, and ties a long-term data record to source
+code that can change shape over time). Instead, `sequences/arbepi.py`
+exports exactly the scalars `preprocess.py` needs to `params.mat`
+(`hdf5storage.savemat(fmt='7.3')`, right next to its existing
+`samp_locs.mat` write); `preprocessing/config.py`'s `load_seq_params` reads
+it back with `h5py` (see below for why not `hdf5storage`). No new
+dependency needed on either side: `hdf5storage` is already a main-repo
+dependency (writer), plain `h5py` is already in the `preprocessing` extras
+(reader).
+
+**`preprocessing/matio.py` -- read hdf5storage `.mat` files with `h5py`,
+correctly.** `hdf5storage` stores arrays *axis-reversed* on disk (MATLAB's
+column-major convention); `h5py` reads the raw on-disk layout with no
+correction. Verified empirically against a real `samp_locs.mat`:
+`hdf5storage.loadmat`'s `schedules` is `(30, 20, 60, 2)` (matching this
+repo's documented `Nframes x Nshots x ETL x 2` layout), while a bare
+`h5py.File(...)['schedules'][()]` comes back `(2, 60, 20, 30)` -- exactly
+the reverse, and exactly `raw.transpose()` recovers the correct array
+(shape *and* values, checked element-by-element against
+`hdf5storage.loadmat`'s output). `matio.read_mat_array`/`read_mat` apply
+this transpose unconditionally; for vectors/scalars it's a no-op on the
+values (only a singleton axis moves), so there's no need to special-case
+shape. Use these for every hdf5storage-written `.mat` this pipeline reads
+(`samp_locs.mat`, `kxoe<Nx>.mat`, `params.mat`) -- never `scipy.io` (can't
+read v7.3 at all, see above), never a bare `h5py` read without the
+transpose.
+
+**Everything `preprocess.py`/`recon_frames.py` write for their own
+internal use -- not for a human to open in a viewer -- stays `.h5`, not
+`.mat`.** These are plain numpy-order `h5py` writes with no MATLAB
+consumer (the zero-filled k-space output, the per-sequence GRE/smaps
+caches) -- the opposite on-disk axis convention from the hdf5storage-written
+files this pipeline *reads*. A `.mat` extension here would silently invite
+reading it with `hdf5storage.loadmat`, which would return every multi-axis
+array transposed; the `.h5` extension is a deliberate, visible signal that
+these files follow this port's own convention, not MATLAB's. One related,
+fixed inconsistency in the original: `recon_frames.m` looks for a *shared*
+`<datdir>/recon/gre.mat`, but `preprocess.m` actually saves its
+whitened+compressed `ksp_gre` to `<datdir>/scanarchives/gre.mat` -- those
+paths don't match in the MATLAB original, and since the whitening matrix
+comes from a per-sequence noise scan, a single shared cache is a latent
+correctness bug (whichever sequence's `preprocess.m` ran last silently
+wins for every other sequence's fallback smaps estimation). This port uses
+one consistent per-sequence path, `<datdir>/recon/<seqname>_gre.h5`, on
+both the writer (`preprocess.py`) and reader (`recon_frames.py`) side.
+
+**The final reconstructed-image files are the one exception: `.nii.gz` +
+JSON sidecar, not `.h5`.** `preprocessing/nifti_io.py`'s `save_recon_nifti`
+is the shared writer `run_rss.py`/`run_recon_sigpy.py`
+all call in place of their old direct `h5py.File(...)` writes. This is a
+deliberate format split by *consumer*, not a blanket format change: the
+intermediate files above (`ksp_epi_zf`, smaps, GRE cache) still feed the
+downstream Julia advanced-recon pipeline and stay plain HDF5 (already
+generic and directly readable via `HDF5.jl`, no format change needed
+there), while the final magnitude images are for a human to look at, and
+this repo's own `.h5` files have no viewer as good as ITK-SNAP/FSLeyes/3D
+Slicer/etc., all of which expect NIfTI (or DICOM) rather than a bare
+HDF5 array. NIfTI has no native complex dtype, so `save_recon_nifti` saves
+magnitude only (`np.abs`) -- `run_rss.py`'s output was
+already real-valued in practice (RSS is a magnitude combine), so this
+loses nothing currently produced, but note it if a future recon driver
+needs the complex-valued image itself; that consumer should keep reading
+`recon_frames`' return value directly; rather than round-tripping it
+through NIfTI. NIfTI also has no free-form attribute dict (unlike h5py's
+`.attrs`), so per-recon parameters that used to live as `.h5` attrs
+(`seqname`, `num_iter`, `lamb_l1`/`lamb_tv`, `runtime_s`, the `seq_params`
+fields) are written to a `<fn_base>.json` sidecar instead -- the common
+BIDS-style image+sidecar convention, not a repo-specific format. The
+NIfTI affine is a plain diagonal voxel-size matrix derived from
+`seq_params.fov`/the image shape; no patient-orientation information
+exists anywhere in this pipeline (unlike a scanner-produced DICOM/NIfTI),
+so voxel spacing is correct but radiological left/right or
+anterior/posterior orientation is not guaranteed.
+
 See `README.md` for the getting-started walkthrough and the full
 `Getting started` / `GE export` usage examples.
