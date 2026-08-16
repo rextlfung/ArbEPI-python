@@ -354,12 +354,12 @@ dependency set -- see below for why it also needs its own venv.
 **Two-stage pipeline, same structure as the MATLAB original**: Stage 1
 (`preprocess.py`, ported from `preprocess.m`) reads raw ScanArchives,
 whitens/coil-compresses/grids/phase-corrects, and writes a zero-filled
-k-space volume. Stage 2 (`recon_frames.py` + `run_rss.py`/`run_recon_sigpy.py`,
-ported from `recon_frames.m` and two of its driver scripts) reconstructs
-every frame via RSS or combined L1-wavelet+TV regularized SENSE -- these two
-are wired up as sanity checks for validating Stage 1's output against real
-acquired data, not the final production reconstruction (a separate, more
-advanced Julia pipeline; CG-SENSE is also planned here but not yet added).
+k-space volume. Stage 2 (`recon_frames.py` + `run_cg_sense.py`/`run_rss.py`/
+`run_recon_sigpy.py`, ported from `recon_frames.m` + its three driver
+scripts) reconstructs every frame via CG-SENSE, RSS, or combined
+L1-wavelet+TV regularized SENSE -- all three are wired up as sanity checks
+for validating Stage 1's output against real acquired data, not the final
+production reconstruction (a separate, more advanced Julia pipeline).
 
 **Raw ScanArchive reading needs GE's proprietary Orchestra SDK
 (`GERecon`), isolated to one module (`raw_io.py`).** This is not optional --
@@ -420,8 +420,9 @@ matrix size, TR) matching exactly. This confirms the whole Stage 1 pipeline
 k-space scatter) end to end, not just its individual building blocks in
 isolation. Every building block was also independently verified before
 that: `raw_io.py` against real `ScanArchive` files (`Archive`/`NextFrame`
-reading real cal/EPI data), `epi_gridding.py`/`oephase.py`/`recon_sigpy.py`
-via synthetic round-trip/convergence tests, and the trickiest piece of
+reading real cal/EPI data), `epi_gridding.py`/`oephase.py`/`cg_sense.py`/
+`recon_sigpy.py` via synthetic round-trip/convergence tests, and the
+trickiest piece of
 `preprocess.py` -- the MATLAB column-major
 `permute`/`reshape` chain that scatters gridded k-space into the correct
 `(ky, kz)` zero-filled-volume slot -- has a dedicated location-encoding
@@ -489,7 +490,7 @@ both the writer (`preprocess.py`) and reader (`recon_frames.py`) side.
 
 **The final reconstructed-image files are the one exception: `.nii.gz` +
 JSON sidecar, not `.h5`.** `preprocessing/nifti_io.py`'s `save_recon_nifti`
-is the shared writer `run_rss.py`/`run_recon_sigpy.py`
+is the shared writer `run_rss.py`/`run_cg_sense.py`/`run_recon_sigpy.py`
 all call in place of their old direct `h5py.File(...)` writes. This is a
 deliberate format split by *consumer*, not a blanket format change: the
 intermediate files above (`ksp_epi_zf`, smaps, GRE cache) still feed the
@@ -499,8 +500,8 @@ there), while the final magnitude images are for a human to look at, and
 this repo's own `.h5` files have no viewer as good as ITK-SNAP/FSLeyes/3D
 Slicer/etc., all of which expect NIfTI (or DICOM) rather than a bare
 HDF5 array. NIfTI has no native complex dtype, so `save_recon_nifti` saves
-magnitude only (`np.abs`) -- `run_rss.py`'s output was
-already real-valued in practice (RSS is a magnitude combine), so this
+magnitude only (`np.abs`) -- `run_cg_sense.py`/`run_rss.py`'s outputs were
+already real-valued in practice (RSS/CG-SENSE magnitude combines), so this
 loses nothing currently produced, but note it if a future recon driver
 needs the complex-valued image itself; that consumer should keep reading
 `recon_frames`' return value directly; rather than round-tripping it

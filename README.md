@@ -163,15 +163,16 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
   epi_gridding.py               1D NUFFT ramp-sample regridding (sigpy, replaces MIRT/hmriutils)
   oephase.py                    Odd/even EPI ghost-correction estimation + application
   smaps.py                      ESPIRiT sensitivity maps (sigpy, replaces BART) + mask/crop/resize/normalize
-  recon_sigpy.py                Combined L1-wavelet + TV regularized SENSE (sigpy, replaces BART pics) --
-                                 a sanity-check recon for validating Stage 1 output, not the final production
-                                 reconstruction (that's a separate, more advanced Julia pipeline)
+  cg_sense.py                   CG-SENSE solver
+  recon_sigpy.py                Combined L1-wavelet + TV regularized SENSE (sigpy, replaces BART pics)
   matio.py                      Shared hdf5storage-compatible .mat reader (h5py-based)
   nifti_io.py                   Writes final recon images as NIfTI + JSON sidecar (for ITK-SNAP/FSLeyes/etc.)
   preprocess.py                 Stage 1 driver: raw data -> zero-filled k-space volume
   recon_frames.py               Stage 2 shared frame-loop + smaps loading
-  run_preprocessing.py / run_rss.py / run_recon_sigpy.py   Batch entry points; RSS and L1-wavelet+TV are
-                                 the two sanity-check reconstructions currently wired up
+  run_preprocessing.py / run_cg_sense.py / run_rss.py / run_recon_sigpy.py   Batch entry points --
+                                 CG-SENSE, RSS, and L1-wavelet+TV are wired up as sanity checks for
+                                 validating Stage 1 output, not the final production reconstruction
+                                 (that's a separate, more advanced Julia pipeline)
   calibrate_delay.py            Automated k-space center delay tuning
 matlab_reference/            One-off scripts for re-validating seq2ge/ against a real MATLAB install
                               (not called by any Python code; MATLAB is not needed to use this repo)

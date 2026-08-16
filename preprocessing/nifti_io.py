@@ -1,6 +1,6 @@
 """Write final reconstructed image volumes as NIfTI, for viewing in
 ITK-SNAP/FSLeyes/3D Slicer/etc. instead of scrolling through raw HDF5 in
-Python (see run_rss.py/run_recon_sigpy.py, the only
+Python (see run_rss.py/run_cg_sense.py/run_recon_sigpy.py, the only
 callers). This is a Python-viewing convenience only -- it does not replace
 any of the .h5 files the pipeline reads/writes for its own use
 (ksp_epi_zf, smaps, the GRE cache): those stay plain h5py (already
