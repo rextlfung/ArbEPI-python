@@ -178,6 +178,68 @@ def test_mask2epi_radial_caipi_mask():
     _assert_endpoints_are_half_extremes(schedule, mask, ETL, Nshots)
 
 
+def test_golden_angle_shot_order_prefix_coverage():
+    """Any prefix of golden-angle-ordered shots should cover the [0, pi)
+    angular range close to uniformly -- unlike plain angular-index order,
+    whose prefixes are narrow contiguous wedges."""
+    from lib.mask2epi import _golden_angle_shot_order
+
+    n = 50
+    centers = np.linspace(0, np.pi, n, endpoint=False)
+    order = _golden_angle_shot_order(centers)
+    assert sorted(order.tolist()) == list(range(n))
+
+    def max_gap(angles):
+        s = np.sort(np.asarray(angles) % np.pi)
+        gaps = np.diff(np.concatenate([s, [s[0] + np.pi]]))
+        return gaps.max()
+
+    for N in (5, 10, 20, 35):
+        golden_prefix_gap = max_gap(centers[order[:N]])
+        naive_prefix_gap = max_gap(centers[:N])
+        # Substantially better than the naive contiguous-angular-order
+        # prefix (which leaves most of the circle completely uncovered for
+        # small N), and close to the theoretical ideal (pi/N).
+        assert golden_prefix_gap < naive_prefix_gap
+        assert golden_prefix_gap < (np.pi / N) * 3
+
+
+def test_mask2epi_radial_shot_order_is_golden_angle_like():
+    """mask2epi_radial's actual shot sequencing (not just the standalone
+    helper) should exhibit the same prefix-uniform-coverage property,
+    measured on each shot's own spoke axis -- the same doubled-angle
+    circular mean mask2epi_radial itself uses to find that axis, not a
+    plain sample centroid (a shot's samples form an opposite wedge pair
+    about k-space center, so the centroid sits near zero and its arctan2
+    would be dominated by imbalance noise rather than the true spoke
+    direction)."""
+    Ny, Nz = 40, 28
+    R = 2
+    ETL = 14
+    mask = caipi_sample([Ny, Nz], R).astype(bool)
+    Nshots = int(mask.sum() // ETL)
+    assert mask.sum() == Nshots * ETL
+
+    schedule, _ = mask2epi_radial(mask, ETL, Nshots)
+    cy, cz = Ny / 2, Nz / 2
+    ys = schedule[:, :, 0].astype(float) - cy
+    zs = schedule[:, :, 1].astype(float) - cz
+    theta = np.mod(np.arctan2(zs, ys), np.pi)  # (Nshots, ETL), folded
+    shot_angles = 0.5 * np.arctan2(
+        np.sin(2 * theta).mean(axis=1), np.cos(2 * theta).mean(axis=1)
+    )
+    shot_angles = np.mod(shot_angles, np.pi)
+
+    def max_gap(angles):
+        s = np.sort(np.asarray(angles) % np.pi)
+        gaps = np.diff(np.concatenate([s, [s[0] + np.pi]]))
+        return gaps.max()
+
+    naive_angles = np.sort(shot_angles)  # best case for a contiguous baseline
+    for N in (3, 6, 10):
+        assert max_gap(shot_angles[:N]) <= max_gap(naive_angles[:N]) + 1e-9
+
+
 def test_mask2epi_radial_rejects_wrong_sample_count():
     mask = np.zeros((4, 4), dtype=bool)
     mask[0, 0] = True

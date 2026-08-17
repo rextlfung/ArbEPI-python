@@ -12,7 +12,10 @@ visiting order, hence "laminar."
 mask2epi_radial: each shot instead sweeps through k-space center as a
 single spoke (an opposite pair of angular wedges about the mask's center),
 so every shot samples near k-space center rather than only whichever shots
-happen to include the central ky row. See its own docstring for the
+happen to include the central ky row. Shots are sequenced in a
+golden-angle-like order (`_golden_angle_shot_order`), so that any prefix of
+consecutively-acquired shots -- not just the complete set -- covers the
+angular range close to uniformly. See its own docstring for the
 partitioning/ordering details, including why ky non-decreasing is
 deliberately given up here.
 
@@ -681,6 +684,58 @@ def mask2epi_laminar(
     return schedule, parts
 
 
+def _golden_angle_shot_order(wedge_centers: np.ndarray) -> np.ndarray:
+    """Golden-angle-like temporal ordering of `mask2epi_radial`'s `Nshots`
+    angular wedges (see that function's docstring for how the wedges
+    themselves -- the spatial partition -- are formed; this only decides
+    the order shots visit them in).
+
+    Real golden-angle radial MRI (Winkelmann et al. 2007; see also
+    https://pmc.ncbi.nlm.nih.gov/articles/PMC9189059/) picks each new
+    spoke's angle freely, incrementing by the golden angle `180 deg / GR`
+    (GR = the golden ratio) every view -- since consecutive multiples of an
+    irrational angle never repeat and always fill the current largest gap,
+    *any* prefix of consecutively-acquired spokes covers the angular range
+    close to uniformly, not just the full set. This repo can't pick spoke
+    angles freely: `mask2epi_radial`'s wedges are fixed in advance (exact
+    equal-ETL-per-wedge counts, needed for the exact-per-shot sample-count
+    constraint every mask2epi_* variant requires) before any ordering
+    decision is made. So the golden-angle idea is applied one level up, to
+    the discrete set of wedges rather than to a continuous angle: shot `t`'s
+    *target* angle is still `t * golden_angle mod pi` exactly as in the
+    continuous case, and is greedily matched to whichever not-yet-assigned
+    wedge's own center angle is closest (circular distance mod pi) --
+    consuming that wedge and moving to shot `t + 1`'s target. This
+    preserves the same prefix-uniformity property approximately (exactly,
+    in the limit of many narrow wedges): the first N shots' wedges are the
+    ones closest to the first N terms of the continuous golden-angle
+    sequence, which are themselves already close to evenly spread.
+
+    Parameters
+    ----------
+    wedge_centers : (Nshots,) representative folded angle (radians,
+        [0, pi)) of each wedge, indexed in the same order as the spatial
+        partition (ascending by angle, i.e. wedge_centers is sorted).
+
+    Returns
+    -------
+    order : (Nshots,) permutation of `range(Nshots)`; shot `t` is assigned
+        wedge `order[t]`.
+    """
+    n = len(wedge_centers)
+    golden_angle = np.pi * (math.sqrt(5) - 1) / 2  # 180 deg / GR, folded mod pi
+    order = np.empty(n, dtype=int)
+    available = list(range(n))
+    for t in range(n):
+        target = (t * golden_angle) % np.pi
+        avail_centers = wedge_centers[available]
+        d = np.abs(avail_centers - target)
+        d = np.minimum(d, np.pi - d)
+        pick = int(np.argmin(d))
+        order[t] = available.pop(pick)
+    return order
+
+
 def _order_half_anchored(
     near_anchor: np.ndarray,
     far_side_coords: np.ndarray,
@@ -758,6 +813,24 @@ def mask2epi_radial(
     different "pass 1" from the ordering pass 1 described in the module
     docstring -- this one assigns points to shots, the ordering pass 1
     below sequences points within a shot.)
+
+    Shot (temporal) order — golden-angle-like wedge sequencing: the
+    angle-sorted chunks above form `Nshots` wedges indexed by ascending
+    angle, but that spatial index is not used directly as the acquisition
+    order. Instead `_golden_angle_shot_order` assigns wedges to shots so
+    that shot `t`'s wedge has folded angle close to `t * golden_angle mod
+    pi` (`golden_angle = 180 deg / GR`, the same low-discrepancy angle used
+    in golden-angle radial MRI -- Winkelmann et al. 2007,
+    https://pmc.ncbi.nlm.nih.gov/articles/PMC9189059/), greedily matching
+    each target angle to whichever wedge is closest and not yet claimed.
+    This gives the same practically useful property real golden-angle
+    radial sampling has: *any* prefix of consecutively-acquired shots (not
+    just the complete set) covers the angular range close to uniformly, so
+    a downstream reconstruction that only has the first few shots of a
+    frame available (e.g. sliding-window / retrospective temporal
+    undersampling) still sees roughly uniform k-space coverage rather than
+    a narrow angular wedge -- which is exactly what acquiring wedges in
+    plain angular order would give.
 
     Splitting within a shot: each shot's points are projected onto that
     shot's own dominant spoke axis — found via the doubled-angle circular
@@ -837,12 +910,18 @@ def mask2epi_radial(
 
     angle_order = np.argsort(theta_folded, kind='stable')
 
+    wedge_centers = np.array([
+        theta_folded[angle_order[w * ETL:(w + 1) * ETL]].mean() for w in range(Nshots)
+    ])
+    shot_order = _golden_angle_shot_order(wedge_centers)
+
     parts = np.zeros((Ny, Nz), dtype=int)
     schedule = np.zeros((Nshots, ETL, 2), dtype=int)
     target = (ETL - 1) // 2
 
     for shot in range(Nshots):
-        idx = angle_order[shot * ETL:(shot + 1) * ETL]
+        w = shot_order[shot]
+        idx = angle_order[w * ETL:(w + 1) * ETL]
         shot_y, shot_z = ys[idx], zs[idx]
         parts[shot_y, shot_z] = shot + 1
 
