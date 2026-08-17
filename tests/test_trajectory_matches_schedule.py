@@ -37,7 +37,9 @@ def _small_params(tmp_path):
 def test_arbepi_trajectory_matches_schedule(tmp_path):
     p = _small_params(tmp_path)
     omegas = gen_sampling_masks(p.R, p)
-    schedules, _ = _compute_schedules(omegas, p.ETL, p.Nshots)  # 0-based, pre-savemat
+    schedules, _ = _compute_schedules(
+        omegas, p.ETL, p.Nshots, p.epi_trajectory, deltak=(1 / p.fov[1], 1 / p.fov[2]),
+    )  # 0-based, pre-savemat
 
     seq = generate_arbepi(omegas, p, seqname='xcheck')
 
