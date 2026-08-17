@@ -182,9 +182,8 @@ def plot_trajectory(
 
 
 def plot_psf(omega: np.ndarray, params: Params, frame_idx: int = 0) -> matplotlib.figure.Figure:
-    """Point spread function in y-z space. Ported from plot_epi.m's PSF
-    cell — rendered as a 2D magnitude heatmap rather than MATLAB's 3D
-    `surf`.
+    """Point spread function in y-z space, rendered as a 3D magnitude
+    surface -- matching plot_epi.m's PSF cell, which uses MATLAB's `surf`.
 
     `omega` may be a single frame's (Ny, Nz) mask, or the full
     (Ny, Nz, Nframes) array -- in the latter case `frame_idx` selects
@@ -198,13 +197,17 @@ def plot_psf(omega: np.ndarray, params: Params, frame_idx: int = 0) -> matplotli
     psf = np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(omega)))
     psf_mag = np.abs(psf)
 
-    fig = matplotlib.figure.Figure(figsize=(6, 5))
-    ax = fig.add_subplot(111)
-    extent = [-Ny * res_y / 2, Ny * res_y / 2, -Nz * res_z / 2, Nz * res_z / 2]
-    im = ax.imshow(psf_mag.T, origin='lower', extent=extent, aspect='equal', cmap='viridis')
-    fig.colorbar(im, ax=ax, label='magnitude (a.u.)')
+    y_vals = (np.arange(Ny) - Ny / 2) * res_y
+    z_vals = (np.arange(Nz) - Nz / 2) * res_z
+    Y, Z = np.meshgrid(y_vals, z_vals, indexing='ij')
+
+    fig = matplotlib.figure.Figure(figsize=(7, 6))
+    ax = fig.add_subplot(111, projection='3d')
+    surf = ax.plot_surface(Y, Z, psf_mag, cmap='viridis', linewidth=0, antialiased=True)
+    fig.colorbar(surf, ax=ax, shrink=0.6, label='magnitude (a.u.)')
     ax.set_xlabel('y (m)')
     ax.set_ylabel('z (m)')
+    ax.set_zlabel('magnitude (a.u.)')
     ax.set_title(f'Point spread function in y-z space, frame {frame_idx + 1}')
     return fig
 
