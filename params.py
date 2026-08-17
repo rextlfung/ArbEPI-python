@@ -136,7 +136,7 @@ def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> P
         B0=spec.B0,
     )
 
-    crt = 20e-6  # s, common raster time (Siemens 10us, GE 4us)
+    crt = 4e-6  # s, GE raster time only; would need 20e-6 (lcm of Siemens 10us, GE 4us) for Siemens compatibility
     dwell = 4e-6  # s
 
     # Spatial parameters. 0.9mm isotropic resolution; x/y FOV held at the
