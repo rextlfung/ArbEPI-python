@@ -96,7 +96,7 @@ def plot_sampling_mask(
     ax.plot(ky_grid.ravel(), kz_grid.ravel(), '.', color=(0.7, 0.7, 0.7), markersize=3)
     ax.plot(ky_samp, kz_samp, 'r.', markersize=4)
     ax.set_aspect('equal')
-    ax.set_title(f'2D sampling mask, frame {frame_idx}. R = {round(R)}')
+    ax.set_title(f'2D sampling mask, frame {frame_idx + 1}. R = {round(R)}')
     ax.set_xlabel('k_y (m$^{-1}$)')
     ax.set_ylabel('k_z (m$^{-1}$)')
     ax.set_xlim(-Ny * deltak_y / 2, Ny * deltak_y / 2)
@@ -164,11 +164,11 @@ def plot_trajectory(
             r = np.hypot(x0, y0)
             dx, dy = (-x0 / r, -y0 / r) if r > 0 else (0.0, 1.0)
             ax.annotate(
-                str(shot), (x0, y0), xytext=(dx * 8, dy * 8), textcoords='offset points',
+                str(shot + 1), (x0, y0), xytext=(dx * 8, dy * 8), textcoords='offset points',
                 fontsize=6, color='k', ha='center', va='center', zorder=6,
                 path_effects=[matplotlib.patheffects.withStroke(linewidth=1.5, foreground='w')],
             )
-        title = f'3D-EPI trajectory, frame {frame_idx}. R = {round(R)}'
+        title = f'3D-EPI trajectory, frame {frame_idx + 1}. R = {round(R)}'
 
     ax.axhline(0, color='k', linewidth=1, zorder=0)
     ax.axvline(0, color='k', linewidth=1, zorder=0)
@@ -205,7 +205,7 @@ def plot_psf(omega: np.ndarray, params: Params, frame_idx: int = 0) -> matplotli
     fig.colorbar(im, ax=ax, label='magnitude (a.u.)')
     ax.set_xlabel('y (m)')
     ax.set_ylabel('z (m)')
-    ax.set_title(f'Point spread function in y-z space, frame {frame_idx}')
+    ax.set_title(f'Point spread function in y-z space, frame {frame_idx + 1}')
     return fig
 
 
@@ -282,6 +282,6 @@ def plot_pns_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> ma
     ax_pns.legend(loc='upper right', fontsize=8)
     ax_pns.grid(True)
 
-    fig.suptitle(f'PNS, one TR (shot {shot_index}), peak {pt.max():.1f}%')
+    fig.suptitle(f'PNS, one TR (shot {shot_index + 1}), peak {pt.max():.1f}%')
     fig.tight_layout()
     return fig
