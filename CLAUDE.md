@@ -118,10 +118,21 @@ exactly (same `make_readout_grads` call, same schedule-derived
 acquires unencoded lines at k-space center for EPI ghost correction.
 
 **`lib/trap4ge.py`** (ported from `../PulCeq/matlab/trap4ge.m`) rounds every
-gradient's rise/flat/fall times up to `params.crt` (20µs, the common raster
-of Siemens' 10µs and GE's 4µs). Every gradient in the sequence passes
-through it before being added to a block — this is a GE-hardware-timing
-requirement, not optional cleanup.
+gradient's rise/flat/fall times up to `params.crt` via `math.ceil(t / crt -
+1e-9) * crt`. Every gradient in the sequence passes through it before being
+added to a block — this is a GE-hardware-timing requirement, not optional
+cleanup. The `- 1e-9` epsilon before `ceil` was added after finding that
+float64 division noise (`0.002 / 4e-6` evaluates to `500.00000000000006`,
+not `500.0`) could make `ceil` silently pad an already-on-raster time by one
+extra raster step; for the excitation slice-select gradient this decentered
+the RF pulse in its (now-longer) flat top and broke `gz_ssr`'s area-
+cancellation assumption, leaving a nonzero residual kz at readout — caught
+by `test_epical_trajectory_is_centered`. `params.crt` is `4e-6` (GE's raster
+only) rather than `20e-6` (lcm of Siemens' 10µs and GE's 4µs): the lcm value
+was originally chosen so gradient boundaries stayed valid on both rasters,
+a precaution this repo no longer needs since it only targets GE hardware —
+revert to `20e-6` if Siemens-dual-raster compatibility becomes relevant
+again (the epsilon fix applies at either value).
 
 **`params.py`**'s `load_params()` replaces MATLAB's `params.m` (which
 injected variables into the caller's workspace — no Python equivalent).
