@@ -220,11 +220,31 @@ def plot_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> matplo
     phase, Gx, Gy, Gz) in a fixed-size figure meant for on-screen viewing,
     which is too short for 6 rows and leaves adjacent y-axis labels
     overlapping. Taller figure + tight_layout() fixes it without touching
-    pypulseq's own plotting code."""
+    pypulseq's own plotting code.
+
+    Marks TE with a vertical dashed line across every row, at the ADC
+    sample time of this shot's k-space-center echo (index (ETL - 1) // 2 --
+    see mask2epi.py's module docstring / CLAUDE.md for why that echo index
+    is the nominal-TE echo). Read directly off the built sequence's ADC
+    timestamps rather than re-deriving calc_te_tr_delays.py's min_te
+    formula, so the line stays correct even if TE padding was skipped
+    (prescribed TE below the achievable minimum)."""
     t0 = shot_index * params.TR
     splot = seq.plot(time_range=(t0, t0 + params.TR), stacked=True, plot_now=False, time_disp='ms')
     fig = splot.fig1
     fig.set_size_inches(20, 10)
+
+    t_adc, _ = seq.adc_times(time_range=(t0, t0 + params.TR))
+    n_fid = len(t_adc) // params.ETL
+    te_echo = (params.ETL - 1) // 2
+    t_te_ms = t_adc[te_echo * n_fid + n_fid // 2] * 1e3
+    for ax in splot.ax1:
+        ax.axvline(t_te_ms, color='k', linestyle='--', linewidth=1, zorder=10)
+    splot.ax1[0].text(
+        t_te_ms, 1.02, 'TE', transform=splot.ax1[0].get_xaxis_transform(),
+        ha='center', va='bottom', fontsize=8,
+    )
+
     fig.tight_layout()
     return fig
 
