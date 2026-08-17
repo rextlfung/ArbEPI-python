@@ -201,14 +201,29 @@ def plot_psf(omega: np.ndarray, params: Params, frame_idx: int = 0) -> matplotli
     z_vals = (np.arange(Nz) - Nz / 2) * res_z
     Y, Z = np.meshgrid(y_vals, z_vals, indexing='ij')
 
-    fig = matplotlib.figure.Figure(figsize=(7, 6))
+    fig = matplotlib.figure.Figure(figsize=(12, 6))
     ax = fig.add_subplot(111, projection='3d')
     surf = ax.plot_surface(Y, Z, psf_mag, cmap='viridis', linewidth=0, antialiased=True)
-    fig.colorbar(surf, ax=ax, shrink=0.6, label='magnitude (a.u.)')
+    # Equal y/z scale (1mm in y renders the same length as 1mm in z), not
+    # matplotlib's default box shape -- leaves the magnitude (z) axis at a
+    # middling height rather than forcing it equal too, since it's in
+    # different units.
+    y_extent, z_extent = Ny * res_y, Nz * res_z
+    # zoom > 1 enlarges the rendered box within its Axes rect (mpl's default
+    # leaves substantial fixed margin around a 3D box regardless of rect
+    # size/shape) -- without it, this plot left large empty borders on a
+    # wide figure no matter how the Axes rect itself was resized.
+    ax.set_box_aspect((y_extent, z_extent, (y_extent + z_extent) / 2), zoom=1.25)
     ax.set_xlabel('y (m)')
     ax.set_ylabel('z (m)')
+    # z (m) is mpl's y-axis here (spatial z maps to plot_surface's second
+    # argument) -- 3 ticks (min/0/max) rather than mpl's default per-sample
+    # ticks, which get crowded for a large Nz.
+    ax.set_yticks(np.linspace(-z_extent / 2, z_extent / 2, 3))
     ax.set_zlabel('magnitude (a.u.)')
     ax.set_title(f'Point spread function in y-z space, frame {frame_idx + 1}')
+    ax.set_position((0.0, 0.08, 0.72, 0.82))
+    fig.colorbar(surf, ax=ax, shrink=0.6, pad=0.15, label='magnitude (a.u.)')
     return fig
 
 
