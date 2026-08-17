@@ -15,7 +15,7 @@ import numpy as np
 import pypulseq as pp
 
 from params import Params, load_params
-from plotting.plotting import plot_one_tr, plot_psf, plot_sampling_mask, plot_trajectory
+from plotting.plotting import plot_one_tr, plot_pns_one_tr, plot_psf, plot_sampling_mask, plot_trajectory
 
 
 def plot_last_run(params: Params, frame_idx: int = 0) -> None:
@@ -42,8 +42,14 @@ def plot_last_run(params: Params, frame_idx: int = 0) -> None:
     plot_one_tr(seq, params, shot_index=frame_idx * params.Nshots).savefig(
         f'{params.output_dir}/one_tr.png', dpi=300
     )
+    plot_pns_one_tr(seq, params, shot_index=frame_idx * params.Nshots).savefig(
+        f'{params.output_dir}/PNS_one_tr.png', dpi=300
+    )
 
-    print(f'Wrote {params.output_dir}/mask.png, psf.png, trajectory.png, one_tr.png (frame {frame_idx})')
+    print(
+        f'Wrote {params.output_dir}/mask.png, psf.png, trajectory.png, one_tr.png, '
+        f'PNS_one_tr.png (frame {frame_idx})'
+    )
 
 
 if __name__ == '__main__':

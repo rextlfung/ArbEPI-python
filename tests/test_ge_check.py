@@ -15,7 +15,12 @@ import pypulseq as pp
 import pytest
 
 from scanners import SCANNERS
-from seq2ge.check import PNS_NORMAL_MODE_THRESHOLD, FeasibilityReport, check_ge_feasibility
+from seq2ge.check import (
+    PNS_FIRST_CONTROLLED_MODE_THRESHOLD,
+    PNS_NORMAL_MODE_THRESHOLD,
+    FeasibilityReport,
+    check_ge_feasibility,
+)
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / 'output'
 
@@ -40,9 +45,21 @@ def test_acoustics_over_threshold_does_not_block_ok():
     assert 'WARN' in report.summary()
 
 
-def test_pns_over_threshold_blocks_ok():
-    # ../PulCeq/matlab/+pge2/checksegment.m really does throw above 80%.
+def test_pns_between_80_and_100_warns_but_does_not_block_ok():
+    # ../PulCeq/matlab/+pge2/checksegment.m throws above 80% ("normal
+    # mode"), but that's a GE-specific policy stricter than IEC
+    # 60601-2-33:2022 itself (80-100% is "first level controlled operating
+    # mode" -- permitted, not prohibited). This port only blocks .ok at the
+    # 100% line; 80-100% is WARN (see seq2ge/check.py's threshold comment).
     report = _clean_report(peak_pns_percent=PNS_NORMAL_MODE_THRESHOLD + 1)
+    assert report.ok
+    assert 'WARN' in report.summary()
+
+
+def test_pns_over_100_blocks_ok():
+    # >100% ("first controlled mode") is predicted to actually stimulate --
+    # this line still hard-blocks .ok.
+    report = _clean_report(peak_pns_percent=PNS_FIRST_CONTROLLED_MODE_THRESHOLD + 1)
     assert not report.ok
     assert 'FAIL' in report.summary()
 

@@ -55,6 +55,12 @@ import numpy as np
 import pypulseq as pp
 
 from params import Params
+from seq2ge.check import (
+    PNS_FIRST_CONTROLLED_MODE_THRESHOLD,
+    PNS_NORMAL_MODE_THRESHOLD,
+    sample_gradients_tesla_per_m,
+)
+from seq2ge.pns import pns
 
 
 def plot_sampling_mask(
@@ -207,5 +213,63 @@ def plot_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> matplo
     splot = seq.plot(time_range=(t0, t0 + params.TR), stacked=True, plot_now=False, time_disp='ms')
     fig = splot.fig1
     fig.set_size_inches(20, 10)
+    fig.tight_layout()
+    return fig
+
+
+def plot_pns_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> matplotlib.figure.Figure:
+    """Gradient / slew / PNS diagnostic for one TR, mirroring PulCeq's own
+    `pge2.pns(..., 'plt', true)` panel layout (../PulCeq/matlab/+pge2/pns.m)
+    -- gradient waveforms, slew rate, and per-channel + total PNS (% of
+    stimulation threshold), with the IEC 60601-2-33:2022 80%/100%
+    operating-mode lines marked (see seq2ge/check.py's
+    PNS_NORMAL_MODE_THRESHOLD/PNS_FIRST_CONTROLLED_MODE_THRESHOLD for what
+    those mean and why only the 100% line blocks `--ge` export).
+
+    Same one-TR window as `plot_one_tr` (shot_index selects
+    [shot_index*TR, (shot_index+1)*TR)) and the same PNS model
+    (seq2ge/pns.py) `--ge`'s own feasibility check uses, driven by
+    `params.spec` (rheobase/alpha/chronaxie) and `params.PNSwt` -- this is
+    a decomposition of the same peak number check_ge_feasibility reports,
+    not an independent estimate."""
+    t0 = shot_index * params.TR
+    gw_tm, dt = sample_gradients_tesla_per_m(seq, time_range=(t0, t0 + params.TR))
+    t_ms = (np.arange(gw_tm.shape[1]) + 0.5) * dt * 1e3
+
+    s_min = params.spec.rheobase / params.spec.alpha
+    pt, p = pns(s_min, params.spec.chronaxie, gw_tm, dt, wt=tuple(params.PNSwt))
+
+    fig = matplotlib.figure.Figure(figsize=(12, 9))
+    ax_grad, ax_slew, ax_pns = fig.subplots(3, 1, sharex=True)
+
+    for ch, label in enumerate(('x', 'y', 'z')):
+        ax_grad.plot(t_ms, gw_tm[ch] * 1e3, label=label)
+    ax_grad.set_ylabel('gradient (mT/m)')
+    ax_grad.legend(loc='upper right')
+    ax_grad.grid(True)
+
+    slew = np.diff(gw_tm, axis=1) / dt
+    for ch, label in enumerate(('x', 'y', 'z')):
+        ax_slew.plot(t_ms[:-1], slew[ch], label=label)
+    ax_slew.set_ylabel('slew (T/m/s)')
+    ax_slew.grid(True)
+
+    for ch, label in enumerate(('x', 'y', 'z')):
+        ax_pns.plot(t_ms, p[ch], '--', linewidth=1, label=f'{label} channel')
+    ax_pns.plot(t_ms, pt, 'k', linewidth=1.5, label='total')
+    ax_pns.axhline(
+        PNS_NORMAL_MODE_THRESHOLD, color='tab:orange', linestyle=':',
+        label=f'{PNS_NORMAL_MODE_THRESHOLD:.0f}% (normal mode)',
+    )
+    ax_pns.axhline(
+        PNS_FIRST_CONTROLLED_MODE_THRESHOLD, color='tab:red', linestyle=':',
+        label=f'{PNS_FIRST_CONTROLLED_MODE_THRESHOLD:.0f}% (first controlled mode)',
+    )
+    ax_pns.set_ylabel('PNS (% of threshold)')
+    ax_pns.set_xlabel('time (ms)')
+    ax_pns.legend(loc='upper right', fontsize=8)
+    ax_pns.grid(True)
+
+    fig.suptitle(f'PNS, one TR (shot {shot_index}), peak {pt.max():.1f}%')
     fig.tight_layout()
     return fig

@@ -40,11 +40,29 @@ from seq2ge.ceq import Ceq
 from seq2ge.pns import pns
 from seq2ge.seq2ceq import seq2ceq
 
-# checksegment.m throws at PNS > 80% ("exceeds normal mode"), a stricter
-# gate than the 100% ("first controlled mode") figure that shows up most
-# often in PNS discussions -- match MATLAB's actual throw condition
-# (../PulCeq/matlab/+pge2/checksegment.m: `if max(pt) > 80 ... throw(...)`),
-# not the more commonly quoted tier.
+# Both thresholds are IEC 60601-2-33:2022's own operating-mode boundaries
+# (see pge2.pns.m's header: wt = [0.8 1.0 0.7] "From IEC 60601-2-33:2022
+# section (12)"), not values GE or this port derived: <=80% is Normal
+# Operating Mode (ordinary clinical scanning), 80-100% is First Level
+# Controlled Operating Mode (permitted, but calls for extra
+# safeguards/operator awareness under the standard), >100% is predicted to
+# actually stimulate.
+#
+# ../PulCeq/matlab/+pge2/checksegment.m throws at *either* line (`if
+# max(pt) > 100 ... throw` then `if max(pt) > 80 ... throw`) -- GE's real
+# scanner refuses to operate anywhere above Normal Operating Mode at all,
+# a stricter, GE-specific policy layered on top of the standard. This port
+# deliberately does not replicate the 80% throw: unlike the real scanner,
+# there is no interlock consequence to a Python check running over a .seq
+# file, so blocking `--ge` export at 80% only prevented inspecting/using
+# sequences that are still within a standard-defined, permitted operating
+# mode. `.ok` therefore only gates on the 100% line (genuinely predicted
+# stimulation); 80-100% is surfaced as WARN via .summary(), same treatment
+# as acoustics below. This does not change what MATLAB's real
+# write_to_ge_from_seq.m path would do with the same sequence -- see
+# CLAUDE.md's "Open finding" for why PNS in the 80-115% range across this
+# repo's sequences is still a real, unresolved sequence-design problem to
+# revisit before any human scan, warning-only or not.
 PNS_NORMAL_MODE_THRESHOLD = 80.0
 PNS_FIRST_CONTROLLED_MODE_THRESHOLD = 100.0
 
@@ -67,15 +85,24 @@ class FeasibilityReport:
         # line ~159) -- it has never blocked a real MATLAB `--ge` export, so
         # this port doesn't block on it either. Surfaced via .summary() as a
         # WARN, not folded into .ok.
+        #
+        # PNS only gates on the 100% ("first controlled mode") line, not 80%
+        # ("normal mode") -- see the PNS_NORMAL_MODE_THRESHOLD comment above
+        # for why this diverges from MATLAB's real 80% throw. 80-100% is
+        # WARN via .summary(), same treatment as acoustics.
         return (
             self.max_grad_mT_m <= self.spec_max_grad
             and self.max_slew_T_m_s <= self.spec_max_slew
             and self.max_b1_gauss <= self.spec_b1_max
-            and self.peak_pns_percent <= PNS_NORMAL_MODE_THRESHOLD
+            and self.peak_pns_percent <= PNS_FIRST_CONTROLLED_MODE_THRESHOLD
         )
 
     def summary(self) -> str:
-        pns_flag = 'OK  ' if self.peak_pns_percent <= PNS_NORMAL_MODE_THRESHOLD else 'FAIL'
+        pns_flag = (
+            'FAIL' if self.peak_pns_percent > PNS_FIRST_CONTROLLED_MODE_THRESHOLD
+            else 'WARN' if self.peak_pns_percent > PNS_NORMAL_MODE_THRESHOLD
+            else 'OK  '
+        )
         pns_tier = (
             f'exceeds first controlled mode ({PNS_FIRST_CONTROLLED_MODE_THRESHOLD:.0f}%)'
             if self.peak_pns_percent > PNS_FIRST_CONTROLLED_MODE_THRESHOLD
@@ -98,7 +125,7 @@ class FeasibilityReport:
         return '\n'.join(lines)
 
 
-def _sample_gradients_tesla_per_m(
+def sample_gradients_tesla_per_m(
     seq: pp.Sequence, time_range: tuple[float, float] | None = None,
 ) -> tuple[np.ndarray, float]:
     """Returns (gw, dt): gw shape (3, n) in T/m, uniformly sampled at the
@@ -177,7 +204,7 @@ def check_ge_feasibility(
     # for a full 60s/15M-sample ArbEPI.seq), and more thorough than
     # windowing since PNS in particular has no periodicity assumption to
     # lean on -- check everything.
-    gw_tm, dt = _sample_gradients_tesla_per_m(seq)
+    gw_tm, dt = sample_gradients_tesla_per_m(seq)
 
     max_grad_mT_m = float(np.abs(gw_tm).max()) * 1e3
     max_slew_T_m_s = float(np.abs(np.diff(gw_tm, axis=1) / dt).max())
@@ -191,7 +218,7 @@ def check_ge_feasibility(
     # _blockrange_window_s and this module's docstring.
     ceq = seq2ceq(seq)
     window = min(_blockrange_window_s(ceq, acoustics_block_range), seq.duration()[0])
-    gw_acoustics, dt_acoustics = _sample_gradients_tesla_per_m(seq, time_range=(0.0, window))
+    gw_acoustics, dt_acoustics = sample_gradients_tesla_per_m(seq, time_range=(0.0, window))
     grad_for_acoustics = gw_acoustics.T.reshape(gw_acoustics.shape[1], 1, 3)
     acoustics = check_grad_acoustics(grad_for_acoustics, spec.ge_coil, dt_acoustics)
 
