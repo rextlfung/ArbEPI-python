@@ -109,7 +109,7 @@ class Params:
     epi_trajectory: str  # 'laminar' (mask2epi_laminar) or 'radial' (mask2epi_radial)
 
 
-DEFAULT_SCANNER = 'GE_UHP'
+DEFAULT_SCANNER = 'GE_MR750'
 
 
 def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> Params:
@@ -137,7 +137,7 @@ def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> P
     )
 
     crt = 20e-6  # s, common raster time (Siemens 10us, GE 4us)
-    dwell = 2e-6  # s
+    dwell = 4e-6  # s
 
     # Spatial parameters. 0.9mm isotropic resolution; x/y FOV held at the
     # previous 216mm, z (slice-select) FOV reduced to 40.5mm.
@@ -152,7 +152,7 @@ def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> P
     Nshots = math.ceil(Ny * Nz / R / ETL)
 
     # Decay parameters
-    TE = 30e-3
+    TE = 40e-3
     volume_tr = 2
     TR = volume_tr / Nshots
     T1 = 1.3
@@ -195,8 +195,8 @@ def load_params(scanner: str = DEFAULT_SCANNER, output_dir: str = 'output') -> P
     # "Open finding" for why this was zero (disabling the PNS check
     # entirely) until now, and that this default now correctly blocks
     # `main.py --ge` for EPIcal/ArbEPI/GRE until slew/blip timing changes.
-    # PNSwt = np.array([0.8, 1.0, 0.7]) # human
-    PNSwt = np.array([0.0, 0.0, 0.0]) # phantom
+    PNSwt = np.array([0.8, 1.0, 0.7]) # human
+    # PNSwt = np.array([0.0, 0.0, 0.0]) # phantom
 
     # Sampling mask
     sampling_method = 'pd'
