@@ -51,6 +51,7 @@ zigzag pattern and exact k-space locations.
 """
 
 import matplotlib.figure
+import matplotlib.patheffects
 import numpy as np
 import pypulseq as pp
 
@@ -140,22 +141,33 @@ def plot_trajectory(
             shot_start = frame_start + shot * n_shot_samples
             shot_traj = k_traj_adc[:, shot_start : shot_start + n_shot_samples]
             color = cmap(shot / params.Nshots)
-            ax.plot(shot_traj[1, :], shot_traj[2, :], '-', linewidth=0.7, color=color, label=f'shot {shot}')
+            ax.plot(shot_traj[1, :], shot_traj[2, :], '-', linewidth=0.7, color=color)
             ax.plot(shot_traj[1, :], shot_traj[2, :], '.', markersize=4, color=color)
             # Mark each echo train's first sample distinctly from the rest
             # of its points, so where each shot begins (vs. wanders through
             # afterward) is visible at a glance -- most useful for
             # mask2epi_radial, where every shot starts at one end of its
-            # spoke rather than at a shared corner of k-space.
+            # spoke rather than at a shared corner of k-space. Label it
+            # directly with the shot number rather than a legend, since a
+            # per-shot legend entry doesn't scale past a handful of shots.
+            x0, y0 = shot_traj[1, 0], shot_traj[2, 0]
             ax.plot(
-                shot_traj[1, 0], shot_traj[2, 0], 'o', markersize=4,
+                x0, y0, 'o', markersize=4,
                 markerfacecolor=color, markeredgecolor='k', markeredgewidth=0.8, zorder=5,
             )
-        ax.plot(
-            [], [], 'o', markersize=4, markerfacecolor='none', markeredgecolor='k',
-            markeredgewidth=0.8, label='echo train start',
-        )
-        ax.legend(fontsize=6, loc='upper right', ncol=2)
+            # Offset the label toward k-space center (rather than a fixed
+            # direction) so starts near the plot's outer border -- common
+            # for mask2epi_radial, whose spokes end near kmax -- get pushed
+            # inward instead of clipped off the edge of the axes. The white
+            # stroke keeps the number legible where it crosses trajectory
+            # lines/markers of other colors.
+            r = np.hypot(x0, y0)
+            dx, dy = (-x0 / r, -y0 / r) if r > 0 else (0.0, 1.0)
+            ax.annotate(
+                str(shot), (x0, y0), xytext=(dx * 8, dy * 8), textcoords='offset points',
+                fontsize=6, color='k', ha='center', va='center', zorder=6,
+                path_effects=[matplotlib.patheffects.withStroke(linewidth=1.5, foreground='w')],
+            )
         title = f'3D-EPI trajectory, frame {frame_idx}. R = {round(R)}'
 
     ax.axhline(0, color='k', linewidth=1, zorder=0)
