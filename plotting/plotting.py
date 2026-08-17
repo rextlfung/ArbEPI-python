@@ -289,7 +289,7 @@ def plot_pns_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> ma
     s_min = params.spec.rheobase / params.spec.alpha
     pt, p = pns(s_min, params.spec.chronaxie, gw_tm, dt, wt=tuple(params.PNSwt))
 
-    fig = matplotlib.figure.Figure(figsize=(12, 9))
+    fig = matplotlib.figure.Figure(figsize=(20, 10))  # match plot_one_tr's 2:1 aspect ratio
     ax_grad, ax_slew, ax_pns = fig.subplots(3, 1, sharex=True)
 
     for ch, label in enumerate(('x', 'y', 'z')):
