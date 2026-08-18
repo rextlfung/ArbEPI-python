@@ -12,17 +12,16 @@ import os
 
 import numpy as np
 
-from params import DEFAULT_SCANNER, load_params
+from params import load_params
 from sampling.gen_sampling_masks import gen_sampling_masks
-from scanners import SCANNERS
 from sequences.arbepi import generate_arbepi
 from sequences.epical import generate_epical
 from sequences.gre import generate_gre
 from sequences.noise import generate_noise
 
 
-def main(scanner: str = DEFAULT_SCANNER, export_ge: bool = False, plot: bool = False):
-    params = load_params(scanner=scanner)
+def main(export_ge: bool = False, plot: bool = False):
+    params = load_params()
 
     # 1. Generate sampling masks and main EPI sequence. params.seed is
     # None by default (np.random.default_rng(None) is unseeded, same as
@@ -70,12 +69,6 @@ def main(scanner: str = DEFAULT_SCANNER, export_ge: bool = False, plot: bool = F
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        '--scanner', choices=list(SCANNERS), default=DEFAULT_SCANNER,
-        help='scanner to build the sequence for (see scanners.py); determines both the '
-             f'.seq gradient/RF hardware limits and the --ge export target '
-             f'(default: {DEFAULT_SCANNER})',
-    )
-    parser.add_argument(
         '--ge', action='store_true', dest='export_ge',
         help='also export each sequence to GE .pge format (see seq2ge/ge_export.py)',
     )
@@ -84,4 +77,4 @@ if __name__ == '__main__':
         help='also write diagnostic sampling-mask/trajectory/PSF plots (see plot_last_run.py)',
     )
     args = parser.parse_args()
-    main(scanner=args.scanner, export_ge=args.export_ge, plot=args.plot)
+    main(export_ge=args.export_ge, plot=args.plot)

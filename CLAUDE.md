@@ -145,8 +145,9 @@ the Python port must `copy.deepcopy(sys)` first (see
 mutating the shared system object.
 
 **Hardware limits come from one place: `scanners.py`'s `ScannerSpec`.**
-`load_params(scanner=...)` looks up a `ScannerSpec` (currently `'GE_MR750'`
-or `'GE_UHP'`) and stores it as `params.spec`; `sys.max_grad`/`sys.max_slew`
+`load_params()` looks up a `ScannerSpec` from its body-level `scanner`
+variable (currently `'GE_MR750'` or `'GE_UHP'`, edit directly in
+`params.py` to change) and stores it as `params.spec`; `sys.max_grad`/`sys.max_slew`
 (used for `.seq` generation) and `seq2ge/check.py`/`seq2ge/writeceq.py`'s
 hardware/PNS/acoustics checks (used by `seq2ge/ge_export.py`'s `--ge` path, pure
 Python, see below) both read from that same `ScannerSpec` instance, so
