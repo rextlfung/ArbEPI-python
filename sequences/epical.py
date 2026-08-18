@@ -27,7 +27,11 @@ from params import Params
 
 def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
     os.makedirs(params.output_dir, exist_ok=True)
-    sys = params.sys
+    # Own copy of params.sys (not the shared instance -- see params.py's
+    # Params.sys docstring), derated for PNS to match arbepi.py's readout
+    # (same gradient design, see sequences/arbepi.py's sys comment).
+    sys = copy.deepcopy(params.sys)
+    sys.max_slew = 100 * sys.gamma  # T/m/s -> Hz/m/s (pypulseq's internal unit)
 
     # Load EPI schedule to match readout gradient design. Index base
     # doesn't matter here: only consecutive-echo differences are used.

@@ -13,6 +13,7 @@ make_excitation_pulse.m has. That asymmetry is preserved here rather than
 silently fixed, since it's unclear whether it's intentional.
 """
 
+import copy
 import math
 import os
 
@@ -27,7 +28,15 @@ from params import FatsatParams, Params
 
 def generate_gre(params: Params, seqname: str = 'GRE') -> pp.Sequence:
     os.makedirs(params.output_dir, exist_ok=True)
-    sys = params.sys
+    # Own copy of params.sys (not the shared instance -- see params.py's
+    # Params.sys docstring) with its own slew derate: GRE's single-line
+    # spoiled readout has a much lower PNS profile than the EPI train's
+    # blip train, so it doesn't need nearly as aggressive a cap. Measured
+    # on a full GRE build (peak PNS vs max_slew, IEC 60601-2-33's 80%
+    # normal-mode threshold): 200 T/m/s (hardware) -> 83.4%, 180 -> 79.7%,
+    # 175 -> 78.7%. 175 T/m/s clears normal mode with a small margin.
+    sys = copy.deepcopy(params.sys)
+    sys.max_slew = 175 * sys.gamma  # T/m/s -> Hz/m/s (pypulseq's internal unit)
     crt = params.crt
 
     seq = pp.Sequence(system=sys)
@@ -53,7 +62,14 @@ def generate_gre(params: Params, seqname: str = 'GRE') -> pp.Sequence:
 
     # Readout and phase-encode gradients
     deltak = [1 / f for f in params.fov_gre]
-    Tread = params.Nx_gre * params.dwell
+    # Exact-Nyquist flat top (Nx_gre*deltak[0]/Tread) can exceed sys.max_grad
+    # once that's derated below hardware for PNS (see params.py) -- stretch
+    # dwell just enough to keep the flat-top amplitude within max_grad (same
+    # oversampling tradeoff make_readout_grads.py makes for the EPI readout),
+    # rounded up to the ADC raster so Tread stays sampleable.
+    dwell_gre = max(params.dwell, deltak[0] / sys.max_grad)
+    dwell_gre = math.ceil(dwell_gre / sys.adc_raster_time) * sys.adc_raster_time
+    Tread = params.Nx_gre * dwell_gre
 
     gy_pre = trap4ge(
         pp.make_trapezoid('y', system=sys, area=params.Ny_gre * deltak[1] / 2, duration=params.Tpre), crt, sys
@@ -93,7 +109,7 @@ def generate_gre(params: Params, seqname: str = 'GRE') -> pp.Sequence:
         + pp.calc_duration(gz_ssr)
         + pp.calc_duration(gx_pre)
         + adc.delay
-        + params.Nx_gre / 2 * params.dwell
+        + Tread / 2
     )
     delay_te = math.ceil((params.TE_gre - te_min) / sys.grad_raster_time) * sys.grad_raster_time
     tr_min = (

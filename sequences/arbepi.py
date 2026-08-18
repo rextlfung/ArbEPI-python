@@ -70,7 +70,14 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     seq : the assembled pypulseq Sequence.
     """
     os.makedirs(params.output_dir, exist_ok=True)
-    sys = params.sys
+    # Own copy of params.sys (not the shared instance -- see params.py's
+    # Params.sys docstring), derated for PNS: this readout's rapid blip
+    # reversals are slew-, not amplitude-, limited (measured on a full
+    # build: capping max_grad alone barely moved peak PNS, 125.9% ->
+    # 124.6%, while max_slew=100 T/m/s brought it to 84.3%). See
+    # CLAUDE.md's "Open finding" on PNS.
+    sys = copy.deepcopy(params.sys)
+    sys.max_slew = 100 * sys.gamma  # T/m/s -> Hz/m/s (pypulseq's internal unit)
 
     # Excitation pulse
     rf, gz_ss, gz_ssr = make_excitation_pulse(params.fa, params.rf_dur, params.rf_tb, params.fov, sys, params.crt)

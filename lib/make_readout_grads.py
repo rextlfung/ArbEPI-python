@@ -74,8 +74,12 @@ def make_readout_grads(
         gy_blip = pp.scale_grad(gy_blip, 1 / max_ky_step, sys)
 
     # Readout trapezoid sized for ramp-sampling and to contain the blip area.
+    # Flat top is capped at sys.max_grad, not always the exact-Nyquist rate
+    # deltak[0]/dwell: if max_grad is below that rate, samples land denser
+    # than deltak[0] (safe oversampling), and Tread grows to still reach the
+    # same kmax -- the ramp-sample gridding recon already handles that.
     systmp = copy.deepcopy(sys)
-    systmp.max_grad = deltak[0] / dwell  # enforce Nyquist sampling on flat top
+    systmp.max_grad = min(deltak[0] / dwell, sys.max_grad)
     gro = trap4ge(
         pp.make_trapezoid('x', system=systmp, area=Nx * deltak[0] + max_blip_area), crt, sys
     )

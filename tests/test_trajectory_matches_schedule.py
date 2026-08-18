@@ -7,6 +7,7 @@ valid, well-timed .seq that samples the wrong k-space locations). This
 closes that gap for both the encoded (ArbEPI) and zeroed (EPIcal) cases.
 """
 
+import copy
 from dataclasses import replace
 
 import numpy as np
@@ -16,6 +17,13 @@ from params import load_params
 from sampling.gen_sampling_masks import gen_sampling_masks
 from sequences.arbepi import _compute_schedules, generate_arbepi
 from sequences.epical import generate_epical
+
+
+def _derated_sys(p):
+    """Matches the PNS derate arbepi.py/epical.py apply to their own sys copy."""
+    sys = copy.deepcopy(p.sys)
+    sys.max_slew = 100 * sys.gamma
+    return sys
 
 
 def _small_params(tmp_path):
@@ -45,7 +53,7 @@ def test_arbepi_trajectory_matches_schedule(tmp_path):
 
     max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
     max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
-    rg = make_readout_grads(max_ky_step, max_kz_step, p.Nx, p.fov, p.dwell, p.sys, p.crt)
+    rg = make_readout_grads(max_ky_step, max_kz_step, p.Nx, p.fov, p.dwell, _derated_sys(p), p.crt)
 
     k_traj_adc, *_ = seq.calculate_kspace()
     Ny, Nz, Nfid = p.Ny, p.Nz, rg.Nfid
@@ -75,7 +83,7 @@ def test_epical_trajectory_is_centered(tmp_path):
     schedules = hdf5storage.loadmat(str(tmp_path / 'samp_locs.mat'))['schedules'].astype(float)
     max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
     max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
-    rg = make_readout_grads(max_ky_step, max_kz_step, p.Nx, p.fov, p.dwell, p.sys, p.crt)
+    rg = make_readout_grads(max_ky_step, max_kz_step, p.Nx, p.fov, p.dwell, _derated_sys(p), p.crt)
 
     k_traj_adc, *_ = seq.calculate_kspace()
     Nfid = rg.Nfid

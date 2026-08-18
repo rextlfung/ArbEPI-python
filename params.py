@@ -109,7 +109,7 @@ class Params:
     epi_trajectory: str  # 'laminar' (mask2epi_laminar) or 'radial' (mask2epi_radial)
 
 def load_params(output_dir: str = 'output') -> Params:
-    scanner = 'GE_UHP' # 'GE_UHP' or 'GE_MR750'. See scanners.py
+    scanner = 'GE_MR750' # 'GE_UHP' or 'GE_MR750'. See scanners.py
     spec = SCANNERS[scanner]
 
     sys = pp.Opts(
@@ -127,7 +127,7 @@ def load_params(output_dir: str = 'output') -> Params:
         B0=spec.B0,
     )
 
-    crt = 20e-6  # s, GE raster time only; would need 20e-6 (lcm of Siemens 10us, GE 4us) for GE AND Siemens compatibility
+    crt = 4e-6  # s, GE raster time only; would need 20e-6 (lcm of Siemens 10us, GE 4us) for GE AND Siemens compatibility
     dwell = 2e-6  # s, for ADC/RF
 
     # Spatial parameters. 0.9mm isotropic resolution; x/y FOV held at the
@@ -143,7 +143,9 @@ def load_params(output_dir: str = 'output') -> Params:
     Nshots = math.ceil(Ny * Nz / R / ETL)
 
     # Decay parameters
-    TE = 30e-3
+    # 39ms for now (min achievable is ~38.1ms at this ETL/R/slew derate) --
+    # BOLD-contrast feasibility of this TE still needs checking.
+    TE = 39e-3
     volume_tr = 2
     TR = volume_tr / Nshots
     T1 = 1.3
@@ -209,7 +211,7 @@ def load_params(output_dir: str = 'output') -> Params:
     # from MATLAB). 'radial' = mask2epi_radial (each shot sweeps through
     # k-space center as one spoke, this repo's own addition) -- see
     # lib/mask2epi.py's module docstring for the tradeoffs between them.
-    epi_trajectory = 'laminar'
+    epi_trajectory = 'radial'
 
     return Params(
         sys=sys,
