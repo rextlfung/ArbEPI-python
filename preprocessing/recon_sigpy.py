@@ -12,17 +12,27 @@ applied one at a time. Solved via PrimalDualHybridGradient, the standard
 solver for f(x) + g(Gx) with f smooth and g nonsmooth-but-prox-friendly on
 a transformed domain.
 
-Verified against a synthetic SENSE forward model (not a real reconstruction
-regression, since no local ScanArchive dataset exists to run this against
-end to end): with fully-sampled synthetic k-space and lamb_l1=lamb_tv
-shrinking to 0, the reconstruction converges to the true image (relative
-error 6.5e-3 -> 7e-4 -> ~0 as lamda goes 1e-2 -> 1e-3 -> 1e-5), confirming
-the Vstack/Stack/PDHG composition is solving the intended problem rather
-than something subtly mis-wired. BART's `-S` rescaling flag has no direct
-replacement; sigpy's own power-iteration step-size calibration
-(max_power_iter) serves an analogous auto-scaling purpose, but the exact
-numerics will differ from BART's -- an already-accepted tradeoff of
-dropping BART.
+Verified against a synthetic SENSE forward model: with fully-sampled
+synthetic k-space and lamb_l1=lamb_tv shrinking to 0, the reconstruction
+converges to the true image (relative error 6.5e-3 -> 7e-4 -> ~0 as lamda
+goes 1e-2 -> 1e-3 -> 1e-5), confirming the Vstack/Stack/PDHG composition is
+solving the intended problem rather than something subtly mis-wired.
+
+`y` is rescaled to O(1) before solving (and the result rescaled back) --
+this port's replacement for BART's `-S` flag, added after real project
+data (wb_2.4mm ball phantom) surfaced the consequence of not having one:
+lamb_l1/lamb_tv are tuned for O(1)-scaled data, so without this step
+they're negligible against raw scanner-unit k-space (|y| ~ 1e4-1e5),
+silently degrading "L1+TV" to an unregularized least-squares SENSE solve.
+At this acquisition's undersampling (R=6) that's ill-posed, and a lambda
+sweep at the true (unscaled) magnitude confirmed it manifests specifically
+as spurious signal loss in a uniform phantom's center -- center/shell
+signal ratio was flat and wrong (~0.64, vs RSS's own 0.76) from lamb=0 up
+through lamb=80, only correcting once lamb reached ~1000, i.e. roughly
+the scale this normalization now reaches automatically at lamb=0.005.
+sigpy's power-iteration step-size calibration (max_power_iter) still
+serves its own separate auto-scaling purpose (for A/G's operator norms,
+not the data/regularizer scale) and remains in place alongside this.
 """
 
 import numpy as np
@@ -54,6 +64,20 @@ def wavelet_tv_recon(
 
     weights = (sp.rss(ksp_cf, axes=(0,)) > 0).astype(ksp_cf.dtype)
     y = ksp_cf * weights**0.5
+
+    # lamb_l1/lamb_tv are calibrated for O(1)-scaled data -- BART's `pics -S`
+    # rescales internally before applying `-R` regularizers (see module
+    # docstring); this is this port's replacement for that step. Without it,
+    # lamb_l1/lamb_tv are negligible against raw scanner-unit k-space
+    # (|y| ~ 1e4-1e5), making the regularizers inert and the "L1+TV" recon
+    # silently degrade to an unregularized (and, at real undersampling
+    # factors, ill-posed) least-squares SENSE solve -- confirmed on real
+    # project data to cause spurious central signal loss in a uniform
+    # phantom, fixed by restoring lamb_l1/lamb_tv to their intended
+    # relative strength via this normalization.
+    scale = 1.0 / np.percentile(np.abs(y[y != 0]), 99)
+    y = y * scale
+
     A = mr.linop.Sense(mps_cf, weights=weights)
 
     W = sp.linop.Wavelet(img_shape, wave_name=wave_name)
@@ -67,4 +91,4 @@ def wavelet_tv_recon(
         max_iter=num_iter, max_power_iter=max_power_iter,
         show_pbar=False,
     )
-    return app.run()
+    return app.run() / scale

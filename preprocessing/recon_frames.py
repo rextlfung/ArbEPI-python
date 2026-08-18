@@ -89,17 +89,20 @@ def recon_frames(
                 f'Reconstructing {nframes} of {nframes_avail} available frames '
                 '(cfg.Nframes cap).'
             )
-        ksp = f['ksp_epi_zf'][:, :, :, :, :nframes]
 
-    print(f'Reconstructing {nframes} frames...')
-    t_start = time.time()
-    frame_data = (ksp[:, :, :, :, frame] for frame in range(nframes))
-    if cfg.use_parfor:
-        worker = functools.partial(_recon_one_frame, recon_fn=recon_fn, smaps=smaps)
-        with concurrent.futures.ProcessPoolExecutor() as executor:
-            results = list(executor.map(worker, frame_data))
-    else:
-        results = [_recon_one_frame(data, recon_fn, smaps) for data in frame_data]
+        print(f'Reconstructing {nframes} frames...')
+        t_start = time.time()
+        # Read one frame at a time rather than slicing the whole [Nx,Ny,Nz,
+        # Nvcoils,Nframes] dataset into memory up front -- for a full-res
+        # acquisition that array can exceed physical RAM (e.g. ~10GiB for a
+        # 240x240x45x18x30 volume), which OOM-kills the process.
+        frame_data = (f['ksp_epi_zf'][:, :, :, :, frame] for frame in range(nframes))
+        if cfg.use_parfor:
+            worker = functools.partial(_recon_one_frame, recon_fn=recon_fn, smaps=smaps)
+            with concurrent.futures.ProcessPoolExecutor() as executor:
+                results = list(executor.map(worker, frame_data))
+        else:
+            results = [_recon_one_frame(data, recon_fn, smaps) for data in frame_data]
     runtime_s = time.time() - t_start
     print(f'Reconstruction done in {runtime_s:.1f} s.')
 
