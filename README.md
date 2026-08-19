@@ -34,14 +34,14 @@ Depends on `pypulseq` (from PyPI), numpy, scipy, matplotlib, hdf5storage, and nu
    from sampling.gen_sampling_masks import gen_sampling_masks
    from sequences.arbepi import generate_arbepi
    from sequences.epical import generate_epical
-   from sequences.gre import generate_gre
+   from sequences.degre import generate_degre
    from sequences.noise import generate_noise
 
    params = load_params()
    omegas = gen_sampling_masks(params.R, params)
    generate_arbepi(omegas, params)   # writes output/ArbEPI.seq, output/samp_locs.mat
    generate_epical(params)           # writes output/EPIcal.seq, output/kxoe<Nx>.mat
-   generate_gre(params)              # writes output/GRE.seq
+   generate_degre(params)            # writes output/deGRE.seq (dual-echo, for coil sensitivity maps + B0 field map)
    generate_noise(params)            # writes output/noise.seq
    ```
    `generate_epical` and `generate_noise` must run after `generate_arbepi` — they load `output/samp_locs.mat`. All outputs go to `params.output_dir` (default `output/`, gitignored).
@@ -125,7 +125,7 @@ export_to_ge('output/ArbEPI.seq', 'output/ArbEPI', params)
 
 **Hardware limits are keyed off the `scanner` variable set in `params.py`** (`GE_MR750` or `GE_UHP`, see `scanners.py`): `load_params()` builds `params.spec` (a `ScannerSpec`) once and derives `sys.max_grad`/`sys.max_slew` for `.seq` generation from the same instance that `seq2ge/check.py`/`seq2ge/writeceq.py` read directly, so they can't drift out of sync with each other. `main.py --ge` also calls `seq2ge.ge_export.check_ge_feasibility()` on all four sequences — running the hardware/PNS/acoustics check without writing a `.pge` — *before* exporting any of them, so an infeasibility surfaces immediately instead of after several full exports. PNS is a physiological safety limit, not a hardware one — `PNSwt` (a separate `Params` field, not part of `ScannerSpec`, since it's phantom-vs-human scan context) defaults to the IEC 60601-2-33:2022-recommended `[0.8, 1.0, 0.7]`; `[0, 0, 0]` disables the PNS check entirely and is only appropriate for phantom/non-human scanning. Acoustic-resonance is checked but never blocks export — it's a `WARN` in the report, matching MATLAB's own `check_grad_acoustics.m`, which only ever calls `warning(...)`, never `error(...)`, when over threshold.
 
-**`main.py --ge` now fails by default on three of the four sequences — this is a real finding, not a bug.** `PNSwt` was `[0, 0, 0]` for the entire lifetime of this port until now, so PNS was never actually evaluated in any `--ge` run to date (weight zero makes the per-channel contribution zero regardless of the real waveform). With the current default weights (validated against MATLAB's real per-instance pipeline to ~0.02 percentage points via `seq2ge/pns.py`/`matlab_reference/dump_pns_peak.m`), `EPIcal`/`ArbEPI`/`GRE` all *exceed* MATLAB's own PNS throw threshold (>80% "exceeds normal mode", >100% "exceeds first controlled mode") at default params — see `CLAUDE.md` for the exact numbers. `seq2ge/check.py` matches MATLAB's throw condition exactly, so this now correctly blocks `main.py --ge` for these three sequences. This needs a resolution (lower slew rate or lengthen blip rise times) before scanning a human on these default sequences.
+**`main.py --ge` now fails by default on three of the four sequences — this is a real finding, not a bug.** `PNSwt` was `[0, 0, 0]` for the entire lifetime of this port until now, so PNS was never actually evaluated in any `--ge` run to date (weight zero makes the per-channel contribution zero regardless of the real waveform). With the current default weights (validated against MATLAB's real per-instance pipeline to ~0.02 percentage points via `seq2ge/pns.py`/`matlab_reference/dump_pns_peak.m`), `EPIcal`/`ArbEPI`/`deGRE` all *exceed* MATLAB's own PNS throw threshold (>80% "exceeds normal mode", >100% "exceeds first controlled mode") at default params — see `CLAUDE.md` for the exact numbers. `seq2ge/check.py` matches MATLAB's throw condition exactly, so this now correctly blocks `main.py --ge` for these three sequences. This needs a resolution (lower slew rate or lengthen blip rise times) before scanning a human on these default sequences.
 
 ## Architecture
 
@@ -141,7 +141,7 @@ lib/
                               (mask2epi_laminar / mask2epi_radial, selected by params.epi_trajectory)
   trap4ge.py                 GE-raster trapezoid rounding (from ../PulCeq)
   (RF/gradient helpers, TE/TR delay calculation)
-sequences/                  ArbEPI, EPIcal, GRE, noise sequence assembly
+sequences/                  ArbEPI, EPIcal, deGRE, noise sequence assembly
 plotting/
   plotting.py                Diagnostic plots (mask/PSF/trajectory/single-TR)
   plot_last_run.py           Drives plotting.py against the most recent output/ run

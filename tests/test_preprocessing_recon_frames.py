@@ -47,7 +47,7 @@ def test_recon_frames_uses_cached_smaps_and_reconstructs_all_frames(tmp_path):
     seq_params = SeqParams(
         Nx=Nx, Ny=Ny, Nz=Nz, ETL=1, R=1, fov=(0.1, 0.1, 0.1),
         volume_tr=1.0, discard_duration=0.0,
-        Nx_gre=Nx, Ny_gre=Ny, Nz_gre=Nz, fov_gre=(0.1, 0.1, 0.1),
+        Nx_degre=Nx, Ny_degre=Ny, Nz_degre=Nz, fov_degre=(0.1, 0.1, 0.1),
     )
 
     # No GRE cache file exists -- if recon_frames tried the "estimate from
@@ -74,7 +74,7 @@ def test_recon_frames_caps_at_cfg_nframes(tmp_path):
     seq_params = SeqParams(
         Nx=Nx, Ny=Ny, Nz=Nz, ETL=1, R=1, fov=(0.1, 0.1, 0.1),
         volume_tr=1.0, discard_duration=0.0,
-        Nx_gre=Nx, Ny_gre=Ny, Nz_gre=Nz, fov_gre=(0.1, 0.1, 0.1),
+        Nx_degre=Nx, Ny_degre=Ny, Nz_degre=Nz, fov_degre=(0.1, 0.1, 0.1),
     )
 
     img, sp, _ = recon_frames(cfg, paths, seq_params, _sum_coils)
@@ -112,7 +112,7 @@ def test_recon_frames_estimates_smaps_when_no_cache(tmp_path, monkeypatch):
     seq_params = SeqParams(
         Nx=Nx, Ny=Ny, Nz=Nz, ETL=1, R=1, fov=(0.1, 0.1, 0.1),
         volume_tr=1.0, discard_duration=0.0,
-        Nx_gre=Nx, Ny_gre=Ny, Nz_gre=Nz, fov_gre=(0.1, 0.1, 0.1),
+        Nx_degre=Nx, Ny_degre=Ny, Nz_degre=Nz, fov_degre=(0.1, 0.1, 0.1),
     )
 
     recon_frames(cfg, paths, seq_params, _sum_coils)

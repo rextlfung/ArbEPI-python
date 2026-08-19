@@ -55,8 +55,8 @@ def test_load_seq_params_round_trips_a_params_mat_fixture(tmp_path):
         'Nx': 240, 'Ny': 240, 'Nz': 45, 'ETL': 60, 'R': 9,
         'fov': np.array([0.216, 0.216, 0.0405]),
         'volume_tr': 2.0, 'discard_duration': 0.0,
-        'Nx_gre': 108, 'Ny_gre': 108, 'Nz_gre': 108,
-        'fov_gre': np.array([0.216, 0.216, 0.216]),
+        'Nx_degre': 108, 'Ny_degre': 108, 'Nz_degre': 108,
+        'fov_degre': np.array([0.216, 0.216, 0.216]),
     }
     with h5py.File(path, 'w') as f:
         for k, v in fields.items():
@@ -71,5 +71,5 @@ def test_load_seq_params_round_trips_a_params_mat_fixture(tmp_path):
     assert sp.ETL == 60 and sp.R == 9
     assert sp.fov == pytest.approx((0.216, 0.216, 0.0405))
     assert sp.volume_tr == pytest.approx(2.0)
-    assert sp.Nx_gre == 108
-    assert sp.fov_gre == pytest.approx((0.216, 0.216, 0.216))
+    assert sp.Nx_degre == 108
+    assert sp.fov_degre == pytest.approx((0.216, 0.216, 0.216))

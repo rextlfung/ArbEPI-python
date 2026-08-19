@@ -15,8 +15,8 @@ import numpy as np
 from params import load_params
 from sampling.gen_sampling_masks import gen_sampling_masks
 from sequences.arbepi import generate_arbepi
+from sequences.degre import generate_degre
 from sequences.epical import generate_epical
-from sequences.gre import generate_gre
 from sequences.noise import generate_noise
 
 
@@ -32,8 +32,8 @@ def main(export_ge: bool = False, plot: bool = False):
     # 2. Calibration sequence (ghost correction + receiver gain)
     generate_epical(params)
 
-    # 3. Gradient echo reference (sensitivity maps)
-    generate_gre(params)
+    # 3. deGRE: dual-echo gradient echo reference (sensitivity maps + B0 field map)
+    generate_degre(params)
 
     # 4. Noise prescan (noise covariance)
     generate_noise(params)
@@ -52,7 +52,7 @@ def main(export_ge: bool = False, plot: bool = False):
 
         seq_paths = {
             name: os.path.join(params.output_dir, f'{name}.seq')
-            for name in ('ArbEPI', 'EPIcal', 'GRE', 'noise')
+            for name in ('ArbEPI', 'EPIcal', 'deGRE', 'noise')
         }
 
         # Check all four sequences for GE hardware/PNS/acoustic-resonance

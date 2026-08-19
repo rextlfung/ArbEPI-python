@@ -1,7 +1,7 @@
 """Stage 1 -- raw ScanArchive data -> zero-filled k-space volume, ready for
 Stage 2 iterative reconstruction. Ports preprocess.m.
 
-No local dataset has every file this needs for one acquisition (noise, GRE,
+No local dataset has every file this needs for one acquisition (noise, deGRE,
 cal, EPI, samp_locs.mat, params.mat all for the same sequence -- in
 particular no noise.h5 exists anywhere under ~/github/data at the time of
 this port), so this module has NOT been run end-to-end against real data.
@@ -187,7 +187,7 @@ def process_epi_frame(
 
 
 def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
-    """Full Stage 1 pipeline for one sequence: noise -> GRE -> smaps ->
+    """Full Stage 1 pipeline for one sequence: noise -> deGRE -> smaps ->
     cal (odd/even phase) -> EPI (streamed frame-by-frame, checkpointed).
     Writes paths.recon.
     """
@@ -205,17 +205,17 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     Nfid, Ncoils, _ = ksp_noise.shape
     W = compute_whitening_matrix(ksp_noise.transpose(0, 2, 1))  # coils last for coils.py
 
-    # STEP 2 -- GRE data -> cc_matrix (coil compression) + ksp_gre (for smaps)
-    print('Loading GRE data...')
+    # STEP 2 -- deGRE data -> cc_matrix (coil compression) + ksp_gre (for smaps)
+    print('Loading deGRE data...')
     ksp_gre_raw = read_archive(cfg.fn_gre)
-    Nx_gre, Ny_gre, Nz_gre = seq_params.Nx_gre, seq_params.Ny_gre, seq_params.Nz_gre
+    Nx_degre, Ny_degre, Nz_degre = seq_params.Nx_degre, seq_params.Ny_degre, seq_params.Nz_degre
     # Discard the blipless calibration block the scanner prepends (first
-    # Ny_gre acquisitions), then unflatten the remaining Ny_gre*Nz_gre
+    # Ny_degre acquisitions), then unflatten the remaining Ny_degre*Nz_degre
     # phase-encode loop -- mechanical port of preprocess.m's
-    # reshape(...,Nx_gre,Ncoils,Ny_gre,Nz_gre) + permute([1 3 4 2]).
-    ksp_gre = ksp_gre_raw[:, :, Ny_gre:]
-    ksp_gre = ksp_gre.reshape(Nx_gre, Ncoils, Ny_gre, Nz_gre, order='F')
-    ksp_gre = ksp_gre.transpose(0, 2, 3, 1)  # [Nx_gre, Ny_gre, Nz_gre, Ncoils]
+    # reshape(...,Nx_degre,Ncoils,Ny_degre,Nz_degre) + permute([1 3 4 2]).
+    ksp_gre = ksp_gre_raw[:, :, Ny_degre:]
+    ksp_gre = ksp_gre.reshape(Nx_degre, Ncoils, Ny_degre, Nz_degre, order='F')
+    ksp_gre = ksp_gre.transpose(0, 2, 3, 1)  # [Nx_degre, Ny_degre, Nz_degre, Ncoils]
 
     ksp_gre = apply_whitening(ksp_gre, W)
 
@@ -248,7 +248,7 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
             print('Estimating sensitivity maps via sigpy ESPIRiT...')
             smaps_raw, emap = estimate_smaps(ksp_gre)
             smaps = process_smaps(
-                smaps_raw, emap, tuple(seq_params.fov_gre), tuple(fov),
+                smaps_raw, emap, tuple(seq_params.fov_degre), tuple(fov),
                 (Nx, Ny, Nz), cfg.threshold_mask,
             )
             with h5py.File(fn_smaps, 'w') as f:

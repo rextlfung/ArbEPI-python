@@ -219,8 +219,8 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             'fov': params.fov,
             'volume_tr': params.volume_tr,
             'discard_duration': params.discard_duration,
-            'Nx_gre': params.Nx_gre, 'Ny_gre': params.Ny_gre, 'Nz_gre': params.Nz_gre,
-            'fov_gre': params.fov_gre,
+            'Nx_degre': params.Nx_degre, 'Ny_degre': params.Ny_degre, 'Nz_degre': params.Nz_degre,
+            'fov_degre': params.fov_degre,
         },
         fmt='7.3',
     )

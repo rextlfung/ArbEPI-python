@@ -132,10 +132,10 @@ class SeqParams:
     volume_tr: float  # s
     discard_duration: float  # s
 
-    Nx_gre: int
-    Ny_gre: int
-    Nz_gre: int
-    fov_gre: tuple[float, float, float]  # m
+    Nx_degre: int
+    Ny_degre: int
+    Nz_degre: int
+    fov_degre: tuple[float, float, float]  # m
 
 
 def load_seq_params(paths: SeqPaths) -> SeqParams:
@@ -158,7 +158,7 @@ def load_seq_params(paths: SeqPaths) -> SeqParams:
             fov=vec3('fov'),
             volume_tr=scalar('volume_tr'),
             discard_duration=scalar('discard_duration'),
-            Nx_gre=int(scalar('Nx_gre')), Ny_gre=int(scalar('Ny_gre')),
-            Nz_gre=int(scalar('Nz_gre')),
-            fov_gre=vec3('fov_gre'),
+            Nx_degre=int(scalar('Nx_degre')), Ny_degre=int(scalar('Ny_degre')),
+            Nz_degre=int(scalar('Nz_degre')),
+            fov_degre=vec3('fov_degre'),
         )

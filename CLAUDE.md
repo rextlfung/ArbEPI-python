@@ -53,8 +53,9 @@ params.py (load_params())  ──►  gen_sampling_masks(R, params)  ──►  
                                           ← both load samp_locs.mat, so must run after generate_arbepi
 ```
 
-`sequences/gre.generate_gre()` (coil sensitivity maps) is independent — it
-doesn't touch `samp_locs.mat`.
+`sequences/degre.generate_degre()` (deGRE: dual-echo GRE, written as
+`deGRE.seq` -- coil sensitivity maps + B0 field map, see that module's
+docstring) is independent — it doesn't touch `samp_locs.mat`.
 
 ### Index convention — read this before touching lib/mask2epi.py or the sequence files
 
@@ -527,6 +528,32 @@ NIfTI affine is a plain diagonal voxel-size matrix derived from
 exists anywhere in this pipeline (unlike a scanner-produced DICOM/NIfTI),
 so voxel spacing is correct but radiological left/right or
 anterior/posterior orientation is not guaranteed.
+
+**Open finding, still unresolved: `preprocessing/` doesn't yet know about
+deGRE's dual-echo acquisition.** `sequences/degre.py` now writes two full
+excitation/readout passes per phase encode (`TE_degre`, a 2-element
+array -- see `params.py`), but `preprocessing/preprocess.py`'s Stage 1
+(`ksp_gre_raw = read_archive(cfg.fn_gre)` through the
+`reshape(Nx_degre, Ncoils, Ny_degre, Nz_degre, order='F')` unflatten) and
+`preprocessing/smaps.py` still assume a single-echo GRE volume -- neither
+currently accounts for the interleaved-echo loop structure
+`generate_degre` assembles (see that module's "Each (iY, iZ) phase-encode
+location is excited once per echo" docstring note). Two follow-ups
+needed, not yet started:
+
+1. Rewire `preprocessing/`'s sensitivity-map pathway (`preprocess.py`'s
+   STEP 2/3, `smaps.py`) to be compatible with the new deGRE acquisition
+   -- specifically, select just one of the two echoes (rather than
+   assuming every acquired line is one contiguous single-echo volume)
+   before computing `estimate_smaps`/`process_smaps`, since the
+   coil-sensitivity pathway doesn't need the second echo at all.
+2. Implement actual B0 field-map estimation from the two echoes (phase
+   difference / `ΔTE`, per `sequences/degre.py`'s module docstring) --
+   this is new functionality, not a rewire of something existing, and
+   will likely depend on an external unwrapping/fitting toolbox (e.g.
+   something in the spirit of FSL `prelude` or a Python phase-unwrapping
+   package) rather than anything currently in `preprocessing/`'s
+   dependency set.
 
 See `README.md` for the getting-started walkthrough and the full
 `Getting started` / `GE export` usage examples.

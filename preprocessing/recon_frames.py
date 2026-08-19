@@ -48,7 +48,7 @@ def _load_smaps(
     nvcoils = ksp_gre.shape[-1]
     smaps_raw, emap = estimate_smaps(ksp_gre)
     smaps = process_smaps(
-        smaps_raw, emap, tuple(seq_params.fov_gre), tuple(seq_params.fov),
+        smaps_raw, emap, tuple(seq_params.fov_degre), tuple(seq_params.fov),
         (seq_params.Nx, seq_params.Ny, seq_params.Nz), cfg.threshold_mask,
     )
     with h5py.File(fn_smaps, 'w') as f:

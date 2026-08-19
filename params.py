@@ -64,20 +64,20 @@ class Params:
     fat_offres_freq: float  # Hz
     fatsat: FatsatParams
 
-    # GRE parameters
-    res_gre: np.ndarray
-    fov_gre: np.ndarray
-    N_gre: np.ndarray
-    Nx_gre: int
-    Ny_gre: int
-    Nz_gre: int
+    # deGRE (dual-echo GRE) parameters
+    res_degre: np.ndarray
+    fov_degre: np.ndarray
+    N_degre: np.ndarray
+    Nx_degre: int
+    Ny_degre: int
+    Nz_degre: int
     Ndummy_zloops: int
-    TE_gre: float
-    TR_gre: float
-    T1_gre: float
-    alpha_gre: float  # degrees
-    rf_dur_gre: float
-    n_cycles_spoil_gre: int
+    TE_degre: np.ndarray  # s, [TE1, TE2] -- two echo times for B0 field mapping
+    TR_degre: float
+    T1_degre: float
+    alpha_degre: float  # degrees
+    rf_dur_degre: float
+    n_cycles_spoil_degre: int
     Tpre: float
 
     # Noise prescan
@@ -166,20 +166,50 @@ def load_params(output_dir: str = 'output') -> Params:
     fat_offres_freq = sys.gamma * sys.B0 * fat_chem_shift
     fatsat = FatsatParams(flip=90, sl_thick=1e5, tbw=3, dur=4e-3)
 
-    # GRE parameters
-    res_gre = np.array([2, 2, 2]) * 1e-3
-    fov_gre = np.array([21.6, 21.6, 21.6]) * 1e-2
-    N_gre = np.round(fov_gre / res_gre).astype(int)
-    Nx_gre, Ny_gre, Nz_gre = int(N_gre[0]), int(N_gre[1]), int(N_gre[2])
+    # deGRE (dual-echo GRE) parameters
+    res_degre = np.array([2, 2, 2]) * 1e-3
+    # N_degre (and hence fov_degre = N_degre*res_degre) tracks the EPI FOV
+    # (`fov` above) rather than independently hardcoded numbers, so it
+    # stays in sync if the EPI FOV ever changes. N_degre is the smallest
+    # integer voxel count at res_degre spacing whose FOV is still >= the
+    # EPI FOV per axis (np.ceil, not round) -- e.g. fov[2]=40.5mm at
+    # res_degre[2]=2mm needs ceil(40.5/2)=21 voxels, giving
+    # fov_degre[2]=42mm exactly, not some in-between value 2mm voxels
+    # can't actually represent. z needs fov_degre[2] >= fov[2]
+    # specifically (preprocessing/smaps.py's process_smaps raises
+    # otherwise); x/y get the same treatment for consistency even though
+    # nothing currently enforces it there. This replaces the old
+    # independent 216mm x/y, 42mm z values.
+    # Epsilon before ceil, same fix as lib/trap4ge.py's _round_up_to_raster
+    # -- float64 noise can make an exact ratio like 216mm/2mm evaluate to
+    # 108.00000000000001 instead of 108.0, which would otherwise make
+    # ceil silently add a spurious extra voxel.
+    N_degre = np.ceil(fov / res_degre - 1e-9).astype(int)
+    fov_degre = N_degre * res_degre
+    Nx_degre, Ny_degre, Nz_degre = int(N_degre[0]), int(N_degre[1]), int(N_degre[2])
 
     Ndummy_zloops = 4
-    TE_gre = 1 / fat_offres_freq + 8e-4
-    TR_gre = 6e-3
-    T1_gre = 1.3
-    alpha_gre = 180 / math.pi * math.acos(math.exp(-TR_gre / T1_gre))
+    # Two echo times for B0 field mapping (see sequences/degre.py, ported
+    # from HarmonizedMRI/B0shimming's writeB0.m): ΔTE is fixed at exactly
+    # 1/fat_offres_freq so fat accumulates one full extra 2*pi of phase
+    # between TE1 and TE2, making its contribution to the echo-to-echo
+    # phase difference (what the field map is computed from) identical at
+    # both echoes and cancel out -- no separate fat-sat pulse needed. The
+    # +8e-4 s offset applied to both (preserving that exact delta) is the
+    # same margin the old single-echo TE_degre used, needed because this
+    # sequence's slab-selective excitation/prephasing (unlike writeB0.m's
+    # non-selective block pulse) doesn't clear a bare 1/fat_offres_freq.
+    TE_degre = 1 / fat_offres_freq * np.array([1.0, 2.0]) + 8e-4
+    # TR_degre must clear tr_min for the *longer* of the two TEs (~7.6ms at
+    # the values above, given this sequence's slab-selective excitation
+    # timing) -- the old single-echo GRE's 6e-3 no longer fits once TE2 is
+    # roughly double TE1. 8e-3 leaves a small margin.
+    TR_degre = 8e-3
+    T1_degre = 1.3
+    alpha_degre = 180 / math.pi * math.acos(math.exp(-TR_degre / T1_degre))
 
-    rf_dur_gre = 0.4e-3
-    n_cycles_spoil_gre = 2
+    rf_dur_degre = 0.4e-3
+    n_cycles_spoil_degre = 2
     Tpre = 1.0e-3
 
     Ncoils = 32
@@ -187,7 +217,7 @@ def load_params(output_dir: str = 'output') -> Params:
     # IEC 60601-2-33:2022-recommended PNS channel weights -- see CLAUDE.md's
     # "Open finding" for why this was zero (disabling the PNS check
     # entirely) until now, and that this default now correctly blocks
-    # `main.py --ge` for EPIcal/ArbEPI/GRE until slew/blip timing changes.
+    # `main.py --ge` for EPIcal/ArbEPI/deGRE until slew/blip timing changes.
     PNSwt = np.array([0.8, 1.0, 0.7]) # human
     # PNSwt = np.array([0.0, 0.0, 0.0]) # phantom
 
@@ -242,19 +272,19 @@ def load_params(output_dir: str = 'output') -> Params:
         fat_chem_shift=fat_chem_shift,
         fat_offres_freq=fat_offres_freq,
         fatsat=fatsat,
-        res_gre=res_gre,
-        fov_gre=fov_gre,
-        N_gre=N_gre,
-        Nx_gre=Nx_gre,
-        Ny_gre=Ny_gre,
-        Nz_gre=Nz_gre,
+        res_degre=res_degre,
+        fov_degre=fov_degre,
+        N_degre=N_degre,
+        Nx_degre=Nx_degre,
+        Ny_degre=Ny_degre,
+        Nz_degre=Nz_degre,
         Ndummy_zloops=Ndummy_zloops,
-        TE_gre=TE_gre,
-        TR_gre=TR_gre,
-        T1_gre=T1_gre,
-        alpha_gre=alpha_gre,
-        rf_dur_gre=rf_dur_gre,
-        n_cycles_spoil_gre=n_cycles_spoil_gre,
+        TE_degre=TE_degre,
+        TR_degre=TR_degre,
+        T1_degre=T1_degre,
+        alpha_degre=alpha_degre,
+        rf_dur_degre=rf_dur_degre,
+        n_cycles_spoil_degre=n_cycles_spoil_degre,
         Tpre=Tpre,
         Ncoils=Ncoils,
         output_dir=output_dir,
