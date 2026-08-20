@@ -15,12 +15,12 @@ import numpy as np
 from lib.make_readout_grads import make_readout_grads
 from params import load_params
 from sampling.gen_sampling_masks import gen_sampling_masks
-from sequences.arbepi import _compute_schedules, generate_arbepi
-from sequences.epical import generate_epical
+from sequences.ArbEPI import _compute_schedules, generate_arbepi
+from sequences.EPIcal import generate_epical
 
 
 def _derated_sys(p):
-    """Matches the PNS derate arbepi.py/epical.py apply to their own sys copy."""
+    """Matches the PNS derate ArbEPI.py/EPIcal.py apply to their own sys copy."""
     sys = copy.deepcopy(p.sys)
     sys.max_slew = 100 * sys.gamma
     return sys

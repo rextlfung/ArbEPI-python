@@ -14,9 +14,9 @@ import numpy as np
 
 from params import load_params
 from sampling.gen_sampling_masks import gen_sampling_masks
-from sequences.arbepi import generate_arbepi
-from sequences.degre import generate_degre
-from sequences.epical import generate_epical
+from sequences.ArbEPI import generate_arbepi
+from sequences.deGRE import generate_degre
+from sequences.EPIcal import generate_epical
 from sequences.noise import generate_noise
 
 

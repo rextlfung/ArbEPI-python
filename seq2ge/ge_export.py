@@ -54,7 +54,7 @@ def export_to_ge(seq_path: str, out_path: str, params: Params) -> None:
     Parameters
     ----------
     seq_path : path to an existing .seq file (e.g. written by
-        sequences.arbepi.generate_arbepi).
+        sequences.ArbEPI.generate_arbepi).
     out_path : output path *without* extension — '.pge' is appended.
     params : loaded Params (see params.load_params); supplies params.spec
         (pislquant and the hardware/PNS constants used by the feasibility

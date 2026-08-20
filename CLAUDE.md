@@ -43,17 +43,17 @@ encode the intended k-space locations.
 params.py (load_params())  ──►  gen_sampling_masks(R, params)  ──►  omegas (Ny×Nz×Nframes bool)
                                                                         │
                                                                         ▼
-                                                          sequences/arbepi.generate_arbepi(omegas, params)
+                                                          sequences/ArbEPI.generate_arbepi(omegas, params)
                                                             │  mask2epi_{laminar,radial}() called per
                                                             │  frame (params.epi_trajectory selects)
                                                             │  schedules: Nframes×Nshots×ETL×2
                                                             │  saved to output/samp_locs.mat
                                                             ▼
-                                          sequences/epical.generate_epical() / sequences/noise.generate_noise()
+                                          sequences/EPIcal.generate_epical() / sequences/noise.generate_noise()
                                           ← both load samp_locs.mat, so must run after generate_arbepi
 ```
 
-`sequences/degre.generate_degre()` (deGRE: dual-echo GRE, written as
+`sequences/deGRE.generate_degre()` (deGRE: dual-echo GRE, written as
 `deGRE.seq` -- coil sensitivity maps + B0 field map, see that module's
 docstring) is independent — it doesn't touch `samp_locs.mat`.
 
@@ -62,7 +62,7 @@ docstring) is independent — it doesn't touch `samp_locs.mat`.
 Internal computation is **0-based** throughout (`mask2epi`'s `schedule`,
 sampling masks, etc.) — a deliberate departure from the 1-based MATLAB
 original. The single place this gets converted back is
-`sequences/arbepi.py`, where `schedules` is written to `samp_locs.mat` as
+`sequences/ArbEPI.py`, where `schedules` is written to `samp_locs.mat` as
 `schedules + 1` so MATLAB-side reconstruction code sees the same convention
 it always has. `parts` (the shot-label map) is already "1-based label, 0 =
 unsampled" and needs no conversion either way.
@@ -80,7 +80,7 @@ touching these files, never `scipy.io`.
 **`lib/mask2epi.py`** holds the core partitioning algorithm, now as two
 interchangeable variants that both turn a 2D `(Ny, Nz)` sampling mask into
 `Nshots` EPI trajectories of length `ETL`: `mask2epi_laminar` (the
-original) and `mask2epi_radial` (added later). `sequences/arbepi.py`
+original) and `mask2epi_radial` (added later). `sequences/ArbEPI.py`
 selects between them via `params.epi_trajectory` (`'laminar'` or
 `'radial'`, default `'laminar'`, set in `params.py`'s "Sampling
 trajectory" section) — a config choice, not a hardcoded call.
@@ -113,7 +113,7 @@ step_size)`. The readout trapezoid (`gro`) is circularly shifted so blips
 fit within each Pulseq block boundary. `gro1`/`gro2` are the leading/trailing
 half-trapezoids played outside/inside the echo loop respectively.
 
-**`sequences/epical.py`** mirrors `sequences/arbepi.py`'s gradient design
+**`sequences/EPIcal.py`** mirrors `sequences/ArbEPI.py`'s gradient design
 exactly (same `make_readout_grads` call, same schedule-derived
 `max_ky_step`/`max_kz_step`) but sets all blip scale factors to 0, so it
 acquires unencoded lines at k-space center for EPI ghost correction.
@@ -142,7 +142,7 @@ that needs it. `Params.sys` (a pypulseq `Opts`) is a mutable object shared
 across all four sequence-generation calls — anywhere the original MATLAB
 did `systmp = sys; systmp.maxGrad = ...` (a value-semantics copy in MATLAB),
 the Python port must `copy.deepcopy(sys)` first (see
-`lib/make_readout_grads.py`, `sequences/arbepi.py`'s `sys_seq`) to avoid
+`lib/make_readout_grads.py`, `sequences/ArbEPI.py`'s `sys_seq`) to avoid
 mutating the shared system object.
 
 **Hardware limits come from one place: `scanners.py`'s `ScannerSpec`.**
@@ -456,7 +456,7 @@ variables -- no Python equivalent of that pattern exists, and copying the
 whole `params.py` module was considered and rejected (it would require
 `pypulseq`/`scanners.py` in the GERecon-constrained preprocessing venv just
 to read a handful of scalars, and ties a long-term data record to source
-code that can change shape over time). Instead, `sequences/arbepi.py`
+code that can change shape over time). Instead, `sequences/ArbEPI.py`
 exports exactly the scalars `preprocess.py` needs to `params.mat`
 (`hdf5storage.savemat(fmt='7.3')`, right next to its existing
 `samp_locs.mat` write); `preprocessing/config.py`'s `load_seq_params` reads
@@ -530,12 +530,12 @@ so voxel spacing is correct but radiological left/right or
 anterior/posterior orientation is not guaranteed.
 
 **`preprocessing/` now knows about deGRE's dual-echo acquisition, and hands
-both echoes off to an external B0-mapping consumer.** `sequences/degre.py`
+both echoes off to an external B0-mapping consumer.** `sequences/deGRE.py`
 writes two full excitation/readout passes per phase encode (`TE_degre`, a
 2-element array -- see `params.py`, echo innermost, then `iY`, then `iZ`,
 including the `iZ=0` receive-gain-calibration pass -- see that module's
 "Each (iY, iZ) phase-encode location is excited once per echo" docstring
-note). `sequences/arbepi.py` now exports `n_echoes_degre = len(params.
+note). `sequences/ArbEPI.py` now exports `n_echoes_degre = len(params.
 TE_degre)` and `TE_degre` itself in its `params.mat` snapshot
 (`preprocessing/config.py`'s `SeqParams.n_echoes_degre`/`TE_degre`, read by
 `load_seq_params`; both default -- `1` and `None` respectively -- when
@@ -548,7 +548,7 @@ unflattens the raw archive against `n_echoes_degre`, returning
 `[Nx_degre, Ny_degre, Nz_degre, n_echoes, Ncoils]` -- every echo, not just
 one. Whitening and coil-compression-matrix estimation still use only
 `PreprocessingConfig.gre_echo_idx` (default `0` = the shorter TE1, for
-higher SNR -- either echo works for sensitivity maps, per `degre.py`'s
+higher SNR -- either echo works for sensitivity maps, per `deGRE.py`'s
 docstring) so `Nvcoils` selection and `smaps.py`'s `estimate_smaps`/
 `process_smaps` behave exactly as before the dual-echo upgrade (the coil
 subspace is echo-independent, so a compression matrix fit on one echo is

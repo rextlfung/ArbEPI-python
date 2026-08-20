@@ -61,7 +61,7 @@ array, not a coordinate used in downstream gradient-scaling arithmetic, so
 there's no reason to renumber it. (Conversion of `schedule`'s indices to
 1-based, for saving `samp_locs.mat` in a form existing MATLAB-side
 reconstruction code can read unchanged, happens once at the save boundary in
-sequences/arbepi.py — not here.)
+sequences/ArbEPI.py — not here.)
 """
 
 import math
@@ -790,7 +790,7 @@ def mask2epi_radial(
     wedges about the mask's center) instead of a raster of ky rows. `ky`
     non-decreasing is deliberately not preserved here. This is safe for the
     standard reference-scan-based Nyquist ghost correction this repo relies
-    on (`sequences/epical.py`'s blips-off scan): that correction is keyed
+    on (`sequences/EPIcal.py`'s blips-off scan): that correction is keyed
     to readout gradient polarity (alternating every echo regardless of
     trajectory shape), not to ky ordering or ky-adjacency between
     consecutive echoes — interleaved multi-shot EPI already violates

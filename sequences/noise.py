@@ -26,7 +26,7 @@ def generate_noise(params: Params, seqname: str = 'noise') -> pp.Sequence:
 
     # Rebuild readout gradient objects matching the EPI sequence.
     # samp_locs.mat is written as MATLAB v7.3 (HDF5-based, see
-    # sequences/arbepi.py) — scipy.io.loadmat cannot read v7.3 at all.
+    # sequences/ArbEPI.py) — scipy.io.loadmat cannot read v7.3 at all.
     schedules = hdf5storage.loadmat(os.path.join(params.output_dir, 'samp_locs.mat'))['schedules']
     max_ky_step = abs(schedules[..., 0][:, :, 1:] - schedules[..., 0][:, :, :-1]).max()
     max_kz_step = abs(schedules[..., 1][:, :, 1:] - schedules[..., 1][:, :, :-1]).max()

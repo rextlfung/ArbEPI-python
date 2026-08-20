@@ -11,7 +11,7 @@ not part of this repo -- in the MATLAB pipeline they live in a per-acquisition
 There is no Python equivalent of that "script injects into workspace" pattern,
 and copying the whole params.py module would drag pypulseq/scanners.py into
 this pipeline just to read a handful of scalars -- so instead
-sequences/arbepi.py exports those scalars to a params.mat snapshot (same mechanism and
+sequences/ArbEPI.py exports those scalars to a params.mat snapshot (same mechanism and
 location as its existing samp_locs.mat write, via
 hdf5storage.savemat(fmt='7.3')). This module only ever reads it back with
 h5py, per this repo's rule of never using scipy.io on v7.3 .mat files.
@@ -48,7 +48,7 @@ class PreprocessingConfig:
 
     # Which of generate_degre's TE_degre echoes to use for coil-sensitivity
     # estimation (0 = TE1, the shorter echo -- less T2* decay, so higher
-    # SNR; either echo works, see sequences/degre.py's module docstring).
+    # SNR; either echo works, see sequences/deGRE.py's module docstring).
     gre_echo_idx: int = 0
 
     # sigpy wavelet+TV regularized recon / CG-SENSE
@@ -141,12 +141,12 @@ class SeqParams:
     Ny_degre: int
     Nz_degre: int
     fov_degre: tuple[float, float, float]  # m
-    n_echoes_degre: int  # len(params.TE_degre) -- see sequences/degre.py's `c` loop
+    n_echoes_degre: int  # len(params.TE_degre) -- see sequences/deGRE.py's `c` loop
     TE_degre: tuple[float, ...] | None  # s; None for pre-dual-echo snapshots (no TE_degre key)
 
 
 def load_seq_params(paths: SeqPaths) -> SeqParams:
-    """Read the params.mat snapshot written by sequences/arbepi.py.
+    """Read the params.mat snapshot written by sequences/ArbEPI.py.
 
     hdf5storage.savemat stores each dict key as a top-level dataset: Python
     scalars come back as shape-(1,1) arrays, 3-vectors as shape-(3,1) --

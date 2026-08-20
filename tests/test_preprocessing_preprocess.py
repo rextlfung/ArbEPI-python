@@ -10,7 +10,7 @@ from preprocessing.preprocess import (
 
 def test_unflatten_gre_echoes_places_data_at_correct_indices():
     """generate_degre's `c` (echo) loop is innermost, then iY, then iZ (see
-    sequences/degre.py) -- build a raw archive where every acquisition
+    sequences/deGRE.py) -- build a raw archive where every acquisition
     encodes its own (echo, iY, iZ) and confirm unflatten_gre_echoes recovers
     exactly the right value at each output location for every echo (not
     just one -- both echoes must survive so an external B0-mapping

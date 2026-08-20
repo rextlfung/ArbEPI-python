@@ -230,7 +230,7 @@ def plot_psf(omega: np.ndarray, params: Params, frame_idx: int = 0) -> matplotli
 def plot_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> matplotlib.figure.Figure:
     """Single-TR snippet of an assembled sequence via pypulseq's own
     `Sequence.plot()`. Every shot loop iteration in generate_arbepi()
-    (sequences/arbepi.py) is exactly one TR, so
+    (sequences/ArbEPI.py) is exactly one TR, so
     [shot_index*TR, (shot_index+1)*TR) covers one shot's worth of blocks —
     fat-sat, RF-spoiled excitation, and the full EPI readout.
 

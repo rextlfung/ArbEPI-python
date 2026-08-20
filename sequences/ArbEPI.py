@@ -222,7 +222,7 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             'Nx_degre': params.Nx_degre, 'Ny_degre': params.Ny_degre, 'Nz_degre': params.Nz_degre,
             'fov_degre': params.fov_degre,
             # generate_degre's `c` loop excites every phase encode once per
-            # echo (see sequences/degre.py) -- preprocess.py's raw deGRE
+            # echo (see sequences/deGRE.py) -- preprocess.py's raw deGRE
             # unflatten needs this to recover the acquisition-order shape.
             'n_echoes_degre': len(params.TE_degre),
             # ΔTE for external phase-difference B0 mapping from preprocess.py's

@@ -32,9 +32,9 @@ Depends on `pypulseq` (from PyPI), numpy, scipy, matplotlib, hdf5storage, and nu
    ```python
    from params import load_params
    from sampling.gen_sampling_masks import gen_sampling_masks
-   from sequences.arbepi import generate_arbepi
-   from sequences.epical import generate_epical
-   from sequences.degre import generate_degre
+   from sequences.ArbEPI import generate_arbepi
+   from sequences.EPIcal import generate_epical
+   from sequences.deGRE import generate_degre
    from sequences.noise import generate_noise
 
    params = load_params()
@@ -92,7 +92,7 @@ not raw index distance `max(|dy|, |dz|)`. This repo's FOV is anisotropic (216 mm
 ### Partitioning
 
 - **`mask2epi_laminar`** (ported from the MATLAB original): sweeps `kz` columns outer, `ky` rows inner in *center-out* order (`_center_out`, an `fftshift`-based interleave: `0, N-1, 1, N-2, ...` roughly, so ky = 0 is spread across every shot rather than clustering all of it in shot 1), filling each shot to exactly `ETL` samples before starting the next. This guarantees `ky` is non-decreasing along the resulting echo train — a constraint inherited from the original design, not re-derived here.
-- **`mask2epi_radial`** (this port's own addition): instead of rows, folds every point's angle about `(ky, kz) = (0, 0)` into `[0, π)` (`θ mod π`), so a point and its 180°-antipodal point land in the same bucket, then sorts by that folded angle and cuts the sorted list into `Nshots` contiguous chunks of exactly `ETL`. Each shot ends up an "opposite wedge pair" — a spoke through k-space center — rather than a raster row. This deliberately gives up `ky` non-decreasing, which is safe here because the Nyquist/odd-even ghost-correction reference scan (`sequences/epical.py`) is keyed to readout-gradient polarity alternation, not to `ky` adjacency between consecutive echoes.
+- **`mask2epi_radial`** (this port's own addition): instead of rows, folds every point's angle about `(ky, kz) = (0, 0)` into `[0, π)` (`θ mod π`), so a point and its 180°-antipodal point land in the same bucket, then sorts by that folded angle and cuts the sorted list into `Nshots` contiguous chunks of exactly `ETL`. Each shot ends up an "opposite wedge pair" — a spoke through k-space center — rather than a raster row. This deliberately gives up `ky` non-decreasing, which is safe here because the Nyquist/odd-even ghost-correction reference scan (`sequences/EPIcal.py`) is keyed to readout-gradient polarity alternation, not to `ky` adjacency between consecutive echoes.
 
 ### Ordering: a three-pass optimization
 

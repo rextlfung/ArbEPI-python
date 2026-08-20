@@ -115,7 +115,7 @@ def unflatten_gre_echoes(
 ) -> np.ndarray:
     """Undo generate_degre's acquisition-order flattening. Ports
     preprocess.m's GRE unflatten (reshape(...,Nx_degre,Ncoils,Ny_degre,
-    Nz_degre) + permute([1 3 4 2])), extended for sequences/degre.py's
+    Nz_degre) + permute([1 3 4 2])), extended for sequences/deGRE.py's
     dual-echo `c` loop, which excites every (iY, iZ) phase encode --
     including the iZ=0 receive-gain-calibration pass -- once per echo,
     echo-fastest, then iY, then iZ.

@@ -189,7 +189,7 @@ def load_params(output_dir: str = 'output') -> Params:
     Nx_degre, Ny_degre, Nz_degre = int(N_degre[0]), int(N_degre[1]), int(N_degre[2])
 
     Ndummy_zloops = 4
-    # Two echo times for B0 field mapping (see sequences/degre.py, ported
+    # Two echo times for B0 field mapping (see sequences/deGRE.py, ported
     # from HarmonizedMRI/B0shimming's writeB0.m): ΔTE is fixed at exactly
     # 1/fat_offres_freq so fat accumulates one full extra 2*pi of phase
     # between TE1 and TE2, making its contribution to the echo-to-echo

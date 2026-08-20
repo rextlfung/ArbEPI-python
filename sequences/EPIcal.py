@@ -29,14 +29,14 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
     os.makedirs(params.output_dir, exist_ok=True)
     # Own copy of params.sys (not the shared instance -- see params.py's
     # Params.sys docstring), derated for PNS to match arbepi.py's readout
-    # (same gradient design, see sequences/arbepi.py's sys comment).
+    # (same gradient design, see sequences/ArbEPI.py's sys comment).
     sys = copy.deepcopy(params.sys)
     sys.max_slew = 100 * sys.gamma  # T/m/s -> Hz/m/s (pypulseq's internal unit)
 
     # Load EPI schedule to match readout gradient design. Index base
     # doesn't matter here: only consecutive-echo differences are used.
     # samp_locs.mat is written as MATLAB v7.3 (HDF5-based, see
-    # sequences/arbepi.py) — scipy.io.loadmat cannot read v7.3 at all, so
+    # sequences/ArbEPI.py) — scipy.io.loadmat cannot read v7.3 at all, so
     # this must use hdf5storage too.
     samp_locs = hdf5storage.loadmat(os.path.join(params.output_dir, 'samp_locs.mat'))
     schedules = samp_locs['schedules']
