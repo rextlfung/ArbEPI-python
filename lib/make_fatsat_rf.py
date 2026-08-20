@@ -1,7 +1,10 @@
 """Adapted from ../ArbEPI/lib/make_fatsat_rf.m.
 
 The MATLAB original designs the fat-sat pulse via GE's
-`toppe.utils.rf.makeslr` (a min-phase SLR pulse), which has no Python
+`toppe.utils.rf.makeslr` (a min-phase SLR pulse, per the Shinnar-Le Roux
+algorithm: Pauly J, Le Roux P, Nishimura D, Macovski A. "Parameter
+relations for the Shinnar-Le Roux selective excitation pulse design
+algorithm." IEEE Trans Med Imaging. 1991;10(1):53-65), which has no Python
 equivalent. Per the project's scoping decision (see the port plan), this
 uses pypulseq's built-in `make_gauss_pulse` instead — a simpler design with
 a less sharp spectral profile than the original SLR pulse, but no new

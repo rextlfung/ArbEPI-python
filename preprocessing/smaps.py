@@ -6,6 +6,10 @@ mask/crop/resize/normalize pipeline. makeSmaps.m's 'pisco' branch is not
 ported: SENSEmethod is effectively always sigpy-ESPIRiT in this port, and
 PISCO (a separate, large MATLAB toolbox) has no available Python port.
 
+ESPIRiT: Uecker M, Lai P, Murphy MJ, et al. "ESPIRiT -- an eigenvalue
+approach to autocalibrating parallel MRI: where SENSE meets GRAPPA." Magn
+Reson Med. 2014;71(3):990-1001.
+
 Convention throughout this repo is coils-last ([..., Ncoils]); sigpy's
 EspiritCalib expects coils-first ([Ncoils, ...]), so estimate_smaps
 transposes at its boundary rather than propagating that convention further.

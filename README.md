@@ -192,3 +192,30 @@ Index convention: internal computation is 0-based throughout (mask2epi's `schedu
 See [../ArbEPI/README.md](../ArbEPI/README.md) for background on the sampling methods and `mask2epi_laminar`'s original (MATLAB) partitioning design — see [Algorithms](#algorithms-libmask2epipy) above for the ordering optimization and `mask2epi_radial`, both this port's own addition with no MATLAB counterpart.
 
 `preprocessing/` is a separate `pyproject.toml` optional-dependency group (`pip install -e ".[preprocessing]"`) with its own venv requirement (Python 3.10, since GE's Orchestra SDK is ABI-locked to it) — see `CLAUDE.md`'s `preprocessing/` section for the full detail: why BART/hmriutils/MIRT were dropped in favor of sigpy + plain numpy, why raw ScanArchive reading still needs GE's proprietary (non-pip, not committed) SDK, and what has/hasn't been validated against real data. The SDK itself is distributed as a GitHub release, accessible by request: [GEHC-External/MR-Orchestra-SDK-Python](https://github.com/GEHC-External/MR-Orchestra-SDK-Python/releases).
+
+## References
+
+Source repositories this port is derived from or ports code from:
+
+- [rextlfung/ArbEPI](https://github.com/rextlfung/ArbEPI) — the MATLAB/Pulseq original this repo ports.
+- [rextlfung/epi-preprocessing](https://github.com/rextlfung/epi-preprocessing) — the MATLAB original `preprocessing/` ports.
+- [HarmonizedMRI/PulCeq](https://github.com/HarmonizedMRI/PulCeq) — `seq2ge/` ports `seq2ceq.m`/`writeceq.m`/`pge2.pns.m`/`check_grad_acoustics.m` from here.
+- [HarmonizedMRI/B0shimming](https://github.com/HarmonizedMRI/B0shimming) — `sequences/deGRE.py` is adapted from this repo's `writeB0.m`.
+
+Libraries this repo depends on:
+
+- [pypulseq](https://github.com/imr-framework/pypulseq) — Pulseq sequence assembly (MIT).
+- [SigPy](https://github.com/mikgroup/sigpy) — ESPIRiT sensitivity maps, NUFFT gridding, L1-wavelet/TV regularized reconstruction (BSD); `sampling/pd_sample.py` is also an independent reimplementation of `sigpy.mri.poisson`'s Poisson-disc algorithm (see that module's docstring for the bugs found in both it and the MATLAB original that motivated the reimplementation).
+- [Numba](https://numba.pydata.org/) — JIT compilation for `pd_sample.py`'s point-placement core.
+- [BART](https://mrirecon.github.io/bart/) — considered for coil compression/whitening/parallel imaging and explicitly dropped in favor of plain numpy + SigPy (see `CLAUDE.md`); noted here since several docstrings describe what this repo does *instead* of calling it.
+
+Proprietary, not distributed with this repo:
+
+- [GE Orchestra SDK / GERecon](https://github.com/GEHC-External/MR-Orchestra-SDK-Python) — required to read raw GE ScanArchive files in `preprocessing/raw_io.py`; installed separately by the user under GE's own license terms, not covered by this repo's license.
+
+Algorithms and standards:
+
+- ESPIRiT: Uecker M, Lai P, Murphy MJ, et al. "ESPIRiT — an eigenvalue approach to autocalibrating parallel MRI: where SENSE meets GRAPPA." *Magn Reson Med.* 2014;71(3):990-1001.
+- Shinnar-Le Roux (SLR) pulse design: Pauly J, Le Roux P, Nishimura D, Macovski A. "Parameter relations for the Shinnar-Le Roux selective excitation pulse design algorithm." *IEEE Trans Med Imaging.* 1991;10(1):53-65. (Referenced in `lib/make_fatsat_rf.py` — the MATLAB original's `toppe.utils.rf.makeslr` implements this; this port uses pypulseq's `make_gauss_pulse` instead, see that module's docstring.)
+- Golden-angle ordering: Winkelmann S, Schaeffter T, Koehler T, Eggers H, Doessel O. "An optimal radial profile order based on the Golden Ratio for time-resolved MRI." *IEEE Trans Med Imaging.* 2007;26(1):68-76. ([open-access copy](https://pmc.ncbi.nlm.nih.gov/articles/PMC9189059/); applied in `lib/mask2epi.py`'s `_golden_angle_shot_order`, see that function's docstring.)
+- Peripheral nerve stimulation: IEC 60601-2-33:2022, the PNS prediction model `seq2ge/pns.py` implements (ported from PulCeq's `pge2.pns.m`).
