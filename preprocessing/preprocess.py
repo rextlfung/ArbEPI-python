@@ -110,6 +110,31 @@ def compute_oephase(
     return a
 
 
+def unflatten_gre_echoes(
+    ksp_gre_raw: np.ndarray, Ny_degre: int, Nz_degre: int, n_echoes: int
+) -> np.ndarray:
+    """Undo generate_degre's acquisition-order flattening. Ports
+    preprocess.m's GRE unflatten (reshape(...,Nx_degre,Ncoils,Ny_degre,
+    Nz_degre) + permute([1 3 4 2])), extended for sequences/degre.py's
+    dual-echo `c` loop, which excites every (iY, iZ) phase encode --
+    including the iZ=0 receive-gain-calibration pass -- once per echo,
+    echo-fastest, then iY, then iZ.
+
+    ksp_gre_raw: [Nx_degre, Ncoils, Nacq] raw archive. The scanner prepends
+    a blipless iZ=0 calibration block (Ny_degre*n_echoes acquisitions),
+    then the Ny_degre*Nz_degre*n_echoes image block.
+
+    Returns [Nx_degre, Ny_degre, Nz_degre, n_echoes, Ncoils] -- every echo,
+    not just one, so callers needing a single echo (e.g. sensitivity-map
+    estimation) select via [..., echo_idx, :] rather than this function
+    dropping data a B0-mapping consumer needs.
+    """
+    Nx_degre, Ncoils, _ = ksp_gre_raw.shape
+    ksp_gre = ksp_gre_raw[:, :, Ny_degre * n_echoes:]
+    ksp_gre = ksp_gre.reshape(Nx_degre, Ncoils, n_echoes, Ny_degre, Nz_degre, order='F')
+    return ksp_gre.transpose(0, 3, 4, 2, 1)  # [Nx_degre, Ny_degre, Nz_degre, n_echoes, Ncoils]
+
+
 def scatter_frame(
     ksp_frame_cart: np.ndarray, schedule_frame: np.ndarray, Ny: int, Nz: int
 ) -> np.ndarray:
@@ -208,29 +233,43 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     # STEP 2 -- deGRE data -> cc_matrix (coil compression) + ksp_gre (for smaps)
     print('Loading deGRE data...')
     ksp_gre_raw = read_archive(cfg.fn_gre)
-    Nx_degre, Ny_degre, Nz_degre = seq_params.Nx_degre, seq_params.Ny_degre, seq_params.Nz_degre
-    # Discard the blipless calibration block the scanner prepends (first
-    # Ny_degre acquisitions), then unflatten the remaining Ny_degre*Nz_degre
-    # phase-encode loop -- mechanical port of preprocess.m's
-    # reshape(...,Nx_degre,Ncoils,Ny_degre,Nz_degre) + permute([1 3 4 2]).
-    ksp_gre = ksp_gre_raw[:, :, Ny_degre:]
-    ksp_gre = ksp_gre.reshape(Nx_degre, Ncoils, Ny_degre, Nz_degre, order='F')
-    ksp_gre = ksp_gre.transpose(0, 2, 3, 1)  # [Nx_degre, Ny_degre, Nz_degre, Ncoils]
+    Ny_degre, Nz_degre = seq_params.Ny_degre, seq_params.Nz_degre
+    # All echoes (whitening/coil compression below apply per-sample along the
+    # coil axis, independent of the extra echo axis, so this carries every
+    # echo through unchanged) -- cfg.gre_echo_idx alone feeds smaps/coil-
+    # compression-matrix estimation, matching prior single-echo behavior
+    # exactly, but the full multi-echo cache lets an external B0-mapping
+    # pipeline (e.g. a Julia consumer) compute the phase-difference field
+    # map from whitened, coil-compressed data without touching the raw
+    # ScanArchive (GERecon-only, not something a non-Python/GE-specific
+    # consumer can read).
+    ksp_gre_all = unflatten_gre_echoes(
+        ksp_gre_raw, Ny_degre, Nz_degre, seq_params.n_echoes_degre
+    )
+    ksp_gre_all = apply_whitening(ksp_gre_all, W)
 
-    ksp_gre = apply_whitening(ksp_gre, W)
-
+    ksp_gre = ksp_gre_all[..., cfg.gre_echo_idx, :]
     cov = compute_coil_covariance(ksp_gre)
     Nvcoils, Nvcoils_energy = select_nvcoils(cov, cfg.cc_energy_thresh, floor=int(2 * R))
     print(f'  Energy threshold {cfg.cc_energy_thresh:.4f}: {Nvcoils_energy} components needed')
     print(f'  Lower bound 2R = {int(2 * R)}  ->  selected Nvcoils = {Nvcoils}')
 
     cc_matrix = coil_compression_matrix(cov, Nvcoils)
-    ksp_gre = apply_coil_compression(ksp_gre, cc_matrix)
+    ksp_gre_all = apply_coil_compression(ksp_gre_all, cc_matrix)
+    ksp_gre = ksp_gre_all[..., cfg.gre_echo_idx, :]
 
     gre_cache_path = os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')
     os.makedirs(os.path.dirname(gre_cache_path), exist_ok=True)
     with h5py.File(gre_cache_path, 'w') as f:
         f.create_dataset('ksp_gre', data=ksp_gre)
+        # [Nx_degre, Ny_degre, Nz_degre, n_echoes, Nvcoils] -- both echoes,
+        # whitened + coil-compressed, plain numpy-order HDF5 (see module
+        # docstring's GE-specific-format rule). TE_degre alongside it gives
+        # a B0-mapping consumer the ΔTE it needs for phase-difference field
+        # mapping without any other file.
+        f.create_dataset('ksp_gre_echoes', data=ksp_gre_all)
+        if seq_params.TE_degre is not None:
+            f.attrs['TE_degre'] = np.asarray(seq_params.TE_degre)
 
     # STEP 3 -- sensitivity maps (before EPI is loaded, so ksp_gre can be freed)
     fn_smaps = os.path.join(cfg.datdir, 'recon', f'smaps_{paths.seqname}_sigpy.h5')
@@ -256,7 +295,7 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
                 f.create_dataset('emap', data=emap)
                 f.create_dataset('smaps', data=smaps)
                 f.attrs['Nvcoils'] = Nvcoils
-    del ksp_gre
+    del ksp_gre, ksp_gre_all
 
     # STEP 4 -- calibration data -> odd/even phase offsets a, trajectory kxo/kxe
     print('Loading calibration data...')

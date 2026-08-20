@@ -10,8 +10,8 @@ not part of this repo -- in the MATLAB pipeline they live in a per-acquisition
 <datdir>/seqs/<seqname>/params.m, loaded at runtime via run(cfg.fn.params).
 There is no Python equivalent of that "script injects into workspace" pattern,
 and copying the whole params.py module would drag pypulseq/scanners.py into
-this pipeline just to read a handful of scalars -- so instead sequences/
-arbepi.py exports those scalars to a params.mat snapshot (same mechanism and
+this pipeline just to read a handful of scalars -- so instead
+sequences/arbepi.py exports those scalars to a params.mat snapshot (same mechanism and
 location as its existing samp_locs.mat write, via
 hdf5storage.savemat(fmt='7.3')). This module only ever reads it back with
 h5py, per this repo's rule of never using scipy.io on v7.3 .mat files.
@@ -45,6 +45,11 @@ class PreprocessingConfig:
     # Sensitivity map estimation. SENSEmethod is always 'sigpy' in this port
     # (BART's ecalib / MATLAB PISCO are not ported -- see smaps.py).
     threshold_mask: float = 0.2
+
+    # Which of generate_degre's TE_degre echoes to use for coil-sensitivity
+    # estimation (0 = TE1, the shorter echo -- less T2* decay, so higher
+    # SNR; either echo works, see sequences/degre.py's module docstring).
+    gre_echo_idx: int = 0
 
     # sigpy wavelet+TV regularized recon / CG-SENSE
     lamb_l1: float = 0.005
@@ -136,6 +141,8 @@ class SeqParams:
     Ny_degre: int
     Nz_degre: int
     fov_degre: tuple[float, float, float]  # m
+    n_echoes_degre: int  # len(params.TE_degre) -- see sequences/degre.py's `c` loop
+    TE_degre: tuple[float, ...] | None  # s; None for pre-dual-echo snapshots (no TE_degre key)
 
 
 def load_seq_params(paths: SeqPaths) -> SeqParams:
@@ -161,4 +168,10 @@ def load_seq_params(paths: SeqPaths) -> SeqParams:
             Nx_degre=int(scalar('Nx_degre')), Ny_degre=int(scalar('Ny_degre')),
             Nz_degre=int(scalar('Nz_degre')),
             fov_degre=vec3('fov_degre'),
+            # Missing in params.mat snapshots written before the dual-echo
+            # deGRE upgrade -- those acquisitions genuinely were single-echo,
+            # so default to 1 rather than raising KeyError on durable,
+            # non-regeneratable per-acquisition data records.
+            n_echoes_degre=int(scalar('n_echoes_degre')) if 'n_echoes_degre' in f else 1,
+            TE_degre=tuple(f['TE_degre'][()].ravel().tolist()) if 'TE_degre' in f else None,
         )

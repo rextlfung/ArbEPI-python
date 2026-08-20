@@ -1,6 +1,45 @@
 import numpy as np
 
-from preprocessing.preprocess import _build_omegas, apply_delay, scatter_frame
+from preprocessing.preprocess import (
+    _build_omegas,
+    apply_delay,
+    scatter_frame,
+    unflatten_gre_echoes,
+)
+
+
+def test_unflatten_gre_echoes_places_data_at_correct_indices():
+    """generate_degre's `c` (echo) loop is innermost, then iY, then iZ (see
+    sequences/degre.py) -- build a raw archive where every acquisition
+    encodes its own (echo, iY, iZ) and confirm unflatten_gre_echoes recovers
+    exactly the right value at each output location for every echo (not
+    just one -- both echoes must survive so an external B0-mapping
+    consumer can use them), and drops the iZ=0 calibration block entirely.
+    """
+    Nx_degre, Ncoils = 2, 3
+    Ny_degre, Nz_degre, n_echoes = 5, 4, 2
+
+    def encode(c, iy, iz):
+        return c + 1j * (iy * 100 + iz)
+
+    calib = np.full((Nx_degre, Ncoils, Ny_degre * n_echoes), -999, dtype=complex)
+    image = np.zeros((Nx_degre, Ncoils, Ny_degre * Nz_degre * n_echoes), dtype=complex)
+    # Acquisition order: iZ outermost, iY middle, echo innermost.
+    acq = 0
+    for iz in range(Nz_degre):
+        for iy in range(Ny_degre):
+            for c in range(n_echoes):
+                image[:, :, acq] = encode(c, iy, iz)
+                acq += 1
+    ksp_gre_raw = np.concatenate([calib, image], axis=-1)
+
+    vol = unflatten_gre_echoes(ksp_gre_raw, Ny_degre, Nz_degre, n_echoes)
+    assert vol.shape == (Nx_degre, Ny_degre, Nz_degre, n_echoes, Ncoils)
+    for c in range(n_echoes):
+        for iy in range(Ny_degre):
+            for iz in range(Nz_degre):
+                expected = encode(c, iy, iz)
+                np.testing.assert_array_equal(vol[:, iy, iz, c, :], expected)
 
 
 def test_scatter_frame_places_data_at_correct_indices():

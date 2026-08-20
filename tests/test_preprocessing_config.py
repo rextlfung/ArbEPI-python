@@ -57,6 +57,8 @@ def test_load_seq_params_round_trips_a_params_mat_fixture(tmp_path):
         'volume_tr': 2.0, 'discard_duration': 0.0,
         'Nx_degre': 108, 'Ny_degre': 108, 'Nz_degre': 108,
         'fov_degre': np.array([0.216, 0.216, 0.216]),
+        'n_echoes_degre': 2,
+        'TE_degre': np.array([0.005, 0.01]),
     }
     with h5py.File(path, 'w') as f:
         for k, v in fields.items():
@@ -73,3 +75,32 @@ def test_load_seq_params_round_trips_a_params_mat_fixture(tmp_path):
     assert sp.volume_tr == pytest.approx(2.0)
     assert sp.Nx_degre == 108
     assert sp.fov_degre == pytest.approx((0.216, 0.216, 0.216))
+    assert sp.n_echoes_degre == 2
+    assert sp.TE_degre == pytest.approx((0.005, 0.01))
+
+
+def test_load_seq_params_defaults_degre_echo_fields_for_pre_dual_echo_snapshot(tmp_path):
+    """params.mat files written before the dual-echo deGRE upgrade have
+    neither n_echoes_degre nor TE_degre -- those acquisitions were
+    genuinely single-echo, so load_seq_params must default rather than
+    raising KeyError on a durable, non-regeneratable per-acquisition data
+    record."""
+    path = tmp_path / 'params.mat'
+    fields = {
+        'Nx': 240, 'Ny': 240, 'Nz': 45, 'ETL': 60, 'R': 9,
+        'fov': np.array([0.216, 0.216, 0.0405]),
+        'volume_tr': 2.0, 'discard_duration': 0.0,
+        'Nx_degre': 108, 'Ny_degre': 108, 'Nz_degre': 108,
+        'fov_degre': np.array([0.216, 0.216, 0.216]),
+    }
+    with h5py.File(path, 'w') as f:
+        for k, v in fields.items():
+            f.create_dataset(k, data=np.asarray(v).transpose())
+
+    paths = SeqPaths(
+        seqname='x', seqdir=str(tmp_path), params=str(path),
+        cal='', noise='', epi='', kxoe='', samp_log='', recon='',
+    )
+    sp = load_seq_params(paths)
+    assert sp.n_echoes_degre == 1
+    assert sp.TE_degre is None

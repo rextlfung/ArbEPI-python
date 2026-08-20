@@ -529,31 +529,53 @@ exists anywhere in this pipeline (unlike a scanner-produced DICOM/NIfTI),
 so voxel spacing is correct but radiological left/right or
 anterior/posterior orientation is not guaranteed.
 
-**Open finding, still unresolved: `preprocessing/` doesn't yet know about
-deGRE's dual-echo acquisition.** `sequences/degre.py` now writes two full
-excitation/readout passes per phase encode (`TE_degre`, a 2-element
-array -- see `params.py`), but `preprocessing/preprocess.py`'s Stage 1
-(`ksp_gre_raw = read_archive(cfg.fn_gre)` through the
-`reshape(Nx_degre, Ncoils, Ny_degre, Nz_degre, order='F')` unflatten) and
-`preprocessing/smaps.py` still assume a single-echo GRE volume -- neither
-currently accounts for the interleaved-echo loop structure
-`generate_degre` assembles (see that module's "Each (iY, iZ) phase-encode
-location is excited once per echo" docstring note). Two follow-ups
-needed, not yet started:
+**`preprocessing/` now knows about deGRE's dual-echo acquisition, and hands
+both echoes off to an external B0-mapping consumer.** `sequences/degre.py`
+writes two full excitation/readout passes per phase encode (`TE_degre`, a
+2-element array -- see `params.py`, echo innermost, then `iY`, then `iZ`,
+including the `iZ=0` receive-gain-calibration pass -- see that module's
+"Each (iY, iZ) phase-encode location is excited once per echo" docstring
+note). `sequences/arbepi.py` now exports `n_echoes_degre = len(params.
+TE_degre)` and `TE_degre` itself in its `params.mat` snapshot
+(`preprocessing/config.py`'s `SeqParams.n_echoes_degre`/`TE_degre`, read by
+`load_seq_params`; both default -- `1` and `None` respectively -- when
+missing, since a `params.mat` snapshot written before this change is a
+durable, non-regeneratable per-acquisition data record, not something to
+raise `KeyError` on).
 
-1. Rewire `preprocessing/`'s sensitivity-map pathway (`preprocess.py`'s
-   STEP 2/3, `smaps.py`) to be compatible with the new deGRE acquisition
-   -- specifically, select just one of the two echoes (rather than
-   assuming every acquired line is one contiguous single-echo volume)
-   before computing `estimate_smaps`/`process_smaps`, since the
-   coil-sensitivity pathway doesn't need the second echo at all.
-2. Implement actual B0 field-map estimation from the two echoes (phase
-   difference / `ΔTE`, per `sequences/degre.py`'s module docstring) --
-   this is new functionality, not a rewire of something existing, and
-   will likely depend on an external unwrapping/fitting toolbox (e.g.
-   something in the spirit of FSL `prelude` or a Python phase-unwrapping
-   package) rather than anything currently in `preprocessing/`'s
-   dependency set.
+`preprocessing/preprocess.py`'s `unflatten_gre_echoes()` (STEP 2)
+unflattens the raw archive against `n_echoes_degre`, returning
+`[Nx_degre, Ny_degre, Nz_degre, n_echoes, Ncoils]` -- every echo, not just
+one. Whitening and coil-compression-matrix estimation still use only
+`PreprocessingConfig.gre_echo_idx` (default `0` = the shorter TE1, for
+higher SNR -- either echo works for sensitivity maps, per `degre.py`'s
+docstring) so `Nvcoils` selection and `smaps.py`'s `estimate_smaps`/
+`process_smaps` behave exactly as before the dual-echo upgrade (the coil
+subspace is echo-independent, so a compression matrix fit on one echo is
+correctly applied to both); `apply_whitening`/`apply_coil_compression`
+operate per-sample along the coil axis regardless of the extra echo axis,
+so this doesn't change the selected echo's values at all. Verified with a
+location-encoding test in the same style as `scatter_frame`'s
+(`test_unflatten_gre_echoes_places_data_at_correct_indices` in
+`tests/test_preprocessing_preprocess.py`): every acquisition is given a
+value encoding its own `(echo, iY, iZ)`, and the test confirms every
+echo's unflattened volume holds exactly the right value at each
+`(iY, iZ)` and that the `iZ=0` calibration block is dropped entirely --
+not just a shape-only check.
+
+**The `<seqname>_gre.h5` cache is the handoff point to an external
+B0-mapping consumer (a separate Julia package, not part of this repo) --
+deliberately not GE-specific.** Alongside the existing `ksp_gre` dataset
+(the selected echo, whitened + coil-compressed, unchanged key so
+`recon_frames.py`'s cache reader needs no changes), STEP 2 now also
+writes `ksp_gre_echoes` (`[Nx_degre, Ny_degre, Nz_degre, n_echoes,
+Nvcoils]`, both echoes, whitened + coil-compressed) and a `TE_degre` attr
+(seconds) whenever `seq_params.TE_degre` is available. Both are plain
+numpy-order HDF5 (see the `.h5`-vs-`.mat` convention note above) -- a
+consumer needs only `h5py`/`HDF5.jl`, never GERecon or the raw
+ScanArchive. Actual B0 estimation (phase difference / `ΔTE`, 3D phase
+unwrapping + fitting) is not implemented in this repo; that's the
+external Julia package's job.
 
 See `README.md` for the getting-started walkthrough and the full
 `Getting started` / `GE export` usage examples.
