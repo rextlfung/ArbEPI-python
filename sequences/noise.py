@@ -17,6 +17,7 @@ import pypulseq as pp
 
 from lib.make_excitation_pulse import make_excitation_pulse
 from lib.make_readout_grads import make_readout_grads
+from lib.mask2epi import max_blip_steps
 from params import Params
 
 
@@ -28,8 +29,7 @@ def generate_noise(params: Params, seqname: str = 'noise') -> pp.Sequence:
     # samp_locs.mat is written as MATLAB v7.3 (HDF5-based, see
     # sequences/ArbEPI.py) — scipy.io.loadmat cannot read v7.3 at all.
     schedules = hdf5storage.loadmat(os.path.join(params.output_dir, 'samp_locs.mat'))['schedules']
-    max_ky_step = abs(schedules[..., 0][:, :, 1:] - schedules[..., 0][:, :, :-1]).max()
-    max_kz_step = abs(schedules[..., 1][:, :, 1:] - schedules[..., 1][:, :, :-1]).max()
+    max_ky_step, max_kz_step = max_blip_steps(schedules)
     rg = make_readout_grads(max_ky_step, max_kz_step, params.Nx, params.fov, params.dwell, sys, params.crt)
     rf, _, _ = make_excitation_pulse(params.fa, params.rf_dur, params.rf_tb, params.fov, sys, params.crt)
 

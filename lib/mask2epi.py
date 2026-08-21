@@ -70,6 +70,24 @@ from typing import Sequence
 import numpy as np
 
 
+def max_blip_steps(schedules: np.ndarray) -> tuple[float, float]:
+    """Largest consecutive-sample ky/kz step size across every frame/shot in
+    `schedules` (Nframes x Nshots x ETL x 2), for sizing unit blips in
+    make_readout_grads.py.
+
+    ETL == 1 has no consecutive samples within a shot to diff (the step
+    along that axis is empty), so np.diff(..., axis=2) would otherwise hand
+    np.max a zero-size array and raise -- handled explicitly here rather
+    than at each of this function's three call sites (sequences/ArbEPI.py,
+    EPIcal.py, noise.py). No steps within a shot means no blips are needed.
+    """
+    if schedules.shape[2] <= 1:
+        return 0.0, 0.0
+    max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
+    max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
+    return max_ky_step, max_kz_step
+
+
 def _center_out(n: int) -> np.ndarray:
     """0-based center-out visiting order of range(n).
 

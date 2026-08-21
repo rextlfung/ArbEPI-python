@@ -22,6 +22,7 @@ from lib.make_fatsat_rf import make_fatsat_rf
 from lib.make_prephasers import make_prephasers
 from lib.make_readout_grads import make_readout_grads
 from lib.make_spoilers import make_spoilers
+from lib.mask2epi import max_blip_steps
 from params import Params
 
 
@@ -48,8 +49,7 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
     rfsat = make_fatsat_rf(params.fatsat, sys, params.fat_offres_freq)
 
     # Readout gradients — sized to match ArbEPI so calibration trajectory applies
-    max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
-    max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
+    max_ky_step, max_kz_step = max_blip_steps(schedules)
     rg = make_readout_grads(max_ky_step, max_kz_step, params.Nx, params.fov, params.dwell, sys, params.crt)
 
     # Prephasers and spoilers (identical to ArbEPI)

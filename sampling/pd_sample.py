@@ -223,6 +223,19 @@ def pd_sample(
     rho_calib = _calib_rho(target_samples, nx, ny, calib_frac)
     calib_mask = rho <= rho_calib
 
+    # The exact-count prune/fill step below can only remove non-calibration
+    # samples, so if the calibration region alone already exceeds the target
+    # budget, the "exactly floor(ny*nx/accel) samples" contract (see this
+    # function's Returns docstring) can't be met -- fail loudly instead of
+    # silently over-returning.
+    n_calib = int(calib_mask.sum())
+    if n_calib > target_samples:
+        raise ValueError(
+            f'Calibration region ({n_calib} samples) exceeds the target sample '
+            f'budget ({target_samples} samples, from accel={accel}); lower '
+            f'calib_frac or accel.'
+        )
+
     r = np.maximum(rho - rho_calib, 0) / max(1 - rho_calib, 1e-6)
 
     # Binary search for the density slope. Target a slightly higher density

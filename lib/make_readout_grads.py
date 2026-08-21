@@ -67,11 +67,13 @@ def make_readout_grads(
         blip_duration = pp.calc_duration(gy_blip)
         gz_blip = pp.make_trapezoid('z', system=sys, area=max_kz_step * deltak[2], duration=blip_duration)
         gz_blip = pp.scale_grad(gz_blip, 1 / max_kz_step, sys)
+        gz_blip = trap4ge(gz_blip, crt, sys)
     else:  # z blip is longer
         max_blip_area = max_kz_step * deltak[2]
         blip_duration = pp.calc_duration(gz_blip)
         gy_blip = pp.make_trapezoid('y', system=sys, area=max_ky_step * deltak[1], duration=blip_duration)
         gy_blip = pp.scale_grad(gy_blip, 1 / max_ky_step, sys)
+        gy_blip = trap4ge(gy_blip, crt, sys)
 
     # Readout trapezoid sized for ramp-sampling and to contain the blip area.
     # Flat top is capped at sys.max_grad, not always the exact-Nyquist rate

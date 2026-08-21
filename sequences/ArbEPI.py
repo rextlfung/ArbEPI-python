@@ -23,7 +23,7 @@ from lib.make_fatsat_rf import make_fatsat_rf
 from lib.make_prephasers import make_prephasers
 from lib.make_readout_grads import make_readout_grads
 from lib.make_spoilers import make_spoilers
-from lib.mask2epi import mask2epi_laminar, mask2epi_radial
+from lib.mask2epi import mask2epi_laminar, mask2epi_radial, max_blip_steps
 from params import Params
 
 _MASK2EPI = {
@@ -92,8 +92,7 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     )
 
     # Infer maximum ky and kz blip steps across all frames and shots
-    max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
-    max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
+    max_ky_step, max_kz_step = max_blip_steps(schedules)
 
     # Readout gradients and ADC event
     rg = make_readout_grads(max_ky_step, max_kz_step, params.Nx, params.fov, params.dwell, sys, params.crt)

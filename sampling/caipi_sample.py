@@ -8,6 +8,17 @@ from typing import Sequence
 import numpy as np
 
 
+def balanced_factors(N: Sequence[int], R: int) -> tuple[int, int]:
+    """Most balanced factorization Ry * Rz = R; larger factor goes to the
+    larger of N = (Ny, Nz)."""
+    Ny, Nz = N[0], N[1]
+    Rsmall = int(np.floor(np.sqrt(R)))
+    while R % Rsmall != 0:
+        Rsmall -= 1
+    Rlarge = R // Rsmall
+    return (Rlarge, Rsmall) if Ny >= Nz else (Rsmall, Rlarge)
+
+
 def caipi_sample(N: Sequence[int], R: int, shift_offset: int = 0) -> np.ndarray:
     Ny, Nz = N[0], N[1]
 
@@ -17,15 +28,7 @@ def caipi_sample(N: Sequence[int], R: int, shift_offset: int = 0) -> np.ndarray:
         'shift_offset must be a non-negative integer'
     )
 
-    # Most balanced factorization Ry * Rz = R; larger factor goes to larger dim
-    Rsmall = int(np.floor(np.sqrt(R)))
-    while R % Rsmall != 0:
-        Rsmall -= 1
-    Rlarge = R // Rsmall
-    if Ny >= Nz:
-        Ry, Rz = Rlarge, Rsmall
-    else:
-        Ry, Rz = Rsmall, Rlarge
+    Ry, Rz = balanced_factors(N, R)
     caipi_z = Ry
 
     omega = np.zeros((Ny, Nz))

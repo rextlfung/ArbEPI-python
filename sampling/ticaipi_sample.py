@@ -21,14 +21,11 @@ from typing import Sequence
 
 import numpy as np
 
-from sampling.caipi_sample import caipi_sample
+from sampling.caipi_sample import balanced_factors, caipi_sample
 
 
 def ticaipi_sample(N: Sequence[int], R: int, frame_idx: int) -> np.ndarray:
-    Rsmall = int(np.floor(np.sqrt(R)))
-    while R % Rsmall != 0:
-        Rsmall -= 1
-    Rz = Rsmall if N[0] >= N[1] else R // Rsmall
+    _, Rz = balanced_factors(N, R)
 
     frame_cycle = frame_idx % R
     kz_offset = frame_cycle % Rz
