@@ -127,6 +127,16 @@ export_to_ge('output/ArbEPI.seq', 'output/ArbEPI', params)
 
 **`main.py --ge` now fails by default on three of the four sequences — this is a real finding, not a bug.** `PNSwt` was `[0, 0, 0]` for the entire lifetime of this port until now, so PNS was never actually evaluated in any `--ge` run to date (weight zero makes the per-channel contribution zero regardless of the real waveform). With the current default weights (validated against MATLAB's real per-instance pipeline to ~0.02 percentage points via `seq2ge/pns.py`/`matlab_reference/dump_pns_peak.m`), `EPIcal`/`ArbEPI`/`deGRE` all *exceed* MATLAB's own PNS throw threshold (>80% "exceeds normal mode", >100% "exceeds first controlled mode") at default params — see `CLAUDE.md` for the exact numbers. `seq2ge/check.py` matches MATLAB's throw condition exactly, so this now correctly blocks `main.py --ge` for these three sequences. This needs a resolution (lower slew rate or lengthen blip rise times) before scanning a human on these default sequences.
 
+## Copy to scanner (`toppe/coppe.py`)
+
+For internal UM fMRI lab use: `toppe/coppe.py` is a Python port of `../toppe/+toppe/+utils/coppe.m` that copies a folder of `.pge` files (e.g. `output/*.pge`) to a scanner over SSH, auto-allocating an unused `pge2` entry number for each and printing the resulting filename → entry-number mapping to enter on the scanner console.
+
+```
+uv run python toppe/coppe.py
+```
+
+See [`toppe/README.md`](toppe/README.md) for usage, SSH key setup, and troubleshooting.
+
 ## Architecture
 
 Only entry points and tightly-coupled global config sit at the repo root — mirroring `../ArbEPI` having `params.m`/`main.m` directly at its repo root — everything else lives in a subpackage grouped by role:
@@ -174,6 +184,9 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
                                  validating Stage 1 output, not the final production reconstruction
                                  (that's a separate, more advanced Julia pipeline)
   calibrate_delay.py            Automated k-space center delay tuning
+toppe/
+  coppe.py                    Copy .pge files to the scanner over SSH, auto-allocating entry numbers
+                              (port of ../toppe/+toppe/+utils/coppe.m; UM lab-internal use)
 matlab_reference/            One-off scripts for re-validating seq2ge/ against a real MATLAB install
                               (not called by any Python code; MATLAB is not needed to use this repo)
   dump_ceq.m                 Dumps seq2ceq.m output for seq2ge/validate_against_matlab.py
