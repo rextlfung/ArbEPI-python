@@ -14,6 +14,12 @@ at its own root — everything else lives under
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
 for the full layout).
 
+## Commit conventions
+
+Do not commit as Claude: no `Co-Authored-By: Claude ...` trailer and no
+Claude/Anthropic identity in the commit author. Commits should read as the
+user's own.
+
 ## Commands
 
 Dependency management is via `uv` (`pyproject.toml` + `uv.lock`), not

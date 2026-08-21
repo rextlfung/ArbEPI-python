@@ -135,7 +135,16 @@ def _assert_endpoints_are_half_extremes(schedule, mask, ETL, Nshots):
     farthest-from-center point, not merely somewhere unconstrained -- i.e.
     the two-pass ordering optimization must only reorder the *interior* of
     each half, never bury the true outer point mid-train (see
-    _order_half_anchored)."""
+    _order_half_anchored) -- UNLESS pass 3 (_euclidean_uncross_refine, run
+    over the whole shot after the two halves are assembled) needed to
+    violate it to remove a genuine self-crossing that straddles the pinned
+    center sample and can only be fixed by trading a point across the
+    before/after boundary (module docstring's "Pass 3" section documents
+    this priority: no self-crossings takes precedence over each half
+    independently keeping its own farthest point at its own endpoint). So
+    a deviation is only accepted here if the final schedule is at least
+    crossing-free -- otherwise pass 3 gave up the half-extremes property
+    for nothing."""
     Ny, Nz = mask.shape
     cy, cz = Ny / 2, Nz / 2
     target = (ETL - 1) // 2
@@ -143,10 +152,16 @@ def _assert_endpoints_are_half_extremes(schedule, mask, ETL, Nshots):
         ys = schedule[shot, :, 0].astype(float)
         zs = schedule[shot, :, 1].astype(float)
         dist = np.sqrt((ys - cy) ** 2 + (zs - cz) ** 2)
-        if target > 0:
-            assert dist[0] == pytest.approx(dist[:target].max())
-        if target < ETL - 1:
-            assert dist[-1] == pytest.approx(dist[target + 1 :].max())
+        violated = False
+        if target > 0 and dist[0] != pytest.approx(dist[:target].max()):
+            violated = True
+        if target < ETL - 1 and dist[-1] != pytest.approx(dist[target + 1 :].max()):
+            violated = True
+        if violated:
+            assert not _has_any_crossing(ys, zs), (
+                f'shot {shot}: half-extremes invariant violated without a '
+                f'crossing to justify it'
+            )
 
 
 def test_mask2epi_radial_small_synthetic_mask():

@@ -329,6 +329,20 @@ def _segments_cross(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray, p4: np.ndarr
     return (d1 > 0) != (d2 > 0) and (d3 > 0) != (d4 > 0)
 
 
+def _count_crossings(pts: np.ndarray) -> int:
+    """Number of properly-crossing (non-adjacent, non-endpoint-sharing)
+    segment pairs along the open path `pts` visits in order."""
+    m = len(pts)
+    n = 0
+    for i in range(m - 1):
+        for j in range(i + 2, m - 1):
+            if i == 0 and j == m - 2:
+                continue
+            if _segments_cross(pts[i], pts[i + 1], pts[j], pts[j + 1]):
+                n += 1
+    return n
+
+
 def _euclidean_uncross_refine(
     coords: np.ndarray,
     deltak: Sequence[float],
@@ -443,7 +457,7 @@ def _euclidean_uncross_refine(
             if i in pinned:
                 continue
             for j in range(i + 2, m):
-                if j in pinned:
+                if j in pinned or span_has_pinned(i, j):
                     continue
                 a, b = order[i], order[j]
                 new_edge_weights = [Dw[order[i - 1], b], Dw[b, order[i + 1]], Dw[order[j - 1], a]]
@@ -468,7 +482,27 @@ def _euclidean_uncross_refine(
         else:
             order[i], order[j] = order[j], order[i]
 
-    # Stage 2: directly target any remaining geometric crossing.
+    # Stage 2: directly target any remaining geometric crossing. Greedily
+    # fixing one crossing can reintroduce a different one elsewhere (there's
+    # no guarantee crossing count decreases monotonically move to move), so
+    # this can otherwise cycle between the same two or more states forever
+    # -- observed empirically: a real case where the only available
+    # candidate for one crossing is exactly the swap that re-creates
+    # another, oscillating for the full `max_passes` budget without ever
+    # converging. `seen` makes any move that would revisit an already-seen
+    # `order` state ineligible, so a cycle is detected and stage 2 stops
+    # rather than spinning. That alone isn't enough, though: the greedy
+    # single-crossing fix can also *wander* through a strictly-worse state
+    # on its way to a cycle or a dead end -- e.g. disturbing a pinned-half
+    # boundary to chase one crossing, without ever actually reaching a
+    # crossing-free result. So the best (fewest-crossings) state seen is
+    # tracked separately and returned at the end, defaulting to the
+    # original (unmodified) order if no move ever strictly improves on it
+    # -- Stage 2 should never hand back something worse than what Stage 1
+    # already achieved.
+    best_order = order.copy()
+    best_n_cross = _count_crossings(coords[order])
+    seen = {tuple(order.tolist())}
     for _ in range(max_passes):
         pts = coords[order]
         crossing = None
@@ -503,14 +537,25 @@ def _euclidean_uncross_refine(
             edges = Dw[trial[:-1], trial[1:]]
             if edges.max() > max_allowed + 1e-9:
                 continue
+            trial_key = tuple(trial.tolist())
+            if trial_key in seen:
+                continue
             order = trial
+            seen.add(trial_key)
             applied = True
+            n_cross = _count_crossings(coords[order])
+            if n_cross < best_n_cross:
+                best_n_cross = n_cross
+                best_order = order.copy()
             break
 
         if not applied:
             break
 
-    return order
+        if best_n_cross == 0:
+            break
+
+    return best_order
 
 
 def _dp_row_directions(
