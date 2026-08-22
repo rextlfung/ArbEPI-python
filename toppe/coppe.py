@@ -23,12 +23,20 @@ See toppe/README.md for usage and the SSH key setup required for this to
 work (two hops, in the same spirit as the MATLAB original: this host ->
 lab jump server, and scanner -> this host, since the transfer is a *pull*
 initiated from the scanner side).
+
+If this host isn't itself allowed to connect to epyc/goliath directly
+(e.g. running from a laptop instead of an already-whitelisted machine like
+phobos.engin.umich.edu), a ProxyJump hop through phobos is used
+automatically (see default_relay) -- pass --relay to point at a different
+relay, or --relay '' to force none. See build_ssh_prefix and README.md's
+"Running from an unwhitelisted machine" section.
 """
 
 import argparse
 import getpass
 import re
 import secrets
+import socket
 import subprocess
 import tarfile
 import tempfile
@@ -42,6 +50,7 @@ from pathlib import Path
 _BASEDIR = '/srv/nfs/psd/usr/psd'
 _JUMP_HOSTS = {'inside': 'epyc', 'outside': 'goliath'}
 _SCANNER_HOST = 'sdc@10.0.1.1'
+_DEFAULT_RELAY_HOST = 'phobos.engin.umich.edu'
 
 _ENTRY_RE = re.compile(r'^(?P<mtime>\d+(?:\.\d+)?)\s+pge(?P<n>\d+)\.entry$')
 
@@ -138,13 +147,20 @@ def find_pge_files(pge_dir: str) -> list[Path]:
     return files
 
 
-def discover_host_ip(override: str | None) -> str:
-    """This host's public IP, so the scanner-side scp pull (see
-    _TRANSFER_SCRIPT) knows where to connect back to. Pass --host-ip to
-    skip the third-party lookup (e.g. if it's unreachable, or the public
-    IP it reports isn't the one the scanner can actually route to)."""
+def discover_host_ip(
+    override: str | None, user: str | None = None, relay: str | None = None,
+) -> str:
+    """The public IP the scanner-side scp pull (see _TRANSFER_SCRIPT) should
+    connect back to. Without --relay this is this host's own public IP;
+    with --relay it's relay's public IP instead (the tarball is staged
+    there -- see stage_tarball_on_relay -- since relay, not this host, is
+    what the scanner's hop-2 keys are provisioned for). Pass --host-ip to
+    skip the lookup entirely (e.g. if it's unreachable, or the IP it
+    reports isn't the one the scanner can actually route to)."""
     if override:
         return override
+    if relay:
+        return discover_relay_ip(user, relay)
     try:
         with urllib.request.urlopen('https://ifconfig.me/ip', timeout=5) as resp:
             return resp.read().decode().strip()
@@ -154,7 +170,116 @@ def discover_host_ip(override: str | None) -> str:
         ) from e
 
 
-def build_ssh_prefix(user: str, target: str) -> list[str]:
+_RELAY_IP_SCRIPT = r"""
+set -eu
+if command -v curl >/dev/null 2>&1; then
+    curl -s https://ifconfig.me/ip
+elif command -v wget >/dev/null 2>&1; then
+    wget -qO- https://ifconfig.me/ip
+else
+    python3 -c "import urllib.request as u
+print(u.urlopen('https://ifconfig.me/ip', timeout=5).read().decode().strip())"
+fi
+"""
+
+
+def _decode_output(result: subprocess.CompletedProcess) -> str:
+    return (
+        (result.stdout or b'').decode(errors='replace')
+        + (result.stderr or b'').decode(errors='replace')
+    )
+
+
+def discover_relay_ip(user: str, relay: str) -> str:
+    """relay's own public IP, queried by running the lookup directly on
+    relay over a plain single-hop ssh (not through ssh_prefix's chain into
+    the scanner) -- reproduces exactly what discover_host_ip would return
+    if coppe.py were run locally on relay itself."""
+    result = subprocess.run(
+        ['ssh', '-q', f'{user}@{relay}', 'bash', '-s'],
+        input=_RELAY_IP_SCRIPT.encode(), capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"could not auto-discover {relay}'s public IP (exit {result.returncode})\n"
+            f'{_decode_output(result)}-- pass --host-ip explicitly'
+        )
+    ip = result.stdout.decode().strip()
+    if not ip:
+        raise RuntimeError(f"could not auto-discover {relay}'s public IP (empty response) "
+                            '-- pass --host-ip explicitly')
+    return ip
+
+
+def stage_tarball_on_relay(user: str, relay: str, tar_path: Path) -> str:
+    """scp's tar_path up to a fresh temp directory on relay -- a direct,
+    single-hop this-host -> relay operation, unlike ssh_prefix's multi-hop
+    chain into the scanner. Returns that remote directory; the
+    scanner-side pull (_TRANSFER_SCRIPT) then scp's the tarball from
+    there, reusing relay's already-provisioned hop-2 keys (see
+    toppe/README.md) rather than needing new ones set up for this host."""
+    result = subprocess.run(['ssh', '-q', f'{user}@{relay}', 'mktemp', '-d'], capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f'could not create a staging directory on {relay} (exit {result.returncode})\n'
+            f'{_decode_output(result)}'
+        )
+    remote_dir = result.stdout.decode().strip()
+    if not remote_dir:
+        raise RuntimeError(f'could not create a staging directory on {relay} (empty response)')
+
+    scp_result = subprocess.run(
+        ['scp', '-q', str(tar_path), f'{user}@{relay}:{remote_dir}/'], capture_output=True,
+    )
+    if scp_result.returncode != 0:
+        cleanup_relay_staging(user, relay, remote_dir)
+        raise RuntimeError(
+            f'could not copy the tarball to {relay} (exit {scp_result.returncode})\n'
+            f'{_decode_output(scp_result)}'
+        )
+    return remote_dir
+
+
+def cleanup_relay_staging(user: str, relay: str, remote_dir: str) -> None:
+    """Best-effort cleanup of the directory stage_tarball_on_relay created;
+    never raises, mirroring release_locks's best-effort style."""
+    try:
+        subprocess.run(
+            ['ssh', '-q', f'{user}@{relay}', 'rm', '-rf', remote_dir], capture_output=True,
+        )
+    except OSError:
+        pass
+
+
+def default_relay() -> str | None:
+    """--relay's default: phobos, unless this host already *is* phobos (in
+    which case no relay hop is needed at all -- see build_ssh_prefix).
+    Compares only the hostname's first label (gethostname() rather than
+    getfqdn(), to avoid a reverse-DNS lookup that can hang on a
+    misconfigured resolver), so this matches whether the local hostname is
+    the bare 'phobos' or the full 'phobos.engin.umich.edu'. Explicitly
+    passing --relay '' overrides this to force no relay from anywhere."""
+    local_host = socket.gethostname().split('.')[0].lower()
+    relay_host = _DEFAULT_RELAY_HOST.split('.')[0].lower()
+    return None if local_host == relay_host else _DEFAULT_RELAY_HOST
+
+
+def build_ssh_prefix(user: str, target: str, relay: str | None = None) -> list[str]:
+    """When relay is given, reaches epyc/goliath via ProxyJump (-J) through
+    it instead of connecting directly -- for running coppe.py from a
+    machine epyc/goliath won't accept connections from, but that can reach
+    a whitelisted relay (e.g. phobos.engin.umich.edu). -J (not a third
+    nested `ssh ... ssh ...` hop) matters here: it makes this host's own
+    ssh client the one authenticating to epyc/goliath (so an interactive
+    Duo prompt still has a tty to prompt on), with only the TCP connection
+    itself routed through relay -- a nested remote-command hop would run
+    that auth on relay with no tty, and Duo can't prompt there. The final
+    epyc/goliath -> scanner hop stays a nested remote-command ssh as
+    before: the scanner's sdc account trusts a key provisioned on
+    epyc/goliath, not on this host or relay."""
+    if relay:
+        return ['ssh', '-q', '-J', f'{user}@{relay}', f'{user}@{_JUMP_HOSTS[target]}',
+                'ssh', '-q', _SCANNER_HOST]
     return ['ssh', '-q', f'{user}@{_JUMP_HOSTS[target]}', 'ssh', '-q', _SCANNER_HOST]
 
 
@@ -325,10 +450,10 @@ def build_tarball(pge_files: list[Path], entry_files: list[Path], tar_path: Path
 
 
 def transfer_and_install(
-    ssh_prefix: list[str], tar_path: Path, user: str, host_ip: str,
+    ssh_prefix: list[str], tar_abspath: str, user: str, host_ip: str,
     remote_run_dir: str, claimed: list[int], verbose: bool,
 ) -> None:
-    args = [_BASEDIR, remote_run_dir, user, host_ip, str(tar_path.resolve()), *map(str, claimed)]
+    args = [_BASEDIR, remote_run_dir, user, host_ip, tar_abspath, *map(str, claimed)]
     run_remote(ssh_prefix, _TRANSFER_SCRIPT, args, verbose=verbose)
 
 
@@ -347,8 +472,15 @@ def print_report(assignment: dict[Path, int], remote_run_dir: str) -> None:
 
 def main(args: argparse.Namespace) -> None:
     pge_files = find_pge_files(args.pge_dir)
-    ssh_prefix = build_ssh_prefix(args.user, args.target)
+    ssh_prefix = build_ssh_prefix(args.user, args.target, args.relay)
     remote_run_dir = f'{_BASEDIR}/{args.user}/{args.run_id}'
+
+    # Printed before the first SSH call into ssh_prefix (query_run_entries,
+    # right below) rather than right before transfer_and_install -- every
+    # call through ssh_prefix can trigger its own Duo push, not just the
+    # final transfer, so the warning needs to be visible before any of them
+    # fire, not just the last one.
+    print('Contacting the scanner (keep an eye out for a Duo push)...')
 
     # A rerun to the same --run-id can reuse entries a previous run already
     # claimed instead of allocating fresh ones -- but only after confirming
@@ -384,14 +516,24 @@ def main(args: argparse.Namespace) -> None:
             tar_path = staging_dir / 'coppe-scanfiles.tgz'
             build_tarball(pge_files, entry_files, tar_path)
 
-            host_ip = discover_host_ip(args.host_ip)
-            print(
-                f'Copying {len(pge_files)} sequence(s) to the scanner '
-                '(keep an eye out for a Duo push)...'
-            )
-            transfer_and_install(
-                ssh_prefix, tar_path, args.user, host_ip, remote_run_dir, claimed, args.verbose,
-            )
+            relay_dir = None
+            try:
+                if args.relay:
+                    relay_dir = stage_tarball_on_relay(args.user, args.relay, tar_path)
+                    tar_abspath = f'{relay_dir}/{tar_path.name}'
+                    host_ip = discover_host_ip(args.host_ip, args.user, args.relay)
+                else:
+                    tar_abspath = str(tar_path.resolve())
+                    host_ip = discover_host_ip(args.host_ip)
+
+                print(f'Copying {len(pge_files)} sequence(s) to the scanner...')
+                transfer_and_install(
+                    ssh_prefix, tar_abspath, args.user, host_ip, remote_run_dir, claimed,
+                    args.verbose,
+                )
+            finally:
+                if relay_dir:
+                    cleanup_relay_staging(args.user, args.relay, relay_dir)
     except Exception:
         release_locks(ssh_prefix, claimed)
         raise
@@ -415,7 +557,14 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--host-ip', default=None,
-        help="override auto-discovery of this host's public IP",
+        help="override auto-discovery of this host's (or --relay's) public IP",
+    )
+    parser.add_argument(
+        '--relay', default=default_relay(),
+        help='ProxyJump through this host to reach epyc/goliath, for running coppe.py from a '
+             "machine they won't accept direct connections from. Defaults to "
+             f"'{_DEFAULT_RELAY_HOST}' unless this host's hostname is already 'phobos' "
+             "(no relay needed); pass --relay '' to force no relay -- see toppe/README.md",
     )
     parser.add_argument(
         '--user', default=getpass.getuser(),

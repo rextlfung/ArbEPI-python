@@ -106,6 +106,60 @@ obvious the first time through:
 The `epyc`/`goliath` → `sdc@10.0.1.1` hop is pre-provisioned lab
 infrastructure — nothing to configure on your end.
 
+## Running from an unwhitelisted machine (e.g. your laptop)
+
+`epyc`/`goliath` only accept SSH connections from machines the lab network
+has whitelisted (e.g. `phobos.engin.umich.edu`) — running `coppe.py`
+directly from an arbitrary machine (a personal laptop, off-campus) fails at
+the very first SSH hop. **`coppe.py` relays through phobos automatically**
+whenever it detects it isn't already running on phobos itself (`--relay`'s
+default, from `default_relay()` — checked via local hostname, no network
+call), so as long as you can SSH from your machine to phobos, no extra flag
+is needed:
+
+```
+uv run python toppe/coppe.py
+```
+
+is equivalent to explicitly passing `--relay phobos.engin.umich.edu`. Pass
+`--relay <other-host>` to relay through somewhere else instead, or
+`--relay ''` to force no relay even from a non-phobos machine.
+
+The relay hop adds phobos as a
+[`ProxyJump`](https://man.openbsd.org/ssh_config#ProxyJump) for the
+`epyc`/`goliath` connection (`ssh -J`, not a third nested `ssh` — see
+`build_ssh_prefix`'s docstring for why that distinction matters for Duo),
+and stages the transfer tarball on phobos rather than locally, so the
+scanner's pull-back leg (hop 2 above) reuses phobos's already-provisioned
+keys instead of needing new ones set up for your laptop.
+
+**Setup required**: just SSH key auth from your machine to the relay itself
+(`ssh-copy-id <your-username>@phobos.engin.umich.edu`, same as any normal
+SSH login) — no new keys needed for the relay → `epyc`/`goliath` or
+scanner → relay hops, since those already work today from the relay
+directly. One extra one-time step: `ssh -J` verifies `epyc`/`goliath`'s host
+key using *your local machine's* `known_hosts`, which (unlike the relay
+itself) has probably never seen it before, since you've only ever reached
+it as a remote command run on the relay. Run this once and accept the
+prompt:
+
+```
+ssh -J <your-username>@phobos.engin.umich.edu <your-username>@epyc echo ok
+ssh -J <your-username>@phobos.engin.umich.edu <your-username>@goliath echo ok
+```
+
+If either one prompts for a password instead of logging straight in, that's
+hop 1's key (see [Hop 1](#hop-1-this-host--lab-jump-server-epyc--goliath)
+above) missing from `epyc`/`goliath` for *your laptop* specifically —
+because `-J` authenticates from your laptop's own SSH client (that's what
+lets an interactive Duo prompt work), the key needs to be on `epyc`/
+`goliath` themselves, not on the relay, even though the relay is where the
+TCP connection is routed through:
+
+```
+ssh-copy-id -o ProxyJump=<your-username>@phobos.engin.umich.edu <your-username>@epyc
+```
+
 ## Usage
 
 ```
@@ -130,6 +184,10 @@ uv run python toppe/coppe.py --host-ip 141.213.x.x
 
 # Use a specific SSH username, or a specific run subfolder name
 uv run python toppe/coppe.py --user labmate --run-id my-test-run
+
+# Relay through a different host instead of the default phobos
+# (see "Running from an unwhitelisted machine" above)
+uv run python toppe/coppe.py --relay some-other-whitelisted-host.engin.umich.edu
 ```
 
 Run `uv run python toppe/coppe.py --help` for the full flag list.
@@ -211,11 +269,13 @@ scanner"):
   one needs a fresh prompt:
   ```
   # ~/.ssh/config, on the machine you run coppe.py from:
-  Host epyc goliath
+  Host epyc goliath phobos.engin.umich.edu
       ControlMaster auto
       ControlPath ~/.ssh/cm-%r@%h:%p
       ControlPersist 10m
   ```
+  (include the relay host too if using `--relay` — it's a separate
+  connection from the `ssh -J` hop into `epyc`/`goliath`)
 - **`could only claim N/M entry numbers ... try again`**: another
   `coppe.py` run grabbed one of the same candidates at the same moment
   (see [Entry-number allocation](#entry-number-allocation)) — just rerun.
