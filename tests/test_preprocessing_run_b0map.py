@@ -13,6 +13,7 @@ import shutil
 import subprocess
 
 import h5py
+import nibabel as nib
 import numpy as np
 import pytest
 
@@ -22,6 +23,29 @@ from preprocessing.run_b0map import run_b0map
 pytestmark = pytest.mark.skipif(
     shutil.which('julia') is None, reason='julia executable not found on PATH'
 )
+
+
+def _write_synthetic_params_mat(seqdir, Nx, Ny, Nz, fov_degre):
+    """Minimal params.mat -- just the fields load_seq_params reads -- in the
+    same on-disk convention hdf5storage.savemat produces (scalars/vectors as
+    plain arrays; load_seq_params's .item()/.ravel() tolerate any shape), so
+    run_b0map's NIfTI export (which needs seq_params.fov_degre) has a real
+    file to read rather than crashing on a fixture gap.
+    """
+    os.makedirs(seqdir, exist_ok=True)
+    with h5py.File(os.path.join(seqdir, 'params.mat'), 'w') as f:
+        f.create_dataset('Nx', data=Nx)
+        f.create_dataset('Ny', data=Ny)
+        f.create_dataset('Nz', data=Nz)
+        f.create_dataset('ETL', data=1)
+        f.create_dataset('R', data=1.0)
+        f.create_dataset('fov', data=np.array([0.2, 0.2, 0.1]))
+        f.create_dataset('volume_tr', data=1.0)
+        f.create_dataset('discard_duration', data=0.0)
+        f.create_dataset('Nx_degre', data=Nx)
+        f.create_dataset('Ny_degre', data=Ny)
+        f.create_dataset('Nz_degre', data=Nz)
+        f.create_dataset('fov_degre', data=np.array(fov_degre))
 
 
 def _fft3c(x: np.ndarray) -> np.ndarray:
@@ -64,6 +88,10 @@ def test_run_b0map_recovers_known_field_map(tmp_path):
     recon_dir = tmp_path / 'recon'
     recon_dir.mkdir()
     f0_true, mask = _write_synthetic_gre_cache(recon_dir / f'{seqname}_gre.h5', rng)
+    fov_degre = (0.2, 0.2, 0.1)
+    _write_synthetic_params_mat(
+        tmp_path / 'seqs' / seqname, *f0_true.shape, fov_degre,
+    )
 
     cfg = load_config(datdir=str(tmp_path), seqnames=[seqname])
     run_b0map(cfg)
@@ -74,6 +102,12 @@ def test_run_b0map_recovers_known_field_map(tmp_path):
         fhat = f['b0map_hz'][()]
         out_mask = f['mask'][()].astype(bool)
         assert f.attrs['mask_threshold'] == pytest.approx(0.1)
+
+    # NIfTI export, on the deGRE grid's fov (not the EPI fov)
+    nii = nib.load(recon_dir / f'{seqname}_b0map.nii.gz')
+    np.testing.assert_allclose(nii.get_fdata(), fhat, atol=1e-3)
+    expected_voxel_mm = [1000.0 * fov_degre[axis] / fhat.shape[axis] for axis in range(3)]
+    np.testing.assert_allclose(np.diag(nii.affine)[:3], expected_voxel_mm)
 
     # (Nx, Ny, Nz) in numpy axis order, not the reversed HDF5.jl-native
     # layout -- this is the axis-order round trip this test is really for.
@@ -127,6 +161,9 @@ def test_run_b0map_unwraps_a_field_map_beyond_the_naive_unambiguous_range(tmp_pa
     recon_dir = tmp_path / 'recon'
     recon_dir.mkdir()
     f0_true, _amp = _write_aliased_synthetic_gre_cache(recon_dir / f'{seqname}_gre.h5', rng)
+    _write_synthetic_params_mat(
+        tmp_path / 'seqs' / seqname, *f0_true.shape, (0.2, 0.2, 0.1),
+    )
 
     cfg = load_config(datdir=str(tmp_path), seqnames=[seqname])
     run_b0map(cfg)

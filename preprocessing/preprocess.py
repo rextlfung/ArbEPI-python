@@ -48,6 +48,7 @@ from preprocessing.config import (
 )
 from preprocessing.epi_gridding import rampsampepi2cart
 from preprocessing.matio import read_mat
+from preprocessing.nifti_io import save_recon_nifti
 from preprocessing.oephase import epiphasecorrect, getoephase
 from preprocessing.smaps import estimate_smaps, process_smaps
 
@@ -295,6 +296,12 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
                 f.create_dataset('emap', data=emap)
                 f.create_dataset('smaps', data=smaps)
                 f.attrs['Nvcoils'] = Nvcoils
+        # Coil axis stands in for save_recon_nifti's "frames" axis -- FSLeyes'
+        # volume slider then scrolls through per-coil maps, magnitude-only
+        # (NIfTI has no complex dtype; see nifti_io module docstring).
+        save_recon_nifti(
+            fn_smaps[: -len('.h5')], smaps, fov=fov, seqname=paths.seqname, Nvcoils=Nvcoils,
+        )
     del ksp_gre, ksp_gre_all
 
     # STEP 4 -- calibration data -> odd/even phase offsets a, trajectory kxo/kxe

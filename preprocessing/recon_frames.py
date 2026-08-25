@@ -27,6 +27,7 @@ import h5py
 import numpy as np
 
 from preprocessing.config import PreprocessingConfig, SeqParams, SeqPaths
+from preprocessing.nifti_io import save_recon_nifti
 from preprocessing.smaps import estimate_smaps, process_smaps
 
 ReconFn = Callable[[np.ndarray, np.ndarray], np.ndarray]
@@ -36,10 +37,18 @@ def _load_smaps(
     cfg: PreprocessingConfig, paths: SeqPaths, seq_params: SeqParams
 ) -> tuple[np.ndarray, int]:
     fn_smaps = os.path.join(cfg.datdir, 'recon', f'smaps_{paths.seqname}_sigpy.h5')
+    fn_smaps_nifti = fn_smaps[: -len('.h5')] + '.nii.gz'
     if os.path.exists(fn_smaps):
         print(f'Loading precomputed sensitivity maps from {fn_smaps}')
         with h5py.File(fn_smaps, 'r') as f:
-            return f['smaps'][()], int(f.attrs['Nvcoils'])
+            smaps, nvcoils = f['smaps'][()], int(f.attrs['Nvcoils'])
+        if not os.path.exists(fn_smaps_nifti):
+            # Backfill: cache was written before the NIfTI export existed.
+            save_recon_nifti(
+                fn_smaps[: -len('.h5')], smaps, fov=seq_params.fov,
+                seqname=paths.seqname, Nvcoils=nvcoils,
+            )
+        return smaps, nvcoils
 
     fn_gre = os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')
     print('Sensitivity maps not found. Estimating via sigpy ESPIRiT...')
@@ -56,6 +65,12 @@ def _load_smaps(
         f.create_dataset('emap', data=emap)
         f.create_dataset('smaps', data=smaps)
         f.attrs['Nvcoils'] = nvcoils
+    # Coil axis stands in for save_recon_nifti's "frames" axis -- FSLeyes'
+    # volume slider then scrolls through per-coil maps, magnitude-only
+    # (NIfTI has no complex dtype; see nifti_io module docstring).
+    save_recon_nifti(
+        fn_smaps[: -len('.h5')], smaps, fov=seq_params.fov, seqname=paths.seqname, Nvcoils=nvcoils,
+    )
     return smaps, nvcoils
 
 

@@ -22,7 +22,10 @@ import os
 import shutil
 import subprocess
 
-from preprocessing.config import PreprocessingConfig, load_config
+import h5py
+
+from preprocessing.config import PreprocessingConfig, load_config, load_seq_params, set_seq_paths
+from preprocessing.nifti_io import save_recon_nifti
 
 _JULIA_DIR = os.path.join(os.path.dirname(__file__), 'julia')
 _JULIA_SCRIPT = os.path.join(_JULIA_DIR, 'b0map.jl')
@@ -58,6 +61,22 @@ def run_b0map(cfg: PreprocessingConfig) -> None:
             )
         except subprocess.CalledProcessError as e:  # noqa: BLE001 -- mirrors the other batch drivers' per-sequence try/catch
             print(f"ERROR [{seqname}]: {e}\nSkipping...")
+            continue
+
+        # NIfTI export for viewing in FSLeyes/etc. -- b0map_hz lives on the
+        # deGRE acquisition grid, not the EPI grid, so its voxel size comes
+        # from seq_params.fov_degre, not seq_params.fov (see nifti_io module
+        # docstring for why this stays alongside, not instead of, the .h5
+        # the Julia consumer above already wrote).
+        paths = set_seq_paths(cfg, seqname)
+        seq_params = load_seq_params(paths)
+        with h5py.File(output_path, 'r') as f:
+            b0map_hz = f['b0map_hz'][()]
+        save_recon_nifti(
+            output_path[: -len('.h5')], b0map_hz,
+            fov=seq_params.fov_degre, seqname=seqname,
+            mask_threshold=cfg.b0map_mask_thresh,
+        )
     print('\nBatch complete.')
 
 
