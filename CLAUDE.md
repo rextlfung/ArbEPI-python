@@ -569,19 +569,115 @@ echo's unflattened volume holds exactly the right value at each
 `(iY, iZ)` and that the `iZ=0` calibration block is dropped entirely --
 not just a shape-only check.
 
-**The `<seqname>_gre.h5` cache is the handoff point to an external
-B0-mapping consumer (a separate Julia package, not part of this repo) --
-deliberately not GE-specific.** Alongside the existing `ksp_gre` dataset
-(the selected echo, whitened + coil-compressed, unchanged key so
-`recon_frames.py`'s cache reader needs no changes), STEP 2 now also
-writes `ksp_gre_echoes` (`[Nx_degre, Ny_degre, Nz_degre, n_echoes,
-Nvcoils]`, both echoes, whitened + coil-compressed) and a `TE_degre` attr
-(seconds) whenever `seq_params.TE_degre` is available. Both are plain
-numpy-order HDF5 (see the `.h5`-vs-`.mat` convention note above) -- a
-consumer needs only `h5py`/`HDF5.jl`, never GERecon or the raw
-ScanArchive. Actual B0 estimation (phase difference / `ΔTE`, 3D phase
-unwrapping + fitting) is not implemented in this repo; that's the
-external Julia package's job.
+**The `<seqname>_gre.h5` cache is the handoff point to B0 field map
+estimation -- deliberately not GE-specific.** Alongside the existing
+`ksp_gre` dataset (the selected echo, whitened + coil-compressed,
+unchanged key so `recon_frames.py`'s cache reader needs no changes), STEP
+2 now also writes `ksp_gre_echoes` (`[Nx_degre, Ny_degre, Nz_degre,
+n_echoes, Nvcoils]`, both echoes, whitened + coil-compressed) and a
+`TE_degre` attr (seconds) whenever `seq_params.TE_degre` is available.
+Both are plain numpy-order HDF5 (see the `.h5`-vs-`.mat` convention note
+above) -- a consumer needs only `h5py`/`HDF5.jl`, never GERecon or the raw
+ScanArchive.
+
+**B0 field map estimation is implemented, via
+[MRIFieldmaps.jl](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl)
+(Lin & Fessler, "Efficient Regularized Field Map Estimation in 3D MRI",
+IEEE TCI 2020) -- not ported to Python, since no such port exists and
+MRIFieldmaps.jl's regularized NCG solver is the actual state of the art
+here, not boilerplate worth reimplementing.** `preprocessing/julia/` is a
+small, self-contained Julia project (`Project.toml` + a pinned
+`Manifest.toml`, both committed) holding one script, `b0map.jl`, invoked
+as a subprocess by `preprocessing/run_b0map.py` (`julia
+--project=preprocessing/julia preprocessing/julia/b0map.jl <gre_h5>
+<output_h5> [mask_threshold]`) -- not embedded via PythonCall/juliacall,
+since there is no other Julia dependency anywhere in this pipeline to
+justify that weight, and a subprocess boundary mirrors how `raw_io.py`
+already isolates GE's proprietary GERecon SDK to one module rather than
+embedding it more deeply. First-time setup needs `julia
+--project=preprocessing/julia -e 'import Pkg; Pkg.instantiate()'` (network
+required once, to populate the local package depot); after that, no
+network access is needed to run it.
+
+`b0map.jl` reads `ksp_gre_echoes`/`TE_degre` back from the cache, IFFTs
+each echo/coil to image space with the same centered-FFT convention as
+`run_rss.py`'s `_ift3` (`fftshift(ifft(fftshift(.)))` per axis), and calls
+`MRIFieldmaps.b0map(finit, images, echotime; mask, chat=true)` -- no
+`smap` argument: this pipeline's ESPIRiT maps (`smaps.py`) are estimated
+on a `cal_size`-cropped grid and resized to the *EPI* grid, neither of
+which matches the deGRE grid `images` lives on, so passing them without a
+matching resize step would violate `b0map`'s shape check; MRIFieldmaps'
+own phase-contrast coil combine (used automatically when `smap` is
+omitted) needs no such alignment. An explicit magnitude-threshold `mask`
+(default `0.1` x peak first-echo magnitude, matching `MRIFieldmaps.
+b0init`'s own default) is *not* optional here despite `b0map`'s own
+`mask` keyword defaulting to "every voxel": its no-`smap` coil-combine
+path divides by each voxel's coil sum-of-squares, and a synthetic
+all-zero-background test volume confirmed this produces a background
+0/0 = NaN that poisons Julia's `maximum()` and returns an all-NaN field
+map end to end (real scanner data has thermal noise everywhere so an
+exactly-zero voxel won't occur, but masking out background is standard
+practice for this package regardless, so the mask stays mandatory here
+rather than becoming a latent footgun).
+
+**`finit` is built via [ROMEO.jl](https://github.com/korbinian90/ROMEO.jl)
+(Dymerska et al., "Phase unwrapping with a rapid opensource minimum
+spanning tree algorithm (ROMEO)", MRM 2021) rather than left to `b0map`'s
+own default (a plain, possibly-aliased two-point phase difference).**
+`b0map`'s NCG solve has a data-fit term that is itself periodic (see the
+cost function referenced below), so it doesn't strictly need unwrapped
+phase to converge -- but that periodicity only guarantees a *locally*
+consistent optimum, not that NCG finds its way to the globally correct 2π
+branch starting from a badly-aliased `finit`. This was measured, not
+theoretical: `b0map.jl`'s own dedicated test
+(`test_run_b0map_unwraps_a_field_map_beyond_the_naive_unambiguous_range`
+in `tests/test_preprocessing_run_b0map.py`) uses a synthetic field map
+exceeding the naive `finit`'s +-1/(2 dTE) unambiguous range (dTE = 2 ms =>
++-250 Hz); `b0map` fed the ROMEO-unwrapped `finit` recovers the true field
+to well under 60 Hz RMSE, fed the plain wrapped `finit` it converges to a
+local minimum that reproduces the aliasing instead of correcting it
+(~207 Hz RMSE, confirmed in scratch testing during development).
+
+Which array actually needs unwrapping is *not* obvious, and got it wrong
+on the first attempt: `MRIFieldmaps.coil_combine`'s phase-contrast formula
+(`zdata_e = sum_c conj(y_{c,1}/sos) * y_{c,e}`) makes the *reference*
+echo's own combined phase (`zdata[...,1]`) identically zero by
+construction for every voxel (`conj(y_{c,1}) * y_{c,1} / sos` sums to a
+real positive number) -- confirmed empirically when a first attempt at
+spatially unwrapping `zdata[...,1]` changed exactly zero voxels on data
+that plainly needed it. The physically meaningful signal is
+`zdata[...,2]`, which for this two-echo case reduces to exactly `y2 *
+conj(y1) / sos` -- the same wrapped phase *difference* `MRIFieldmaps.
+b0init` itself computes (`angle.(y2 .* conj(y1))`). So `b0map.jl`'s
+`romeo_finit` unwraps that one 3D volume via `ROMEO.unwrap`, weighted by
+its own magnitude (a coherence-like quantity in `[0, 1]` from the
+phase-contrast combine -- naturally lower wherever the two echoes
+disagree, i.e. exactly where `unwrap` should trust the local phase less,
+not the raw image amplitude), then divides by `2π * dTE` to get Hz. Only
+the first two echoes are used, matching `b0init`'s own restriction to
+two-point phase difference in the non-water-fat case -- consistent with
+this pipeline only ever acquiring a two-echo deGRE.
+
+**Axis order, both directions, verified empirically rather than assumed:**
+HDF5.jl reads/writes arrays reversed relative to h5py/numpy, the mirror
+image of the `hdf5storage`-vs-`h5py` gotcha `preprocessing/matio.py`
+documents for the opposite (MATLAB-writer) direction. Confirmed against a
+real Python-written `(Nx, Ny, Nz, n_echoes, Ncoils)` dataset: Julia's
+`read` returns it as `(Ncoils, n_echoes, Nz, Ny, Nx)`, and
+`permutedims(raw, reverse(1:ndims(raw)))` recovers the correct array
+(`b0map.jl`'s `read_numpy_array`). The same reversal is applied on
+*write* (`write_numpy_array`), so `<seqname>_b0map.h5`'s
+`b0map_hz`/`finit_hz`/`mask` datasets land on disk already in numpy axis
+order and need no correction
+read back from Python -- confirmed both ways with a synthetic dual-echo
+GRE volume carrying a known spatial field-map ramp (`tests/
+test_preprocessing_run_b0map.py`): shape matches exactly, and the
+recovered field map correlates > 0.98 with the injected ground truth.
+That test (and the whole `preprocessing/julia/` path) is skipped
+whenever no `julia` executable is on `PATH` -- the same tolerance this
+repo already extends to MATLAB-based comparisons (no MATLAB install was
+available during this port either, see the Commands section) and to
+`raw_io.py`'s GERecon dependency.
 
 See `README.md` for the getting-started walkthrough and the full
 `Getting started` / `GE export` usage examples.

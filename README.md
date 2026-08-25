@@ -184,6 +184,11 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
                                  validating Stage 1 output, not the final production reconstruction
                                  (that's a separate, more advanced Julia pipeline)
   calibrate_delay.py            Automated k-space center delay tuning
+  run_b0map.py                  Batch driver for B0 field map estimation (subprocess -> julia/b0map.jl)
+  julia/                        Self-contained Julia project (Project.toml + Manifest.toml, pinned):
+                                 b0map.jl estimates a B0 field map from the deGRE dual-echo cache via
+                                 MRIFieldmaps.jl, with its initial guess unwrapped via ROMEO.jl -- see
+                                 CLAUDE.md's preprocessing/ section for the design
 toppe/
   coppe.py                    Copy .pge files to the scanner over SSH, auto-allocating entry numbers
                               (port of ../toppe/+toppe/+utils/coppe.m; UM lab-internal use)
@@ -221,6 +226,8 @@ Libraries this repo depends on:
 - [SigPy](https://github.com/mikgroup/sigpy) — ESPIRiT sensitivity maps, NUFFT gridding, L1-wavelet/TV regularized reconstruction (BSD); `sampling/pd_sample.py` is also an independent reimplementation of `sigpy.mri.poisson`'s Poisson-disc algorithm (see that module's docstring for the bugs found in both it and the MATLAB original that motivated the reimplementation).
 - [Numba](https://numba.pydata.org/) — JIT compilation for `pd_sample.py`'s point-placement core.
 - [BART](https://mrirecon.github.io/bart/) — considered for coil compression/whitening/parallel imaging and explicitly dropped in favor of plain numpy + SigPy (see `CLAUDE.md`); noted here since several docstrings describe what this repo does *instead* of calling it.
+- [MRIFieldmaps.jl](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl) — B0 field map estimation (MIT), invoked as a subprocess from `preprocessing/run_b0map.py` via the self-contained Julia project in `preprocessing/julia/`; requires a separate `julia` install (see `CLAUDE.md`'s `preprocessing/` section), not otherwise part of this repo's Python dependency set.
+- [ROMEO.jl](https://github.com/korbinian90/ROMEO.jl) — phase unwrapping (MIT), used by `preprocessing/julia/b0map.jl` to build the field map solve's initial guess; same Julia project as MRIFieldmaps.jl above.
 
 Proprietary, not distributed with this repo:
 
@@ -231,4 +238,6 @@ Algorithms and standards:
 - ESPIRiT: Uecker M, Lai P, Murphy MJ, et al. "ESPIRiT — an eigenvalue approach to autocalibrating parallel MRI: where SENSE meets GRAPPA." *Magn Reson Med.* 2014;71(3):990-1001.
 - Shinnar-Le Roux (SLR) pulse design: Pauly J, Le Roux P, Nishimura D, Macovski A. "Parameter relations for the Shinnar-Le Roux selective excitation pulse design algorithm." *IEEE Trans Med Imaging.* 1991;10(1):53-65. (Referenced in `lib/make_fatsat_rf.py` — the MATLAB original's `toppe.utils.rf.makeslr` implements this; this port uses pypulseq's `make_gauss_pulse` instead, see that module's docstring.)
 - Golden-angle ordering: Winkelmann S, Schaeffter T, Koehler T, Eggers H, Doessel O. "An optimal radial profile order based on the Golden Ratio for time-resolved MRI." *IEEE Trans Med Imaging.* 2007;26(1):68-76. ([open-access copy](https://pmc.ncbi.nlm.nih.gov/articles/PMC9189059/); applied in `lib/mask2epi.py`'s `_golden_angle_shot_order`, see that function's docstring.)
+- Regularized B0 field map estimation: Lin CY, Fessler JA. "Efficient Regularized Field Map Estimation in 3D MRI." *IEEE Trans Comput Imaging.* 2020;7:60-73. (Implemented by MRIFieldmaps.jl, invoked from `preprocessing/julia/b0map.jl`.)
+- Phase unwrapping: Dymerska B, Eckstein K, Bachrata B, Siow B, Trattnig S, Shmueli K, Robinson SD. "Phase unwrapping with a rapid opensource minimum spanning tree algorithm (ROMEO)." *Magn Reson Med.* 2021;85(4):2294-2308. (Implemented by ROMEO.jl, used in `b0map.jl` to build the field map solve's initial guess -- see `CLAUDE.md`'s `preprocessing/` section for why the naive two-point guess isn't safe to use directly.)
 - Peripheral nerve stimulation: IEC 60601-2-33:2022, the PNS prediction model `seq2ge/pns.py` implements (ported from PulCeq's `pge2.pns.m`).

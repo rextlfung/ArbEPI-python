@@ -57,6 +57,11 @@ class PreprocessingConfig:
     num_iter: int = 100
     Nframes: float = float('inf')
 
+    # B0 field map estimation (run_b0map.py -> preprocessing/julia/b0map.jl).
+    # Fraction of peak first-echo GRE magnitude below which a voxel is
+    # excluded from the fit -- matches MRIFieldmaps.jl's own b0init default.
+    b0map_mask_thresh: float = 0.1
+
     do_sense: bool = True
     use_parfor: bool = False
     interactive: bool = False
