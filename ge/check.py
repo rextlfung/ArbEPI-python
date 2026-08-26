@@ -19,7 +19,8 @@ MATLAB's window -- per-segment `segment_dead_time`/`segment_ringdown_time`
 padding added by `pge2.getsegmentinstance.m` (~117us/segment, a
 GE-Ceq-interpreter artifact with no Pulseq-timeline equivalent) -- is not
 reproduced, and empirically accounts for the entire residual gap: computed
-against real MATLAB output (`matlab_reference/dump_acoustics_blockrange.m`) on this
+against real MATLAB output (dumped via a since-removed `matlab_reference/
+dump_acoustics_blockrange.m` one-off script, preserved in git history) on this
 repo's four sequences, the window duration matches MATLAB's to within one
 4us raster sample (GRE.seq: 173766 vs MATLAB's 173767 samples; ArbEPI.seq:
 25000 vs 25001), and the resulting acoustics number matches to <0.04%

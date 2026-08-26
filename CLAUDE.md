@@ -28,8 +28,7 @@ not a local path — verify no local patch is needed there before ever
 switching it back to a `file://` dependency.
 
 Linting is via Ruff, configured in `pyproject.toml`'s `[tool.ruff]`
-(`select = ["E", "F", "I"]` — pycodestyle, pyflakes, import sorting;
-`matlab_reference/` is excluded since it holds `.m` files, not Python).
+(`select = ["E", "F", "I"]` — pycodestyle, pyflakes, import sorting).
 No MATLAB-based end-to-end
 comparison suite exists either — no MATLAB install was available during the
 initial port, so correctness is validated by: (a) unit tests on algorithm
@@ -201,13 +200,15 @@ for both `main.py --ge` and standalone use — `ge/ge_export.py` calls straight
 into `ge.seq2ceq`/`ge.writeceq`/`ge.check`, with no `matlab -batch` shell-out
 and no sibling `../pulseq`/`../toppe`/`../PulCeq`/`../ArbEPI` checkouts
 required. MATLAB is only needed if re-validating this port against a fresh
-`../PulCeq` checkout in the future (see `matlab_reference/dump_*.m` below).
+`../PulCeq` checkout in the future (the one-off `dump_*.m` scripts used to
+produce the reference data cited below no longer live in this repo — see
+"matlab_reference/ removed" below).
 
 `ge/seq2ceq.py` + `ge/blocks.py` port `seq2ceq.m`/`compareblocks.m`/
 `getdynamics.m`/`getblocktype.m`; `ge/writeceq.py` ports `writeceq.m`'s
 binary `.pge` writer. Validated field-by-field against real MATLAB output
-(`ge/validate_against_matlab.py` + `matlab_reference/dump_ceq.m`, which dumps
-MATLAB's `ceq` struct for comparison) on all four generated sequences:
+(`ge/validate_against_matlab.py` + the since-removed `dump_ceq.m`, which
+dumped MATLAB's `ceq` struct for comparison) on all four generated sequences:
 `noise.pge`/`GRE.pge` come out byte-identical, `ArbEPI.pge`/`EPIcal.pge`
 differ only in the `maxSlew` header float32's last bit (summation-order
 noise, not a bug -- confirmed by matching every other field including the
@@ -239,9 +240,9 @@ FFT/forbidden-band check, per-coil tables copied verbatim), and `ge/check.py`
 limits, run directly on `seq.get_gradients()` -- no MATLAB round trip).
 Both `ge/pns.py` and `ge/acoustics.py` match real MATLAB output to
 float64/float32 precision on identical input (`ge/validate_pns.py` +
-`matlab_reference/dump_pns_test.m`/`dump_acoustics_test.m`). `ge/check.py`'s
+the since-removed `dump_pns_test.m`/`dump_acoustics_test.m`). `ge/check.py`'s
 whole-sequence PNS convolution matches MATLAB's real per-segment-instance
-computation (via `matlab_reference/dump_pns_peak.m`, which replicates
+computation (via the since-removed `dump_pns_peak.m`, which replicated
 `checksegment.m`'s pipeline without its fail-fast throw) to within 0.02
 percentage points on the full ArbEPI/GE_UHP sequence (114.7% vs 114.72%).
 
@@ -254,8 +255,8 @@ sys, 'blockRange', [1 10], ...)` inside `write_to_ge_from_seq.m` -- walk
 `ceq.loop` rows in segment order starting at row 1, including whole
 segments until the next segment's start row would be >= `block_range[1]`),
 computed from this port's own `seq2ceq(seq)` rather than guessed at.
-Reproduction against real MATLAB output (`matlab_reference/dump_acoustics_blockrange.m`)
-on this repo's four sequences: window duration matches to within one 4us
+Reproduction against real MATLAB output (via the since-removed
+`dump_acoustics_blockrange.m`) on this repo's four sequences: window duration matches to within one 4us
 raster sample (`GRE.seq`: 173766 vs MATLAB's 173767 samples; `ArbEPI.seq`:
 25000 vs 25001), and the resulting acoustics number matches to <0.04%
 relative error (`GRE.seq`: 0.4024 here vs MATLAB's 0.402213; `ArbEPI.seq`:
@@ -313,14 +314,15 @@ as `params.spec` (rather than duplicating `max_grad`/`max_slew`/`b1_max`/
 MATLAB path needed them formatted into a `pge2.opts(...)` snippet) --
 `ge/check.py`/`ge/writeceq.py` read straight from `params.spec`.
 
-`matlab_reference/` now holds only the one-off validation scripts used to produce
-the MATLAB reference data cited throughout this section
-(`dump_ceq.m`, `dump_pns_test.m`, `dump_pns_peak.m`, `dump_acoustics_test.m`,
-`dump_acoustics_blockrange.m`) -- none are called by any Python code.
-`write_to_ge_from_seq.m`/`ge_feasibility_check.m` (the former MATLAB
-shell-out targets) have been removed now that `ge/ge_export.py` no longer
-calls them; their content is preserved in git history for anyone
-re-deriving this port's validation record.
+**`matlab_reference/` removed** -- it held only the one-off validation
+scripts used to produce the MATLAB reference data cited throughout this
+section (`dump_ceq.m`, `dump_pns_test.m`, `dump_pns_peak.m`,
+`dump_acoustics_test.m`, `dump_acoustics_blockrange.m`), none of which were
+ever called by any Python code; their content is preserved in git history
+for anyone re-deriving this port's validation record against a fresh
+`../PulCeq` checkout. `write_to_ge_from_seq.m`/`ge_feasibility_check.m` (the
+former MATLAB shell-out targets) were removed earlier, once `ge/ge_export.py`
+no longer called them, for the same reason.
 - **Fat-sat RF pulse**: the MATLAB original designs this via GE's
   `toppe.utils.rf.makeslr` (min-phase SLR), which has no Python equivalent.
   `lib/make_fatsat_rf.py` uses pypulseq's built-in `make_gauss_pulse`

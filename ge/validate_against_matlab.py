@@ -11,7 +11,8 @@ Usage (from repo root), to check seq2ceq only:
 same .seq exists (e.g. from ge.ge_export.export_to_ge / main.py --ge):
     uv run python -m ge.validate_against_matlab output/noise.seq output/noise_ceq_reference.mat output/noise.pge 10
 
-The reference .mat is produced by matlab_reference/dump_ceq.m, e.g.:
+The reference .mat is produced by the (now removed, see git history)
+matlab_reference/dump_ceq.m script, e.g.:
     matlab -batch "addpath('../pulseq/matlab'); addpath('../toppe'); \
         addpath('../PulCeq/matlab'); addpath('../ArbEPI/lib'); addpath('matlab'); \
         dump_ceq('<abs path to .seq>', '<abs path to reference .mat>');"

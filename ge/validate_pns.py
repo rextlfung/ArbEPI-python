@@ -3,8 +3,8 @@ test -- depends on a local MATLAB install and a reference .mat file that
 isn't committed (see ge/validate_against_matlab.py's module docstring for
 why this repo keeps MATLAB cross-checks out of the automated suite).
 
-Usage (from repo root), after generating the reference with
-matlab_reference/dump_pns_test.m:
+Usage (from repo root), after generating the reference with the (now
+removed, see git history) matlab_reference/dump_pns_test.m script:
     uv run python -m ge.validate_pns output/pns_test_reference.mat
 """
 
