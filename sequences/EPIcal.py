@@ -1,12 +1,16 @@
 """Ported from ../ArbEPI/src/EPIcal.m — EPI ghost-correction calibration sequence.
 
 Structurally mirrors ArbEPI but with no ky/kz blips, producing unencoded
-readout lines at k-space center. Requires samp_locs.mat from a prior
+readout lines at k-space center. Requires scan_info.mat from a prior
 generate_arbepi() run (used to match readout gradient design so the
 calibration trajectory matches the imaging trajectory).
 
-Outputs: <output_dir>/EPIcal.seq, <output_dir>/kxoe<Nx>.mat (odd/even echo
-k-space trajectories for ghost correction).
+Outputs: <output_dir>/EPIcal.seq. kxoe<Nx>.mat (odd/even echo k-space
+trajectories for ghost correction, now scan_info.mat's kxo/kxe) used to be
+written here too, but is now written by sequences/ArbEPI.py instead --
+EPIcal's own kx trajectory is identical to ArbEPI's (this sequence is just
+ArbEPI's readout with the y/z blips zeroed, which doesn't affect gx
+timing/area at all), so there's no need for a second, redundant copy.
 """
 
 import copy
@@ -36,11 +40,11 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
 
     # Load EPI schedule to match readout gradient design. Index base
     # doesn't matter here: only consecutive-echo differences are used.
-    # samp_locs.mat is written as MATLAB v7.3 (HDF5-based, see
+    # scan_info.mat is written as MATLAB v7.3 (HDF5-based, see
     # sequences/ArbEPI.py) — scipy.io.loadmat cannot read v7.3 at all, so
     # this must use hdf5storage too.
-    samp_locs = hdf5storage.loadmat(os.path.join(params.output_dir, 'samp_locs.mat'))
-    schedules = samp_locs['schedules']
+    scan_info = hdf5storage.loadmat(os.path.join(params.output_dir, 'scan_info.mat'))
+    schedules = scan_info['schedules']
 
     # Excitation pulse (identical to ArbEPI)
     rf, gz_ss, gz_ssr = make_excitation_pulse(params.fa, params.rf_dur, params.rf_tb, params.fov, sys, params.crt)
@@ -127,17 +131,6 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
     else:
         print('Timing check failed! Error listing follows:')
         print(error_report)
-
-    # Save odd/even echo k-space trajectories for ghost correction. These
-    # are physical k-space values (cycles/m), not indices — no 1-based
-    # conversion applies. Written as MATLAB v7.3 (HDF5-based), matching the
-    # original MATLAB code's `save(..., '-v7.3')`.
-    k_traj_adc, *_ = seq.calculate_kspace()
-    kxo = k_traj_adc[0, : rg.Nfid]
-    kxe = k_traj_adc[0, rg.Nfid : rg.Nfid * 2]
-    hdf5storage.savemat(
-        os.path.join(params.output_dir, f'kxoe{params.Nx}.mat'), {'kxo': kxo, 'kxe': kxe}, fmt='7.3'
-    )
 
     # Write Pulseq .seq file
     seq.set_definition('FOV', params.fov)

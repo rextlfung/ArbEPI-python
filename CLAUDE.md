@@ -51,34 +51,57 @@ params.py (load_params())  ──►  gen_sampling_masks(R, params)  ──►  
                                                           sequences/ArbEPI.generate_arbepi(omegas, params)
                                                             │  mask2epi_{laminar,radial}() called per
                                                             │  frame (params.epi_trajectory selects)
-                                                            │  schedules: Nframes×Nshots×ETL×2
-                                                            │  saved to output/samp_locs.mat
+                                                            │  schedules: Nframes×Nshots×ETL×3
+                                                            │  (ky, kz, echo time), kxo/kxe, and a scan-
+                                                            │  scalar snapshot all saved to
+                                                            │  output/scan_info.mat
                                                             ▼
                                           sequences/EPIcal.generate_epical() / sequences/noise.generate_noise()
-                                          ← both load samp_locs.mat, so must run after generate_arbepi
+                                          ← both load scan_info.mat, so must run after generate_arbepi
 ```
 
 `sequences/deGRE.generate_degre()` (deGRE: dual-echo GRE, written as
 `deGRE.seq` -- coil sensitivity maps + B0 field map, see that module's
-docstring) is independent — it doesn't touch `samp_locs.mat`.
+docstring) is independent — it doesn't touch `scan_info.mat`.
 
 ### Index convention — read this before touching lib/mask2epi.py or the sequence files
 
 Internal computation is **0-based** throughout (`mask2epi`'s `schedule`,
 sampling masks, etc.) — a deliberate departure from the 1-based MATLAB
 original. The single place this gets converted back is
-`sequences/ArbEPI.py`, where `schedules` is written to `samp_locs.mat` as
-`schedules + 1` so MATLAB-side reconstruction code sees the same convention
-it always has. `parts` (the shot-label map) is already "1-based label, 0 =
-unsampled" and needs no conversion either way.
+`sequences/ArbEPI.py`, where `schedules` is written to `scan_info.mat` as
+`schedules + 1` (on just its (ky, kz) channels, see below) so MATLAB-side
+reconstruction code sees the same convention it always has. `parts` (the
+shot-label map) is already "1-based label, 0 = unsampled" and needs no
+conversion either way.
 
 ### `.mat` file format
 
-`output/samp_locs.mat` and `output/kxoe<Nx>.mat` are written via
+`output/scan_info.mat` -- kxo/kxe (odd/even echo k-space trajectories for
+ghost correction), schedules/parts (the sampling schedule), and a snapshot
+of the scan scalars `preprocessing/` needs -- is written via
 `hdf5storage.savemat(..., fmt='7.3')`, matching the original MATLAB code's
 `save(..., '-v7.3')`. **`scipy.io.loadmat`/`savemat` cannot read or write
 v7.3 at all** — always use `hdf5storage.loadmat` (or raw `h5py`) when
-touching these files, never `scipy.io`.
+touching this file, never `scipy.io`. `schedules` itself is `Nframes ×
+Nshots × ETL × 3`: `schedules[..., :2]` is the 1-based `(ky, kz)` index
+pair, `schedules[..., 2]` is echo time in seconds since RF excitation for
+that acquisition (uniform across every shot/frame, since readout timing
+doesn't vary between them) -- not an index, so it's exempt from the 1-based
+conversion above. This was a deliberate consolidation: `scan_info.mat`
+replaces three previously-separate files (`samp_locs.mat`, `params.mat`,
+`kxoe<Nx>.mat`), all written by `sequences/ArbEPI.py` at one point in the
+pipeline now that nothing needs `kxoe<Nx>.mat`'s old two-stage,
+Nx-dependent filename resolution (see `preprocessing/preprocess.py`'s
+`load_kxoe`) or a separate `EPIcal.py`-computed copy of kxo/kxe (see
+`sequences/EPIcal.py`'s module docstring for why that copy was redundant --
+EPIcal's own kx trajectory is mathematically identical to ArbEPI's,
+confirmed by `test_arbepi_kxoe_matches_epical`). The echo-time channel
+exists so a future off-resonance-correction consumer (`recon/`) has, for
+every k-space sample it already indexes, both a field-map value (see the
+B0 field map paragraph below) and the acquisition time needed to convert
+that field-map value into a phase-correction term -- `recon/` does not
+consume it yet.
 
 ### Key design decisions (carried over from ../ArbEPI, still apply here)
 
@@ -351,7 +374,7 @@ no longer called them, for the same reason.
   `mask2epi_laminar`'s raster order. `plotting/plot_last_run.py` drives all
   four plotting functions against the most recent `output/` run and is
   wired into `main.py --plot`, which now runs *before* the `--ge` export
-  step (both independently depend only on `samp_locs.mat`/`ArbEPI.seq`, not
+  step (both independently depend only on `scan_info.mat`/`ArbEPI.seq`, not
   on each other) so the diagnostic plots are still written even if `--ge`
   fails. `docs/demo/` holds static copies of one `--plot` run's output,
   embedded in README's Demo section — not regenerated automatically, so
@@ -367,8 +390,8 @@ no longer called them, for the same reason.
 
 `preprocessing/` is a from-scratch Python port of the companion MATLAB repo
 `../epi-preprocessing`: raw scanner data -> reconstructed images, the
-consumer of `samp_locs.mat`/`kxoe<Nx>.mat` this repo's sequence-generation
-side produces. It's a separate `pyproject.toml` optional-dependency group
+consumer of `scan_info.mat` this repo's sequence-generation side produces.
+It's a separate `pyproject.toml` optional-dependency group
 (`preprocessing`), deliberately kept out of the main sequence-generation
 dependency set -- see below for why it also needs its own venv.
 
@@ -465,30 +488,29 @@ whole `params.py` module was considered and rejected (it would require
 `pypulseq`/`scanners.py` in the GERecon-constrained preprocessing venv just
 to read a handful of scalars, and ties a long-term data record to source
 code that can change shape over time). Instead, `sequences/ArbEPI.py`
-exports exactly the scalars `preprocess.py` needs to `params.mat`
-(`hdf5storage.savemat(fmt='7.3')`, right next to its existing
-`samp_locs.mat` write); `preprocessing/config.py`'s `load_seq_params` reads
-it back with `h5py` (see below for why not `hdf5storage`). No new
-dependency needed on either side: `hdf5storage` is already a main-repo
-dependency (writer), plain `h5py` is already in the `preprocessing` extras
-(reader).
+exports exactly the scalars `preprocess.py` needs into `scan_info.mat`
+(`hdf5storage.savemat(fmt='7.3')`, alongside the kxo/kxe/schedules arrays it
+also writes there -- see the ".mat file format" section above);
+`preprocessing/config.py`'s `load_seq_params` reads it back with `h5py`
+(see below for why not `hdf5storage`). No new dependency needed on either
+side: `hdf5storage` is already a main-repo dependency (writer), plain
+`h5py` is already in the `preprocessing` extras (reader).
 
 **`preprocessing/matio.py` -- read hdf5storage `.mat` files with `h5py`,
 correctly.** `hdf5storage` stores arrays *axis-reversed* on disk (MATLAB's
 column-major convention); `h5py` reads the raw on-disk layout with no
-correction. Verified empirically against a real `samp_locs.mat`:
-`hdf5storage.loadmat`'s `schedules` is `(30, 20, 60, 2)` (matching this
-repo's documented `Nframes x Nshots x ETL x 2` layout), while a bare
-`h5py.File(...)['schedules'][()]` comes back `(2, 60, 20, 30)` -- exactly
+correction. Verified empirically against a real `scan_info.mat`:
+`hdf5storage.loadmat`'s `schedules` is `(30, 20, 60, 3)` (matching this
+repo's documented `Nframes x Nshots x ETL x 3` layout), while a bare
+`h5py.File(...)['schedules'][()]` comes back `(3, 60, 20, 30)` -- exactly
 the reverse, and exactly `raw.transpose()` recovers the correct array
 (shape *and* values, checked element-by-element against
 `hdf5storage.loadmat`'s output). `matio.read_mat_array`/`read_mat` apply
 this transpose unconditionally; for vectors/scalars it's a no-op on the
 values (only a singleton axis moves), so there's no need to special-case
 shape. Use these for every hdf5storage-written `.mat` this pipeline reads
-(`samp_locs.mat`, `kxoe<Nx>.mat`, `params.mat`) -- never `scipy.io` (can't
-read v7.3 at all, see above), never a bare `h5py` read without the
-transpose.
+(`scan_info.mat`) -- never `scipy.io` (can't read v7.3 at all, see above),
+never a bare `h5py` read without the transpose.
 
 **Everything `preprocess.py`/`recon_frames.py` write for their own
 internal use -- not for a human to open in a viewer -- stays `.h5`, not
@@ -544,12 +566,13 @@ writes two full excitation/readout passes per phase encode (`TE_degre`, a
 including the `iZ=0` receive-gain-calibration pass -- see that module's
 "Each (iY, iZ) phase-encode location is excited once per echo" docstring
 note). `sequences/ArbEPI.py` now exports `n_echoes_degre = len(params.
-TE_degre)` and `TE_degre` itself in its `params.mat` snapshot
-(`preprocessing/config.py`'s `SeqParams.n_echoes_degre`/`TE_degre`, read by
-`load_seq_params`; both default -- `1` and `None` respectively -- when
-missing, since a `params.mat` snapshot written before this change is a
-durable, non-regeneratable per-acquisition data record, not something to
-raise `KeyError` on).
+TE_degre)` and `TE_degre` itself in its scan-scalar snapshot (now part of
+`scan_info.mat`, formerly its own `params.mat` -- see the ".mat file
+format" section above) (`preprocessing/config.py`'s
+`SeqParams.n_echoes_degre`/`TE_degre`, read by `load_seq_params`; both
+default -- `1` and `None` respectively -- when missing, since a snapshot
+written before this change is a durable, non-regeneratable per-acquisition
+data record, not something to raise `KeyError` on).
 
 `preprocessing/preprocess.py`'s `unflatten_gre_echoes()` (STEP 2)
 unflattens the raw archive against `n_echoes_degre`, returning

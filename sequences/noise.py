@@ -3,7 +3,7 @@ covariance estimation.
 
 Acquires ADC data without RF or gradients (aside from one trailing dummy RF
 block, needed so the scanner recognizes a second block type). Requires
-samp_locs.mat from a prior generate_arbepi() run to match readout geometry.
+scan_info.mat from a prior generate_arbepi() run to match readout geometry.
 
 Outputs: <output_dir>/noise.seq (Pulseq format).
 """
@@ -26,9 +26,9 @@ def generate_noise(params: Params, seqname: str = 'noise') -> pp.Sequence:
     sys = params.sys
 
     # Rebuild readout gradient objects matching the EPI sequence.
-    # samp_locs.mat is written as MATLAB v7.3 (HDF5-based, see
+    # scan_info.mat is written as MATLAB v7.3 (HDF5-based, see
     # sequences/ArbEPI.py) — scipy.io.loadmat cannot read v7.3 at all.
-    schedules = hdf5storage.loadmat(os.path.join(params.output_dir, 'samp_locs.mat'))['schedules']
+    schedules = hdf5storage.loadmat(os.path.join(params.output_dir, 'scan_info.mat'))['schedules']
     max_ky_step, max_kz_step = max_blip_steps(schedules)
     rg = make_readout_grads(max_ky_step, max_kz_step, params.Nx, params.fov, params.dwell, sys, params.crt)
     rf, _, _ = make_excitation_pulse(params.fa, params.rf_dur, params.rf_tb, params.fov, sys, params.crt)

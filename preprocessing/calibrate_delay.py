@@ -83,7 +83,7 @@ def calibrate_delay(
     ETL_even = ETL - (ETL % 2)
     ksp_cal = ksp_cal[:, :ETL_even, :, :]
 
-    kxo0, kxe0 = load_kxoe(paths.seqdir, Nx)
+    kxo0, kxe0 = load_kxoe(paths.scan_info)
 
     report: dict = {'delay': [], 'a1': [], 'a2': [], 'wrap_count': []}
     for d in delay_range:

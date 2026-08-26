@@ -4,7 +4,7 @@ Ported from ../ArbEPI/main.m. Edit params.py to configure the experiment,
 then run this script. Sequences are written to the output/ directory.
 
 Order matters: generate_arbepi must run first because generate_epical and
-generate_noise load samp_locs.mat that it produces.
+generate_noise load scan_info.mat that it produces.
 """
 
 import argparse
@@ -40,7 +40,7 @@ def main(export_ge: bool = False, plot: bool = False):
 
     if plot:
         # Diagnostic sampling-mask/trajectory/PSF plots — see plot_last_run.py.
-        # Written before GE export (only depends on samp_locs.mat/ArbEPI.seq,
+        # Written before GE export (only depends on scan_info.mat/ArbEPI.seq,
         # both already on disk by this point) so they're available even if
         # export_ge fails below.
         from plotting.plot_last_run import plot_last_run

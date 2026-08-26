@@ -7,9 +7,9 @@ itself implement.
 
 Such a file is typically produced by an outside collaborator's own MATLAB
 pipeline as a plain v5 .mat file -- unlike this repo's own
-hdf5storage-written v7.3 `.mat` outputs (samp_locs.mat, kxoe<Nx>.mat), it
-must be read with `scipy.io.loadmat`, not `hdf5storage.loadmat` (which
-cannot read v5 at all).
+hdf5storage-written v7.3 `.mat` output (scan_info.mat), it must be read
+with `scipy.io.loadmat`, not `hdf5storage.loadmat` (which cannot read v5 at
+all).
 """
 
 import numpy as np

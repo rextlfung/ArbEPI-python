@@ -4,7 +4,7 @@ hdf5storage stores arrays axis-reversed on disk (MATLAB's column-major
 convention); h5py reads the raw on-disk layout, so anything with more than
 one non-singleton axis needs a full transpose to recover the logical shape
 hdf5storage.loadmat would give. Verified empirically against a real
-output/samp_locs.mat: h5py's raw read of `schedules` comes back as
+output/scan_info.mat: h5py's raw read of `schedules` comes back as
 (2, 60, 20, 30), while the true logical shape (matching hdf5storage.loadmat,
 and this repo's own documented Nframes x Nshots x ETL x 2 layout) is
 (30, 20, 60, 2) -- exactly `raw.transpose()`. For vectors/scalars this is a

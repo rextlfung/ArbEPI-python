@@ -25,26 +25,36 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _write_synthetic_params_mat(seqdir, Nx, Ny, Nz, fov_degre):
-    """Minimal params.mat -- just the fields load_seq_params reads -- in the
-    same on-disk convention hdf5storage.savemat produces (scalars/vectors as
-    plain arrays; load_seq_params's .item()/.ravel() tolerate any shape), so
-    run_b0map's NIfTI export (which needs seq_params.fov_degre) has a real
-    file to read rather than crashing on a fixture gap.
+def _write_synthetic_scan_info(seqdir, Nx_degre, Ny_degre, Nz_degre, fov_degre,
+                                Nx=None, Ny=None, Nz=None, fov=None):
+    """Minimal scan_info.mat -- just the fields load_seq_params reads -- in
+    the same on-disk convention hdf5storage.savemat produces (scalars/
+    vectors as plain arrays; load_seq_params's .item()/.ravel() tolerate any
+    shape), so run_b0map's NIfTI export (which needs seq_params.fov) has a
+    real file to read rather than crashing on a fixture gap.
+
+    Nx/Ny/Nz/fov (the *EPI* grid) default to the deGRE grid's own values --
+    most tests don't care about the deGRE-grid-to-EPI-grid resize and just
+    want it to be a no-op; test_run_b0map_resizes_field_map_to_epi_grid
+    passes distinct ones to actually exercise the resize.
     """
+    Nx = Nx_degre if Nx is None else Nx
+    Ny = Ny_degre if Ny is None else Ny
+    Nz = Nz_degre if Nz is None else Nz
+    fov = fov_degre if fov is None else fov
     os.makedirs(seqdir, exist_ok=True)
-    with h5py.File(os.path.join(seqdir, 'params.mat'), 'w') as f:
+    with h5py.File(os.path.join(seqdir, 'scan_info.mat'), 'w') as f:
         f.create_dataset('Nx', data=Nx)
         f.create_dataset('Ny', data=Ny)
         f.create_dataset('Nz', data=Nz)
         f.create_dataset('ETL', data=1)
         f.create_dataset('R', data=1.0)
-        f.create_dataset('fov', data=np.array([0.2, 0.2, 0.1]))
+        f.create_dataset('fov', data=np.array(fov))
         f.create_dataset('volume_tr', data=1.0)
         f.create_dataset('discard_duration', data=0.0)
-        f.create_dataset('Nx_degre', data=Nx)
-        f.create_dataset('Ny_degre', data=Ny)
-        f.create_dataset('Nz_degre', data=Nz)
+        f.create_dataset('Nx_degre', data=Nx_degre)
+        f.create_dataset('Ny_degre', data=Ny_degre)
+        f.create_dataset('Nz_degre', data=Nz_degre)
         f.create_dataset('fov_degre', data=np.array(fov_degre))
 
 
@@ -89,7 +99,7 @@ def test_run_b0map_recovers_known_field_map(tmp_path):
     recon_dir.mkdir()
     f0_true, mask = _write_synthetic_gre_cache(recon_dir / f'{seqname}_gre.h5', rng)
     fov_degre = (0.2, 0.2, 0.1)
-    _write_synthetic_params_mat(
+    _write_synthetic_scan_info(
         tmp_path / 'seqs' / seqname, *f0_true.shape, fov_degre,
     )
 
@@ -103,7 +113,9 @@ def test_run_b0map_recovers_known_field_map(tmp_path):
         out_mask = f['mask'][()].astype(bool)
         assert f.attrs['mask_threshold'] == pytest.approx(0.1)
 
-    # NIfTI export, on the deGRE grid's fov (not the EPI fov)
+    # NIfTI export, on the EPI grid's fov -- identical to the deGRE grid's
+    # here since this fixture's EPI grid defaults to match it (see
+    # test_run_b0map_resizes_field_map_to_epi_grid for the mismatched case).
     nii = nib.load(recon_dir / f'{seqname}_b0map.nii.gz')
     np.testing.assert_allclose(nii.get_fdata(), fhat, atol=1e-3)
     expected_voxel_mm = [1000.0 * fov_degre[axis] / fhat.shape[axis] for axis in range(3)]
@@ -161,7 +173,7 @@ def test_run_b0map_unwraps_a_field_map_beyond_the_naive_unambiguous_range(tmp_pa
     recon_dir = tmp_path / 'recon'
     recon_dir.mkdir()
     f0_true, _amp = _write_aliased_synthetic_gre_cache(recon_dir / f'{seqname}_gre.h5', rng)
-    _write_synthetic_params_mat(
+    _write_synthetic_scan_info(
         tmp_path / 'seqs' / seqname, *f0_true.shape, (0.2, 0.2, 0.1),
     )
 
@@ -188,6 +200,49 @@ def test_run_b0map_unwraps_a_field_map_beyond_the_naive_unambiguous_range(tmp_pa
     rmse = np.sqrt(np.mean((fhat[mask] - f0_true[mask]) ** 2))
     assert rmse < 60.0  # naive (no unwrap) finit gives ~207 Hz RMSE on this data
     assert np.corrcoef(fhat[mask], f0_true[mask])[0, 1] > 0.95
+
+
+def test_run_b0map_resizes_field_map_to_epi_grid(tmp_path):
+    """Real acquisitions estimate the field map on a coarser, smaller deGRE
+    grid than the EPI grid a B0-corrected reconstruction actually needs
+    (e.g. this repo's real 108^3 @ 2mm deGRE vs 240x240x45 @ 0.9mm EPI) --
+    run_b0map must resize onto that EPI grid, not just pass through
+    b0map.jl's native deGRE-grid output unchanged."""
+    rng = np.random.default_rng(1)
+    seqname = 'resizetest'
+    recon_dir = tmp_path / 'recon'
+    recon_dir.mkdir()
+    f0_true, _mask = _write_synthetic_gre_cache(recon_dir / f'{seqname}_gre.h5', rng)
+    Nx_degre, Ny_degre, Nz_degre = f0_true.shape
+    fov_degre = (0.2, 0.2, 0.1)
+    n_epi = (2 * Nx_degre, 2 * Ny_degre, 2 * Nz_degre)
+    fov_epi = (0.2, 0.2, 0.08)  # smaller z-FOV than deGRE -> also exercises the z-crop
+    _write_synthetic_scan_info(
+        tmp_path / 'seqs' / seqname, Nx_degre, Ny_degre, Nz_degre, fov_degre,
+        Nx=n_epi[0], Ny=n_epi[1], Nz=n_epi[2], fov=fov_epi,
+    )
+
+    cfg = load_config(datdir=str(tmp_path), seqnames=[seqname])
+    run_b0map(cfg)
+
+    with h5py.File(recon_dir / f'{seqname}_b0map.h5', 'r') as f:
+        assert f['b0map_hz'].shape == n_epi
+        assert f['mask'].shape == n_epi
+        # native deGRE-grid arrays are kept alongside, unresized
+        assert f['b0map_hz_degre'].shape == f0_true.shape
+        assert f['mask_degre'].shape == f0_true.shape
+        b0map_hz_degre = f['b0map_hz_degre'][()]
+        b0map_hz = f['b0map_hz'][()]
+
+    # NIfTI voxel size now derives from the EPI fov/shape, not the deGRE ones.
+    nii = nib.load(recon_dir / f'{seqname}_b0map.nii.gz')
+    assert nii.shape == n_epi
+    expected_voxel_mm = [1000.0 * fov_epi[axis] / n_epi[axis] for axis in range(3)]
+    np.testing.assert_allclose(np.diag(nii.affine)[:3], expected_voxel_mm)
+
+    # Sanity: interpolation shouldn't blow up the field-map scale relative
+    # to the native deGRE-grid estimate it was resized from.
+    assert np.abs(b0map_hz).max() <= 1.5 * np.abs(b0map_hz_degre).max() + 1.0
 
 
 def test_run_b0map_reports_missing_gre_cache(tmp_path, capsys):

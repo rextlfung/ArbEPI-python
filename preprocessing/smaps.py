@@ -18,7 +18,8 @@ transposes at its boundary rather than propagating that convention further.
 import numpy as np
 import sigpy as sp
 import sigpy.mri.app as mri_app
-from scipy import ndimage
+
+from preprocessing.grid_resize import resize_to_epi_grid
 
 
 def estimate_smaps(
@@ -72,12 +73,6 @@ def estimate_smaps(
     return smaps, emap[0]
 
 
-def _matlab_round(x: float) -> int:
-    """See preprocessing/oephase.py's _matlab_round -- MATLAB rounds half
-    away from zero; only ever called here on a non-negative value."""
-    return int(np.floor(x + 0.5))
-
-
 def process_smaps(
     smaps_raw: np.ndarray,
     emap: np.ndarray,
@@ -99,34 +94,14 @@ def process_smaps(
     fov_gre, fov: (fx, fy, fz) in meters
     n_target: (Nx, Ny, Nz), the EPI acquisition grid
     """
-    Nx_gre, Ny_gre, Nz_gre, _ = smaps_raw.shape
-    Nx, Ny, Nz = n_target
-    if fov_gre[2] < fov[2]:
-        raise ValueError(
-            f'process_smaps: EPI z-FOV ({fov[2]:.3f} m) exceeds '
-            f'GRE z-FOV ({fov_gre[2]:.3f} m).'
-        )
-
     # 1. Eigenvalue support mask.
     eig_mask = emap > threshold_mask
     smaps = smaps_raw * eig_mask[..., None]
 
-    # 2. Crop z to match EPI FOV. z_frac*Nz_gre is always in [0, Nz_gre/2)
-    # given the FOV check above, so plain floor(x+0.5) rounding suffices.
-    z_frac = (fov_gre[2] - fov[2]) / fov_gre[2] / 2
-    z_start = _matlab_round(z_frac * Nz_gre)
-    z_end = _matlab_round(Nz_gre - z_frac * Nz_gre)
-    if z_start < 0 or z_end > Nz_gre or z_start >= z_end:
-        raise ValueError(
-            f'process_smaps: computed z crop [{z_start}, {z_end}) '
-            f'is out of range [0, {Nz_gre}).'
-        )
-    smaps = smaps[:, :, z_start:z_end, :]
-
-    # 3. Interpolate to EPI grid. Cubic spline, matching MATLAB imresize3's
-    # default; not bit-identical to it (different implementation).
-    zoom = (Nx / smaps.shape[0], Ny / smaps.shape[1], Nz / smaps.shape[2], 1)
-    smaps = ndimage.zoom(smaps.real, zoom, order=3) + 1j * ndimage.zoom(smaps.imag, zoom, order=3)
+    # 2+3. Crop z to match EPI FOV, then interpolate (cubic spline) to the
+    # EPI grid -- see grid_resize.py's module docstring for why this
+    # deGRE-grid-to-EPI-grid crop+resize is shared with run_b0map.py.
+    smaps = resize_to_epi_grid(smaps, fov_gre, fov, n_target, order=3)
 
     # 4. Normalize: divide by the cross-coil RSS so sum(|s_c|^2) <= 1
     # everywhere, matching the ESPIRiT convention regularized SENSE recon

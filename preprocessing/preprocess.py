@@ -2,9 +2,9 @@
 Stage 2 iterative reconstruction. Ports preprocess.m.
 
 No local dataset has every file this needs for one acquisition (noise, deGRE,
-cal, EPI, samp_locs.mat, params.mat all for the same sequence -- in
-particular no noise.h5 exists anywhere under ~/github/data at the time of
-this port), so this module has NOT been run end-to-end against real data.
+cal, EPI, scan_info.mat all for the same sequence -- in particular no
+noise.h5 exists anywhere under ~/github/data at the time of this port), so
+this module has NOT been run end-to-end against real data.
 Every building block it calls (raw_io, coils, epi_gridding, oephase, smaps)
 has been independently verified (real-data smoke tests or synthetic
 round-trip tests -- see their own test files), and the scatter step that
@@ -58,22 +58,35 @@ from preprocessing.smaps import estimate_smaps, process_smaps
 # which actually needs to read ScanArchives, imports it, lazily, below.
 
 
-def load_kxoe(seqdir: str, nx: int) -> tuple[np.ndarray, np.ndarray]:
-    """kxo, kxe (cycles/cm) from kxoe<Nx>.mat -- resolved here (once Nx is
-    known from params) rather than at set_seq_paths time, mirroring
-    preprocess.m's own two-stage resolution (its cfg.fn.kxoe placeholder is
-    overwritten the same way once Nx is available)."""
-    path = os.path.join(seqdir, f'kxoe{nx}.mat')
-    d = read_mat(path, ['kxo', 'kxe'])
+def load_kxoe(scan_info_path: str) -> tuple[np.ndarray, np.ndarray]:
+    """kxo, kxe (cycles/cm) from scan_info.mat. MATLAB's preprocess.m
+    resolved this filename in two steps (its cfg.fn.kxoe placeholder was
+    only overwritten with the real, Nx-dependent kxoe<Nx>.mat name once Nx
+    was known) -- that's moot now that kxo/kxe live in scan_info.mat
+    alongside everything else sequences/ArbEPI.py writes, at one fixed
+    path resolved by set_seq_paths() up front."""
+    d = read_mat(scan_info_path, ['kxo', 'kxe'])
     return d['kxo'].ravel() / 100, d['kxe'].ravel() / 100
 
 
-def load_schedules(samp_log_path: str) -> np.ndarray:
-    """schedules [Nframes, Nshots, ETL, 2], converted from the 1-based
-    convention samp_locs.mat is written in (see CLAUDE.md's index
-    convention section) to 0-based for Python indexing."""
-    schedules = read_mat(samp_log_path, ['schedules'])['schedules']
-    return schedules.astype(np.int64) - 1
+def load_schedules(scan_info_path: str) -> tuple[np.ndarray, np.ndarray]:
+    """Returns (schedules, echo_times).
+
+    schedules: [Nframes, Nshots, ETL, 2] int, (ky, kz), converted from the
+        1-based convention scan_info.mat's 'schedules' is written in (see
+        CLAUDE.md's index convention section) to 0-based for Python
+        indexing.
+    echo_times: [Nframes, Nshots, ETL] float, seconds since RF excitation
+        for that acquisition (sequences/ArbEPI.py's 3rd 'schedules'
+        channel) -- split out here (not 1-based/0-based, so no index
+        conversion applies to it) so every existing (ky, kz)-only consumer
+        (scatter_frame, _build_omegas, plotting/plot_last_run.py) keeps
+        working against a plain int array unchanged.
+    """
+    raw = read_mat(scan_info_path, ['schedules'])['schedules']
+    schedules = raw[..., :2].astype(np.int64) - 1
+    echo_times = raw[..., 2]
+    return schedules, echo_times
 
 
 def apply_delay(
@@ -315,7 +328,7 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     ksp_cal = apply_whitening(ksp_cal_raw.transpose(0, 2, 1), W)  # [Nfid, N_cal, Ncoils]
     ksp_cal = apply_coil_compression(ksp_cal, cc_matrix)  # [Nfid, N_cal, Nvcoils]
 
-    kxo0, kxe0 = load_kxoe(paths.seqdir, Nx)
+    kxo0, kxe0 = load_kxoe(paths.scan_info)
     delay = seq_delay(cfg, paths.seqname)
     print(f'Applying k-space center offset: {delay:.2f} samples')
     kxo, kxe = apply_delay(kxo0, kxe0, Nfid, delay)
@@ -332,7 +345,7 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     del ksp_cal
 
     # STEP 5 -- sampling schedule (tiny; needed before allocating the output)
-    schedules = load_schedules(paths.samp_log)
+    schedules, echo_times = load_schedules(paths.scan_info)
     Nframes, Nshots, ETL_sched, _ = schedules.shape
     if ETL_sched != ETL:
         raise ValueError(
@@ -365,6 +378,7 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
             chunks=(Nx, Ny, Nz, Nvcoils, 1),
         )
         mf.create_dataset('omegas', data=_build_omegas(schedules, Ny, Nz))
+        mf.create_dataset('echo_times', data=_build_echo_times(schedules, echo_times, Ny, Nz))
         mf.attrs['n_frames_discard'] = NframesDiscard
         start_frame = 0
 
@@ -408,3 +422,24 @@ def _build_omegas(schedules: np.ndarray, Ny: int, Nz: int) -> np.ndarray:
         iz = schedules[frame, :, :, 1].ravel()
         omegas[iy, iz, frame] = True
     return omegas
+
+
+def _build_echo_times(
+    schedules: np.ndarray, echo_times: np.ndarray, Ny: int, Nz: int,
+) -> np.ndarray:
+    """Companion to _build_omegas: scatters each (ky, kz) location's echo
+    time (seconds since RF excitation -- sequences/ArbEPI.py's 3rd
+    'schedules' channel, split out by load_schedules()) onto the same
+    [Ny, Nz, Nframes] grid as 'omegas', for a future off-resonance-
+    correction consumer (recon/) that needs per-sampled-location
+    acquisition time, not just which locations were sampled. Unsampled
+    voxels are left at 0 -- always disambiguable via the 'omegas' mask
+    written alongside (the same "zero outside the valid region, check the
+    mask" convention grid_resize.py/GatheredSense already use)."""
+    Nframes = schedules.shape[0]
+    t = np.zeros((Ny, Nz, Nframes), dtype=np.float64)
+    for frame in range(Nframes):
+        iy = schedules[frame, :, :, 0].ravel()
+        iz = schedules[frame, :, :, 1].ravel()
+        t[iy, iz, frame] = echo_times[frame].ravel()
+    return t

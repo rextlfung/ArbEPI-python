@@ -4,7 +4,7 @@ recently generated sequence in output/. Run standalone after main.py via
 `python plotting/plot_last_run.py`, which breaks its own package-relative
 imports), or via `python main.py --plot` (see main.py).
 
-Reconstructs the sampling masks from samp_locs.mat (the schedule actually
+Reconstructs the sampling masks from scan_info.mat (the schedule actually
 used to build the sequence) rather than regenerating them, since sampling
 methods other than 'caipi' are randomized and wouldn't reproduce the exact
 masks from the last run.
@@ -26,8 +26,8 @@ from plotting.plotting import (
 
 def plot_last_run(params: Params, frame_idx: int = 0) -> None:
     # Reconstruct the exact sampling masks (all frames) from the schedule
-    # that was actually used (samp_locs.mat's schedules are 1-based).
-    schedules = hdf5storage.loadmat(f'{params.output_dir}/samp_locs.mat')['schedules']
+    # that was actually used (scan_info.mat's schedules are 1-based).
+    schedules = hdf5storage.loadmat(f'{params.output_dir}/scan_info.mat')['schedules']
     omegas = np.zeros((params.Ny, params.Nz, params.Nframes), dtype=bool)
     for frame in range(params.Nframes):
         iy, iz = schedules[frame, ..., 0].astype(int) - 1, schedules[frame, ..., 1].astype(int) - 1

@@ -1,7 +1,11 @@
 """Ported from ../ArbEPI/src/ArbEPI.m — the main 3D-EPI sequence.
 
-Outputs: <output_dir>/ArbEPI.seq (Pulseq format), <output_dir>/samp_locs.mat
-(schedules and partition map for reconstruction).
+Outputs: <output_dir>/ArbEPI.seq (Pulseq format) and <output_dir>/scan_info.mat
+-- kxo/kxe (odd/even echo k-space trajectories for ghost correction, shared
+with EPIcal.py, see this module's kxoe comment below), schedules ((ky, kz,
+echo time) per acquisition) and parts (the partition map), and a snapshot of
+scan scalars preprocessing/ needs -- everything preprocessing/ reads for
+this acquisition, in one file.
 
 GE `.pge` export (write_to_ge.m) and the trailing MATLAB plotting figures
 are intentionally not ported here — see ge/ge_export.py (stage 8 of the
@@ -109,6 +113,25 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
         params.ETL, params.TE, params.TR, sys,
     )
 
+    # Per-echo acquisition time (s since RF excitation), for a future
+    # off-resonance-correction consumer (recon/) that needs per-sampled-
+    # k-space-location acquisition time, not just its (ky, kz) index --
+    # exported as scan_info.mat's 3rd 'schedules' channel below. Every echo
+    # occupies one gro-duration block (calc_te_tr_delays.py's own min_tr
+    # term is `ETL * calc_duration(gro)`, i.e. this same uniform-spacing
+    # assumption), and min_te's `(ETL/2 - 0.5) * calc_duration(gro)` term
+    # anchors the nominal (TE-defining) echo at continuous echo-train index
+    # ETL/2 - 0.5 -- so per-echo time is that same anchor offset by
+    # (echo - (ETL/2 - 0.5)) gro-durations. `min_te + te_delay` is the TE
+    # actually achieved at that nominal echo (equals params.TE when
+    # achievable; falls back to min_te, matching calc_te_tr_delays' own
+    # "warns, never raises" behavior, when it isn't -- see CLAUDE.md).
+    # Identical for every shot/frame, since readout timing doesn't vary
+    # across them.
+    gro_dur = pp.calc_duration(rg.gro)
+    te_nominal_echo = min_te + te_delay
+    echo_times = te_nominal_echo + (np.arange(params.ETL) - (params.ETL / 2 - 0.5)) * gro_dur
+
     # Assemble sequence. Local copy: MATLAB's params.m re-executes fresh for
     # every sequence function, so `sys.adcDeadTime = 0` there never leaks
     # across ArbEPI/EPIcal/GRE/noise. Here `params.sys` may be one shared
@@ -190,29 +213,58 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
         print('Timing check failed! Error listing follows:')
         print(error_report)
 
-    # Save sampling locations for reconstruction. schedules/parts were
-    # computed 0-based (see mask2epi.py); convert schedules to 1-based here
-    # so samp_locs.mat matches what MATLAB-side reconstruction code expects
+    # Odd/even echo k-space trajectories for ghost correction. This used to
+    # be computed by EPIcal.py from its own separately-built sequence, but
+    # EPIcal is just this sequence's readout with ky/kz blips zeroed -- the
+    # y/z blips ride on separate gradient channels and don't affect gx
+    # timing/area, so the first two echoes' kx trajectory (the alternating
+    # odd/even readout polarity) is identical whether read from ArbEPI's or
+    # EPIcal's sequence. Computing it here means EPIcal.py no longer needs
+    # to run at all just to produce this, and there's only one
+    # calculate_kspace() call instead of two. Physical k-space values
+    # (cycles/m), not indices -- no 1-based conversion applies.
+    k_traj_adc, *_ = seq.calculate_kspace()
+    kxo = k_traj_adc[0, : rg.Nfid]
+    kxe = k_traj_adc[0, rg.Nfid : rg.Nfid * 2]
+
+    # Sampling schedule for reconstruction. schedules/parts were computed
+    # 0-based (see mask2epi.py); convert schedules to 1-based here so
+    # scan_info.mat matches what MATLAB-side reconstruction code expects
     # (parts is already a 1-based shot label with 0 = unsampled, no
-    # conversion needed). Written as MATLAB v7.3 (HDF5-based) via
-    # hdf5storage, matching the original MATLAB code's `save(..., '-v7.3')`
-    # — scipy.io.savemat can only write v5/v4, never v7.3.
-    hdf5storage.savemat(
-        os.path.join(params.output_dir, 'samp_locs.mat'),
-        {'schedules': schedules + 1, 'parts': parts},
-        fmt='7.3',
+    # conversion needed). schedules gains a 3rd channel here, echo_times
+    # (broadcast to every frame/shot -- see its computation above), so the
+    # array holds [iy (1-based), iz (1-based), echo time (s)] per
+    # acquisition -- float64 throughout (iy/iz stay exactly representable),
+    # since MATLAB has no separate-dtype-per-column array type anyway.
+    # preprocessing/preprocess.py's load_schedules() splits the 3rd channel
+    # back out for consumers that still want a plain (ky, kz) index array.
+    schedules_te = np.broadcast_to(echo_times, (params.Nframes, params.Nshots, params.ETL))
+    schedules_out = np.concatenate(
+        [(schedules + 1).astype(np.float64), schedules_te[..., None]], axis=-1,
     )
 
-    # Snapshot the scan scalars preprocessing/ needs (see
-    # preprocessing/config.py's load_seq_params) -- MATLAB's preprocess.m
-    # gets these by run()-ing a per-acquisition params.m into its workspace,
-    # which has no Python equivalent. Rather than requiring pypulseq/
-    # scanners.py in the (separate, GE-SDK-constrained) preprocessing venv
-    # just to read a handful of scalars, export them as a durable data
-    # snapshot instead, same mechanism/location as samp_locs.mat above.
+    # Save everything preprocessing/ needs for this acquisition in one file,
+    # scan_info.mat: the kxo/kxe trajectories and schedules/parts above, plus
+    # a snapshot of the scan scalars preprocessing/config.py's
+    # load_seq_params reads (MATLAB's preprocess.m gets these by run()-ing a
+    # per-acquisition params.m into its workspace, which has no Python
+    # equivalent -- copying the whole params.py module would drag
+    # pypulseq/scanners.py into the separate, GE-SDK-constrained
+    # preprocessing venv just to read a handful of scalars). These three
+    # used to be three separate files (kxoe<Nx>.mat, samp_locs.mat,
+    # params.mat); consolidated now that all of them are written from this
+    # one place, at this one point in the pipeline (kxoe<Nx>.mat's
+    # Nx-dependent name was the original reason it needed its own file,
+    # resolved in a second step once Nx was known -- moot once it's just
+    # another key in the same dict as everything else here). Written as
+    # MATLAB v7.3 (HDF5-based) via hdf5storage, matching the original
+    # MATLAB code's `save(..., '-v7.3')` -- scipy.io.savemat can only write
+    # v5/v4, never v7.3.
     hdf5storage.savemat(
-        os.path.join(params.output_dir, 'params.mat'),
+        os.path.join(params.output_dir, 'scan_info.mat'),
         {
+            'kxo': kxo, 'kxe': kxe,
+            'schedules': schedules_out, 'parts': parts,
             'Nx': params.Nx, 'Ny': params.Ny, 'Nz': params.Nz,
             'ETL': params.ETL, 'R': params.R,
             'fov': params.fov,

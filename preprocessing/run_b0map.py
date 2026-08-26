@@ -16,6 +16,16 @@ weight.
 Depends on preprocess()'s STEP 2 output (`<seqname>_gre.h5`, whitened +
 coil-compressed dual-echo GRE k-space + TE_degre), so run_preprocessing()
 must have already completed for each seqname before this.
+
+b0map.jl itself estimates entirely on the deGRE acquisition grid (that's
+where the dual-echo images/phase data live). This driver then resizes that
+result onto the *EPI* acquisition grid -- the shape/FOV a B0-corrected EPI
+reconstruction (recon/) actually needs -- via grid_resize.py's
+resize_to_epi_grid, the same crop+resize routine smaps.py's process_smaps
+already uses to move ESPIRiT coil maps from the deGRE grid to the EPI grid.
+`<seqname>_b0map.h5`'s 'b0map_hz'/'mask' keys hold the EPI-grid result (the
+primary consumable); the native deGRE-grid arrays are kept alongside under
+a '_degre' suffix for diagnostic/QC use.
 """
 
 import os
@@ -23,8 +33,10 @@ import shutil
 import subprocess
 
 import h5py
+import numpy as np
 
 from preprocessing.config import PreprocessingConfig, load_config, load_seq_params, set_seq_paths
+from preprocessing.grid_resize import resize_to_epi_grid
 from preprocessing.nifti_io import save_recon_nifti
 
 _JULIA_DIR = os.path.join(os.path.dirname(__file__), 'julia')
@@ -63,18 +75,50 @@ def run_b0map(cfg: PreprocessingConfig) -> None:
             print(f"ERROR [{seqname}]: {e}\nSkipping...")
             continue
 
-        # NIfTI export for viewing in FSLeyes/etc. -- b0map_hz lives on the
-        # deGRE acquisition grid, not the EPI grid, so its voxel size comes
-        # from seq_params.fov_degre, not seq_params.fov (see nifti_io module
-        # docstring for why this stays alongside, not instead of, the .h5
-        # the Julia consumer above already wrote).
         paths = set_seq_paths(cfg, seqname)
         seq_params = load_seq_params(paths)
         with h5py.File(output_path, 'r') as f:
-            b0map_hz = f['b0map_hz'][()]
+            b0map_hz_degre = f['b0map_hz'][()]
+            mask_degre = f['mask'][()].astype(bool)
+
+        # b0map.jl (above) estimates on the deGRE grid -- that's where the
+        # dual-echo images/phase data actually live -- but a B0-corrected
+        # EPI reconstruction needs the field map on the *EPI* grid. Zero
+        # outside the fitted mask before resizing (mirrors process_smaps'
+        # own mask-before-crop/resize step in smaps.py) so cubic-spline
+        # interpolation doesn't blend in MRIFieldmaps' embed() fill value
+        # for unfit background voxels near the mask boundary; the mask
+        # itself is resized with order=0 (nearest) so no fractional/
+        # invented mask values appear. See grid_resize.py for the shared
+        # crop+resize routine (same one process_smaps uses for coil maps).
+        n_target = (seq_params.Nx, seq_params.Ny, seq_params.Nz)
+        b0map_hz = resize_to_epi_grid(
+            b0map_hz_degre * mask_degre, seq_params.fov_degre, seq_params.fov,
+            n_target, order=3,
+        ).astype(np.float32)
+        mask = resize_to_epi_grid(
+            mask_degre, seq_params.fov_degre, seq_params.fov, n_target, order=0,
+        ).astype(bool)
+
+        # Keep the native deGRE-grid arrays too (diagnostic/QC use, e.g.
+        # comparing against the GRE magnitude image, which lives on that
+        # grid) under an explicit '_degre' suffix; 'b0map_hz'/'mask' become
+        # the EPI-grid versions -- the primary consumable, matching
+        # smaps_<seqname>_sigpy.h5's 'smaps_raw' (small grid) vs. 'smaps'
+        # (EPI grid) convention. finit_hz stays deGRE-grid only -- it's a
+        # pure NCG-initialization diagnostic, never consumed downstream.
+        with h5py.File(output_path, 'a') as f:
+            f.move('b0map_hz', 'b0map_hz_degre')
+            f.move('mask', 'mask_degre')
+            f.create_dataset('b0map_hz', data=b0map_hz)
+            f.create_dataset('mask', data=mask)
+
+        # NIfTI export for viewing in FSLeyes/etc., now on the EPI grid/fov
+        # like every other NIfTI this pipeline writes (see nifti_io module
+        # docstring).
         save_recon_nifti(
             output_path[: -len('.h5')], b0map_hz,
-            fov=seq_params.fov_degre, seqname=seqname,
+            fov=seq_params.fov, seqname=seqname,
             mask_threshold=cfg.b0map_mask_thresh,
         )
     print('\nBatch complete.')

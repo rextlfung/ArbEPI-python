@@ -1,8 +1,12 @@
+import h5py
 import numpy as np
+import pytest
 
 from preprocessing.preprocess import (
+    _build_echo_times,
     _build_omegas,
     apply_delay,
+    load_schedules,
     scatter_frame,
     unflatten_gre_echoes,
 )
@@ -112,6 +116,67 @@ def test_apply_delay_extrapolates_linearly():
     expected = slope * (idx - 0.5 - delay) + intercept
     np.testing.assert_allclose(kxo, expected, atol=1e-10)
     np.testing.assert_allclose(kxe, expected, atol=1e-10)
+
+
+def _write_hdf5storage_style(path, arrays: dict):
+    """See tests/test_preprocessing_matio.py's copy of this helper -- writes
+    datasets axis-reversed, mimicking hdf5storage's on-disk convention,
+    without depending on hdf5storage itself (not in the preprocessing
+    venv)."""
+    with h5py.File(path, 'w') as f:
+        for name, arr in arrays.items():
+            f.create_dataset(name, data=np.asarray(arr).transpose())
+
+
+def test_load_schedules_splits_ky_kz_from_echo_time(tmp_path):
+    """scan_info.mat's 'schedules' is (Nframes, Nshots, ETL, 3) --
+    1-based (ky, kz) plus echo time in seconds (sequences/ArbEPI.py).
+    load_schedules must convert the first two channels to 0-based ints and
+    leave the 3rd (not an index) untouched."""
+    Nframes, Nshots, ETL = 2, 3, 4
+    ky_1based = np.arange(1, Nframes * Nshots * ETL + 1).reshape(Nframes, Nshots, ETL) % 5 + 1
+    kz_1based = np.arange(1, Nframes * Nshots * ETL + 1).reshape(Nframes, Nshots, ETL) % 3 + 1
+    te = 0.001 + 0.0001 * np.arange(ETL)[None, None, :] * np.ones((Nframes, Nshots, 1))
+    raw = np.stack([ky_1based, kz_1based, te], axis=-1)
+
+    path = tmp_path / 'scan_info.mat'
+    _write_hdf5storage_style(path, {'schedules': raw})
+
+    schedules, echo_times = load_schedules(str(path))
+    assert schedules.shape == (Nframes, Nshots, ETL, 2)
+    assert echo_times.shape == (Nframes, Nshots, ETL)
+    np.testing.assert_array_equal(schedules[..., 0], ky_1based - 1)
+    np.testing.assert_array_equal(schedules[..., 1], kz_1based - 1)
+    np.testing.assert_allclose(echo_times, te)
+
+
+def test_build_echo_times_places_values_at_scheduled_locations():
+    # Real schedules never repeat a (ky, kz) location within a frame (see
+    # CLAUDE.md: Nshots*ETL exactly equals the mask's sample count) --
+    # sample without replacement so this fixture keeps that invariant and
+    # each per-element assertion below is unambiguous.
+    Nframes, Nshots, ETL = 2, 3, 4
+    Ny, Nz = 6, 5
+    rng = np.random.default_rng(2)
+    grid = np.array([(y, z) for y in range(Ny) for z in range(Nz)])
+    schedules = np.stack(
+        [grid[rng.choice(len(grid), Nshots * ETL, replace=False)].reshape(Nshots, ETL, 2)
+         for _ in range(Nframes)],
+        axis=0,
+    )
+    echo_times = rng.uniform(0.01, 0.05, (Nframes, Nshots, ETL))
+
+    t = _build_echo_times(schedules, echo_times, Ny, Nz)
+    assert t.shape == (Ny, Nz, Nframes)
+
+    omegas = _build_omegas(schedules, Ny, Nz)
+    for frame in range(Nframes):
+        for s in range(Nshots):
+            for e in range(ETL):
+                iy, iz = schedules[frame, s, e]
+                assert t[iy, iz, frame] == pytest.approx(echo_times[frame, s, e])
+    # Unsampled locations stay at 0, disambiguable via omegas.
+    assert np.all(t[~omegas] == 0)
 
 
 def test_build_omegas_marks_scheduled_locations():

@@ -41,16 +41,15 @@ def test_set_seq_paths_builds_expected_layout():
     )
     paths = set_seq_paths(cfg, 'caipi')
     assert paths.seqdir == '/data/seqs/caipi'
-    assert paths.params == '/data/seqs/caipi/params.mat'
+    assert paths.scan_info == '/data/seqs/caipi/scan_info.mat'
     assert paths.cal == '/data/scanarchives/caipi_cal.h5'
     assert paths.noise == '/data/scanarchives/caipi_noise.h5'
     assert paths.epi == '/data/scanarchives/caipi_epi.h5'
-    assert paths.samp_log == '/data/seqs/caipi/samp_locs.mat'
     assert paths.recon == '/data/recon/caipi_epi_zf.h5'  # .h5, not .mat -- see SeqPaths docstring
 
 
-def test_load_seq_params_round_trips_a_params_mat_fixture(tmp_path):
-    path = tmp_path / 'params.mat'
+def test_load_seq_params_round_trips_a_scan_info_fixture(tmp_path):
+    path = tmp_path / 'scan_info.mat'
     fields = {
         'Nx': 240, 'Ny': 240, 'Nz': 45, 'ETL': 60, 'R': 9,
         'fov': np.array([0.216, 0.216, 0.0405]),
@@ -65,8 +64,8 @@ def test_load_seq_params_round_trips_a_params_mat_fixture(tmp_path):
             f.create_dataset(k, data=np.asarray(v).transpose())
 
     paths = SeqPaths(
-        seqname='x', seqdir=str(tmp_path), params=str(path),
-        cal='', noise='', epi='', kxoe='', samp_log='', recon='',
+        seqname='x', seqdir=str(tmp_path), scan_info=str(path),
+        cal='', noise='', epi='', recon='',
     )
     sp = load_seq_params(paths)
     assert sp.Nx == 240 and sp.Ny == 240 and sp.Nz == 45
@@ -80,12 +79,12 @@ def test_load_seq_params_round_trips_a_params_mat_fixture(tmp_path):
 
 
 def test_load_seq_params_defaults_degre_echo_fields_for_pre_dual_echo_snapshot(tmp_path):
-    """params.mat files written before the dual-echo deGRE upgrade have
+    """Scan-scalar snapshots written before the dual-echo deGRE upgrade have
     neither n_echoes_degre nor TE_degre -- those acquisitions were
     genuinely single-echo, so load_seq_params must default rather than
     raising KeyError on a durable, non-regeneratable per-acquisition data
     record."""
-    path = tmp_path / 'params.mat'
+    path = tmp_path / 'scan_info.mat'
     fields = {
         'Nx': 240, 'Ny': 240, 'Nz': 45, 'ETL': 60, 'R': 9,
         'fov': np.array([0.216, 0.216, 0.0405]),
@@ -98,8 +97,8 @@ def test_load_seq_params_defaults_degre_echo_fields_for_pre_dual_echo_snapshot(t
             f.create_dataset(k, data=np.asarray(v).transpose())
 
     paths = SeqPaths(
-        seqname='x', seqdir=str(tmp_path), params=str(path),
-        cal='', noise='', epi='', kxoe='', samp_log='', recon='',
+        seqname='x', seqdir=str(tmp_path), scan_info=str(path),
+        cal='', noise='', epi='', recon='',
     )
     sp = load_seq_params(paths)
     assert sp.n_echoes_degre == 1

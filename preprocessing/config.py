@@ -11,8 +11,8 @@ not part of this repo -- in the MATLAB pipeline they live in a per-acquisition
 There is no Python equivalent of that "script injects into workspace" pattern,
 and copying the whole params.py module would drag pypulseq/scanners.py into
 this pipeline just to read a handful of scalars -- so instead
-sequences/ArbEPI.py exports those scalars to a params.mat snapshot (same mechanism and
-location as its existing samp_locs.mat write, via
+sequences/ArbEPI.py exports those scalars into scan_info.mat, alongside the
+kxo/kxe trajectories and sampling schedule it already writes there (via
 hdf5storage.savemat(fmt='7.3')). This module only ever reads it back with
 h5py, per this repo's rule of never using scipy.io on v7.3 .mat files.
 """
@@ -93,12 +93,10 @@ class SeqPaths:
 
     seqname: str
     seqdir: str
-    params: str
+    scan_info: str
     cal: str
     noise: str
     epi: str
-    kxoe: str  # placeholder; resolved once Nx is known from params (see preprocess.py)
-    samp_log: str
     recon: str
 
 
@@ -108,19 +106,24 @@ def set_seq_paths(cfg: PreprocessingConfig, seqname: str) -> SeqPaths:
     return SeqPaths(
         seqname=seqname,
         seqdir=seqdir,
-        params=os.path.join(seqdir, 'params.mat'),
+        # kxo/kxe, schedules/parts, and the scan-scalar snapshot used to
+        # live in three separate files (kxoe<Nx>.mat, samp_locs.mat,
+        # params.mat) -- sequences/ArbEPI.py now writes all of them in one
+        # place, at one point in the pipeline (kxoe<Nx>.mat's Nx-dependent
+        # filename was the original reason for a separate file resolved in
+        # a second step; that's moot now that nothing needs to construct
+        # the filename before Nx is known -- see preprocess.py's load_kxoe).
+        scan_info=os.path.join(seqdir, 'scan_info.mat'),
         cal=os.path.join(scanarchives, f'{seqname}_cal.h5'),
         noise=os.path.join(scanarchives, f'{seqname}_noise.h5'),
         epi=os.path.join(scanarchives, f'{seqname}_epi.h5'),
-        kxoe=os.path.join(seqdir, 'kxoe90.mat'),
-        samp_log=os.path.join(seqdir, 'samp_locs.mat'),
         # .h5, not .mat: everything preprocess.py itself writes (this file,
         # the GRE/smaps caches) is plain numpy-order h5py, the opposite
         # on-disk axis convention from the hdf5storage-written .mat files
-        # this pipeline reads (samp_locs.mat, kxoe*.mat, params.mat -- see
-        # preprocessing/matio.py). A .mat extension here would silently
-        # invite reading it with hdf5storage.loadmat, which would return
-        # every multi-axis array transposed.
+        # this pipeline reads (scan_info.mat -- see preprocessing/matio.py).
+        # A .mat extension here would silently invite reading it with
+        # hdf5storage.loadmat, which would return every multi-axis array
+        # transposed.
         recon=os.path.join(cfg.datdir, 'recon', f'{seqname}_epi_zf.h5'),
     )
 
@@ -151,13 +154,14 @@ class SeqParams:
 
 
 def load_seq_params(paths: SeqPaths) -> SeqParams:
-    """Read the params.mat snapshot written by sequences/ArbEPI.py.
+    """Read the scan scalar snapshot written by sequences/ArbEPI.py into
+    scan_info.mat (one of several arrays that file holds -- see SeqPaths).
 
     hdf5storage.savemat stores each dict key as a top-level dataset: Python
     scalars come back as shape-(1,1) arrays, 3-vectors as shape-(3,1) --
     hence the .item()/.ravel() below rather than a bare [()].
     """
-    with h5py.File(paths.params, 'r') as f:
+    with h5py.File(paths.scan_info, 'r') as f:
         def scalar(name):
             return f[name][()].item()
 
@@ -173,10 +177,11 @@ def load_seq_params(paths: SeqPaths) -> SeqParams:
             Nx_degre=int(scalar('Nx_degre')), Ny_degre=int(scalar('Ny_degre')),
             Nz_degre=int(scalar('Nz_degre')),
             fov_degre=vec3('fov_degre'),
-            # Missing in params.mat snapshots written before the dual-echo
-            # deGRE upgrade -- those acquisitions genuinely were single-echo,
-            # so default to 1 rather than raising KeyError on durable,
-            # non-regeneratable per-acquisition data records.
+            # Missing in scan-scalar snapshots written before the dual-echo
+            # deGRE upgrade (params.mat, pre-consolidation, or an early
+            # scan_info.mat) -- those acquisitions genuinely were
+            # single-echo, so default to 1 rather than raising KeyError on
+            # durable, non-regeneratable per-acquisition data records.
             n_echoes_degre=int(scalar('n_echoes_degre')) if 'n_echoes_degre' in f else 1,
             TE_degre=tuple(f['TE_degre'][()].ravel().tolist()) if 'TE_degre' in f else None,
         )

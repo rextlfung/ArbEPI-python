@@ -59,9 +59,9 @@ Python/numpy array indices into `mask`. `parts` keeps MATLAB's convention of
 1-based shot labels with 0 meaning "unsampled" — it's a label/sentinel
 array, not a coordinate used in downstream gradient-scaling arithmetic, so
 there's no reason to renumber it. (Conversion of `schedule`'s indices to
-1-based, for saving `samp_locs.mat` in a form existing MATLAB-side
-reconstruction code can read unchanged, happens once at the save boundary in
-sequences/ArbEPI.py — not here.)
+1-based, for saving into `scan_info.mat`'s `schedules` array in a form
+existing MATLAB-side reconstruction code can read unchanged, happens once at
+the save boundary in sequences/ArbEPI.py — not here.)
 """
 
 import math
