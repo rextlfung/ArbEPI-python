@@ -86,7 +86,7 @@ class Params:
     # Output
     output_dir: str
 
-    # The selected ScannerSpec itself (see scanners.py) -- seq2ge/ge_export.py's
+    # The selected ScannerSpec itself (see scanners.py) -- ge/ge_export.py's
     # pure-Python feasibility check/export reads max_grad/max_slew/b1_max/
     # chronaxie/rheobase/alpha/ge_coil/pislquant straight from this, so
     # they can't drift out of sync with `sys` above (both come from the

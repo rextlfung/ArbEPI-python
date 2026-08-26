@@ -55,13 +55,13 @@ import matplotlib.patheffects
 import numpy as np
 import pypulseq as pp
 
-from params import Params
-from seq2ge.check import (
+from ge.check import (
     PNS_FIRST_CONTROLLED_MODE_THRESHOLD,
     PNS_NORMAL_MODE_THRESHOLD,
     sample_gradients_tesla_per_m,
 )
-from seq2ge.pns import pns
+from ge.pns import pns
+from params import Params
 
 
 def plot_sampling_mask(
@@ -272,13 +272,13 @@ def plot_pns_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> ma
     `pge2.pns(..., 'plt', true)` panel layout (../PulCeq/matlab/+pge2/pns.m)
     -- gradient waveforms, slew rate, and per-channel + total PNS (% of
     stimulation threshold), with the IEC 60601-2-33:2022 80%/100%
-    operating-mode lines marked (see seq2ge/check.py's
+    operating-mode lines marked (see ge/check.py's
     PNS_NORMAL_MODE_THRESHOLD/PNS_FIRST_CONTROLLED_MODE_THRESHOLD for what
     those mean and why only the 100% line blocks `--ge` export).
 
     Same one-TR window as `plot_one_tr` (shot_index selects
     [shot_index*TR, (shot_index+1)*TR)) and the same PNS model
-    (seq2ge/pns.py) `--ge`'s own feasibility check uses, driven by
+    (ge/pns.py) `--ge`'s own feasibility check uses, driven by
     `params.spec` (rheobase/alpha/chronaxie) and `params.PNSwt` -- this is
     a decomposition of the same peak number check_ge_feasibility reports,
     not an independent estimate."""

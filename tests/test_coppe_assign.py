@@ -1,13 +1,13 @@
-"""Pure-logic tests for toppe/coppe.py's entry-number assignment and
+"""Pure-logic tests for ge/coppe.py's entry-number assignment and
 entry-file formatting -- no live SSH/network needed. The remote-facing
 functions (run_remote/query_existing_entries/claim_entry_numbers) are thin
 wrappers around subprocess calls to a real scanner and aren't exercised
-here; see toppe/README.md for how to smoke-test those against a real
+here; see ge/README.md for how to smoke-test those against a real
 scanner."""
 
 from pathlib import Path
 
-from toppe.coppe import (
+from ge.coppe import (
     assign_entry_numbers,
     find_pge_files,
     split_reused_files,

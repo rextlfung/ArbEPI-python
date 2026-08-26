@@ -6,7 +6,7 @@ Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](../pypulseq
 
 This port covers Pulseq `.seq` sequence generation only. A few things from the original MATLAB repo are handled differently — see below.
 
-- **GE `.pge` export**: `seq2ge/` is a pure-Python port of the PulCeq/pge2 toolchain (`seq2ceq`, `writeceq`, and the `pge2.pns`/`check_grad_acoustics` feasibility checks), and is the operative path for `seq2ge/ge_export.py`/`main.py --ge` — no MATLAB round trip, no sibling `../pulseq`/`../toppe`/`../PulCeq`/`../ArbEPI` checkouts required. Validated field-by-field and, for two of the four default sequences, byte-for-byte against real MATLAB output, including end to end through `main.py --ge` itself (see `seq2ge/`'s module docstrings and `CLAUDE.md`). See [GE export](#ge-export-pge) below.
+- **GE `.pge` export**: `ge/` is a pure-Python port of the PulCeq/pge2 toolchain (`seq2ceq`, `writeceq`, and the `pge2.pns`/`check_grad_acoustics` feasibility checks), and is the operative path for `ge/ge_export.py`/`main.py --ge` — no MATLAB round trip, no sibling `../pulseq`/`../toppe`/`../PulCeq`/`../ArbEPI` checkouts required. Validated field-by-field and, for two of the four default sequences, byte-for-byte against real MATLAB output, including end to end through `main.py --ge` itself (see `ge/`'s module docstrings and `CLAUDE.md`). See [GE export](#ge-export-pge) below.
 - **Fat-sat RF pulse**: the MATLAB original designs this via GE's `toppe.utils.rf.makeslr` (min-phase SLR), which has no Python equivalent. This port uses pypulseq's built-in `make_gauss_pulse` instead — a simpler design with a less sharp spectral profile.
 - **Plotting** (`plotting/plotting.py`) covers the sampling mask, k-space trajectory, point-spread-function, and single-TR pulse-diagram plots. The interactive scroll/slider mask viewer from the MATLAB repo is not ported. The single-TR plot (`plot_one_tr`) isn't a custom pulse-diagram renderer — it's a thin wrapper around pypulseq's own `Sequence.plot()`. Mask/PSF/trajectory plots take an optional `frame_idx` to select one frame out of a multi-frame run; see `plotting/plotting.py`'s module docstring for why the per-frame trajectory plot draws through exact-sliced ADC samples rather than the fine continuous line pypulseq's `calculate_kspace()` returns for the whole sequence. `plotting/plot_last_run.py` drives all of this against the most recent `output/` run (`python main.py --plot`, or standalone via `python -m plotting.plot_last_run`).
 - **Poisson-disc sampling** (`sampling/pd_sample.py`) is a local reimplementation, not a dependency on [SigPy](https://github.com/mikgroup/sigpy) (whose `sigpy.mri.poisson` both `../ArbEPI/lib/pd_sample.m` and this module's algorithm are based on). SigPy was tried directly and rejected: its own `poisson()` has an unbounded `while slope_min < slope_max` binary-search loop with no iteration cap, which hangs forever on small/coarse grids where no achievable density slope lands within `tol` of the target acceleration (reproduced independently of any code in this repo — confirmed via `sigpy.mri.poisson` alone). Separately, both `../ArbEPI/lib/pd_sample.m` and this module's own first version had a *different* bug (not reseeding the point-placement RNG identically on every binary-search iteration, unlike real SigPy), which made the search non-convergent and slow rather than truly infinite. A third bug (a missing `nx*ny` active-list cap that real SigPy has) let the point-placement active list grow unboundedly in the same radius-floor/dense-center regime. `pd_sample.py`'s docstring has the full writeup of all three; the local implementation fixes all of them and adds a bounded outer-search iteration cap (`max_search_iters`) that SigPy itself lacks. The point-placement core is still JIT-compiled with [numba](https://numba.pydata.org/) -- a narrow, single-function dependency (unlike depending on the `sigpy` package wholesale) -- since even with all three fixes it's an inherently sequential loop that can run hundreds of thousands of iterations for worst-case seeds, and pure Python can't get there without JIT (measured ~1-12s/frame in pure Python vs. ~0.02-0.2s/frame JIT-compiled, at production scale).
@@ -117,25 +117,25 @@ Full derivation, empirical results (bottleneck-only vs. two-pass vs. three-pass 
 Pure Python, no MATLAB install or sibling-repo checkouts required:
 
 ```python
-from seq2ge.ge_export import export_to_ge
+from ge.ge_export import export_to_ge
 export_to_ge('output/ArbEPI.seq', 'output/ArbEPI', params)
 ```
 
-`export_to_ge` runs a feasibility check (hardware limits, PNS, acoustic-resonance — see below) and raises `RuntimeError` if it fails, then writes the `.pge` via `seq2ge/seq2ceq.py` + `seq2ge/writeceq.py`. Verified end-to-end on a small test sequence and on a full-scale default-params run (`main.py`'s output): the resulting `.pge` files match freshly-regenerated real MATLAB output (`seq2ceq`/`pge2.writeceq`) byte-for-byte for two of the four default sequences and to within a single float32 ULP on a derived header field for the other two — see `CLAUDE.md` for the full record.
+`export_to_ge` runs a feasibility check (hardware limits, PNS, acoustic-resonance — see below) and raises `RuntimeError` if it fails, then writes the `.pge` via `ge/seq2ceq.py` + `ge/writeceq.py`. Verified end-to-end on a small test sequence and on a full-scale default-params run (`main.py`'s output): the resulting `.pge` files match freshly-regenerated real MATLAB output (`seq2ceq`/`pge2.writeceq`) byte-for-byte for two of the four default sequences and to within a single float32 ULP on a derived header field for the other two — see `CLAUDE.md` for the full record.
 
-**Hardware limits are keyed off the `scanner` variable set in `params.py`** (`GE_MR750` or `GE_UHP`, see `scanners.py`): `load_params()` builds `params.spec` (a `ScannerSpec`) once and derives `sys.max_grad`/`sys.max_slew` for `.seq` generation from the same instance that `seq2ge/check.py`/`seq2ge/writeceq.py` read directly, so they can't drift out of sync with each other. `main.py --ge` also calls `seq2ge.ge_export.check_ge_feasibility()` on all four sequences — running the hardware/PNS/acoustics check without writing a `.pge` — *before* exporting any of them, so an infeasibility surfaces immediately instead of after several full exports. PNS is a physiological safety limit, not a hardware one — `PNSwt` (a separate `Params` field, not part of `ScannerSpec`, since it's phantom-vs-human scan context) defaults to the IEC 60601-2-33:2022-recommended `[0.8, 1.0, 0.7]`; `[0, 0, 0]` disables the PNS check entirely and is only appropriate for phantom/non-human scanning. Acoustic-resonance is checked but never blocks export — it's a `WARN` in the report, matching MATLAB's own `check_grad_acoustics.m`, which only ever calls `warning(...)`, never `error(...)`, when over threshold.
+**Hardware limits are keyed off the `scanner` variable set in `params.py`** (`GE_MR750` or `GE_UHP`, see `scanners.py`): `load_params()` builds `params.spec` (a `ScannerSpec`) once and derives `sys.max_grad`/`sys.max_slew` for `.seq` generation from the same instance that `ge/check.py`/`ge/writeceq.py` read directly, so they can't drift out of sync with each other. `main.py --ge` also calls `ge.ge_export.check_ge_feasibility()` on all four sequences — running the hardware/PNS/acoustics check without writing a `.pge` — *before* exporting any of them, so an infeasibility surfaces immediately instead of after several full exports. PNS is a physiological safety limit, not a hardware one — `PNSwt` (a separate `Params` field, not part of `ScannerSpec`, since it's phantom-vs-human scan context) defaults to the IEC 60601-2-33:2022-recommended `[0.8, 1.0, 0.7]`; `[0, 0, 0]` disables the PNS check entirely and is only appropriate for phantom/non-human scanning. Acoustic-resonance is checked but never blocks export — it's a `WARN` in the report, matching MATLAB's own `check_grad_acoustics.m`, which only ever calls `warning(...)`, never `error(...)`, when over threshold.
 
-**`main.py --ge` now fails by default on three of the four sequences — this is a real finding, not a bug.** `PNSwt` was `[0, 0, 0]` for the entire lifetime of this port until now, so PNS was never actually evaluated in any `--ge` run to date (weight zero makes the per-channel contribution zero regardless of the real waveform). With the current default weights (validated against MATLAB's real per-instance pipeline to ~0.02 percentage points via `seq2ge/pns.py`/`matlab_reference/dump_pns_peak.m`), `EPIcal`/`ArbEPI`/`deGRE` all *exceed* MATLAB's own PNS throw threshold (>80% "exceeds normal mode", >100% "exceeds first controlled mode") at default params — see `CLAUDE.md` for the exact numbers. `seq2ge/check.py` matches MATLAB's throw condition exactly, so this now correctly blocks `main.py --ge` for these three sequences. This needs a resolution (lower slew rate or lengthen blip rise times) before scanning a human on these default sequences.
+**`main.py --ge` now fails by default on three of the four sequences — this is a real finding, not a bug.** `PNSwt` was `[0, 0, 0]` for the entire lifetime of this port until now, so PNS was never actually evaluated in any `--ge` run to date (weight zero makes the per-channel contribution zero regardless of the real waveform). With the current default weights (validated against MATLAB's real per-instance pipeline to ~0.02 percentage points via `ge/pns.py`/`matlab_reference/dump_pns_peak.m`), `EPIcal`/`ArbEPI`/`deGRE` all *exceed* MATLAB's own PNS throw threshold (>80% "exceeds normal mode", >100% "exceeds first controlled mode") at default params — see `CLAUDE.md` for the exact numbers. `ge/check.py` matches MATLAB's throw condition exactly, so this now correctly blocks `main.py --ge` for these three sequences. This needs a resolution (lower slew rate or lengthen blip rise times) before scanning a human on these default sequences.
 
-## Copy to scanner (`toppe/coppe.py`)
+## Copy to scanner (`ge/coppe.py`)
 
-For internal UM fMRI lab use: `toppe/coppe.py` is a Python port of `../toppe/+toppe/+utils/coppe.m` that copies a folder of `.pge` files (e.g. `output/*.pge`) to a scanner over SSH, auto-allocating an unused `pge2` entry number for each and printing the resulting filename → entry-number mapping to enter on the scanner console.
+For internal UM fMRI lab use: `ge/coppe.py` is a Python port of `../toppe/+toppe/+utils/coppe.m` that copies a folder of `.pge` files (e.g. `output/*.pge`) to a scanner over SSH, auto-allocating an unused `pge2` entry number for each and printing the resulting filename → entry-number mapping to enter on the scanner console.
 
 ```
-uv run python toppe/coppe.py
+uv run python ge/coppe.py
 ```
 
-See [`toppe/README.md`](toppe/README.md) for usage, SSH key setup, and troubleshooting.
+See [`ge/README.md`](ge/README.md) for usage, SSH key setup, and troubleshooting.
 
 ## Architecture
 
@@ -155,7 +155,7 @@ sequences/                  ArbEPI, EPIcal, deGRE, noise sequence assembly
 plotting/
   plotting.py                Diagnostic plots (mask/PSF/trajectory/single-TR)
   plot_last_run.py           Drives plotting.py against the most recent output/ run
-seq2ge/                      Pure-Python GE .pge toolchain (Pulseq -> GE), wired into main.py --ge
+ge/                      Pure-Python GE .pge toolchain (Pulseq -> GE), wired into main.py --ge
   ge_export.py                 GE feasibility checking / .pge export entry points
   ceq.py                       Ceq/ParentBlock/Segment data contract
   blocks.py                    Block type/dynamics/comparison (port of PulCeq's compareblocks.m etc.)
@@ -166,6 +166,8 @@ seq2ge/                      Pure-Python GE .pge toolchain (Pulseq -> GE), wired
   acoustics.py                 Acoustic-resonance check (port of check_grad_acoustics.m)
   check.py                     Combines hardware/PNS/acoustics into one FeasibilityReport
   validate_against_matlab.py   Field-by-field / byte-for-byte comparison vs. MATLAB output
+  coppe.py                     Copy .pge files to the scanner over SSH, auto-allocating entry numbers
+                                (port of ../toppe/+toppe/+utils/coppe.m; UM lab-internal use)
 preprocessing/                Raw-data -> reconstructed-image pipeline, ported from ../epi-preprocessing
   config.py                    Session/per-sequence config (replaces config.m/set_seq_paths.m)
   raw_io.py                     ScanArchive reading via GE's Orchestra SDK (GERecon, external, not committed)
@@ -189,15 +191,12 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
                                  b0map.jl estimates a B0 field map from the deGRE dual-echo cache via
                                  MRIFieldmaps.jl, with its initial guess unwrapped via ROMEO.jl -- see
                                  CLAUDE.md's preprocessing/ section for the design
-toppe/
-  coppe.py                    Copy .pge files to the scanner over SSH, auto-allocating entry numbers
-                              (port of ../toppe/+toppe/+utils/coppe.m; UM lab-internal use)
-matlab_reference/            One-off scripts for re-validating seq2ge/ against a real MATLAB install
+matlab_reference/            One-off scripts for re-validating ge/ against a real MATLAB install
                               (not called by any Python code; MATLAB is not needed to use this repo)
-  dump_ceq.m                 Dumps seq2ceq.m output for seq2ge/validate_against_matlab.py
-  dump_pns_test.m            Dumps pge2.pns.m's synthetic sub_test() reference for seq2ge/validate_pns.py
+  dump_ceq.m                 Dumps seq2ceq.m output for ge/validate_against_matlab.py
+  dump_pns_test.m            Dumps pge2.pns.m's synthetic sub_test() reference for ge/validate_pns.py
   dump_pns_peak.m            Dumps peak PNS%% across every segment instance of a real sequence
-  dump_acoustics_test.m      Dumps a check_grad_acoustics.m reference for seq2ge/acoustics.py's validation
+  dump_acoustics_test.m      Dumps a check_grad_acoustics.m reference for ge/acoustics.py's validation
   dump_acoustics_blockrange.m  Dumps the former MATLAB export path's exact acoustics blockRange check
 tests/                       Unit tests (pytest)
 docs/demo/                   Static images embedded in this README's Demo section
@@ -217,7 +216,7 @@ Source repositories this port is derived from or ports code from:
 
 - [rextlfung/ArbEPI](https://github.com/rextlfung/ArbEPI) — the MATLAB/Pulseq original this repo ports.
 - [rextlfung/epi-preprocessing](https://github.com/rextlfung/epi-preprocessing) — the MATLAB original `preprocessing/` ports.
-- [HarmonizedMRI/PulCeq](https://github.com/HarmonizedMRI/PulCeq) — `seq2ge/` ports `seq2ceq.m`/`writeceq.m`/`pge2.pns.m`/`check_grad_acoustics.m` from here.
+- [HarmonizedMRI/PulCeq](https://github.com/HarmonizedMRI/PulCeq) — `ge/` ports `seq2ceq.m`/`writeceq.m`/`pge2.pns.m`/`check_grad_acoustics.m` from here.
 - [HarmonizedMRI/B0shimming](https://github.com/HarmonizedMRI/B0shimming) — `sequences/deGRE.py` is adapted from this repo's `writeB0.m`.
 
 Libraries this repo depends on:
@@ -240,4 +239,4 @@ Algorithms and standards:
 - Golden-angle ordering: Winkelmann S, Schaeffter T, Koehler T, Eggers H, Doessel O. "An optimal radial profile order based on the Golden Ratio for time-resolved MRI." *IEEE Trans Med Imaging.* 2007;26(1):68-76. ([open-access copy](https://pmc.ncbi.nlm.nih.gov/articles/PMC9189059/); applied in `lib/mask2epi.py`'s `_golden_angle_shot_order`, see that function's docstring.)
 - Regularized B0 field map estimation: Lin CY, Fessler JA. "Efficient Regularized Field Map Estimation in 3D MRI." *IEEE Trans Comput Imaging.* 2020;7:60-73. (Implemented by MRIFieldmaps.jl, invoked from `preprocessing/julia/b0map.jl`.)
 - Phase unwrapping: Dymerska B, Eckstein K, Bachrata B, Siow B, Trattnig S, Shmueli K, Robinson SD. "Phase unwrapping with a rapid opensource minimum spanning tree algorithm (ROMEO)." *Magn Reson Med.* 2021;85(4):2294-2308. (Implemented by ROMEO.jl, used in `b0map.jl` to build the field map solve's initial guess -- see `CLAUDE.md`'s `preprocessing/` section for why the naive two-point guess isn't safe to use directly.)
-- Peripheral nerve stimulation: IEC 60601-2-33:2022, the PNS prediction model `seq2ge/pns.py` implements (ported from PulCeq's `pge2.pns.m`).
+- Peripheral nerve stimulation: IEC 60601-2-33:2022, the PNS prediction model `ge/pns.py` implements (ported from PulCeq's `pge2.pns.m`).

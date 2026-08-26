@@ -1,4 +1,4 @@
-# toppe/coppe.py — copy .pge sequences to the scanner
+# ge/coppe.py — copy .pge sequences to the scanner
 
 For **internal University of Michigan fMRI lab use only** — the server
 names below (`epyc`, `goliath`, `sdc@10.0.1.1`) are specific to this lab's
@@ -118,7 +118,7 @@ call), so as long as you can SSH from your machine to phobos, no extra flag
 is needed:
 
 ```
-uv run python toppe/coppe.py
+uv run python ge/coppe.py
 ```
 
 is equivalent to explicitly passing `--relay phobos.engin.umich.edu`. Pass
@@ -163,7 +163,7 @@ ssh-copy-id -o ProxyJump=<your-username>@phobos.engin.umich.edu <your-username>@
 ## Usage
 
 ```
-uv run python toppe/coppe.py
+uv run python ge/coppe.py
 ```
 
 Transfers every `output/*.pge` file to the "inside" scanner using your
@@ -171,26 +171,26 @@ current username. Other examples:
 
 ```
 # Transfer to the "outside" scanner instead
-uv run python toppe/coppe.py --target outside
+uv run python ge/coppe.py --target outside
 
 # Transfer .pge files from a different folder
-uv run python toppe/coppe.py --pge-dir /path/to/some/other/folder
+uv run python ge/coppe.py --pge-dir /path/to/some/other/folder
 
 # Show live output during the transfer (e.g. to watch for a Duo push)
-uv run python toppe/coppe.py -v
+uv run python ge/coppe.py -v
 
 # Skip the automatic public-IP lookup (see Troubleshooting)
-uv run python toppe/coppe.py --host-ip 141.213.x.x
+uv run python ge/coppe.py --host-ip 141.213.x.x
 
 # Use a specific SSH username, or a specific run subfolder name
-uv run python toppe/coppe.py --user labmate --run-id my-test-run
+uv run python ge/coppe.py --user labmate --run-id my-test-run
 
 # Relay through a different host instead of the default phobos
 # (see "Running from an unwhitelisted machine" above)
-uv run python toppe/coppe.py --relay some-other-whitelisted-host.engin.umich.edu
+uv run python ge/coppe.py --relay some-other-whitelisted-host.engin.umich.edu
 ```
 
-Run `uv run python toppe/coppe.py --help` for the full flag list.
+Run `uv run python ge/coppe.py --help` for the full flag list.
 
 ## Entry-number allocation
 

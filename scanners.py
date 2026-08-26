@@ -2,7 +2,7 @@
 
 A single source of truth for the gradient/RF hardware limits that both
 `.seq` generation (Siemens-format Pulseq, via `params.py`'s `sys`) and GE
-`.pge` export/feasibility checking (`seq2ge/ge_export.py`) must agree on, so a
+`.pge` export/feasibility checking (`ge/ge_export.py`) must agree on, so a
 sequence built for a given scanner cannot silently drift out of sync with
 that scanner's actual limits (see the `g_max`/`slew_max` unit-drift bug
 this module replaces, described in CLAUDE.md/README.md history).
@@ -10,7 +10,7 @@ this module replaces, described in CLAUDE.md/README.md history).
 `max_grad`/`max_slew` here are the values used to build the `.seq` file
 itself (via `params.py`'s `pp.Opts` construction, which reads every one of
 `pp.Opts`'s kwargs straight off the selected `ScannerSpec` rather than
-hard-coding any of them there); `seq2ge/ge_export.py` derives GE's
+hard-coding any of them there); `ge/ge_export.py` derives GE's
 G/cm-based `g_max`/`slew_max` from these same two numbers rather than
 storing them twice. `ScannerSpec` intentionally holds only plain data (no
 `pypulseq` import here) -- `params.py` is the one place that converts it
@@ -18,10 +18,10 @@ into a `pp.Opts`.
 
 `ge_coil` is the coil identifier string passed through to MATLAB's
 `pge2.opts(...)`/`check_grad_acoustics(...)` when using the MATLAB export
-path (seq2ge/ge_export.py). `chronaxie`/`rheobase`/`alpha` duplicate the PNS
+path (ge/ge_export.py). `chronaxie`/`rheobase`/`alpha` duplicate the PNS
 SAFE-model coefficients from the same `pge2.opts.m` table (used by
-seq2ge/pns.py's pure-Python PNS check -- see seq2ge/check.py); `check_grad_acoustics`'s
-per-coil acoustic-resonance bands are ported directly into seq2ge/acoustics.py
+ge/pns.py's pure-Python PNS check -- see ge/check.py); `check_grad_acoustics`'s
+per-coil acoustic-resonance bands are ported directly into ge/acoustics.py
 instead (they're keyed by `ge_coil`, not duplicated per-scanner here).
 """
 
@@ -37,7 +37,7 @@ class ScannerSpec:
     psd_rf_wait: float  # s, RF-gradient delay
     psd_grd_wait: float  # s, ADC-gradient delay
     pislquant: int  # ADC events at scan start for receive gain calibration
-    ge_coil: str  # coil code for pge2.opts / check_grad_acoustics / seq2ge/acoustics.py
+    ge_coil: str  # coil code for pge2.opts / check_grad_acoustics / ge/acoustics.py
     chronaxie: float  # s, PNS SAFE-model nerve impulse response time constant
     rheobase: float  # stimulation threshold for constant slew of infinite duration
     alpha: float  # effective coil length (dimensionless); s_min = rheobase / alpha

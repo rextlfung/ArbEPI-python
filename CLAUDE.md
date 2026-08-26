@@ -10,7 +10,7 @@ fast, vendor-agnostic 3D-EPI MRI pulse sequences from arbitrary 2D
 points and global config (`main.py`, `params.py`, `scanners.py`) sit at
 the repo root, mirroring `../ArbEPI` having `params.m`/`main.m` directly
 at its own root — everything else lives under
-`lib/`/`sequences/`/`sampling/`/`plotting/`/`seq2ge/`, matching
+`lib/`/`sequences/`/`sampling/`/`plotting/`/`ge/`, matching
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
 for the full layout).
 
@@ -155,14 +155,14 @@ mutating the shared system object.
 `load_params()` looks up a `ScannerSpec` from its body-level `scanner`
 variable (currently `'GE_MR750'` or `'GE_UHP'`, edit directly in
 `params.py` to change) and stores it as `params.spec`; `sys.max_grad`/`sys.max_slew`
-(used for `.seq` generation) and `seq2ge/check.py`/`seq2ge/writeceq.py`'s
-hardware/PNS/acoustics checks (used by `seq2ge/ge_export.py`'s `--ge` path, pure
+(used for `.seq` generation) and `ge/check.py`/`ge/writeceq.py`'s
+hardware/PNS/acoustics checks (used by `ge/ge_export.py`'s `--ge` path, pure
 Python, see below) both read from that same `ScannerSpec` instance, so
 they cannot drift out of sync the way they used to (see git history for
 the bug this replaced: `slew_max` had been hand-set to a value 25% higher
 than `sys.max_slew` actually specified). `ScannerSpec.ge_coil` (e.g.
-`'xrm'`, `'hrmbuhp'`) keys `seq2ge/acoustics.py`'s per-coil forbidden-band
-table and `ScannerSpec.chronaxie`/`rheobase`/`alpha` key `seq2ge/pns.py`'s
+`'xrm'`, `'hrmbuhp'`) keys `ge/acoustics.py`'s per-coil forbidden-band
+table and `ScannerSpec.chronaxie`/`rheobase`/`alpha` key `ge/pns.py`'s
 per-coil PNS coefficients — see `../PulCeq/matlab/+pge2/opts.m`'s header
 comment for the authoritative table if adding a new scanner. `PNSwt`
 stays a separate `Params` field (not part of `ScannerSpec`) since it's
@@ -170,7 +170,7 @@ scan-context — phantom vs. human — not a hardware constant; PNS is a
 physiological limit, so don't silently lower `PNSwt` to make an error go
 away — `[0, 0, 0]` is only valid for phantom/non-human scanning, and the
 default is now the IEC 60601-2-33:2022-recommended `[0.8, 1.0, 0.7]` (see
-the "Open finding" below for why it wasn't always). `seq2ge.ge_export.check_ge_feasibility()`
+the "Open finding" below for why it wasn't always). `ge.ge_export.check_ge_feasibility()`
 runs the hardware/PNS/acoustics check without writing a `.pge` file —
 `main.py --ge` calls it on all four sequences before exporting any of
 them, so infeasibility surfaces immediately rather than after several full
@@ -195,28 +195,28 @@ schedule.
 
 ### GE `.pge` export -- fully ported to Python, no MATLAB round trip
 
-`seq2ge/` is a from-scratch Python port of PulCeq's `seq2ceq`/`writeceq`/
+`ge/` is a from-scratch Python port of PulCeq's `seq2ceq`/`writeceq`/
 `pge2.pns`/`check_grad_acoustics` toolchain, and is now the operative path
-for both `main.py --ge` and standalone use — `seq2ge/ge_export.py` calls straight
-into `seq2ge.seq2ceq`/`seq2ge.writeceq`/`seq2ge.check`, with no `matlab -batch` shell-out
+for both `main.py --ge` and standalone use — `ge/ge_export.py` calls straight
+into `ge.seq2ceq`/`ge.writeceq`/`ge.check`, with no `matlab -batch` shell-out
 and no sibling `../pulseq`/`../toppe`/`../PulCeq`/`../ArbEPI` checkouts
 required. MATLAB is only needed if re-validating this port against a fresh
 `../PulCeq` checkout in the future (see `matlab_reference/dump_*.m` below).
 
-`seq2ge/seq2ceq.py` + `seq2ge/blocks.py` port `seq2ceq.m`/`compareblocks.m`/
-`getdynamics.m`/`getblocktype.m`; `seq2ge/writeceq.py` ports `writeceq.m`'s
+`ge/seq2ceq.py` + `ge/blocks.py` port `seq2ceq.m`/`compareblocks.m`/
+`getdynamics.m`/`getblocktype.m`; `ge/writeceq.py` ports `writeceq.m`'s
 binary `.pge` writer. Validated field-by-field against real MATLAB output
-(`seq2ge/validate_against_matlab.py` + `matlab_reference/dump_ceq.m`, which dumps
+(`ge/validate_against_matlab.py` + `matlab_reference/dump_ceq.m`, which dumps
 MATLAB's `ceq` struct for comparison) on all four generated sequences:
 `noise.pge`/`GRE.pge` come out byte-identical, `ArbEPI.pge`/`EPIcal.pge`
 differ only in the `maxSlew` header float32's last bit (summation-order
 noise, not a bug -- confirmed by matching every other field including the
 full loop table exactly). This byte-for-byte/near-identical match was
-re-confirmed after wiring `seq2ge/ge_export.py` end to end (fresh MATLAB
+re-confirmed after wiring `ge/ge_export.py` end to end (fresh MATLAB
 references regenerated from the exact `.seq` files `main.py --ge`
 produces, `noise`/`GRE` byte-identical, `ArbEPI`/`EPIcal` 1-float32-ULP on
 `maxSlew` only, all four `loop` tables matching exactly) -- not just on
-`seq2ge/seq2ceq.py`/`seq2ge/writeceq.py` in isolation. Two real bugs were caught
+`ge/seq2ceq.py`/`ge/writeceq.py` in isolation. Two real bugs were caught
 and fixed by this validation: a sign error in `_write_grad`'s waveform
 normalization, and a wrong assumption that the `.pge` header's `maxSlew`
 field echoes the scanner's hardware limit rather than (as MATLAB actually
@@ -225,21 +225,21 @@ does) the sequence's realized peak slew.
 One deliberate, disclosed deviation: `seq2ceq.m`'s gradient-heating
 `Emax` calculation sums stale 1-indexed loop columns 11:13 (`energy_gz,
 recphs, blockDuration`, not the three gradient energies its variable names
-imply) -- `seq2ge/seq2ceq.py` sums the correct energy columns instead. This
+imply) -- `ge/seq2ceq.py` sums the correct energy columns instead. This
 produced identical `Emax_n` results on all four test sequences but is not
 guaranteed to in general; consider reporting the indexing bug upstream to
 PulCeq.
 
-**PNS/acoustics/hardware checking is also ported**: `seq2ge/pns.py` (GE's
+**PNS/acoustics/hardware checking is also ported**: `ge/pns.py` (GE's
 IEC 60601-2-33:2022 PNS model, from `pge2.pns.m` -- not the same model as
 pypulseq's own `pypulseq.utils.safe_pns_prediction`, which is Siemens'
-different SAFE parameterization), `seq2ge/acoustics.py` (`check_grad_acoustics.m`'s
-FFT/forbidden-band check, per-coil tables copied verbatim), and `seq2ge/check.py`
+different SAFE parameterization), `ge/acoustics.py` (`check_grad_acoustics.m`'s
+FFT/forbidden-band check, per-coil tables copied verbatim), and `ge/check.py`
 (`check_ge_feasibility()`, combining both plus gradient/slew/B1 hardware
 limits, run directly on `seq.get_gradients()` -- no MATLAB round trip).
-Both `seq2ge/pns.py` and `seq2ge/acoustics.py` match real MATLAB output to
-float64/float32 precision on identical input (`seq2ge/validate_pns.py` +
-`matlab_reference/dump_pns_test.m`/`dump_acoustics_test.m`). `seq2ge/check.py`'s
+Both `ge/pns.py` and `ge/acoustics.py` match real MATLAB output to
+float64/float32 precision on identical input (`ge/validate_pns.py` +
+`matlab_reference/dump_pns_test.m`/`dump_acoustics_test.m`). `ge/check.py`'s
 whole-sequence PNS convolution matches MATLAB's real per-segment-instance
 computation (via `matlab_reference/dump_pns_peak.m`, which replicates
 `checksegment.m`'s pipeline without its fail-fast throw) to within 0.02
@@ -248,7 +248,7 @@ percentage points on the full ArbEPI/GE_UHP sequence (114.7% vs 114.72%).
 Acoustics is checked over a bounded window rather than the whole sequence
 -- its FFT cost scales with window length, and a full ~60s/15M-sample
 sequence takes minutes for no benefit. The window is not an arbitrary
-fixed duration: `seq2ge/check.py`'s `_blockrange_window_s` reproduces the
+fixed duration: `ge/check.py`'s `_blockrange_window_s` reproduces the
 exact block-selection semantics of MATLAB's own check (`pge2.plot(ceq,
 sys, 'blockRange', [1 10], ...)` inside `write_to_ge_from_seq.m` -- walk
 `ceq.loop` rows in segment order starting at row 1, including whole
@@ -274,7 +274,7 @@ only ever calls MATLAB's `warning(...)` when `magb > threshold` (see its
 source, line ~159 -- `if magb>threshold, warning(...); end`) -- it has
 never once blocked a real MATLAB `--ge` export, unlike PNS
 (`checksegment.m` really does `throw(MException(...))` above 80%, see
-below). `seq2ge/check.py`'s `FeasibilityReport.ok` originally folded acoustics
+below). `ge/check.py`'s `FeasibilityReport.ok` originally folded acoustics
 into the same hard gate as PNS/hardware limits; this would have made the
 Python `--ge` path *reject* `GRE.seq` (acoustics 0.402, over the 0.3
 threshold) even though the exact same sequence has always exported
@@ -294,7 +294,7 @@ contribution zero regardless of the real waveform, and MATLAB's
 throw(MException('safety:pns', ...))`), so a real weight would have caught
 this immediately if one had ever been used. `params.py`'s default is now
 the IEC 60601-2-33:2022-recommended `wt = [0.8, 1.0, 0.7]`, and
-`seq2ge/check.py` matches MATLAB's throw condition exactly
+`ge/check.py` matches MATLAB's throw condition exactly
 (`PNS_NORMAL_MODE_THRESHOLD = 80.0`) -- so **`main.py --ge` now correctly
 fails by default** on three of the four sequences: `noise` 0% (no
 gradients, passes), `EPIcal` 113.2%, `ArbEPI` 114.7%, `GRE` 100.6% -- all
@@ -311,14 +311,14 @@ change (lower slew / longer blip rise times) to bring peak PNS under 80%.
 as `params.spec` (rather than duplicating `max_grad`/`max_slew`/`b1_max`/
 `ge_coil`/`pislquant`/etc. as separate derived fields, as it did when the
 MATLAB path needed them formatted into a `pge2.opts(...)` snippet) --
-`seq2ge/check.py`/`seq2ge/writeceq.py` read straight from `params.spec`.
+`ge/check.py`/`ge/writeceq.py` read straight from `params.spec`.
 
 `matlab_reference/` now holds only the one-off validation scripts used to produce
 the MATLAB reference data cited throughout this section
 (`dump_ceq.m`, `dump_pns_test.m`, `dump_pns_peak.m`, `dump_acoustics_test.m`,
 `dump_acoustics_blockrange.m`) -- none are called by any Python code.
 `write_to_ge_from_seq.m`/`ge_feasibility_check.m` (the former MATLAB
-shell-out targets) have been removed now that `seq2ge/ge_export.py` no longer
+shell-out targets) have been removed now that `ge/ge_export.py` no longer
 calls them; their content is preserved in git history for anyone
 re-deriving this port's validation record.
 - **Fat-sat RF pulse**: the MATLAB original designs this via GE's
@@ -422,7 +422,7 @@ multi-regularizer pattern: `G = Vstack([Wavelet, FiniteDifference])`,
 `PrimalDualHybridGradient` -- the same structure `sigpy.mri.app.
 L1WaveletRecon`/`TotalVariationRecon` each use individually, just combined.
 **Accepted, disclosed tradeoff**: none of this claims numerical parity with
-BART/MIRT (unlike `seq2ge/`'s float-ULP-level MATLAB validation) --
+BART/MIRT (unlike `ge/`'s float-ULP-level MATLAB validation) --
 verification here is algorithm-invariant instead (round-trip/convergence
 tests against synthetic data with known ground truth), the same philosophy
 this repo already uses for sequence generation where no MATLAB comparison

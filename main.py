@@ -48,7 +48,7 @@ def main(export_ge: bool = False, plot: bool = False):
         plot_last_run(params)
 
     if export_ge:
-        from seq2ge.ge_export import check_ge_feasibility, export_to_ge
+        from ge.ge_export import check_ge_feasibility, export_to_ge
 
         seq_paths = {
             name: os.path.join(params.output_dir, f'{name}.seq')
@@ -70,7 +70,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         '--ge', action='store_true', dest='export_ge',
-        help='also export each sequence to GE .pge format (see seq2ge/ge_export.py)',
+        help='also export each sequence to GE .pge format (see ge/ge_export.py)',
     )
     parser.add_argument(
         '--plot', action='store_true',

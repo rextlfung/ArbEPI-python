@@ -5,7 +5,7 @@ why this repo keeps MATLAB cross-checks out of the automated suite).
 
 Usage (from repo root), after generating the reference with
 matlab_reference/dump_pns_test.m:
-    uv run python -m seq2ge.validate_pns output/pns_test_reference.mat
+    uv run python -m ge.validate_pns output/pns_test_reference.mat
 """
 
 import sys
@@ -13,7 +13,7 @@ import sys
 import hdf5storage
 import numpy as np
 
-from seq2ge.pns import pns
+from ge.pns import pns
 
 
 def validate(reference_mat_path: str) -> bool:

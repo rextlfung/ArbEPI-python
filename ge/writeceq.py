@@ -44,7 +44,7 @@ from typing import BinaryIO
 
 import numpy as np
 
-from seq2ge.ceq import Ceq, ParentBlock
+from ge.ceq import Ceq, ParentBlock
 
 NMAXBLOCKSFORGRADHEATCHECK = 40000
 

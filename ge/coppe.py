@@ -19,7 +19,7 @@ dropped entirely):
   - Prints the resulting filename -> N mapping so it can be typed into
     the scanner console.
 
-See toppe/README.md for usage and the SSH key setup required for this to
+See ge/README.md for usage and the SSH key setup required for this to
 work (two hops, in the same spirit as the MATLAB original: this host ->
 lab jump server, and scanner -> this host, since the transfer is a *pull*
 initiated from the scanner side).
@@ -110,7 +110,7 @@ done
 """
 
 # Pulls the tarball back from this host (scp initiated from the scanner
-# side -- see toppe/README.md for why), unpacks it into the per-user/
+# side -- see ge/README.md for why), unpacks it into the per-user/
 # per-run directory, and moves just the .entry files into the shared
 # pulseq/v7/ namespace (the .pge files stay where they land).
 _TRANSFER_SCRIPT = r"""
@@ -217,7 +217,7 @@ def stage_tarball_on_relay(user: str, relay: str, tar_path: Path) -> str:
     chain into the scanner. Returns that remote directory; the
     scanner-side pull (_TRANSFER_SCRIPT) then scp's the tarball from
     there, reusing relay's already-provisioned hop-2 keys (see
-    toppe/README.md) rather than needing new ones set up for this host."""
+    ge/README.md) rather than needing new ones set up for this host."""
     result = subprocess.run(['ssh', '-q', f'{user}@{relay}', 'mktemp', '-d'], capture_output=True)
     if result.returncode != 0:
         raise RuntimeError(
@@ -564,7 +564,7 @@ if __name__ == '__main__':
         help='ProxyJump through this host to reach epyc/goliath, for running coppe.py from a '
              "machine they won't accept direct connections from. Defaults to "
              f"'{_DEFAULT_RELAY_HOST}' unless this host's hostname is already 'phobos' "
-             "(no relay needed); pass --relay '' to force no relay -- see toppe/README.md",
+             "(no relay needed); pass --relay '' to force no relay -- see ge/README.md",
     )
     parser.add_argument(
         '--user', default=getpass.getuser(),

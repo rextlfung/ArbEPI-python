@@ -15,8 +15,8 @@ import warnings
 import numpy as np
 import pypulseq as pp
 
-from seq2ge.blocks import compare_blocks, get_block_type, get_dynamics
-from seq2ge.ceq import N_LOOP_COLUMNS, Ceq, ParentBlock, Segment
+from ge.blocks import compare_blocks, get_block_type, get_dynamics
+from ge.ceq import N_LOOP_COLUMNS, Ceq, ParentBlock, Segment
 
 _INCONSISTENT_MSG = (
     'Sequence contains inconsistent segment definitions. This may occur due '

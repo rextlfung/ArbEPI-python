@@ -1,4 +1,4 @@
-"""Self-consistency smoke test for seq2ge/seq2ceq.py against real generated
+"""Self-consistency smoke test for ge/seq2ceq.py against real generated
 sequences in output/ (run `uv run python main.py` first if missing).
 
 noise.seq exercises pure-delay blocks and multi-instance segments;
@@ -15,7 +15,7 @@ import numpy as np
 import pypulseq as pp
 import pytest
 
-from seq2ge.seq2ceq import seq2ceq
+from ge.seq2ceq import seq2ceq
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / 'output'
 

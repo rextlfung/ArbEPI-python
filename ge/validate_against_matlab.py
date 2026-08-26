@@ -5,11 +5,11 @@ aren't committed (see CLAUDE.md: no MATLAB-based end-to-end suite exists;
 this is the same kind of one-off cross-check, not a CI-run test).
 
 Usage (from repo root), to check seq2ceq only:
-    uv run python -m seq2ge.validate_against_matlab output/noise.seq output/noise_ceq_reference.mat
+    uv run python -m ge.validate_against_matlab output/noise.seq output/noise_ceq_reference.mat
 
 ...or also check writeceq's .pge output, if a MATLAB-written .pge for the
-same .seq exists (e.g. from seq2ge.ge_export.export_to_ge / main.py --ge):
-    uv run python -m seq2ge.validate_against_matlab output/noise.seq output/noise_ceq_reference.mat output/noise.pge 10
+same .seq exists (e.g. from ge.ge_export.export_to_ge / main.py --ge):
+    uv run python -m ge.validate_against_matlab output/noise.seq output/noise_ceq_reference.mat output/noise.pge 10
 
 The reference .mat is produced by matlab_reference/dump_ceq.m, e.g.:
     matlab -batch "addpath('../pulseq/matlab'); addpath('../toppe'); \
@@ -25,9 +25,9 @@ import hdf5storage
 import numpy as np
 import pypulseq as pp
 
-from seq2ge.read_pge import read_pge
-from seq2ge.seq2ceq import seq2ceq
-from seq2ge.writeceq import write_ceq
+from ge.read_pge import read_pge
+from ge.seq2ceq import seq2ceq
+from ge.writeceq import write_ceq
 
 
 def _flatten(x):

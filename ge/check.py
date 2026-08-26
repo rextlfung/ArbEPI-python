@@ -33,12 +33,12 @@ from dataclasses import dataclass
 import numpy as np
 import pypulseq as pp
 
+from ge.acoustics import THRESHOLD as ACOUSTICS_THRESHOLD
+from ge.acoustics import check_grad_acoustics
+from ge.ceq import Ceq
+from ge.pns import pns
+from ge.seq2ceq import seq2ceq
 from scanners import ScannerSpec
-from seq2ge.acoustics import THRESHOLD as ACOUSTICS_THRESHOLD
-from seq2ge.acoustics import check_grad_acoustics
-from seq2ge.ceq import Ceq
-from seq2ge.pns import pns
-from seq2ge.seq2ceq import seq2ceq
 
 # Both thresholds are IEC 60601-2-33:2022's own operating-mode boundaries
 # (see pge2.pns.m's header: wt = [0.8 1.0 0.7] "From IEC 60601-2-33:2022

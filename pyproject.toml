@@ -42,7 +42,7 @@ preprocessing = [
 py-modules = ["params", "scanners"]
 
 [tool.setuptools.packages.find]
-include = ["sampling*", "lib*", "sequences*", "plotting*", "seq2ge*", "preprocessing*", "toppe*"]
+include = ["sampling*", "lib*", "sequences*", "plotting*", "ge*", "preprocessing*"]
 
 [tool.ruff]
 line-length = 100
