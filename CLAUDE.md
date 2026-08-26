@@ -679,5 +679,168 @@ repo already extends to MATLAB-based comparisons (no MATLAB install was
 available during this port either, see the Commands section) and to
 `raw_io.py`'s GERecon dependency.
 
+### `recon/` -- Multi-Scale Low-Rank (MSLR) fMRI reconstruction, ported from `../mslr-recon` onto `mirtorch`
+
+`recon/` is a Python/PyTorch port of the companion Julia repo `../mslr-recon`
+(multi-scale locally-low-rank fMRI reconstruction, Ong & Lustig 2016 --
+SENSE forward model per time frame + a nuclear-norm patch regularizer at
+several spatial scales, solved via FISTA/POGM), built on
+[mirtorch](https://github.com/guanhuaw/MIRTorch) in place of `../mslr-recon`'s
+MIRT.jl + LinearMapsAA dependency. It consumes this repo's own
+`preprocessing/` output directly (`<seqname>_epi_zf.h5`'s `ksp_epi_zf` +
+`smaps_<seqname>_sigpy.h5`'s `smaps`) -- no format bridging needed, since
+mslr-recon already reads exactly this key/shape convention from ArbEPI-python's
+sigpy exports (see `../mslr-recon`'s own docs).
+
+Like `preprocessing/`, this is a separate `pyproject.toml` optional-dependency
+group (`recon`: `torch`, `mirtorch`, `h5py`, `nibabel`) kept out of the core
+and `preprocessing` dependency sets -- torch is a large, often
+GPU-index-specific install with no reason to share a venv with GERecon's
+Python-3.10/numpy<2.0-locked `preprocessing` extra, so it gets its own
+dedicated venv (`.venv-recon`) the same way `preprocessing` gets
+`.venv-preprocessing`. Unlike `preprocessing/julia/`'s subprocess boundary to
+Julia, `recon/` imports mirtorch/torch directly at module level (mirtorch is
+pure Python, pip-installable, no cross-language embedding problem to solve)
+-- tests gate on it via `pytest.importorskip("torch")`/`("mirtorch")`, not a
+`shutil.which` subprocess check, so the main test suite still collects
+without the `recon` venv active.
+
+**Module layout**: `recon/lowrank.py` (patch extraction/recombination +
+singular-value soft-thresholding, ported from `../mslr-recon/src/recon.jl`)
+batches every patch into one tensor and calls a single `torch.linalg.svd`
+rather than looping per-patch like the Julia original's `@threads`/streaming
+CUSOLVER dispatch -- PyTorch's batched SVD already parallelizes internally,
+so the loop-based Array/CuArray dispatch split in `recon.jl` has no Python
+equivalent needed. The one piece of Julia's `SVST` that *is* still needed is
+the exact-zero shortcut (patches with `‖X‖_F <= beta` are forced to exact
+zero before the SVD, not just after) -- a correctness safeguard against
+subnormal-magnitude matrices producing NaN, not a Julia-GPU-only concern.
+`recon/solvers.py` ports `../mslr-recon/src/mirt_mod.jl`'s `pogm_restart`
+(PGM/FPGM/POGM with gradient restart and early stopping via `conv_tol`)
+faithfully in the momentum/restart math, but drops its GPU-memory-specific
+mechanics (manual buffer aliasing, forced `GC.gc()`/`CUDA.reclaim()`) since
+those exist only to fit Julia's broadcast-allocates-a-new-array semantics
+under a 48GB budget -- PyTorch's caching allocator and Python-float-times-
+complex64-tensor weak-type promotion don't have that problem.
+
+**`recon/operators.py`'s `GatheredSense`** is a custom `mirtorch.linear.
+linearmaps.LinearMap` subclass, not `mirtorch.linear.mri.Sense` directly --
+deliberately, despite `Sense` (with `norm='ortho'`) implementing
+mathematically the exact same convention as `../mslr-recon/src/sense_gpu.jl`'s
+`Asense_gpu` (verified by adjoint self-consistency in
+`tests/test_recon_operators.py`: both apply
+`fftshift(fftn(ifftshift(.)), norm='ortho')` forward and the mirror-image
+adjoint, which -- since `fftshift`/`ifftshift` are permutation matrices,
+`P^T = P^-1`, and ortho-normalized `fftn`/`ifftn` are mutually adjoint -- is
+exactly the true adjoint for any grid size, odd or even, not a naively-
+expected swapped-shift version). The reason for the custom subclass: mirtorch's
+`Sense` returns a *dense* masked `(Nc,Nx,Ny,Nz)` k-space grid per frame, and
+on this repo's real acquisition scale (240x240x45, 18 coils, 30 frames, R~9)
+that OOMs a 49GB GPU on the very first gradient evaluation (measured: an
+~11GB dense k-space tensor per intermediate, versus mslr-recon's own
+memory budget which assumes the *gathered* `(K,Nc)` representation
+`Asense_gpu` already uses, `K = Nx*Ny*Nz/R`). `GatheredSense` implements the
+identical forward/adjoint math but gathers to the `K` sampled locations,
+cutting every k-space-shaped tensor by the acceleration factor `R` -- this
+was a real, measured fix, not a preemptive optimization (`build_encoding_
+operator`+`gather_ksp` are the two entry points; `.A[it].idx` on the
+returned `mirtorch.linear.BlockDiagonal` exposes each frame's own flat
+spatial sample indices for gathering a matching k-space target array).
+
+**`recon/reconstruct.py`'s `_load_array` reads chunked HDF5 datasets
+chunk-by-chunk along the last axis, not via a single `d[()]` call.** Measured
+on real `ArbEPI_epi_zf.h5` data (chunked one time-frame per chunk, ~373MB
+each): a bare `d[()]` full-dataset read ran at ~7 MB/s (838M+ read syscalls
+for 7.5GB -- an h5py/HDF5 chunk-cache pathology when the default cache
+doesn't fit even one chunk), versus ~500 MB/s reading one same-sized chunk
+slice at a time -- a two-orders-of-magnitude difference that made an 11GB
+file's load alone take 15+ minutes before this fix (23s after).
+
+**Validated against real `../mslr-recon` (Julia) output on real scanner
+data** (2026-08-25, RTX A6000, `20260822ball_radial` and `20260822ball_laminar`
+datasets -- the two `mask2epi` trajectory variants from the same acquisition,
+see `../mslr-recon/experiments/20260822ball.jl`'s header -- both
+`Nx,Ny,Nz,Nvc,Nt = 240,240,45,18,30`, `R~9`, all six run via
+`recon/validate_against_mslr.py`, which re-derives every reconstruction
+parameter from the Julia `.mat`'s own saved fields rather than
+re-specifying them, so it always replicates exactly what the reference run
+used):
+
+| dataset | config | n_iters | dc_cost max rel diff | reg_cost max rel diff | X_recon rel L2 err | Pearson r | runtime (python vs julia) |
+|---|---|---|---|---|---|---|---|
+| radial | L (local only, `[15,15,15]`) | 55 | 5.9e-7 | 3.0e-6 | 1.6e-5 | 0.9999999998 | 309s vs 405s |
+| radial | G (global only, whole volume) | 56 | 1.6e-6 | 8.1e-6 | 3.8e-5 | 0.9999999989 | 96s vs 134s |
+| radial | G+L (both scales) | 101 | 1.6e-6 | 2.1e-4 | 2.1e-5 | 0.9999999997 | 597s vs 785s |
+| laminar | L | 54 | 5.0e-7 | 2.7e-6 | 1.5e-5 | 0.9999999998 | 304s vs (not re-timed) |
+| laminar | G | 55 | 1.6e-6 | 1.1e-5 | 3.3e-5 | 0.9999999993 | 95s vs (not re-timed) |
+| laminar | G+L | 101 | 8.1e-7 | 1.2e-4 | 2.0e-5 | 0.9999999997 | 600s vs (not re-timed) |
+
+All six configs converge to the *same* iteration count as the corresponding
+Julia run (confirming `pogm_restart`'s gradient-restart and early-stopping
+logic matches exactly, not just the final answer) and match to float32
+summation-order noise -- the same class of ~1-ULP difference
+`seq2ge/validate_against_matlab.py` already documents against real MATLAB
+output, just for a very different (iterative, GPU-batched-SVD-heavy)
+numerical pipeline. `reg_cost[-1]`'s check gets a looser tolerance
+(`rtol=5e-4` vs the default `1e-4`) specifically for the two-scale `G+L`
+configs -- summing nuclear norms across scales, including a giant
+whole-volume SVD, measurably accumulates more floating-point noise
+(~1-2e-4) than any single-scale config (~1e-6 on both datasets), a real,
+consistent pattern rather than a threshold picked to paper over one
+failing run. Python also ran consistently faster than Julia on every
+radial config (laminar wasn't independently re-timed, since it exercises
+identical code paths to radial).
+
+**Why Python is faster despite Julia's raw kernels being faster per call
+(measured 2026-08-25, in-situ instrumentation of the real `scripts/
+reconstruct.jl` on real data, not isolated microbenchmarks)**: two
+overheads specific to `mslr-recon`'s Julia implementation, not a general
+Julia-vs-Python effect --
+1. **`GC.gc(true); CUDA.reclaim()`**, called once per iteration as the
+   first line of `g_prox` (`mirt_mod.jl`'s docstring point 5: added to fit
+   Julia's broadcast-allocates-a-new-array semantics under a 48GB VRAM
+   budget), costs **0.86-1.85s per iteration** in steady state --
+   comparable to or larger than the entire FFT forward+adjoint call
+   (~0.67s) and several times the SVD cost for the `G` config (~0.28s).
+   PyTorch's caching allocator needs no such call.
+2. **Sequential, not batched, per-patch GPU SVD** for the `L`/`G+L`
+   configs -- `recon.jl`'s own GPU dispatch path is deliberately serial
+   ("sequential CUSOLVER calls, no `@threads`", since `CuArray`s can't use
+   `@threads`): measured **5.2s for 4500 sequential 3375x30 SVDs** in situ,
+   vs. `recon/lowrank.py`'s single batched `torch.linalg.svd` call over the
+   same 4500 patches at **3.8s** -- cuSOLVER's batched routine amortizes
+   per-call launch overhead that 4500 individual calls each pay.
+
+Both were confirmed directly, not inferred: a scratch-instrumented copy of
+`reconstruct.jl` (`@elapsed`-style timing wrapped around `dc_cost_grad`'s
+`A' * (A * image_sum(X) - ksp)` and around `g_prox`'s `GC.gc`/`CUDA.reclaim`
+and `patchSVST` sections) run for a few real iterations on the real
+`20260822ball_radial` data reproduced the full per-iteration wall-clock
+almost exactly by summing these pieces. Meanwhile isolated single-call
+benchmarks confirm Fessler's expectation holds at the kernel level: Julia's
+`Asense_gpu` forward/adjoint (0.298s / 0.361s) is genuinely faster than
+`recon/operators.py`'s equivalent (0.480s / 0.549s) and the two configs'
+whole-volume SVD costs are comparable (Julia 0.158s vs Python 0.170s for
+the same `2592000x30` matrix) -- it's the two overheads above, not the
+underlying linear algebra, that flip the net result. (Aside, found while
+instrumenting: Julia's own bulk `h5read()` on `ArbEPI_epi_zf.h5` hits the
+same HDF5 chunk-cache pathology `recon/reconstruct.py`'s `_load_array` docs
+above -- tiny-read-storm, not disk-speed-bound -- confirming that gotcha is
+an HDF5-tooling issue in general, not Python/h5py-specific; irrelevant to
+the runtime comparison above since `runtime_s` on both sides only measures
+the solver loop, not data loading.)
+
+Not yet ported from `../mslr-recon`: `src/activation.jl` (a standalone
+GLM task-activation module, not wired into the main pipeline even in the
+original) and `src/metrics.jl`/`scripts/report.jl` (tSNR maps and
+convergence-plot reporting) -- both are QA/visualization, not required for
+a working reconstruction path. `recon/reconstruct.py`'s `run_recon` also
+does not yet write its own `.mat`/`.nii.gz` output the way `../mslr-recon`'s
+`run_recon` does (`recon/validate_against_mslr.py` compares in-memory
+`ReconResult` fields directly instead) -- a `save_result` driver reusing
+`preprocessing/nifti_io.py`'s `save_recon_nifti` for the magnitude image
+would be the natural next piece if this becomes a routine (not just
+validation) reconstruction path.
+
 See `README.md` for the getting-started walkthrough and the full
 `Getting started` / `GE export` usage examples.

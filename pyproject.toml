@@ -37,12 +37,26 @@ preprocessing = [
     "scipy>=1.10",
     "nibabel>=5.0",
 ]
+# Multi-scale low-rank (MSLR) reconstruction (recon/), mirroring ../mslr-recon
+# (Julia/MIRT.jl) on PyTorch/mirtorch instead. Deliberately excluded from the
+# core and `preprocessing` dependency sets: torch is a large, often
+# GPU-index-specific install (see recon/README or top-level docs for the
+# CUDA wheel selection this machine needs), and has no reason to share a venv
+# with GERecon's Python-3.10/numpy<2.0-locked `preprocessing` extra -- create
+# a dedicated venv for this extra (e.g. `.venv-recon`) the same way
+# `preprocessing` gets its own `.venv-preprocessing`.
+recon = [
+    "torch>=2.2",
+    "mirtorch>=0.3.1",
+    "h5py>=3.10",
+    "nibabel>=5.0",
+]
 
 [tool.setuptools]
 py-modules = ["params", "scanners"]
 
 [tool.setuptools.packages.find]
-include = ["sampling*", "lib*", "sequences*", "plotting*", "ge*", "preprocessing*"]
+include = ["sampling*", "lib*", "sequences*", "plotting*", "ge*", "preprocessing*", "recon*"]
 
 [tool.ruff]
 line-length = 100
