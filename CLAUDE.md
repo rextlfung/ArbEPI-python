@@ -363,10 +363,15 @@ plus an empirical slew sweep (2026-08-27, ~600 rise/fall/blip candidates,
 full-dims worst-frame ArbEPI builds scored by `ge/pns.py`'s RSS-combined
 total): the tuned defaults in `params.py`
 (`slew_derate=100`, `ro_slew_rise=100`, `ro_slew_fall=120`,
-`blip_slew=100`) measure **78.3% peak on the full ArbEPI build (GE_MR750,
-seed=0) at min TE ~35.2 ms**, vs 77.4% at min TE ~35.9 ms for the
-symmetric-100 design through the same code -- POPE spends ~1% of PNS
-margin to shorten TE by ~0.7 ms. Two sweep lessons worth keeping: (a) the
+`blip_slew=105`) measure **79.8% peak on the full ArbEPI build (GE_MR750,
+seed=0) at min TE 34.86 ms**, vs 77.4% at min TE ~35.8 ms for the
+symmetric-100 design through the same code -- POPE spends ~2.4% of PNS
+margin to shorten TE by ~0.9 ms. `blip_slew=105` is a deliberate
+ride-the-line choice (explicit user decision) leaving only ~0.2% margin
+to the 80% limit -- thinner than observed mask-to-mask variation, so
+re-verify after any seed/mask/`R`/`ETL`/resolution change and drop back
+to `blip_slew=100` (78.3% at min TE 35.10 ms) if a new mask pushes it
+over. Two sweep lessons worth keeping: (a) the
 per-channel PNS maxima are badly misleading here -- the y/z blips play
 centered on the kx turnaround, exactly where the readout fall ramp ends,
 so aggressive fall/blip slews RSS-combine into a 3-channel hotspot (e.g.
