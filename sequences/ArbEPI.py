@@ -25,9 +25,9 @@ from lib.calc_te_tr_delays import calc_te_tr_delays
 from lib.make_excitation_pulse import make_excitation_pulse
 from lib.make_fatsat_rf import make_fatsat_rf
 from lib.make_prephasers import make_prephasers
-from lib.make_readout_grads import make_readout_grads
 from lib.make_spoilers import make_spoilers
 from lib.mask2epi import mask2epi_laminar, mask2epi_radial, max_blip_steps
+from lib.readout_from_params import derated_sys, make_readout_grads_from_params
 from params import Params
 
 _MASK2EPI = {
@@ -74,14 +74,15 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     seq : the assembled pypulseq Sequence.
     """
     os.makedirs(params.output_dir, exist_ok=True)
-    # Own copy of params.sys (not the shared instance -- see params.py's
-    # Params.sys docstring), derated for PNS: this readout's rapid blip
-    # reversals are slew-, not amplitude-, limited (measured on a full
+    # Derated system for all non-readout gradients (excitation, fat-sat,
+    # prephasers, spoilers), from the params.slew_derate knob: this
+    # sequence is slew-, not amplitude-, PNS-limited (measured on a full
     # build: capping max_grad alone barely moved peak PNS, 125.9% ->
-    # 124.6%, while max_slew=100 T/m/s brought it to 84.3%). See
-    # CLAUDE.md's "Open finding" on PNS.
-    sys = copy.deepcopy(params.sys)
-    sys.max_slew = 100 * sys.gamma  # T/m/s -> Hz/m/s (pypulseq's internal unit)
+    # 124.6%, while a symmetric max_slew=100 T/m/s brought it to 84.3%;
+    # the asymmetric POPE readout ramps -- see lib/make_readout_grads.py's
+    # module docstring and params.py's ro_slew_rise/ro_slew_fall -- take it
+    # under the 80% normal-mode limit). See CLAUDE.md's PNS section.
+    sys = derated_sys(params)
 
     # Excitation pulse
     rf, gz_ss, gz_ssr = make_excitation_pulse(params.fa, params.rf_dur, params.rf_tb, params.fov, sys, params.crt)
@@ -98,8 +99,9 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # Infer maximum ky and kz blip steps across all frames and shots
     max_ky_step, max_kz_step = max_blip_steps(schedules)
 
-    # Readout gradients and ADC event
-    rg = make_readout_grads(max_ky_step, max_kz_step, params.Nx, params.fov, params.dwell, sys, params.crt)
+    # Readout gradients and ADC event (asymmetric POPE ramps + blip slew
+    # from params -- see lib/readout_from_params.py)
+    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, params)
 
     # Prephasers and spoilers
     gx_pre, gy_pre, gz_pre = make_prephasers(params.Nx, params.Ny, params.Nz, params.fov, sys, params.crt)
@@ -107,10 +109,11 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
         params.Nx, params.Ny, params.Nz, params.fov, params.n_cycles_spoil, sys, params.crt
     )
 
-    # Delays to achieve desired TE and TR
+    # Delays to achieve desired TE and TR. echo_offset anchors the
+    # prescribed TE at the true kx = 0 crossing (see calc_te_tr_delays).
     te_delay, tr_delay, min_te, min_tr = calc_te_tr_delays(
         rf, rfsat, gz_ss, gz_ssr, gx_pre, gy_pre, gz_pre, rg.gro, gx_spoil, gy_spoil, gz_spoil,
-        params.ETL, params.TE, params.TR, sys,
+        params.ETL, params.TE, params.TR, sys, echo_offset=rg.echo_offset,
     )
 
     # Per-echo acquisition time (s since RF excitation), for a future
@@ -119,9 +122,10 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # exported as scan_info.mat's 3rd 'schedules' channel below. Every echo
     # occupies one gro-duration block (calc_te_tr_delays.py's own min_tr
     # term is `ETL * calc_duration(gro)`, i.e. this same uniform-spacing
-    # assumption), and min_te's `(ETL/2 - 0.5) * calc_duration(gro)` term
-    # anchors the nominal (TE-defining) echo at continuous echo-train index
-    # ETL/2 - 0.5 -- so per-echo time is that same anchor offset by
+    # assumption), and min_te anchors the nominal (TE-defining) echo's true
+    # kx = 0 crossing (via rg.echo_offset -- identical for both readout
+    # parities, see lib/make_readout_grads.py) at continuous echo-train
+    # index ETL/2 - 0.5 -- so per-echo time is that same anchor offset by
     # (echo - (ETL/2 - 0.5)) gro-durations. `min_te + te_delay` is the TE
     # actually achieved at that nominal echo (equals params.TE when
     # achievable; falls back to min_te, matching calc_te_tr_delays' own
@@ -135,8 +139,12 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # Assemble sequence. Local copy: MATLAB's params.m re-executes fresh for
     # every sequence function, so `sys.adcDeadTime = 0` there never leaks
     # across ArbEPI/EPIcal/GRE/noise. Here `params.sys` may be one shared
-    # object across all four calls, so mutate a copy instead.
-    sys_seq = copy.deepcopy(sys)
+    # object across all four calls, so mutate a copy instead. The Sequence
+    # system is the full-hardware params.sys, NOT the derated `sys` above:
+    # the readout's POPE fall ramp deliberately runs above the derate
+    # (params.ro_slew_fall, still within hardware limits, which
+    # ge/check.py verifies against params.spec).
+    sys_seq = copy.deepcopy(params.sys)
     sys_seq.adc_dead_time = 0  # suppress warnings; no back-to-back ADC blocks
     seq = pp.Sequence(system=sys_seq)
 
@@ -168,10 +176,12 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             y_locs = schedules[frame, shot, :, 0]
             z_locs = schedules[frame, shot, :, 1]
 
-            # Move to first k-space location
+            # Move to first k-space location. gx pre-winds to -S/2 (not its
+            # built-in -kmax) so both readout parities sample symmetrically
+            # about kx = 0 and reach +-kmax -- see ReadoutGrads.gx_pre_scale.
             gy_pre_tmp = pp.scale_grad(gy_pre, (y_locs[0] - Ny / 2) / (-Ny / 2))
             gz_pre_tmp = pp.scale_grad(gz_pre, (z_locs[0] - Nz / 2) / (-Nz / 2))
-            seq.add_block(gx_pre, gy_pre_tmp, gz_pre_tmp)
+            seq.add_block(pp.scale_grad(gx_pre, rg.gx_pre_scale), gy_pre_tmp, gz_pre_tmp)
 
             # EPI readout — zip through k-space with alternating readout polarity
             seq.add_block(rg.gro1)

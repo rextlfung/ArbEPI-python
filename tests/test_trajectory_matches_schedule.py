@@ -7,24 +7,16 @@ valid, well-timed .seq that samples the wrong k-space locations). This
 closes that gap for both the encoded (ArbEPI) and zeroed (EPIcal) cases.
 """
 
-import copy
 from dataclasses import replace
 
 import numpy as np
 import pytest
 
-from lib.make_readout_grads import make_readout_grads
+from lib.readout_from_params import make_readout_grads_from_params
 from params import load_params
 from sampling.gen_sampling_masks import gen_sampling_masks
 from sequences.ArbEPI import _compute_schedules, generate_arbepi
 from sequences.EPIcal import generate_epical
-
-
-def _derated_sys(p):
-    """Matches the PNS derate ArbEPI.py/EPIcal.py apply to their own sys copy."""
-    sys = copy.deepcopy(p.sys)
-    sys.max_slew = 100 * sys.gamma
-    return sys
 
 
 def _small_params(tmp_path):
@@ -54,7 +46,7 @@ def test_arbepi_trajectory_matches_schedule(tmp_path):
 
     max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
     max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
-    rg = make_readout_grads(max_ky_step, max_kz_step, p.Nx, p.fov, p.dwell, _derated_sys(p), p.crt)
+    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, p)
 
     k_traj_adc, *_ = seq.calculate_kspace()
     Ny, Nz, Nfid = p.Ny, p.Nz, rg.Nfid
@@ -131,7 +123,7 @@ def test_arbepi_kxoe_matches_epical(tmp_path):
     schedules = scan_info['schedules']
     max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
     max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
-    rg = make_readout_grads(max_ky_step, max_kz_step, p.Nx, p.fov, p.dwell, _derated_sys(p), p.crt)
+    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, p)
 
     k_traj_adc, *_ = epical_seq.calculate_kspace()
     kxo_epical = k_traj_adc[0, : rg.Nfid]
@@ -139,6 +131,106 @@ def test_arbepi_kxoe_matches_epical(tmp_path):
 
     np.testing.assert_allclose(scan_info['kxo'].ravel(), kxo_epical, atol=1e-6)
     np.testing.assert_allclose(scan_info['kxe'].ravel(), kxe_epical, atol=1e-6)
+
+
+def test_arbepi_kx_coverage_and_nyquist(tmp_path):
+    """Both readout parities must actually cover the full +-kmax range
+    (the recentering fix: gx pre-winds to -S/2, not -kmax, so the a1 lost
+    to the circular shift no longer shifts the sampled window off-center),
+    and no two consecutive kx samples may be farther apart than deltak
+    (Nyquist), including on the asymmetric POPE ramps."""
+    p = _small_params(tmp_path)
+    omegas = gen_sampling_masks(p.R, p)
+    seq = generate_arbepi(omegas, p, seqname='xcheck')
+
+    schedules, _ = _compute_schedules(
+        omegas, p.ETL, p.Nshots, p.epi_trajectory, deltak=(1 / p.fov[1], 1 / p.fov[2]),
+    )
+    max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
+    max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
+    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, p)
+
+    k_traj_adc, *_ = seq.calculate_kspace()
+    deltak_x = rg.deltak[0]
+    k_need = (p.Nx / 2 - 0.5) * deltak_x
+    for parity in (0, 1):  # odd/even echoes of the first shot
+        kx = k_traj_adc[0, parity * rg.Nfid : (parity + 1) * rg.Nfid]
+        assert kx.min() <= -k_need, f'parity {parity}: -kmax not covered ({kx.min():.1f})'
+        assert kx.max() >= k_need, f'parity {parity}: +kmax not covered ({kx.max():.1f})'
+        assert np.max(np.abs(np.diff(kx))) <= deltak_x * (1 + 1e-6), (
+            f'parity {parity}: kx sample spacing exceeds Nyquist'
+        )
+    # With asymmetric ramps each parity's own window is NOT symmetric about
+    # kx = 0 (odd spans [-S/2 + a1, S/2 - a_d]); it's the two parities that
+    # mirror each other sample-for-sample (even-echo kx(t) = -odd-echo
+    # kx(t) at the same in-block time) -- the property the -S/2 pre-wind
+    # guarantees, and what makes the kx = 0 crossing time parity-independent.
+    kx_odd = k_traj_adc[0, : rg.Nfid]
+    kx_even = k_traj_adc[0, rg.Nfid : 2 * rg.Nfid]
+    np.testing.assert_allclose(kx_even, -kx_odd, atol=1e-6)
+
+
+def test_arbepi_schedule_echo_times_match_measured_kx_zero_crossings(tmp_path):
+    """Ground-truth check of schedules[..., 2] (per-echo acquisition time,
+    used by a future B0-correction consumer): the saved echo times must
+    match the kx(t) = 0 crossing times measured from the assembled
+    sequence itself, for every echo of a shot -- both parities. Before the
+    echo_offset fix these were early by the gro1 lead-in block plus the
+    in-block crossing time (~0.5-0.6 ms at default params)."""
+    import hdf5storage
+
+    p = _small_params(tmp_path)
+    omegas = gen_sampling_masks(p.R, p)
+    seq = generate_arbepi(omegas, p, seqname='xcheck')
+
+    scan_info = hdf5storage.loadmat(str(tmp_path / 'scan_info.mat'))
+    et_saved = scan_info['schedules'][0, 0, :, 2]
+
+    schedules = scan_info['schedules']
+    max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
+    max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
+    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, p)
+
+    k_traj_adc, _, t_excitation, _, t_adc = seq.calculate_kspace()
+    # First shot's echoes: interpolate the kx = 0 crossing within each
+    # echo's ADC window from the measured trajectory.
+    t_rf = t_excitation[0]
+    for e in range(p.ETL):
+        kx = k_traj_adc[0, e * rg.Nfid : (e + 1) * rg.Nfid]
+        t = t_adc[e * rg.Nfid : (e + 1) * rg.Nfid]
+        sign_change = np.nonzero(np.diff(np.sign(kx)))[0]
+        assert len(sign_change) == 1, f'echo {e}: expected exactly one kx=0 crossing'
+        i = sign_change[0]
+        t_cross = t[i] + (0 - kx[i]) * (t[i + 1] - t[i]) / (kx[i + 1] - kx[i])
+        # ~5 gradient-raster steps of tolerance: the RF-center time
+        # convention (dead time, ringdown) isn't exactly the saved
+        # anchor's `0.5 * calc_duration(rf)`.
+        assert t_cross - t_rf == pytest.approx(et_saved[e], abs=5 * p.sys.grad_raster_time), (
+            f'echo {e}: measured kx=0 crossing differs from saved echo time'
+        )
+
+
+def test_readout_ramps_are_asymmetric():
+    """The composite readout waveform's realized edge slews must reflect
+    ro_slew_rise/ro_slew_fall, and the gro1 lead-in must span exactly half
+    the blip window (the circular-shift split point)."""
+    p = load_params()
+    assert p.ro_slew_fall > p.ro_slew_rise  # POPE: fall faster than rise
+    rg = make_readout_grads_from_params(4, 4, p)
+
+    gamma = p.sys.gamma
+    w, tt = rg.gro.waveform, rg.gro.tt
+    slews = np.diff(w) / np.diff(tt) / gamma  # T/m/s
+    # Steepest downward edge ~ ro_slew_fall; steepest upward edge (the
+    # remainder of the throttled rise) ~ ro_slew_rise. Ramp times are
+    # ceil'd to the raster, so realized slew is <= nominal, within one
+    # raster step's worth.
+    assert np.max(-slews) == pytest.approx(p.ro_slew_fall, rel=0.05)
+    assert np.max(-slews) <= p.ro_slew_fall * (1 + 1e-6)
+    assert np.max(slews) == pytest.approx(p.ro_slew_rise, rel=0.05)
+    assert np.max(slews) <= p.ro_slew_rise * (1 + 1e-6)
+
+    assert rg.gro1.shape_dur == pytest.approx(rg.blip_duration / 2)
 
 
 def test_epical_trajectory_is_centered(tmp_path):
@@ -154,7 +246,7 @@ def test_epical_trajectory_is_centered(tmp_path):
     schedules = hdf5storage.loadmat(str(tmp_path / 'scan_info.mat'))['schedules'].astype(float)
     max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
     max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
-    rg = make_readout_grads(max_ky_step, max_kz_step, p.Nx, p.fov, p.dwell, _derated_sys(p), p.crt)
+    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, p)
 
     k_traj_adc, *_ = seq.calculate_kspace()
     Nfid = rg.Nfid

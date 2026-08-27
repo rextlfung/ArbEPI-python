@@ -29,6 +29,26 @@ class Params:
     crt: float  # common raster time (s)
     dwell: float  # s, ADC sample time
 
+    # PNS-driven slew limits (T/m/s), the single source of truth consumed
+    # via lib/readout_from_params.py (ArbEPI/EPIcal used to hardcode a
+    # `sys.max_slew = 100 * sys.gamma` derate in three separate places).
+    # slew_derate: general derate applied to everything except the readout
+    # ramps (excitation, fat-sat, prephasers, spoilers, and -- via the
+    # derated sys handed to make_readout_grads -- the ky/kz blips).
+    # ro_slew_rise/ro_slew_fall: the readout trapezoid's asymmetric POPE
+    # ramps (see lib/make_readout_grads.py's module docstring: PNS peaks at
+    # the end of each ramp-up, so only the rise is throttled while the fall
+    # runs at/near hardware slew).
+    slew_derate: float
+    ro_slew_rise: float
+    ro_slew_fall: float
+    # Blip slew (T/m/s), separate from both of the above: the blips play
+    # centered on the kx turnaround (right after the fast fall), so they
+    # are their own lever in the RSS PNS combination -- faster blips
+    # shorten the blip window (and with it every readout lobe) but raise
+    # the y/z contribution at the turnaround hotspot.
+    blip_slew: float
+
     # EPI spatial parameters
     res: np.ndarray  # m, [x, y, z]
     N: np.ndarray  # acquisition tensor size [Nx, Ny, Nz]
@@ -130,6 +150,31 @@ def load_params(output_dir: str = 'output') -> Params:
     crt = 4e-6  # s, GE raster time only; would need 20e-6 (lcm of Siemens 10us, GE 4us) for GE AND Siemens compatibility
     dwell = 2e-6  # s, for ADC/RF
 
+    # PNS-driven slew limits (T/m/s) -- see the Params field comments.
+    # Values below are the outcome of an empirical sweep (2026-08-27, ~600
+    # rise/fall/blip candidates, each a full-dims worst-frame ArbEPI build
+    # evaluated with ge/pns.py's RSS-combined total; see CLAUDE.md's PNS
+    # section): 100/120/100 measures 78.2% peak PNS at min TE 35.22 ms
+    # vs the symmetric-100 design's 77.4% at 35.92 ms, on a conservative
+    # sweep mask whose largest blip step was 39 (the seed=0 mask's is 37,
+    # and the full seed=0 build confirms 78.3% peak at TE 35.30 ms
+    # realized -- slightly more PNS headroom and min_te pad than the sweep
+    # numbers imply). The POPE gain is
+    # deliberately modest here: on this whole-body GE gradient the y-blip
+    # plays centered on the kx turnaround, i.e. exactly where the readout
+    # fall ramp ends, so an aggressive fall slew RSS-combines with the
+    # blip into a 3-channel hotspot (e.g. rise/fall/blip 95/200/170 looks
+    # great per-channel but its RSS total is 106%) -- the sweep therefore
+    # lands on a mild fall/rise ratio and a moderate blip slew rather than
+    # the paper's hardware-limit fall. The prescribed-TE target of 30 ms
+    # is unreachable under the 80% normal-mode line: every config at
+    # min TE <= 35.2 ms exceeded 80% (the fastest sub-80% config is this
+    # one; reaching ~33 ms costs >85%, and ~30 ms well over 100%).
+    slew_derate = 100.0
+    ro_slew_rise = 100.0  # POPE-throttled ramp-up
+    ro_slew_fall = 120.0  # ramp-down; not PNS-limited per se, but see above
+    blip_slew = 100.0
+
     # Spatial parameters. 0.9mm isotropic resolution; x/y FOV held at the
     # previous 216mm, z (slice-select) FOV reduced to 40.5mm.
     res = np.array([0.9, 0.9, 0.9]) * 1e-3
@@ -143,9 +188,14 @@ def load_params(output_dir: str = 'output') -> Params:
     Nshots = math.ceil(Ny * Nz / R / ETL)
 
     # Decay parameters
-    # 39ms for now (min achievable is ~38.1ms at this ETL/R/slew derate) --
-    # BOLD-contrast feasibility of this TE still needs checking.
-    TE = 39e-3
+    # Min achievable TE is ~35.22 ms at this ETL/R and the POPE slews above
+    # (with the seed=0 mask's blip steps; a different mask shifts it by a
+    # few hundred us at most). 35.3 ms leaves a small pad; calc_te_tr_delays
+    # warns (and falls back to min_te) if a future mask makes it
+    # unachievable. BOLD-contrast optimality of this TE still needs
+    # checking -- the target of 30 ms is unreachable under the 80% PNS
+    # limit (see the slew-sweep comment above).
+    TE = 35.3e-3
     volume_tr = 2
     TR = volume_tr / Nshots
     T1 = 1.3
@@ -247,6 +297,10 @@ def load_params(output_dir: str = 'output') -> Params:
         sys=sys,
         crt=crt,
         dwell=dwell,
+        slew_derate=slew_derate,
+        ro_slew_rise=ro_slew_rise,
+        ro_slew_fall=ro_slew_fall,
+        blip_slew=blip_slew,
         res=res,
         N=N,
         fov=fov,

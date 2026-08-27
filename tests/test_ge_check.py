@@ -93,3 +93,36 @@ def test_check_ge_feasibility_noise_has_no_gradients():
     assert report.max_grad_mT_m == 0
     assert report.max_slew_T_m_s == 0
     assert report.peak_pns_percent == 0
+
+
+def test_arbepi_default_params_peak_pns_under_normal_mode_limit(tmp_path):
+    """Safety regression bound: a full-dims, 1-frame ArbEPI built with the
+    default params (POPE asymmetric readout ramps + tuned blip slew, see
+    params.py's slew section) must stay under GE's 80% normal-mode PNS
+    limit. This is the check that was impossible before the POPE readout:
+    the old symmetric-derate design measured ~84% (see CLAUDE.md's PNS
+    section), and PNSwt = 0 before that disabled the check entirely."""
+    import warnings
+    from dataclasses import replace
+
+    import numpy as np
+
+    from ge.check import sample_gradients_tesla_per_m
+    from ge.pns import pns
+    from params import load_params
+    from sampling.gen_sampling_masks import gen_sampling_masks
+    from sequences.ArbEPI import generate_arbepi
+
+    p = replace(load_params(output_dir=str(tmp_path)), Nframes=1, seed=0)
+    omegas = gen_sampling_masks(p.R, p, rng=np.random.default_rng(p.seed))
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        seq = generate_arbepi(omegas, p, seqname='pnscheck')
+
+    gw, dt = sample_gradients_tesla_per_m(seq)
+    pt, _ = pns(p.spec.rheobase / p.spec.alpha, p.spec.chronaxie, gw, dt, tuple(p.PNSwt))
+    peak = float(np.max(pt))
+    assert peak < PNS_NORMAL_MODE_THRESHOLD, (
+        f'peak PNS {peak:.1f}% exceeds the {PNS_NORMAL_MODE_THRESHOLD}% normal-mode '
+        f'limit -- the default readout/blip slews are no longer PNS-safe'
+    )

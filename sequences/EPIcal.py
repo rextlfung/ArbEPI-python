@@ -24,19 +24,17 @@ from lib.calc_te_tr_delays import calc_te_tr_delays
 from lib.make_excitation_pulse import make_excitation_pulse
 from lib.make_fatsat_rf import make_fatsat_rf
 from lib.make_prephasers import make_prephasers
-from lib.make_readout_grads import make_readout_grads
 from lib.make_spoilers import make_spoilers
 from lib.mask2epi import max_blip_steps
+from lib.readout_from_params import derated_sys, make_readout_grads_from_params
 from params import Params
 
 
 def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
     os.makedirs(params.output_dir, exist_ok=True)
-    # Own copy of params.sys (not the shared instance -- see params.py's
-    # Params.sys docstring), derated for PNS to match arbepi.py's readout
+    # Derated system for the non-readout gradients, matching ArbEPI's
     # (same gradient design, see sequences/ArbEPI.py's sys comment).
-    sys = copy.deepcopy(params.sys)
-    sys.max_slew = 100 * sys.gamma  # T/m/s -> Hz/m/s (pypulseq's internal unit)
+    sys = derated_sys(params)
 
     # Load EPI schedule to match readout gradient design. Index base
     # doesn't matter here: only consecutive-echo differences are used.
@@ -54,7 +52,7 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
 
     # Readout gradients — sized to match ArbEPI so calibration trajectory applies
     max_ky_step, max_kz_step = max_blip_steps(schedules)
-    rg = make_readout_grads(max_ky_step, max_kz_step, params.Nx, params.fov, params.dwell, sys, params.crt)
+    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, params)
 
     # Prephasers and spoilers (identical to ArbEPI)
     gx_pre, gy_pre, gz_pre = make_prephasers(params.Nx, params.Ny, params.Nz, params.fov, sys, params.crt)
@@ -65,11 +63,12 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
     # TE and TR delays (identical to ArbEPI)
     te_delay, tr_delay, min_te, min_tr = calc_te_tr_delays(
         rf, rfsat, gz_ss, gz_ssr, gx_pre, gy_pre, gz_pre, rg.gro, gx_spoil, gy_spoil, gz_spoil,
-        params.ETL, params.TE, params.TR, sys,
+        params.ETL, params.TE, params.TR, sys, echo_offset=rg.echo_offset,
     )
 
-    # Assemble sequence
-    sys_seq = copy.deepcopy(sys)
+    # Assemble sequence (full-hardware system, matching ArbEPI -- the POPE
+    # fall ramp deliberately exceeds the derate; see ArbEPI.py's comment)
+    sys_seq = copy.deepcopy(params.sys)
     sys_seq.adc_dead_time = 0  # suppress warnings; no back-to-back ADC blocks
     seq = pp.Sequence(system=sys_seq)
 
@@ -97,8 +96,15 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
         if params.TE > min_te:
             seq.add_block(pp.make_delay(te_delay))
 
-        # Prephase to k-space center (no ky/kz encoding — blips will be zero)
-        seq.add_block(gx_pre, pp.scale_grad(gy_pre, 0), pp.scale_grad(gz_pre, 0))
+        # Prephase to k-space center (no ky/kz encoding — blips will be
+        # zero). gx pre-winds to -S/2, identical to ArbEPI (see
+        # ReadoutGrads.gx_pre_scale) -- required for the calibration kx
+        # trajectory to match the imaging one.
+        seq.add_block(
+            pp.scale_grad(gx_pre, rg.gx_pre_scale),
+            pp.scale_grad(gy_pre, 0),
+            pp.scale_grad(gz_pre, 0),
+        )
 
         # EPI readout — same waveform as ArbEPI, blips scaled to zero
         seq.add_block(rg.gro1)

@@ -141,16 +141,51 @@ step_size)`. The readout trapezoid (`gro`) is circularly shifted so blips
 fit within each Pulseq block boundary. `gro1`/`gro2` are the leading/trailing
 half-trapezoids played outside/inside the echo loop respectively.
 
+**The readout trapezoid is asymmetric (POPE)**: rise and fall slews are
+independent (`params.ro_slew_rise`/`ro_slew_fall`, blips separately via
+`params.blip_slew`), after Huber et al.'s "PNS Optimized Pulses for EPI"
+(bioRxiv 2026, doi 10.64898/2026.07.22.739360) -- nerve-integration PNS
+models peak at the *end* of each sustained slew event (fall of lobe n ->
+blip window -> rise of lobe n+1), so the ramp-up is throttled while the
+ramp-down runs faster. See `lib/make_readout_grads.py`'s module docstring
+for the full geometry (a1/a_d/S notation, the -S/2 prephaser scaling via
+`ReadoutGrads.gx_pre_scale`, and the parity-independent in-block kx = 0
+crossing exported as `ReadoutGrads.echo_offset`), and the PNS section
+below for the measured numbers and why the tuned asymmetry is milder than
+the paper's. Two long-standing bugs (inherited from the MATLAB original)
+were fixed as part of this change, both verified by measurement before and
+by tests after: (1) the sampled kx window was off-center by `a1` (~21
+lines at old defaults) because `gx_pre` pre-wound exactly -kmax while the
+first sample sits `a1` past the wind -- an unintended one-sided partial
+Fourier, now fixed by `gx_pre_scale` (test:
+`test_arbepi_kx_coverage_and_nyquist`); (2) saved per-echo times
+(`schedules[..., 2]`) and the realized TE ran ~0.6-0.7 ms late because
+`calc_te_tr_delays`'s `min_te` omitted the `gro1` lead-in block, assumed
+the echo sat at the composite block's center, and measured "RF center" as
+the RF block's midpoint (dead-time/ringdown asymmetry included) -- now
+anchored at the true kx = 0 crossing via `echo_offset` and
+`pp.calc_rf_center` (test:
+`test_arbepi_schedule_echo_times_match_measured_kx_zero_crossings`).
+
 **`sequences/EPIcal.py`** mirrors `sequences/ArbEPI.py`'s gradient design
-exactly (same `make_readout_grads` call, same schedule-derived
-`max_ky_step`/`max_kz_step`) but sets all blip scale factors to 0, so it
-acquires unencoded lines at k-space center for EPI ghost correction.
+exactly (same readout-grads/derated-sys construction, via
+`lib/readout_from_params.py` -- the single source of truth for
+`params.slew_derate`/`ro_slew_rise`/`ro_slew_fall`/`blip_slew`, replacing
+three formerly hand-copied `sys.max_slew = 100 * sys.gamma` derates; the
+trajectory tests use the same factory) but sets all blip scale factors to
+0, so it acquires unencoded lines at k-space center for EPI ghost
+correction. Its `gx_pre` must carry the same `rg.gx_pre_scale` factor as
+ArbEPI's (enforced by `test_arbepi_kxoe_matches_epical`).
 
 **`lib/trap4ge.py`** (ported from `../PulCeq/matlab/trap4ge.m`) rounds every
 gradient's rise/flat/fall times up to `params.crt` via `math.ceil(t / crt -
 1e-9) * crt`. Every gradient in the sequence passes through it before being
 added to a block — this is a GE-hardware-timing requirement, not optional
-cleanup. The `- 1e-9` epsilon before `ceil` was added after finding that
+cleanup — with one deliberate exception: the POPE readout trapezoid
+(`make_readout_grads`'s `gro`) computes its rise/flat/fall directly as crt
+multiples instead, because `trap4ge`'s area-preserving amplitude rescale
+would perturb the `a1`/`a_d` ramp-area geometry the prephaser scaling and
+echo timing are derived from (same raster guarantee, different route). The `- 1e-9` epsilon before `ceil` was added after finding that
 float64 division noise (`0.002 / 4e-6` evaluates to `500.00000000000006`,
 not `500.0`) could make `ceil` silently pad an already-on-raster time by one
 extra raster step; for the excitation slice-select gradient this decentered
@@ -206,7 +241,10 @@ function of `ETL` (shorter helps `min_te`, hurts `min_tr` since fewer
 shots share the fixed `volume_tr` budget) and the actual per-shot ky/kz
 blip requirements (which depend on the sampling mask, not just `ETL`) —
 don't hand-derive feasibility, call `calc_te_tr_delays` directly (or scan
-across candidate `ETL` values) to check.
+across candidate `ETL` values) to check. Its `echo_offset` parameter
+(pass `ReadoutGrads.echo_offset`) anchors the prescribed TE at the true
+kx = 0 crossing — see the POPE paragraph above for the TE-accuracy bugs
+this fixed.
 
 **`mask2epi_laminar`/`mask2epi_radial`'s `Nshots*ETL` must exactly equal
 the sampling mask's total sample count** (asserted at the top of each) —
@@ -308,28 +346,46 @@ acoustics, `.summary()` reports it as `WARN` (non-blocking) rather than
 guess. `GRE.seq`'s acoustics number is still surfaced every run; whether
 it's a real problem is a separate open question (see below).
 
-**Open finding, still unresolved (sequence parameters, not code)**:
-`params.py`'s `PNSwt` default was `[0, 0, 0]` for the entire lifetime of
-this port until now, which meant PNS was never actually evaluated in any
-`--ge` run to date -- weight zero makes `pge2.pns`'s per-channel
-contribution zero regardless of the real waveform, and MATLAB's
-`checksegment.m` really does *throw* on PNS > 80%
-(`../PulCeq/matlab/+pge2/checksegment.m`: `if max(pt) > 80 ...
-throw(MException('safety:pns', ...))`), so a real weight would have caught
-this immediately if one had ever been used. `params.py`'s default is now
-the IEC 60601-2-33:2022-recommended `wt = [0.8, 1.0, 0.7]`, and
-`ge/check.py` matches MATLAB's throw condition exactly
-(`PNS_NORMAL_MODE_THRESHOLD = 80.0`) -- so **`main.py --ge` now correctly
-fails by default** on three of the four sequences: `noise` 0% (no
-gradients, passes), `EPIcal` 113.2%, `ArbEPI` 114.7%, `GRE` 100.6% -- all
-three exceed MATLAB's 80% "normal mode" throw threshold, and exceed the
-100% "first controlled mode" threshold outright. This is a safety-relevant
-open item, not a code-correctness one: raising the weight surfaced a real
-problem in the sequence design rather than solving it. The sequences this
-repo generates by default have not been validated as PNS-safe for human
-scanning, and `main.py --ge` will now say so instead of silently
-succeeding. Revisit before any human scan: the sequence parameters need to
-change (lower slew / longer blip rise times) to bring peak PNS under 80%.
+**PNS finding history (resolved 2026-08-27; kept because the numbers below
+are cited elsewhere)**: `params.py`'s `PNSwt` default was `[0, 0, 0]` for
+the entire lifetime of this port until 2026-08, which meant PNS was never
+actually evaluated in any `--ge` run to date -- weight zero makes
+`pge2.pns`'s per-channel contribution zero regardless of the real
+waveform, and MATLAB's `checksegment.m` really does *throw* on PNS > 80%
+(`../PulCeq/matlab/+pge2/checksegment.m`). With the IEC
+60601-2-33:2022-recommended `wt = [0.8, 1.0, 0.7]` the original
+full-hardware-slew sequences measured `EPIcal` 113.2%, `ArbEPI` 114.7%,
+`GRE` 100.6% (on GE_UHP); an interim symmetric derate to 100 T/m/s
+(hardcoded in the sequence files at the time) brought ArbEPI to ~84.3% --
+still over the 80% normal-mode line. The resolution is the POPE
+asymmetric readout (see `lib/make_readout_grads.py`'s paragraph above)
+plus an empirical slew sweep (2026-08-27, ~600 rise/fall/blip candidates,
+full-dims worst-frame ArbEPI builds scored by `ge/pns.py`'s RSS-combined
+total): the tuned defaults in `params.py`
+(`slew_derate=100`, `ro_slew_rise=100`, `ro_slew_fall=120`,
+`blip_slew=100`) measure **78.3% peak on the full ArbEPI build (GE_MR750,
+seed=0) at min TE ~35.2 ms**, vs 77.4% at min TE ~35.9 ms for the
+symmetric-100 design through the same code -- POPE spends ~1% of PNS
+margin to shorten TE by ~0.7 ms. Two sweep lessons worth keeping: (a) the
+per-channel PNS maxima are badly misleading here -- the y/z blips play
+centered on the kx turnaround, exactly where the readout fall ramp ends,
+so aggressive fall/blip slews RSS-combine into a 3-channel hotspot (e.g.
+rise/fall/blip 95/200/170 looks fine per-channel but totals 106%), which
+is why the tuned fall/rise ratio is far milder than the POPE paper's
+hardware-limit fall; (b) a prescribed TE of 30 ms (a considered target) is
+unreachable under 80% -- every swept config at min TE <= 35.2 ms exceeded
+the line, ~33 ms costs >85%, and ~30 ms well over 100%.
+`test_arbepi_default_params_peak_pns_under_normal_mode_limit`
+(tests/test_ge_check.py) now regression-guards the <80% property on every
+test run, and `plotting/compare_readout_pns.py` (`uv run python -m
+plotting.compare_readout_pns`) rebuilds the symmetric-vs-POPE comparison
+-- two full ArbEPI sequences from the same seed=0 masks and identical
+nominal parameters, per-variant PNS-over-one-TR figures plus a combined
+overlay (`output/compare_pope/`), and a printed table (peak PNS, echo
+spacing, realized TE). PNS remains scan-context-dependent: these numbers
+are for `PNSwt = [0.8, 1.0, 0.7]` on GE_MR750 with the seed=0 mask, and
+any change to scanner, mask seed, `R`/`ETL`, or resolution needs the
+check re-run (the regression test and `main.py --ge` both do).
 
 `params.py`'s `Params` dataclass carries the selected `ScannerSpec` itself
 as `params.spec` (rather than duplicating `max_grad`/`max_slew`/`b1_max`/

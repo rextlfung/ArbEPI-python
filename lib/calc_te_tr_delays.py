@@ -28,11 +28,23 @@ def calc_te_tr_delays(
     TE: float,
     TR: float,
     sys: pp.Opts,
+    echo_offset: float = 0.0,
 ) -> Tuple[float, float, float, float]:
+    # echo_offset (ReadoutGrads.echo_offset) is the time from the start of
+    # the gro1 lead-in block to the true in-block kx = 0 crossing of each
+    # echo, so the nominal echo (continuous echo-train index ETL/2 - 0.5)
+    # is anchored at the actual echo, not at the composite block's center.
+    # The first term is the time from the true RF center to the end of the
+    # RF block (the old `0.5 * pp.calc_duration(rf)` measured from the
+    # block's *middle*, which sits (ringdown - dead_time)/2 away from the
+    # physical RF center). Before these fixes, the realized TE ran
+    # ~0.6-0.7 ms later than prescribed at default params (gro1 block +
+    # in-block crossing time + RF-center offset, all silently omitted).
     min_te = (
-        0.5 * pp.calc_duration(rf)
+        max(pp.calc_duration(rf), pp.calc_duration(gz_ss)) - (rf.delay + pp.calc_rf_center(rf)[0])
         + pp.calc_duration(gz_ssr)
         + max(pp.calc_duration(gx_pre), pp.calc_duration(gy_pre), pp.calc_duration(gz_pre))
+        + echo_offset
         + (ETL / 2 - 0.5) * pp.calc_duration(gro)
     )
 
