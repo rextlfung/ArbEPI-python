@@ -115,11 +115,36 @@ def _overlay_figure(variants, compare_dir):
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Compare symmetric vs POPE (asymmetric) EPI readout PNS/TE.'
+    )
+    parser.add_argument('--rise', type=float, default=None,
+                        help='override ro_slew_rise (T/m/s) for the POPE variant')
+    parser.add_argument('--fall', type=float, default=None,
+                        help='override ro_slew_fall (T/m/s) for the POPE variant')
+    parser.add_argument('--blip', type=float, default=None,
+                        help='override blip_slew (T/m/s) for the POPE variant')
+    parser.add_argument('--te', type=float, default=None,
+                        help='override prescribed TE (s) for BOTH variants; prescribing an '
+                             'unachievably short TE makes each variant fall back to (and so '
+                             'report) its own minimum TE')
+    args = parser.parse_args()
+
     p0 = load_params()
     assert p0.seed is not None, 'set params.seed so both variants share one mask'
     compare_dir = os.path.join(p0.output_dir, 'compare_pope')
     os.makedirs(compare_dir, exist_ok=True)
     p0 = replace(p0, output_dir=compare_dir)
+    if args.rise is not None:
+        p0 = replace(p0, ro_slew_rise=args.rise)
+    if args.fall is not None:
+        p0 = replace(p0, ro_slew_fall=args.fall)
+    if args.blip is not None:
+        p0 = replace(p0, blip_slew=args.blip)
+    if args.te is not None:
+        p0 = replace(p0, TE=args.te)
 
     print('generating sampling masks (shared by both variants)...')
     omegas = gen_sampling_masks(p0.R, p0, rng=np.random.default_rng(p0.seed))
