@@ -21,12 +21,18 @@ GE-Ceq-interpreter artifact with no Pulseq-timeline equivalent) -- is not
 reproduced, and empirically accounts for the entire residual gap: computed
 against real MATLAB output (dumped via a since-removed `matlab_reference/
 dump_acoustics_blockrange.m` one-off script, preserved in git history) on this
-repo's four sequences, the window duration matches MATLAB's to within one
-4us raster sample (GRE.seq: 173766 vs MATLAB's 173767 samples; ArbEPI.seq:
+repo's four sequences as they existed at validation time (`GRE.seq`, the
+single-echo predecessor to today's dual-echo `deGRE.seq` -- these numbers
+were never re-measured after that rename/upgrade, so treat them as a
+historical record of the *method*'s accuracy, not a current claim about
+`deGRE.seq`), the window duration matches MATLAB's to within one 4us
+raster sample (GRE.seq: 173766 vs MATLAB's 173767 samples; ArbEPI.seq:
 25000 vs 25001), and the resulting acoustics number matches to <0.04%
 relative error (GRE.seq: 0.4024 here vs MATLAB's 0.402213; ArbEPI.seq:
 0.028146 here vs MATLAB's 0.02814424) -- see CLAUDE.md for the full
-reproduction record.
+reproduction record. Today's `deGRE.seq` measures acoustics 0.2456 (under
+the 0.3 threshold, unlike the old single-echo GRE.seq) via this same
+Python check -- not independently re-validated against a fresh MATLAB run.
 """
 
 from dataclasses import dataclass
@@ -61,9 +67,12 @@ from scanners import ScannerSpec
 # stimulation); 80-100% is surfaced as WARN via .summary(), same treatment
 # as acoustics below. This does not change what MATLAB's real
 # write_to_ge_from_seq.m path would do with the same sequence -- see
-# CLAUDE.md's "Open finding" for why PNS in the 80-115% range across this
-# repo's sequences is still a real, unresolved sequence-design problem to
-# revisit before any human scan, warning-only or not.
+# CLAUDE.md's "PNS finding history" for how the 80-115% range measured
+# across this repo's sequences before POPE was resolved (the tuned
+# asymmetric readout now measures 79.8% on the full ArbEPI build); the
+# 80/100% gate split above is a permanent design decision, not contingent
+# on that resolution, and still applies to any future sequence/parameter
+# change that pushes PNS back into the 80-100% WARN range.
 PNS_NORMAL_MODE_THRESHOLD = 80.0
 PNS_FIRST_CONTROLLED_MODE_THRESHOLD = 100.0
 
@@ -195,9 +204,17 @@ def _blockrange_window_s(ceq: Ceq, block_range: tuple[int, int] = (1, 10)) -> fl
     return total_s
 
 
-def check_ge_feasibility(
+def check_seq_feasibility(
     seq: pp.Sequence,
     spec: ScannerSpec,
+    # (1.0, 1.0, 1.0), not the IEC human weights [0.8, 1.0, 0.7] or the
+    # phantom [0, 0, 0] -- deliberate, not an oversight (explicit user
+    # decision): weighting every channel at 1.0 is the most conservative
+    # choice available, an upper bound that never *underweights* any
+    # channel relative to the human table. Production (`ge_export.py`)
+    # always passes `params.PNSwt` explicitly regardless, so this default
+    # only matters for direct callers (e.g. tests/test_ge_check.py) that
+    # don't care which scan context they're measuring under.
     pns_wt: tuple[float, float, float] = (1.0, 1.0, 1.0),
     acoustics_block_range: tuple[int, int] = (1, 10),
 ) -> FeasibilityReport:

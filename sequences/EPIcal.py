@@ -41,8 +41,7 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
     # scan_info.mat is written as MATLAB v7.3 (HDF5-based, see
     # sequences/ArbEPI.py) — scipy.io.loadmat cannot read v7.3 at all, so
     # this must use hdf5storage too.
-    scan_info = hdf5storage.loadmat(os.path.join(params.output_dir, 'scan_info.mat'))
-    schedules = scan_info['schedules']
+    schedules = hdf5storage.loadmat(os.path.join(params.output_dir, 'scan_info.mat'))['schedules']
 
     # Excitation pulse (identical to ArbEPI)
     rf, gz_ss, gz_ssr = make_excitation_pulse(params.fa, params.rf_dur, params.rf_tb, params.fov, sys, params.crt)

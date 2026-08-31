@@ -18,7 +18,7 @@ from ge.check import (
     PNS_FIRST_CONTROLLED_MODE_THRESHOLD,
     PNS_NORMAL_MODE_THRESHOLD,
     FeasibilityReport,
-    check_ge_feasibility,
+    check_seq_feasibility,
 )
 from scanners import SCANNERS
 
@@ -65,14 +65,14 @@ def test_pns_over_100_blocks_ok():
 
 
 @pytest.mark.parametrize('seq_name', ['noise.seq', 'ArbEPI.seq'])
-def test_check_ge_feasibility_runs(seq_name):
+def test_check_seq_feasibility_runs(seq_name):
     seq_path = OUTPUT_DIR / seq_name
     if not seq_path.exists():
         pytest.skip(f'{seq_path} not found; run `uv run python main.py` first')
 
     seq = pp.Sequence()
     seq.read(str(seq_path))
-    report = check_ge_feasibility(seq, SCANNERS['GE_UHP'])
+    report = check_seq_feasibility(seq, SCANNERS['GE_UHP'])
 
     assert report.max_grad_mT_m >= 0
     assert report.max_slew_T_m_s >= 0
@@ -81,14 +81,14 @@ def test_check_ge_feasibility_runs(seq_name):
     assert report.acoustics_max_in_band >= 0
 
 
-def test_check_ge_feasibility_noise_has_no_gradients():
+def test_check_seq_feasibility_noise_has_no_gradients():
     seq_path = OUTPUT_DIR / 'noise.seq'
     if not seq_path.exists():
         pytest.skip(f'{seq_path} not found; run `uv run python main.py` first')
 
     seq = pp.Sequence()
     seq.read(str(seq_path))
-    report = check_ge_feasibility(seq, SCANNERS['GE_UHP'])
+    report = check_seq_feasibility(seq, SCANNERS['GE_UHP'])
 
     assert report.max_grad_mT_m == 0
     assert report.max_slew_T_m_s == 0

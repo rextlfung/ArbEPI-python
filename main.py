@@ -23,9 +23,11 @@ from sequences.noise import generate_noise
 def main(export_ge: bool = False, plot: bool = False):
     params = load_params()
 
-    # 1. Generate sampling masks and main EPI sequence. params.seed is
-    # None by default (np.random.default_rng(None) is unseeded, same as
-    # gen_sampling_masks' own fallback) -- set it for a reproducible mask.
+    # 1. Generate sampling masks and main EPI sequence. params.seed
+    # defaults to 0 (reproducible mask -- every PNS/timing number quoted
+    # in CLAUDE.md/README is seed-dependent); pass None instead
+    # (np.random.default_rng(None) is unseeded, same as gen_sampling_masks'
+    # own fallback) for a fresh mask each run.
     omegas = gen_sampling_masks(params.R, params, rng=np.random.default_rng(params.seed))
     generate_arbepi(omegas, params)
 
@@ -58,12 +60,18 @@ def main(export_ge: bool = False, plot: bool = False):
         # Check all four sequences for GE hardware/PNS/acoustic-resonance
         # feasibility before writing any .pge file, so an infeasible
         # sequence is caught up front rather than after several full
-        # exports have already run.
-        for seq_path in seq_paths.values():
-            check_ge_feasibility(seq_path, params)
+        # exports have already run. Reuse each loaded Sequence + report in
+        # the export pass below instead of re-reading and re-checking --
+        # neither is cheap on a large sequence like ArbEPI.seq.
+        checked = {
+            name: check_ge_feasibility(seq_path, params) for name, seq_path in seq_paths.items()
+        }
 
         for name, seq_path in seq_paths.items():
-            export_to_ge(seq_path, os.path.join(params.output_dir, name), params)
+            seq, report = checked[name]
+            export_to_ge(
+                seq_path, os.path.join(params.output_dir, name), params, seq=seq, report=report,
+            )
 
 
 if __name__ == '__main__':

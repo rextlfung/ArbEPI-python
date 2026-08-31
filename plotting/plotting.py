@@ -278,10 +278,11 @@ def plot_pns_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> ma
 
     Same one-TR window as `plot_one_tr` (shot_index selects
     [shot_index*TR, (shot_index+1)*TR)) and the same PNS model
-    (ge/pns.py) `--ge`'s own feasibility check uses, driven by
+    (ge/pns.py) `ge.check.check_seq_feasibility` uses (via `--ge`'s own
+    feasibility check, `ge.ge_export.check_ge_feasibility`), driven by
     `params.spec` (rheobase/alpha/chronaxie) and `params.PNSwt` -- this is
-    a decomposition of the same peak number check_ge_feasibility reports,
-    not an independent estimate."""
+    a decomposition of the same peak number that function reports, not an
+    independent estimate."""
     t0 = shot_index * params.TR
     gw_tm, dt = sample_gradients_tesla_per_m(seq, time_range=(t0, t0 + params.TR))
     t_ms = (np.arange(gw_tm.shape[1]) + 0.5) * dt * 1e3

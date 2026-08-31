@@ -14,7 +14,7 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("mirtorch")
 
 from recon.operators import build_encoding_operator  # noqa: E402
-from recon.reconstruct import run_recon  # noqa: E402
+from recon.reconstruct import _load_omega, run_recon  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -63,6 +63,47 @@ def _write_synthetic_dataset(tmp_path, Nx, Ny, Nz, Nc, Nt, R, fn_prefix="ksp"):
     with h5py.File(fn_smaps, "w") as f:
         f.create_dataset("smaps", data=smaps_np)
     return str(fn_ksp), str(fn_smaps)
+
+
+def test_load_omega_prefers_omegas_dataset_over_exact_zero_inference(tmp_path):
+    """A sample that rounds to exactly 0+0j after phase correction is still
+    a real, acquired sample -- inferring the mask from `ksp != 0` would
+    silently mark it 'not acquired'. Write a ksp_epi_zf.h5 with exactly
+    this case (a sampled voxel whose k-space value is exact zero) alongside
+    the authoritative 'omegas' dataset preprocess.py writes, and confirm
+    _load_omega trusts 'omegas' rather than being fooled by the exact
+    zero."""
+    Nx, Ny, Nz, Nc, Nt = 4, 3, 3, 2, 2
+    ksp_np = _complex_randn(Nx, Ny, Nz, Nc, Nt, seed=0).cpu().numpy()
+    omegas_np = torch.zeros(Ny, Nz, Nt, dtype=torch.bool).numpy()
+    omegas_np[0, 0, :] = True  # the one sampled location
+    ksp_np[:, 0, 0, :, :] = 0.0  # ...whose k-space value happens to be exact zero
+
+    fn_ksp = tmp_path / "ksp_with_omegas.h5"
+    with h5py.File(fn_ksp, "w") as f:
+        f.create_dataset("ksp_epi_zf", data=ksp_np)
+        f.create_dataset("omegas", data=omegas_np)
+
+    ksp0 = torch.from_numpy(ksp_np).to(DEVICE)
+    omega = _load_omega(str(fn_ksp), Nx, Ny, Nz, Nt, ksp0)
+    assert omega[:, 0, 0, :].all(), "the sampled-but-zero-valued location must read as sampled"
+    assert not omega[:, 1:, 1:, :].any()
+
+
+def test_load_omega_falls_back_to_exact_zero_inference_without_omegas(tmp_path):
+    """Recon files written before preprocess.py added 'omegas' must still
+    work, via the `!= 0` fallback."""
+    Nx, Ny, Nz, Nc, Nt = 4, 3, 3, 2, 2
+    ksp_np = _complex_randn(Nx, Ny, Nz, Nc, Nt, seed=1).cpu().numpy()
+
+    fn_ksp = tmp_path / "ksp_no_omegas.h5"
+    with h5py.File(fn_ksp, "w") as f:
+        f.create_dataset("ksp_epi_zf", data=ksp_np)
+
+    ksp0 = torch.from_numpy(ksp_np).to(DEVICE)
+    omega = _load_omega(str(fn_ksp), Nx, Ny, Nz, Nt, ksp0)
+    expected = ksp0[:, :, :, 0, :] != 0
+    assert torch.equal(omega, expected)
 
 
 def test_run_recon_smoke(tmp_path):

@@ -31,7 +31,7 @@ import numpy as np
 from ge.check import (
     PNS_FIRST_CONTROLLED_MODE_THRESHOLD,
     PNS_NORMAL_MODE_THRESHOLD,
-    check_ge_feasibility,
+    check_seq_feasibility,
     sample_gradients_tesla_per_m,
 )
 from ge.pns import pns
@@ -56,7 +56,7 @@ def _build(name, p, omegas):
     )
     rg = make_readout_grads_from_params(*max_blip_steps(schedules), p)
 
-    report = check_ge_feasibility(seq, p.spec, pns_wt=tuple(p.PNSwt))
+    report = check_seq_feasibility(seq, p.spec, pns_wt=tuple(p.PNSwt))
 
     # Realized TE = the nominal echo's saved acquisition time (equals the
     # prescription when achievable, this variant's own min TE otherwise).

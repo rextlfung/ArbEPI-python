@@ -57,6 +57,12 @@ class ReadoutGrads:
     Nfid: int
     blip_duration: float
     deltak: Sequence[float]
+    # Dead under the current POPE (asymmetric-ramp) geometry, which sizes
+    # the flat top from `2 * max(a1, a_d)` instead (see below) -- but this
+    # was load-bearing pre-POPE (`S = Nx*deltak + max_blip_area`, the
+    # symmetric-ramp case where a1 == a_d == max_blip_area/2) and kept
+    # deliberately rather than deleted, in case a future change reverts to
+    # a symmetric-slew readout where it's needed again.
     max_blip_area: float
     # Scale factor for the x prephaser: gx_pre is built with area exactly
     # -Nx/2*deltak[0] (lib/make_prephasers.py), but centered coverage needs
@@ -173,12 +179,22 @@ def make_readout_grads(
         'above the fall slew inverts that and is never what you want.'
     )
 
-    # Size blips to support the largest steps across all frames/shots.
+    # Size blips to support the largest steps across all frames/shots. A
+    # zero step means no shot ever needs a blip on that axis (mask2epi
+    # returns (0.0, 0.0) for ETL == 1, and any axis with Ny or Nz == 1
+    # hits this too) -- build a zero-area placeholder instead of dividing
+    # by zero to reach "unit amplitude": since every real step on that
+    # axis is also 0, `pp.scale_grad(rg.*_blip, step_size)` at assembly
+    # time always scales by 0 regardless of this blip's own amplitude, so
+    # only its duration (for matching against the other axis, below)
+    # needs to come out right.
     gy_blip = pp.make_trapezoid('y', system=sys, area=max_ky_step * deltak[1])
-    gy_blip = pp.scale_grad(gy_blip, 1 / max_ky_step, sys)
+    if max_ky_step != 0:
+        gy_blip = pp.scale_grad(gy_blip, 1 / max_ky_step, sys)
     gy_blip = trap4ge(gy_blip, crt, sys)
     gz_blip = pp.make_trapezoid('z', system=sys, area=max_kz_step * deltak[2])
-    gz_blip = pp.scale_grad(gz_blip, 1 / max_kz_step, sys)
+    if max_kz_step != 0:
+        gz_blip = pp.scale_grad(gz_blip, 1 / max_kz_step, sys)
     gz_blip = trap4ge(gz_blip, crt, sys)
 
     # Match blip durations so they always fit within one readout block.
@@ -186,13 +202,15 @@ def make_readout_grads(
         max_blip_area = max_ky_step * deltak[1]
         blip_duration = pp.calc_duration(gy_blip)
         gz_blip = pp.make_trapezoid('z', system=sys, area=max_kz_step * deltak[2], duration=blip_duration)
-        gz_blip = pp.scale_grad(gz_blip, 1 / max_kz_step, sys)
+        if max_kz_step != 0:
+            gz_blip = pp.scale_grad(gz_blip, 1 / max_kz_step, sys)
         gz_blip = trap4ge(gz_blip, crt, sys)
     else:  # z blip is longer
         max_blip_area = max_kz_step * deltak[2]
         blip_duration = pp.calc_duration(gz_blip)
         gy_blip = pp.make_trapezoid('y', system=sys, area=max_ky_step * deltak[1], duration=blip_duration)
-        gy_blip = pp.scale_grad(gy_blip, 1 / max_ky_step, sys)
+        if max_ky_step != 0:
+            gy_blip = pp.scale_grad(gy_blip, 1 / max_ky_step, sys)
         gy_blip = trap4ge(gy_blip, crt, sys)
 
     # The circular shift below splits gro at t_s = blip_duration/2;

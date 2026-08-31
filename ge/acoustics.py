@@ -64,10 +64,13 @@ def check_grad_acoustics(grad: np.ndarray, coil: str, gdt: float = 4e-6) -> Acou
             axis_hz.append((lo_hz, hi_hz))
         bands_hz.append(axis_hz)
 
-    # zero-fill for FFT (must decay to zero to avoid ringing)
+    # zero-fill for FFT (must decay to zero to avoid ringing). n1 + ZF_FAC*n1
+    # == 8*n1 is provably always even, so check_grad_acoustics.m's own
+    # `if mod(n1+zf1, 2), zf1 = zf1+1; end` (with the same hardcoded
+    # zf_fac = 7) can never fire either -- confirmed dead in both languages,
+    # not a Python-port omission, so it's dropped here rather than carried
+    # over as unreachable code.
     zf1 = ZF_FAC * n1
-    if (n1 + zf1) % 2:
-        zf1 += 1
     padded = np.zeros((n1 + zf1, n2, n3))
     padded[:n1] = grad
 
@@ -77,6 +80,15 @@ def check_grad_acoustics(grad: np.ndarray, coil: str, gdt: float = 4e-6) -> Acou
 
     max_in_band = 0.0
     for lg in range(n3):
+        # Every waveform axis (lg) is checked against every axis's band
+        # list, not just bands_hz[lg] -- this looks like it should be
+        # `bands_hz[lg]` alone, but it's a faithful port of
+        # check_grad_acoustics.m's own loop (`for lg=1:n3, for l1=1:
+        # length(bands), ...`, storing the full lg x l1 cross product in
+        # val{lg}{l1}{l2}), confirmed against ../ArbEPI/lib/
+        # check_grad_acoustics.m directly. Do not "fix" this to
+        # bands_hz[lg] -- that would diverge from the real MATLAB
+        # behavior this repo's acoustics numbers are validated against.
         for axis_hz in bands_hz:
             for lo_hz, hi_hz in axis_hz:
                 in_band = (hz >= lo_hz) & (hz <= hi_hz)

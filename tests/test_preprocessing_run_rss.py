@@ -1,6 +1,12 @@
 import numpy as np
+import pytest
 
-from preprocessing.run_rss import _ift3, _rss_recon
+# run_rss.py imports recon_frames.py (which needs sigpy and nibabel, via
+# smaps.py/nifti_io.py) and nifti_io.py directly at module scope.
+pytest.importorskip("sigpy")
+pytest.importorskip("nibabel")
+
+from preprocessing.run_rss import _ift3, _rss_recon  # noqa: E402
 
 
 def test_ift3_inverts_centered_forward_fft():

@@ -2,11 +2,18 @@ import h5py
 import numpy as np
 import pytest
 
-from preprocessing.preprocess import (
+# preprocess.py imports epi_gridding.py (sigpy) and nifti_io.py (nibabel) at
+# module scope -- not used by these tests directly, but the whole module
+# fails to import without both.
+pytest.importorskip("sigpy")
+pytest.importorskip("nibabel")
+
+from preprocessing.preprocess import (  # noqa: E402
     _build_echo_times,
     _build_omegas,
     apply_delay,
     load_schedules,
+    resume_start_frame,
     scatter_frame,
     unflatten_gre_echoes,
 )
@@ -116,6 +123,48 @@ def test_apply_delay_extrapolates_linearly():
     expected = slope * (idx - 0.5 - delay) + intercept
     np.testing.assert_allclose(kxo, expected, atol=1e-10)
     np.testing.assert_allclose(kxe, expected, atol=1e-10)
+
+
+class _FakeArchiveReader:
+    """Mimics ArchiveReader.next_frame(): each call returns the next shot's
+    index (as a 1-element array standing in for [Nfid, Ncoils] data), so a
+    test can decode exactly which shot a caller consumed."""
+
+    def __init__(self):
+        self._next = 0
+
+    def next_frame(self) -> np.ndarray:
+        shot = np.array([self._next])
+        self._next += 1
+        return shot
+
+
+def test_resume_start_frame_fast_forwards_past_completed_shots(tmp_path):
+    """Regression test: ArchiveReader has no seek, so resuming from a
+    checkpoint must replay (and discard) every shot already consumed by the
+    prior run -- otherwise frame `start_frame` would silently receive frame
+    0's data instead of its own. Checkpoint at frame 2 (0-based) with 5
+    shots/frame must skip shots 0-14, so the next shot read is shot 15."""
+    shots_per_frame = 5
+    with h5py.File(tmp_path / 'recon.h5', 'a') as mf:
+        mf.attrs['last_completed_frame'] = 2
+
+        reader = _FakeArchiveReader()
+        start_frame = resume_start_frame(mf, reader, shots_per_frame)
+
+        assert start_frame == 3
+        next_shot = reader.next_frame()
+        assert next_shot[0] == 3 * shots_per_frame
+
+
+def test_resume_start_frame_no_checkpoint_does_not_advance_reader():
+    with h5py.File('resume_start_frame_test', 'w', driver='core', backing_store=False) as mf:
+        reader = _FakeArchiveReader()
+        start_frame = resume_start_frame(mf, reader, shots_per_frame=5)
+
+        assert start_frame == 0
+        next_shot = reader.next_frame()
+        assert next_shot[0] == 0
 
 
 def _write_hdf5storage_style(path, arrays: dict):

@@ -16,7 +16,9 @@ from lib.readout_from_params import make_readout_grads_from_params
 from params import load_params
 from sampling.gen_sampling_masks import gen_sampling_masks
 from sequences.ArbEPI import _compute_schedules, generate_arbepi
+from sequences.deGRE import generate_degre
 from sequences.EPIcal import generate_epical
+from sequences.noise import generate_noise
 
 
 def _small_params(tmp_path):
@@ -131,6 +133,29 @@ def test_arbepi_kxoe_matches_epical(tmp_path):
 
     np.testing.assert_allclose(scan_info['kxo'].ravel(), kxo_epical, atol=1e-6)
     np.testing.assert_allclose(scan_info['kxe'].ravel(), kxe_epical, atol=1e-6)
+
+
+def test_noise_nfid_matches_arbepi(tmp_path):
+    """generate_noise() rebuilds its readout gradients from scan_info.mat
+    to match the imaging readout's Nfid/gro duration -- it must go through
+    make_readout_grads_from_params() (the derated POPE sys + blip_sys), the
+    same as generate_arbepi()/generate_epical(), not params.sys directly.
+    Regression test for a real bug where noise.py bypassed that helper and
+    got a shorter Nfid, which preprocessing's calibration guard rejects
+    outright (see preprocessing/preprocess.py's Nfid mismatch check)."""
+    import hdf5storage
+
+    p = _small_params(tmp_path)
+    omegas = gen_sampling_masks(p.R, p)
+    generate_arbepi(omegas, p, seqname='xcheck')
+
+    schedules = hdf5storage.loadmat(str(tmp_path / 'scan_info.mat'))['schedules']
+    max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
+    max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
+    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, p)
+
+    noise_seq = generate_noise(p, seqname='xcheck_noise')
+    assert noise_seq.get_block(1).adc.num_samples == rg.Nfid
 
 
 def test_arbepi_kx_coverage_and_nyquist(tmp_path):
@@ -259,3 +284,37 @@ def test_epical_trajectory_is_centered(tmp_path):
             kz = k_traj_adc[2, idx]
             assert abs(ky) < 1e-6, f'shot={s} echo={e} ky={ky} (expected ~0)'
             assert abs(kz) < 1e-6, f'shot={s} echo={e} kz={kz} (expected ~0)'
+
+
+def test_degre_excitation_is_centered(tmp_path):
+    """deGRE inlines its slab-selective excitation rather than calling
+    make_excitation_pulse, but must apply the same
+    gz_ss.delay = rf.delay - gz_ss.rise_time resync after trap4ge --
+    trap4ge always rebuilds the trapezoid from scratch (lib/trap4ge.py),
+    which resets delay to 0 regardless of whether its rise/flat/fall
+    rounding changes anything, so without the resync the RF pulse is
+    decentered within gz_ss's flat top right now, not just if crt changes.
+    The iZ=0 rows are pure receive-gain-calibration lines (y_step =
+    z_step = 0, see generate_degre's loop) -- ky is unaffected by this bug
+    (it never touches gz_ss/gz_ssr), but a decentered excitation leaves a
+    nonzero residual kz at readout via gz_ssr's now-mistimed rewind."""
+    p = replace(
+        load_params(), Ny_degre=2, Nz_degre=2, Ndummy_zloops=0, output_dir=str(tmp_path),
+    )
+    seq = generate_degre(p, seqname='xcheck_degre')
+
+    k_traj_adc, *_ = seq.calculate_kspace()
+    # First ADC-bearing acquisition overall is iZ=0, iY=0, echo c=0.
+    ky, kz = k_traj_adc[1, 0], k_traj_adc[2, 0]
+    assert abs(ky) < 1e-6, f'ky={ky} (expected ~0)'
+    assert abs(kz) < 1e-6, f'kz={kz} (expected ~0)'
+
+
+def test_degre_raises_actionable_error_below_minimum_tr(tmp_path):
+    """generate_degre raises a clear, actionable error for a below-minimum
+    TE_degre (delay_te < 0); TR_degre must be guarded the same way, or a
+    too-short TR_degre fails deep inside pp.make_delay with a generic
+    error that names neither TR_degre nor the achievable minimum."""
+    p = replace(load_params(), TR_degre=1e-6, output_dir=str(tmp_path))
+    with pytest.raises(ValueError, match='TR_degre'):
+        generate_degre(p, seqname='xcheck_degre')

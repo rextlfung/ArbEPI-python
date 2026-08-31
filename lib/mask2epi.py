@@ -299,7 +299,11 @@ def _bottleneck_2opt_order(
         best_max = current_max
         best_move = None
         for i in range(1, m - 1):
-            for j in range(i, j_upper):
+            # j starts at i + 1, not i: a single-element "reversal" (j == i)
+            # is a no-op (order[i:i+1][::-1] == order[i:i+1]) that can never
+            # change the candidate max, so evaluating it wastes O(m)
+            # candidates per pass for no benefit.
+            for j in range(i + 1, j_upper):
                 new_e1 = D[order[i - 1], order[j]]
                 if j < m - 1:
                     new_e2 = D[order[i], order[j + 1]]
@@ -331,13 +335,20 @@ def _segments_cross(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray, p4: np.ndarr
 
 def _count_crossings(pts: np.ndarray) -> int:
     """Number of properly-crossing (non-adjacent, non-endpoint-sharing)
-    segment pairs along the open path `pts` visits in order."""
+    segment pairs along the open path `pts` visits in order.
+
+    No special case for the first/last segment pair: that exclusion is
+    only valid for a *closed* tour, where segments 0 and m-2 are adjacent
+    (segment m-2 ends where segment 0 begins). These paths are open, so
+    for m > 3 the first and last segments are ordinary non-adjacent
+    segments (the `range(i + 2, ...)` bound already excludes true
+    adjacency) that can genuinely cross -- e.g. a periphery-to-periphery
+    crossing in a mask2epi_radial shot's two spoke ends, which this
+    function exists to detect for pass 3 (_euclidean_uncross_refine)."""
     m = len(pts)
     n = 0
     for i in range(m - 1):
         for j in range(i + 2, m - 1):
-            if i == 0 and j == m - 2:
-                continue
             if _segments_cross(pts[i], pts[i + 1], pts[j], pts[j + 1]):
                 n += 1
     return n
@@ -406,8 +417,13 @@ def _euclidean_uncross_refine(
     points on either side of the center sample) can leave both
     center-adjacent edges' *values* unchanged -- the crossing-removing
     swap is a true tie in weighted-Euclidean length, not an improvement,
-    so stage 1 never takes it even though it strictly helps the actual
-    goal (no self-crossings). Stage 2 directly detects any remaining
+    so stage 1's strict-improvement rule never takes it even though it
+    strictly helps the actual goal (no self-crossings). (Stage 1's swap
+    loop only excludes `i`/`j` themselves from `pinned`, not the span
+    between them -- unlike the reversal loop, a swap doesn't displace
+    anything strictly between `i` and `j`, so a pinned point there isn't
+    at risk and doesn't need to block the move.) Stage 2 directly detects
+    any remaining
     geometric crossing (`_segments_cross`) and greedily applies the first
     fixing reversal or swap found that respects `max_allowed` and doesn't
     increase weighted-Euclidean length beyond a small tolerance -- honest
@@ -457,7 +473,13 @@ def _euclidean_uncross_refine(
             if i in pinned:
                 continue
             for j in range(i + 2, m):
-                if j in pinned or span_has_pinned(i, j):
+                # No span_has_pinned check here (unlike the reversal loop
+                # above): a swap only touches positions i and j -- both
+                # already checked individually -- and leaves every
+                # position strictly between them untouched, so a pinned
+                # point in that span is not displaced and doesn't block
+                # the move.
+                if j in pinned:
                     continue
                 a, b = order[i], order[j]
                 new_edge_weights = [Dw[order[i - 1], b], Dw[b, order[i + 1]], Dw[order[j - 1], a]]
@@ -508,8 +530,8 @@ def _euclidean_uncross_refine(
         crossing = None
         for i in range(m - 1):
             for j in range(i + 2, m - 1):
-                if i == 0 and j == m - 2:
-                    continue
+                # No closed-tour special case here either -- see
+                # _count_crossings' docstring.
                 if _segments_cross(pts[i], pts[i + 1], pts[j], pts[j + 1]):
                     crossing = (i, j)
                     break
@@ -900,11 +922,20 @@ def mask2epi_radial(
     mean (`0.5 * atan2(mean(sin(2*theta)), mean(cos(2*theta)))`), which is
     robust to the pi-periodic wraparound `theta_folded` introduces (a plain
     mean of angles straddling the 0/pi boundary would cancel incorrectly)
-    — and split at the point nearest k-space center into a "before" half
-    (`target` points) and an "after" half (`ETL - 1 - target` points),
-    matching `calc_te_tr_delays.py`'s nominal TE echo index
-    `target = (ETL - 1) // 2` (see the derivation below). This projection
-    sort only decides *which* points land in which half -- the actual
+    — sorted by that projection, then split *by count*, not by position
+    relative to the center point: the point nearest k-space center (by
+    actual 2D distance, found within this projection-sorted order) is
+    removed, and the remaining `ETL - 1` projection-sorted points are cut
+    into a "before" half (the first `target` of them) and an "after" half
+    (the rest, `ETL - 1 - target`), matching `calc_te_tr_delays.py`'s
+    nominal TE echo index `target = (ETL - 1) // 2` (see the derivation
+    below). When the center point's own projection-sorted position isn't
+    exactly `target`, this "before" half can include points that sit
+    projection-wise on the far side of center -- a deliberate tradeoff
+    that guarantees the exact `target`/`ETL - 1 - target` counts the fixed
+    TE echo index needs, at the cost of "before"/"after" not being a
+    literal geometric split around center. This projection sort only
+    decides *which* points land in which half -- the actual
     visiting order within each half is decided by `_order_half_anchored`'s
     two-pass optimization (`_sum_optimized_order` for min-sum TSP,
     `_bottleneck_2opt_order` for bottleneck refinement -- see module

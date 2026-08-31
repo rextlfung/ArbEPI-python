@@ -1,7 +1,9 @@
 import numpy as np
-import sigpy
+import pytest
 
-from preprocessing.epi_gridding import rampsamp2cart, rampsampepi2cart
+sigpy = pytest.importorskip("sigpy")
+
+from preprocessing.epi_gridding import rampsamp2cart, rampsampepi2cart  # noqa: E402
 
 
 def _ramp_trajectory(nx, fov_cm):

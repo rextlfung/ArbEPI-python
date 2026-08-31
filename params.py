@@ -33,8 +33,8 @@ class Params:
     # via lib/readout_from_params.py (ArbEPI/EPIcal used to hardcode a
     # `sys.max_slew = 100 * sys.gamma` derate in three separate places).
     # slew_derate: general derate applied to everything except the readout
-    # ramps (excitation, fat-sat, prephasers, spoilers, and -- via the
-    # derated sys handed to make_readout_grads -- the ky/kz blips).
+    # ramps and the ky/kz blips (excitation, fat-sat, prephasers, spoilers)
+    # -- the blips get their own derate, blip_slew below, via blip_sys().
     # ro_slew_rise/ro_slew_fall: the readout trapezoid's asymmetric POPE
     # ramps (see lib/make_readout_grads.py's module docstring: PNS peaks at
     # the end of each ramp-up, so only the rise is throttled while the fall
@@ -94,7 +94,6 @@ class Params:
     Ndummy_zloops: int
     TE_degre: np.ndarray  # s, [TE1, TE2] -- two echo times for B0 field mapping
     TR_degre: float
-    T1_degre: float
     alpha_degre: float  # degrees
     rf_dur_degre: float
     n_cycles_spoil_degre: int
@@ -262,8 +261,7 @@ def load_params(output_dir: str = 'output') -> Params:
     # timing) -- the old single-echo GRE's 6e-3 no longer fits once TE2 is
     # roughly double TE1. 8e-3 leaves a small margin.
     TR_degre = 8e-3
-    T1_degre = 1.3
-    alpha_degre = 180 / math.pi * math.acos(math.exp(-TR_degre / T1_degre))
+    alpha_degre = 180 / math.pi * math.acos(math.exp(-TR_degre / T1))  # T1 set above
 
     rf_dur_degre = 0.4e-3
     n_cycles_spoil_degre = 2
@@ -272,9 +270,11 @@ def load_params(output_dir: str = 'output') -> Params:
     Ncoils = 32
 
     # IEC 60601-2-33:2022-recommended PNS channel weights -- see CLAUDE.md's
-    # "Open finding" for why this was zero (disabling the PNS check
-    # entirely) until now, and that this default now correctly blocks
-    # `main.py --ge` for EPIcal/ArbEPI/deGRE until slew/blip timing changes.
+    # "PNS finding history" for why this was zero (disabling the PNS check
+    # entirely) for most of this port's lifetime, and how the current
+    # slew/blip tuning (see the "PNS-driven slew limits" comment below)
+    # brought the full ArbEPI build back under the 80% normal-mode line
+    # with this weighting.
     PNSwt = np.array([0.8, 1.0, 0.7]) # human
     # PNSwt = np.array([0.0, 0.0, 0.0]) # phantom
 
@@ -342,7 +342,6 @@ def load_params(output_dir: str = 'output') -> Params:
         Ndummy_zloops=Ndummy_zloops,
         TE_degre=TE_degre,
         TR_degre=TR_degre,
-        T1_degre=T1_degre,
         alpha_degre=alpha_degre,
         rf_dur_degre=rf_dur_degre,
         n_cycles_spoil_degre=n_cycles_spoil_degre,

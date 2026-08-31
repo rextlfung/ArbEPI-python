@@ -20,10 +20,11 @@ from params import Params
 def derated_sys(params: Params) -> pp.Opts:
     """params.sys derated to params.slew_derate (T/m/s), as a fresh copy.
 
-    Used for every gradient except the readout trapezoid's own ramps:
-    excitation, fat-sat, prephasers, spoilers, and the ky/kz blips.
-    Always a deepcopy -- params.sys is one shared mutable object across
-    all four sequence-generation calls (see params.py's Params.sys note).
+    Used for every gradient except the readout trapezoid's own ramps and
+    the ky/kz blips (which get their own derate via blip_sys() below):
+    excitation, fat-sat, prephasers, spoilers. Always a deepcopy --
+    params.sys is one shared mutable object across all four
+    sequence-generation calls (see params.py's Params.sys note).
     """
     sys = copy.deepcopy(params.sys)
     sys.max_slew = params.slew_derate * sys.gamma  # T/m/s -> Hz/m/s

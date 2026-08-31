@@ -1,6 +1,9 @@
 import numpy as np
+import pytest
 
-from preprocessing.smaps import estimate_smaps, process_smaps
+pytest.importorskip("sigpy")
+
+from preprocessing.smaps import estimate_smaps, process_smaps  # noqa: E402
 
 
 def _gaussian_coil_sens(nx, ny, center, sigma):

@@ -39,12 +39,12 @@ Depends on `pypulseq` (from PyPI), numpy, scipy, matplotlib, hdf5storage, and nu
 
    params = load_params()
    omegas = gen_sampling_masks(params.R, params)
-   generate_arbepi(omegas, params)   # writes output/ArbEPI.seq, output/samp_locs.mat
-   generate_epical(params)           # writes output/EPIcal.seq, output/kxoe<Nx>.mat
+   generate_arbepi(omegas, params)   # writes output/ArbEPI.seq, output/scan_info.mat
+   generate_epical(params)           # writes output/EPIcal.seq
    generate_degre(params)            # writes output/deGRE.seq (dual-echo, for coil sensitivity maps + B0 field map)
    generate_noise(params)            # writes output/noise.seq
    ```
-   `generate_epical` and `generate_noise` must run after `generate_arbepi` — they load `output/samp_locs.mat`. All outputs go to `params.output_dir` (default `output/`, gitignored).
+   `generate_epical` and `generate_noise` must run after `generate_arbepi` — they load `output/scan_info.mat`. All outputs go to `params.output_dir` (default `output/`, gitignored).
 3. Add `--plot` to also write diagnostic plots (`mask.png`, `psf.png`, `trajectory.png`, `one_tr.png`) via `plotting/plot_last_run.py`, and/or `--ge` to also export each sequence to GE `.pge` (see [GE export](#ge-export-pge) below):
    ```
    uv run python main.py --plot --ge
@@ -123,7 +123,7 @@ export_to_ge('output/ArbEPI.seq', 'output/ArbEPI', params)
 
 `export_to_ge` runs a feasibility check (hardware limits, PNS, acoustic-resonance — see below) and raises `RuntimeError` if it fails, then writes the `.pge` via `ge/seq2ceq.py` + `ge/writeceq.py`. Verified end-to-end on a small test sequence and on a full-scale default-params run (`main.py`'s output): the resulting `.pge` files match freshly-regenerated real MATLAB output (`seq2ceq`/`pge2.writeceq`) byte-for-byte for two of the four default sequences and to within a single float32 ULP on a derived header field for the other two — see `CLAUDE.md` for the full record.
 
-**Hardware limits are keyed off the `scanner` variable set in `params.py`** (`GE_MR750` or `GE_UHP`, see `scanners.py`): `load_params()` builds `params.spec` (a `ScannerSpec`) once and derives `sys.max_grad`/`sys.max_slew` for `.seq` generation from the same instance that `ge/check.py`/`ge/writeceq.py` read directly, so they can't drift out of sync with each other. `main.py --ge` also calls `ge.ge_export.check_ge_feasibility()` on all four sequences — running the hardware/PNS/acoustics check without writing a `.pge` — *before* exporting any of them, so an infeasibility surfaces immediately instead of after several full exports. PNS is a physiological safety limit, not a hardware one — `PNSwt` (a separate `Params` field, not part of `ScannerSpec`, since it's phantom-vs-human scan context) defaults to the IEC 60601-2-33:2022-recommended `[0.8, 1.0, 0.7]`; `[0, 0, 0]` disables the PNS check entirely and is only appropriate for phantom/non-human scanning. Acoustic-resonance is checked but never blocks export — it's a `WARN` in the report, matching MATLAB's own `check_grad_acoustics.m`, which only ever calls `warning(...)`, never `error(...)`, when over threshold.
+**Hardware limits are keyed off the `scanner` variable set in `params.py`** (`GE_MR750` or `GE_UHP`, see `scanners.py`): `load_params()` builds `params.spec` (a `ScannerSpec`) once and derives `sys.max_grad`/`sys.max_slew` for `.seq` generation from the same instance that `ge/check.py`/`ge/writeceq.py` read directly, so they can't drift out of sync with each other. `main.py --ge` also calls `ge.ge_export.check_ge_feasibility()` on all four sequences — running the hardware/PNS/acoustics check without writing a `.pge` — *before* exporting any of them, so an infeasibility surfaces immediately instead of after several full exports. PNS is a physiological safety limit, not a hardware one — `PNSwt` (a separate `Params` field, not part of `ScannerSpec`, since it's phantom-vs-human scan context) defaults to the IEC 60601-2-33:2022-recommended `[0.8, 1.0, 0.7]`; `[0, 0, 0]` disables the PNS check entirely and is only appropriate for phantom/non-human scanning. PNS export-blocking uses a deliberately looser threshold than IEC's own "normal operating mode" line: `main.py --ge` only fails (raises `RuntimeError`) above the 100% "first controlled mode" threshold (genuinely predicted stimulation), not IEC's 80% normal-mode line — 80–100% is reported as a `WARN`, not a hard failure, since (unlike the real scanner's own interlock) a Python check has no operational consequence to blocking a `.seq` file that's still within a standard-defined, permitted mode; see `ge/check.py`'s `PNS_NORMAL_MODE_THRESHOLD`/`FeasibilityReport.ok` for the reasoning. Acoustic-resonance is checked but never blocks export — it's a `WARN` in the report, matching MATLAB's own `check_grad_acoustics.m`, which only ever calls `warning(...)`, never `error(...)`, when over threshold.
 
 **Default sequences now measure under the 80% normal-mode PNS line.** `PNSwt` was `[0, 0, 0]` for most of this port's lifetime, so PNS was never actually evaluated in any `--ge` run (weight zero makes the per-channel contribution zero regardless of the real waveform); turning on the real weights (validated against MATLAB's per-instance pipeline to ~0.02 percentage points via `ge/pns.py`) revealed `EPIcal`/`ArbEPI`/`deGRE` all far over the limit (113–115% for the EPI sequences at full hardware slew). The resolution is a PNS-optimized *asymmetric* EPI readout (POPE, [Huber et al. 2026](https://doi.org/10.64898/2026.07.22.739360)): the readout trapezoid's ramp-up slew is throttled (`params.ro_slew_rise`) while the ramp-down (`ro_slew_fall`) runs faster, since nerve-integration PNS models peak at the *end* of each sustained slew event. With the empirically tuned defaults in `params.py` (rise/fall/blip 100/120/105 T/m/s), the full ArbEPI build measures ~79.8% peak PNS at a ~0.9 ms shorter minimum TE than a symmetric 100 T/m/s derate — see `CLAUDE.md`'s PNS section for the sweep record, including why the fall/rise ratio stays mild here (the y/z blips play centered on the readout reversal, so aggressive fall/blip slews RSS-combine into a 3-channel hotspot on this whole-body gradient). `uv run python -m plotting.compare_readout_pns` rebuilds the symmetric-vs-POPE comparison (two full sequences, identical nominal parameters and sampling masks) and writes per-variant and overlay PNS figures to `output/compare_pope/`. A regression test (`test_arbepi_default_params_peak_pns_under_normal_mode_limit`) guards the <80% property; PNS is scan-context-dependent, so re-check after changing scanner, mask seed, `R`/`ETL`, or resolution.
 
@@ -192,20 +192,20 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
                                  b0map.jl estimates a B0 field map from the deGRE dual-echo cache via
                                  MRIFieldmaps.jl, with its initial guess unwrapped via ROMEO.jl -- see
                                  CLAUDE.md's preprocessing/ section for the design
-matlab_reference/            One-off scripts for re-validating ge/ against a real MATLAB install
-                              (not called by any Python code; MATLAB is not needed to use this repo)
-  dump_ceq.m                 Dumps seq2ceq.m output for ge/validate_against_matlab.py
-  dump_pns_test.m            Dumps pge2.pns.m's synthetic sub_test() reference for ge/validate_pns.py
-  dump_pns_peak.m            Dumps peak PNS%% across every segment instance of a real sequence
-  dump_acoustics_test.m      Dumps a check_grad_acoustics.m reference for ge/acoustics.py's validation
-  dump_acoustics_blockrange.m  Dumps the former MATLAB export path's exact acoustics blockRange check
+recon/                        Multi-Scale Low-Rank (MSLR) fMRI reconstruction, ported from
+                              ../mslr-recon (Julia/MIRT.jl) onto PyTorch/mirtorch
+  operators.py                  GatheredSense: memory-efficient gathered-k-space SENSE operator
+  lowrank.py                    Patch extraction/recombination + singular-value soft-thresholding
+  solvers.py                    pogm_restart: PGM/FPGM/POGM with gradient restart, early stopping
+  reconstruct.py                Top-level run_recon driver (FISTA/POGM over locally-low-rank patches)
+  validate_against_mslr.py      Field-by-field comparison vs. real ../mslr-recon (Julia) output
 tests/                       Unit tests (pytest)
 docs/demo/                   Static images embedded in this README's Demo section
 ```
 
-Index convention: internal computation is 0-based throughout (mask2epi's `schedule`, sampling masks, etc.). `output/samp_locs.mat` is written with `schedules` converted to 1-based (matching what MATLAB-side reconstruction code expects) — `parts` is already a 1-based shot label with 0 = unsampled, so it needs no conversion.
+Index convention: internal computation is 0-based throughout (mask2epi's `schedule`, sampling masks, etc.). `output/scan_info.mat` is written with `schedules`' (ky, kz) channels converted to 1-based (matching what MATLAB-side reconstruction code expects) — `parts` is already a 1-based shot label with 0 = unsampled, so it needs no conversion.
 
-`.mat` files (`samp_locs.mat`, `kxoe<Nx>.mat`) are written via `hdf5storage` in MATLAB v7.3 format (HDF5-based), matching the original MATLAB code's `save(..., '-v7.3')`. `scipy.io.savemat`/`loadmat` cannot write or read v7.3 at all — use `hdf5storage.loadmat` (or `h5py` directly) to read these files from Python, not `scipy.io.loadmat`.
+`output/scan_info.mat` (kxo/kxe, schedules/parts, and a snapshot of the scan scalars `preprocessing/` needs — consolidating what used to be three separate files, `samp_locs.mat`/`params.mat`/`kxoe<Nx>.mat`) is written via `hdf5storage` in MATLAB v7.3 format (HDF5-based), matching the original MATLAB code's `save(..., '-v7.3')`. `scipy.io.savemat`/`loadmat` cannot write or read v7.3 at all — use `hdf5storage.loadmat` (or `h5py` directly) to read these files from Python, not `scipy.io.loadmat`.
 
 See [../ArbEPI/README.md](../ArbEPI/README.md) for background on the sampling methods and `mask2epi_laminar`'s original (MATLAB) partitioning design — see [Algorithms](#algorithms-libmask2epipy) above for the ordering optimization and `mask2epi_radial`, both this port's own addition with no MATLAB counterpart.
 

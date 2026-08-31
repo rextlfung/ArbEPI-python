@@ -225,6 +225,28 @@ def process_epi_frame(
     return scatter_frame(ksp_cart, schedule_frame, Ny, Nz)
 
 
+def resume_start_frame(mf: h5py.File, epi_reader, shots_per_frame: int) -> int:
+    """Frame index to resume STEP 6's per-frame loop from, given a checkpoint
+    file already open for append. `epi_reader` (an ArchiveReader or anything
+    exposing next_frame()) has no seek -- the archive is a sequential stream
+    -- so on resume this must replay and discard every shot already consumed
+    by the prior run, or frame `start_frame` would silently receive frame 0's
+    data instead (shapes and the Nfid check in preprocess() both still pass,
+    so nothing else would catch the misalignment).
+    """
+    start_frame = mf.attrs.get('last_completed_frame', -1) + 1
+    if start_frame > 0:
+        n_skip = start_frame * shots_per_frame
+        print(
+            f'Resuming from frame {start_frame} '
+            f'(checkpoint found at frame {start_frame - 1}); '
+            f'fast-forwarding archive reader past {n_skip} already-consumed shots...'
+        )
+        for _ in range(n_skip):
+            epi_reader.next_frame()
+    return start_frame
+
+
 def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     """Full Stage 1 pipeline for one sequence: noise -> deGRE -> smaps ->
     cal (odd/even phase) -> EPI (streamed frame-by-frame, checkpointed).
@@ -362,12 +384,7 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     os.makedirs(os.path.dirname(paths.recon), exist_ok=True)
     if os.path.exists(paths.recon):
         mf = h5py.File(paths.recon, 'a')
-        start_frame = mf.attrs.get('last_completed_frame', -1) + 1
-        if start_frame > 0:
-            print(
-                f'Resuming from frame {start_frame} '
-                f'(checkpoint found at frame {start_frame - 1}).'
-            )
+        start_frame = resume_start_frame(mf, epi_reader, shots_per_frame)
     else:
         print(f'Pre-allocating output file: {paths.recon}')
         mf = h5py.File(paths.recon, 'w')

@@ -1,9 +1,11 @@
 import json
 
-import nibabel as nib
 import numpy as np
+import pytest
 
-from preprocessing.nifti_io import save_recon_nifti
+nib = pytest.importorskip("nibabel")
+
+from preprocessing.nifti_io import save_recon_nifti  # noqa: E402
 
 
 def test_save_recon_nifti_writes_magnitude_with_fov_derived_spacing(tmp_path):

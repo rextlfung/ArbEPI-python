@@ -13,12 +13,14 @@ import shutil
 import subprocess
 
 import h5py
-import nibabel as nib
 import numpy as np
 import pytest
 
-from preprocessing.config import load_config
-from preprocessing.run_b0map import run_b0map
+# run_b0map.py imports nifti_io.py at module scope, which needs nibabel.
+nib = pytest.importorskip("nibabel")
+
+from preprocessing.config import load_config  # noqa: E402
+from preprocessing.run_b0map import run_b0map  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     shutil.which('julia') is None, reason='julia executable not found on PATH'

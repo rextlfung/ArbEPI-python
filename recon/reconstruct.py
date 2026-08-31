@@ -65,6 +65,43 @@ def _load_array(fn: str, key: str) -> np.ndarray:
         return np.asarray(d[()])
 
 
+def _load_omega(
+    fn_ksp: str, Nx: int, Ny: int, Nz: int, Nt: int, ksp0: torch.Tensor
+) -> torch.Tensor:
+    """(Nx,Ny,Nz,Nt) sampling mask, broadcast across the readout axis
+    (kx doesn't affect which (ky,kz) locations were sampled).
+
+    Prefers the authoritative 'omegas' dataset preprocess.py writes into
+    the same file (preprocessing/preprocess.py's _build_omegas) over
+    inferring the mask from which complex64 k-space values happen to be
+    exactly zero: a real acquired sample that rounds to exactly 0+0j after
+    phase correction would otherwise silently become "not acquired", and
+    since that would be consistently wrong across every coil, a per-coil
+    consistency check can't catch it either -- so that check is only worth
+    doing in the fallback branch below, where it's actually load-bearing.
+    Falls back to the `!= 0` derivation, logged, for recon files written
+    before 'omegas' existed.
+    """
+    with h5py.File(fn_ksp, "r") as f:
+        has_omegas = "omegas" in f
+        if has_omegas:
+            omegas_yzt = torch.from_numpy(np.asarray(f["omegas"][()])).to(ksp0.device)
+    if has_omegas:
+        assert tuple(omegas_yzt.shape) == (Ny, Nz, Nt), (
+            f"omegas shape {tuple(omegas_yzt.shape)} doesn't match k-space dims ({Ny},{Nz},{Nt})"
+        )
+        return omegas_yzt.unsqueeze(0).expand(Nx, -1, -1, -1).bool()
+
+    print(
+        f"  '{fn_ksp}' has no 'omegas' dataset (written before preprocess.py added it) -- "
+        "falling back to inferring the sampling mask from exact-zero k-space values."
+    )
+    omega = ksp0[:, :, :, 0, :] != 0
+    for ic in range(1, ksp0.shape[3]):
+        assert torch.equal(omega, ksp0[:, :, :, ic, :] != 0), f"Coil {ic} has a differing mask"
+    return omega
+
+
 def _reg_weights(
     patch_sizes: list[tuple[int, int, int]], Nt: int, N_voxels: int, lambda_global: float
 ) -> list[float]:
@@ -109,11 +146,9 @@ def run_recon(
         f"smaps shape {tuple(smaps.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz},{Nvc})"
     )
 
-    omega = ksp0[:, :, :, 0, :] != 0
+    omega = _load_omega(fn_ksp, Nx, Ny, Nz, Nt, ksp0)
     R = (Nx * Ny * Nz) / omega[:, :, :, 0].sum().item()
     print(f"Acceleration factor R ~ {R:.2f}")
-    for ic in range(1, Nvc):
-        assert torch.equal(omega, ksp0[:, :, :, ic, :] != 0), f"Coil {ic} has a differing mask"
     counts = omega.sum(dim=(0, 1, 2))
     assert torch.all(counts == counts[0]), "Frames have differing sample counts"
 

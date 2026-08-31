@@ -23,18 +23,30 @@ def compute_whitening_matrix(noise: np.ndarray) -> np.ndarray:
     equivalent in effect to BART's `whiten -n`.
     """
     x = noise.reshape(-1, noise.shape[-1])  # [Nsamples, Ncoils]
-    psi = (x.conj().T @ x) / x.shape[0]  # [Ncoils, Ncoils] Hermitian covariance
-    L = np.linalg.cholesky(psi)  # psi = L @ L^H
-    return np.linalg.inv(L)  # W: Cov(W x) = I
+    # psi = E[conj(c_i) c_j] = conj(Psi), the *transpose* of the standard
+    # covariance Psi = E[c c^H] that compute_coil_covariance below uses --
+    # not a copy-paste inconsistency, see apply_whitening's docstring for
+    # why this flipped convention is required here.
+    psi = (x.conj().T @ x) / x.shape[0]
+    L = np.linalg.cholesky(psi)  # psi = L @ L^H, i.e. conj(L) @ conj(L)^H = Psi
+    return np.linalg.inv(L)  # W = inv(L): Cov(W x) = I under psi's convention
 
 
 def apply_whitening(data: np.ndarray, W: np.ndarray, coil_axis: int = -1) -> np.ndarray:
     """Apply a [Ncoils, Ncoils] whitening matrix along `coil_axis`.
 
-    For a single sample (coil vector) x, the whitened sample is W @ x. Batched
-    over rows (samples), that's `data @ W.conj().T` rather than `data @ W.T`
-    -- W is applied to column vectors, and transposing that onto the *row*
-    layout used here picks up a conjugate (W^H, not W^T); verified against
+    For a single sample (coil vector) x, the whitened sample is
+    `conj(W) @ x`, not `W @ x`: `compute_whitening_matrix` computes
+    `psi = conj(Psi)` (see its comment), so its Cholesky factor `L`
+    satisfies `psi = L @ L^H`, meaning `conj(L)` -- not `L` -- is the
+    Cholesky factor of the standard covariance `Psi`, and the whitener for
+    `Psi` is `conj(inv(L)) = conj(W)`. Batched over rows (samples),
+    applying `conj(W)` to each column-vector sample and transposing back
+    to this function's row layout is `data @ conj(W).T = data @
+    W.conj().T`, exactly what's below -- the conjugate comes entirely from
+    needing `conj(W)` in the first place, not from the row/column
+    transpose itself (transposing `M @ v` to row form is plain `v @ M.T`,
+    picking up no conjugate on its own for any M). Verified against
     `test_whitening_decorrelates_and_normalizes`.
     """
     data = np.moveaxis(data, coil_axis, -1)

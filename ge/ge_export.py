@@ -10,14 +10,13 @@ from pathlib import Path
 
 import pypulseq as pp
 
-from ge.check import FeasibilityReport
-from ge.check import check_ge_feasibility as _check_ge_feasibility
+from ge.check import FeasibilityReport, check_seq_feasibility
 from ge.seq2ceq import seq2ceq
 from ge.writeceq import write_ceq
 from params import Params
 
 
-def check_ge_feasibility(seq_path: str, params: Params) -> FeasibilityReport:
+def check_ge_feasibility(seq_path: str, params: Params) -> tuple[pp.Sequence, FeasibilityReport]:
     """
     Run GE hardware/PNS/acoustic-resonance feasibility checks on a .seq
     file, without writing a .pge file — a fast pre-flight so infeasibility
@@ -32,6 +31,14 @@ def check_ge_feasibility(seq_path: str, params: Params) -> FeasibilityReport:
         (hardware/PNS constants for the scanner the sequence was built
         for) and params.PNSwt (phantom-vs-human PNS channel weights).
 
+    Returns
+    -------
+    (seq, report) : the loaded Sequence and its FeasibilityReport -- pass
+        both to export_to_ge's `seq`/`report` parameters to avoid it
+        re-reading the .seq file and re-running this same check (not
+        cheap on a large sequence: a full re-`seq.read()`, whole-sequence
+        PNS convolution, acoustics window, and seq2ceq run).
+
     Raises
     ------
     RuntimeError
@@ -40,14 +47,20 @@ def check_ge_feasibility(seq_path: str, params: Params) -> FeasibilityReport:
     """
     seq = pp.Sequence()
     seq.read(str(Path(seq_path).resolve()))
-    report = _check_ge_feasibility(seq, params.spec, pns_wt=tuple(params.PNSwt))
+    report = check_seq_feasibility(seq, params.spec, pns_wt=tuple(params.PNSwt))
     print(f'{Path(seq_path).name}:\n{report.summary()}')
     if not report.ok:
         raise RuntimeError(f'GE feasibility check failed for {seq_path}:\n{report.summary()}')
-    return report
+    return seq, report
 
 
-def export_to_ge(seq_path: str, out_path: str, params: Params) -> None:
+def export_to_ge(
+    seq_path: str,
+    out_path: str,
+    params: Params,
+    seq: pp.Sequence | None = None,
+    report: FeasibilityReport | None = None,
+) -> None:
     """
     Convert a Pulseq .seq file to a GE TOPPE .pge file.
 
@@ -59,6 +72,14 @@ def export_to_ge(seq_path: str, out_path: str, params: Params) -> None:
     params : loaded Params (see params.load_params); supplies params.spec
         (pislquant and the hardware/PNS constants used by the feasibility
         check run before writing) and params.PNSwt.
+    seq, report : optional pre-loaded Sequence / pre-computed
+        FeasibilityReport, e.g. both returned by a prior
+        `check_ge_feasibility(seq_path, params)` call -- pass both to skip
+        re-reading `seq_path` and re-running the feasibility check here.
+        Independent knobs (pass `seq` alone to skip only the re-read, still
+        checking it fresh; `report` is trusted as-is with no verification
+        that it was actually computed from `seq`, so only pass one you
+        know corresponds to it).
 
     Raises
     ------
@@ -67,9 +88,11 @@ def export_to_ge(seq_path: str, out_path: str, params: Params) -> None:
         mirrors write_to_ge_from_seq.m's own internal ge_feasibility_check
         call, so export never silently writes an infeasible .pge.
     """
-    seq = pp.Sequence()
-    seq.read(str(Path(seq_path).resolve()))
-    report = _check_ge_feasibility(seq, params.spec, pns_wt=tuple(params.PNSwt))
+    if seq is None:
+        seq = pp.Sequence()
+        seq.read(str(Path(seq_path).resolve()))
+    if report is None:
+        report = check_seq_feasibility(seq, params.spec, pns_wt=tuple(params.PNSwt))
     if not report.ok:
         raise RuntimeError(f'GE feasibility check failed for {seq_path}:\n{report.summary()}')
 

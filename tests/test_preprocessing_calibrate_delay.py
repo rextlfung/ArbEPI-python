@@ -1,4 +1,14 @@
-from preprocessing.calibrate_delay import _matlab_round, select_best_delay
+import pytest
+
+# calibrate_delay.py imports epi_gridding.py at module scope, which needs
+# sigpy -- not itself used in this test, but the whole module fails to
+# import without it. See CLAUDE.md's "preprocessing/" section: sigpy/
+# nibabel live in the optional `preprocessing` extra, not the core
+# dependency set, so this must be gated the same way tests/test_recon_*.py
+# gates on torch/mirtorch.
+pytest.importorskip("sigpy")
+
+from preprocessing.calibrate_delay import _matlab_round, select_best_delay  # noqa: E402
 
 
 def test_select_best_delay_picks_zero_wrap_closest_to_zero_a2():

@@ -1,7 +1,10 @@
 import numpy as np
-import sigpy.mri as mr
+import pytest
 
-from preprocessing.recon_sigpy import wavelet_tv_recon
+pytest.importorskip("sigpy")
+import sigpy.mri as mr  # noqa: E402
+
+from preprocessing.recon_sigpy import wavelet_tv_recon  # noqa: E402
 
 
 def _gaussian_coil_sens(nx, ny, center, sigma):

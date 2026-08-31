@@ -8,12 +8,13 @@ scan scalars preprocessing/ needs -- everything preprocessing/ reads for
 this acquisition, in one file.
 
 GE `.pge` export (write_to_ge.m) and the trailing MATLAB plotting figures
-are intentionally not ported here — see ge/ge_export.py (stage 8 of the
-port plan) and plotting/plotting.py respectively.
+are intentionally not ported here — see ge/ge_export.py and
+plotting/plotting.py respectively.
 """
 
 import copy
 import os
+from concurrent.futures import ProcessPoolExecutor
 from typing import Tuple
 
 import hdf5storage
@@ -36,6 +37,14 @@ _MASK2EPI = {
 }
 
 
+def _compute_one_frame_schedule(
+    omega_frame: np.ndarray, ETL: int, Nshots: int, trajectory: str, deltak: Tuple[float, float]
+) -> Tuple[np.ndarray, np.ndarray]:
+    """One frame's mask2epi_{trajectory} call -- module-level (not a
+    closure) so ProcessPoolExecutor can pickle it."""
+    return _MASK2EPI[trajectory](omega_frame, ETL, Nshots, deltak)
+
+
 def _compute_schedules(
     omegas: np.ndarray, ETL: int, Nshots: int, trajectory: str, deltak: Tuple[float, float]
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -45,18 +54,40 @@ def _compute_schedules(
     index step are compared in physical k-space units, matching how
     make_readout_grads.py sizes the two blip axes independently (see
     lib/mask2epi.py's module docstring).
+
+    Frames are fully independent (each is its own mask2epi_* call on
+    omegas[:, :, frame], a TSP-ish optimization over Nshots shots) --
+    parallelized over a process pool once there's more than one frame to
+    amortize its startup cost (measured ~21.7s of a 46.8s full ArbEPI
+    build serially; small/test builds with Nframes == 1 fall back to a
+    plain call with no pool overhead at all).
+
     Returns 0-based schedules/parts (see lib/mask2epi.py)."""
     if trajectory not in _MASK2EPI:
         raise ValueError(
             f'Unknown epi_trajectory {trajectory!r}; expected one of {sorted(_MASK2EPI)}'
         )
-    mask2epi = _MASK2EPI[trajectory]
 
     Ny, Nz, Nframes = omegas.shape
     schedules = np.zeros((Nframes, Nshots, ETL, 2), dtype=int)
     parts = np.zeros((Ny, Nz, Nframes), dtype=int)
-    for frame in range(Nframes):
-        schedules[frame], parts[:, :, frame] = mask2epi(omegas[:, :, frame], ETL, Nshots, deltak)
+
+    if Nframes <= 1:
+        for frame in range(Nframes):
+            schedules[frame], parts[:, :, frame] = _compute_one_frame_schedule(
+                omegas[:, :, frame], ETL, Nshots, trajectory, deltak
+            )
+        return schedules, parts
+
+    with ProcessPoolExecutor(max_workers=min(Nframes, os.cpu_count() or 1)) as pool:
+        futures = [
+            pool.submit(
+                _compute_one_frame_schedule, omegas[:, :, frame], ETL, Nshots, trajectory, deltak
+            )
+            for frame in range(Nframes)
+        ]
+        for frame, future in enumerate(futures):
+            schedules[frame], parts[:, :, frame] = future.result()
     return schedules, parts
 
 
@@ -230,10 +261,26 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # timing/area, so the first two echoes' kx trajectory (the alternating
     # odd/even readout polarity) is identical whether read from ArbEPI's or
     # EPIcal's sequence. Computing it here means EPIcal.py no longer needs
-    # to run at all just to produce this, and there's only one
-    # calculate_kspace() call instead of two. Physical k-space values
+    # to run at all just to produce this. Physical k-space values
     # (cycles/m), not indices -- no 1-based conversion applies.
-    k_traj_adc, *_ = seq.calculate_kspace()
+    #
+    # calculate_kspace() has no time_range argument, so computing this from
+    # the full (real) sequence costs a full-sequence FFT-free but O(all
+    # ADC samples) trajectory integration -- measured at 16.7s of a 46.8s
+    # full ArbEPI build (36%), just to keep 2*Nfid samples out of ~2.5M.
+    # Assemble a throwaway single-shot sequence instead, from the same
+    # already-built gx_pre/gro1/gro events: the y/z channels (prephasers,
+    # blips, gz_ss/gz_ssr, spoilers) don't affect kx at all, so a minimal
+    # gx-only sequence reproduces the real sequence's kx trajectory exactly
+    # (verified to ~1e-11, float precision noise, against the prior
+    # full-sequence computation) while running calculate_kspace() over a
+    # handful of blocks instead of the whole build.
+    kxoe_seq = pp.Sequence(system=sys_seq)
+    kxoe_seq.add_block(pp.scale_grad(gx_pre, rg.gx_pre_scale))
+    kxoe_seq.add_block(rg.gro1)
+    kxoe_seq.add_block(rg.adc, pp.scale_grad(rg.gro, 1))
+    kxoe_seq.add_block(rg.adc, pp.scale_grad(rg.gro, -1))
+    k_traj_adc, *_ = kxoe_seq.calculate_kspace()
     kxo = k_traj_adc[0, : rg.Nfid]
     kxe = k_traj_adc[0, rg.Nfid : rg.Nfid * 2]
 

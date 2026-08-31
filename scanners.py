@@ -16,13 +16,15 @@ storing them twice. `ScannerSpec` intentionally holds only plain data (no
 `pypulseq` import here) -- `params.py` is the one place that converts it
 into a `pp.Opts`.
 
-`ge_coil` is the coil identifier string passed through to MATLAB's
-`pge2.opts(...)`/`check_grad_acoustics(...)` when using the MATLAB export
-path (ge/ge_export.py). `chronaxie`/`rheobase`/`alpha` duplicate the PNS
-SAFE-model coefficients from the same `pge2.opts.m` table (used by
-ge/pns.py's pure-Python PNS check -- see ge/check.py); `check_grad_acoustics`'s
-per-coil acoustic-resonance bands are ported directly into ge/acoustics.py
-instead (they're keyed by `ge_coil`, not duplicated per-scanner here).
+`ge_coil` is the coil identifier string that keys `ge/pns.py`'s and
+`ge/acoustics.py`'s per-coil tables -- this repo's pure-Python port of
+MATLAB's `pge2.opts(...)`/`check_grad_acoustics(...)` (ge/ge_export.py has
+no MATLAB round trip; see CLAUDE.md's GE export section). `chronaxie`/
+`rheobase`/`alpha` duplicate the PNS SAFE-model coefficients from the same
+`pge2.opts.m` table (used by ge/pns.py's pure-Python PNS check -- see
+ge/check.py); `check_grad_acoustics`'s per-coil acoustic-resonance bands
+are ported directly into ge/acoustics.py instead (they're keyed by
+`ge_coil`, not duplicated per-scanner here).
 """
 
 from dataclasses import dataclass

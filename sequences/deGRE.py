@@ -26,11 +26,17 @@ preprocessing modules key off their own `_gre` raw-data naming convention
 for acquired ScanArchives, independent of this file's name.
 
 Note: this file inlines the slab-selective excitation pulse construction
-(trap4ge only, no `gzSS.delay = rf.delay - gzSS.riseTime` resync) rather
-than calling make_excitation_pulse, exactly mirroring GRE.m — which does
-the same inline construction, omitting that resync line that
-make_excitation_pulse.m has. That asymmetry is preserved here rather than
-silently fixed, since it's unclear whether it's intentional.
+rather than calling make_excitation_pulse, but does apply the same
+`gz_ss.delay = rf.delay - gz_ss.rise_time` resync after trap4ge that
+lib/make_excitation_pulse.py does. GRE.m (and an earlier version of this
+file) omitted that resync, exactly mirroring GRE.m's own inline
+construction -- but trap4ge always rebuilds the trapezoid from scratch via
+pp.make_trapezoid (see lib/trap4ge.py), which resets delay to 0
+regardless of whether the rise/flat/fall rounding itself changes anything;
+without the resync this decenters the RF pulse within gz_ss's flat top
+right now, not just if crt ever changes, leaving a nonzero residual kz at
+readout (confirmed via test_degre_excitation_is_centered, the deGRE
+analogue of test_epical_trajectory_is_centered).
 """
 
 import copy
@@ -72,6 +78,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         return_gz=True,
     )
     gz_ss = trap4ge(gz_ss, crt, sys)
+    gz_ss.delay = rf.delay - gz_ss.rise_time  # sync RF onset with slice-select gradient
     gz_ssr = trap4ge(gz_ssr, crt, sys)
 
     # Readout and phase-encode gradients
@@ -169,6 +176,11 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         + pp.calc_duration(gx_spoil)
     )
     delay_tr = np.array([math.ceil((params.TR_degre - tr) / raster) * raster for tr in tr_min])
+    if np.any(delay_tr < 0):
+        raise ValueError(
+            f'params.TR_degre {params.TR_degre * 1e3:.3f} ms is below the minimum achievable TR '
+            f'{tr_min.max() * 1e3:.3f} ms for at least one echo -- increase TR_degre.'
+        )
 
     # Assemble sequence.
     # iZ < 0: dummy shots to reach steady state

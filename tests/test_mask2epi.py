@@ -457,6 +457,22 @@ def test_mask2epi_radial_2opt_no_worse_than_plain_projection_sort():
     assert optimized_max <= naive_max + 1e-9
 
 
+def test_count_crossings_detects_first_vs_last_segment():
+    """Regression test: _count_crossings used to skip the (i=0, j=m-2) pair
+    as a special case correct only for a *closed* tour (there, segment m-2
+    is adjacent to segment 0). These are open paths, so for m > 3 that
+    pair is an ordinary non-adjacent pair that can genuinely cross -- e.g.
+    exactly the periphery-to-periphery crossing a radial shot's two spoke
+    ends produce most often."""
+    from lib.mask2epi import _count_crossings
+
+    pts4 = np.array([[0, 0], [2, 2], [2, 0], [0, 2]], dtype=float)
+    assert _count_crossings(pts4) == 1
+
+    pts5 = np.array([[0, 0], [2, 2], [2, 0], [0, 2], [1, 1]], dtype=float)
+    assert _count_crossings(pts5) >= 1
+
+
 def _has_any_crossing(ys, zs):
     from lib.mask2epi import _segments_cross
 
@@ -464,8 +480,6 @@ def _has_any_crossing(ys, zs):
     pts = list(zip(ys, zs))
     for i in range(n - 1):
         for j in range(i + 2, n - 1):
-            if i == 0 and j == n - 2:
-                continue
             if _segments_cross(pts[i], pts[i + 1], pts[j], pts[j + 1]):
                 return True
     return False
