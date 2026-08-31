@@ -14,6 +14,332 @@ at its own root — everything else lives under
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
 for the full layout).
 
+## Open TODOs (review findings, 2026-08-31, against `99055a5`)
+
+Unfixed findings from a repo-wide review for correctness, consistency and
+conciseness. Work items 1-2 first (a live blocker and a silent wrong-data
+path), then 14-16 to restore the test/lint safety net before changing
+anything else. **[measured]** = reproduced by running the code, with the
+number quoted. **[verify]** = suspicious, but needs a judgement call
+against the MATLAB reference before acting.
+
+Baseline at review time: `uv run ruff check .` -> 21 errors; `uv run
+pytest` -> **0 tests** in the plain main venv (see 14); with the
+un-collectable modules excluded, 112 passed / 9 skipped; with the `recon`
+extra installed too, 139 passed / 14 skipped.
+
+### Correctness
+
+- [ ] **1. `sequences/noise.py` readout doesn't match the imaging readout --
+  blocks all Stage 1 preprocessing. [measured]** `noise.py:26` uses
+  `sys = params.sys` (full hardware slew) and `:33` calls
+  `make_readout_grads` directly, bypassing
+  `make_readout_grads_from_params()` that `ArbEPI.py:104`/`EPIcal.py:55`
+  use -- so it gets neither the POPE `ro_slew_rise`/`ro_slew_fall` nor
+  `blip_slew`. At default params (seed=0, max blip steps 37/4):
+  ArbEPI/EPIcal `Nfid=344`, `gro` 1076 us; noise.py `Nfid=288`, `gro`
+  860 us. `preprocess.py:323` and `calibrate_delay.py:76` both then raise
+  `Calibration Nfid (344) != noise Nfid (288)`. Not a POPE regression
+  (`9ae28d5` doesn't touch `noise.py`) -- the three hand-copied derates
+  never included this file. Fix: `sys = derated_sys(params)` and
+  `rg = make_readout_grads_from_params(max_ky_step, max_kz_step, params)`;
+  hand the same `derated_sys` to `make_excitation_pulse` on `:34`. Add a
+  regression test pinning noise's `Nfid` to ArbEPI's, in the style of
+  `test_arbepi_kxoe_matches_epical`.
+- [ ] **2. `preprocess()` resume replays the EPI archive from shot 0 --
+  silently writes every frame to the wrong index.**
+  `preprocessing/preprocess.py:358` opens `ArchiveReader` at the start of
+  the archive, but the loop at `:387` begins at `start_frame` (from the
+  `last_completed_frame` checkpoint at `:365`) and immediately pulls
+  `shots_per_frame` shots. Nothing fast-forwards past the already-consumed
+  shots, and `ArchiveReader` (`raw_io.py`) has no seek -- so frame
+  `start_frame` receives frame 0's data, and so on. Shapes match, the
+  `Nfid` check at `:390` passes, the run reports success. Fix: skip
+  `start_frame * shots_per_frame` frames on resume, or drop the resume
+  path. Add a test that "crashes" a fake reader mid-run and asserts the
+  resumed frames land correctly (same style as the `scatter_frame`
+  location-encoding test).
+- [ ] **3. Zero blip step raises `ZeroDivisionError`, defeating the
+  documented ETL=1 guardrail.** `lib/mask2epi.py:84` returns `(0.0, 0.0)`
+  for `ETL == 1` ("no blips are needed"), but `make_readout_grads` then
+  does `1 / max_ky_step` at lines 178, 181, 189, 195. Also fires whenever
+  one axis has no steps (e.g. `Nz = 1`). Fix: treat a zero step as "no
+  blip on this axis" -- a zero-area blip of the matched duration. Test
+  both `ETL = 1` and `max_kz_step = 0`.
+- [ ] **4. `pogm_restart(mom="pogm")` is broken by an in-place `g_prox`.
+  [measured]** `recon/reconstruct.py:157-164`'s `g_prox` writes into its
+  argument (`X[..., k] = result`) and returns it, so at
+  `recon/solvers.py:134-137` `xnew is znew`, `xnew - znew` is exactly
+  zero, and the composite-gradient term vanishes; `zold = znew` (`:156`)
+  and `xold = xnew` (`:172`) then alias too, so the next iteration's
+  `ba_z * (xold - zold)` is zero and POGM momentum degenerates entirely.
+  On a LASSO check (300 iters): `fpgm` identical either way,
+  `pogm` F=3.2335616506 (in-place) vs 3.2304467568 (pure), max diff
+  3.1e-2. `run_recon` defaults to `fpgm`, which is why the `../mslr-recon`
+  validation never caught it -- but `pogm_restart`'s own default is
+  `pogm`. Fix: make `g_prox` pure, or clone `znew` before the prox call.
+  Add a solver test running both momenta against a closed-form prox
+  problem.
+- [ ] **5. `_count_crossings` is blind to an open path's first-vs-last
+  segment. [measured]** The `if i == 0 and j == m - 2: continue` at
+  `lib/mask2epi.py:339` (and the identical skip in pass-3 stage 2 at
+  `:511`) is only correct for a *closed* tour. These paths are open, and
+  `_segments_cross` already rejects shared endpoints, so for `m > 3` those
+  two segments can genuinely cross: a 4-point path
+  `(0,0)->(2,2)->(2,0)->(0,2)` properly crosses, and `_count_crossings`
+  reports 0. So pass 3 never sees the periphery-to-periphery crossing that
+  `mask2epi_radial` produces most often, and `best_n_cross`
+  (`:504`/`:546`) under-counts. Fix: drop the special case in both loops
+  (the `range(i + 2, ...)` bound already excludes adjacency); regression
+  test with the 4-point path.
+- [ ] **6. `generate_degre` has no negative-`delay_tr` guard.**
+  `sequences/deGRE.py:158-162` raises a clear error for a negative
+  `delay_te`; `:171` computes `delay_tr` the same way with no check, so
+  `TR_degre < tr_min` fails at `pp.make_delay` (`:214`) with a generic
+  pypulseq error naming neither `TR_degre` nor the achievable minimum.
+  Easy to hit: `TE_degre` tracks `fat_offres_freq` (so it moves with
+  `B0`), while `TR_degre` is a hand-set `8e-3` "with a small margin".
+  Mirror the `delay_te` check.
+- [ ] **7. `run_recon` re-derives the sampling mask from exact zeros.**
+  `recon/reconstruct.py:112` does `omega = ksp0[:, :, :, 0, :] != 0`, but
+  the authoritative mask is in the same file as the `omegas` dataset
+  written by `preprocess.py:380` (with `echo_times` at `:381`). A sample
+  that rounds to exactly `0+0j` after phase correction silently becomes
+  "not acquired", and the per-coil assert at `:115-116` wouldn't catch it
+  (it would be consistently wrong across coils). Read `omegas` when
+  present, keeping `!= 0` as a logged fallback -- which also removes the
+  `Nvc`-times full-boolean-tensor loop at `:115-116`.
+- [ ] **8. [verify] `check_grad_acoustics` scores every gradient axis
+  against every axis's forbidden bands.** `ge/acoustics.py:79-86` loops
+  `for lg in range(n3)` then `for axis_hz in bands_hz` -- all three band
+  lists, not `bands_hz[lg]`. `_ESP_BANDS_US` is explicitly per-axis, so
+  this can only inflate `max_in_band`. But CLAUDE.md reports agreement
+  with real MATLAB to <0.04%, so either `check_grad_acoustics.m` has the
+  same structure (make that an explicit comment here, so nobody "fixes"
+  it later) or the match is coincidental because `xrm`'s x and y bands are
+  identical and z is close. Check the MATLAB loop, then fix or document.
+- [ ] **9. Pass-3 swap moves are over-restricted by `span_has_pinned`.**
+  `lib/mask2epi.py:460` rejects a swap if any pinned position lies between
+  `i` and `j`. Correct for a *reversal* (which displaces the span), wrong
+  for a *swap*, which only touches `i` and `j` -- both already checked
+  individually. Net effect: stage 1 can never make the most useful move
+  for a radial shot, swapping two points across the pinned center sample.
+  The stage-2 docstring (`:404-415`) blames a weighted-Euclidean tie, but
+  the move is structurally blocked before the tie matters. Drop the guard
+  from the swap branch only, fix the docstring,
+  re-run `tests/test_mask2epi.py` (its crossing-count assertions guard it).
+- [ ] **10. `deGRE` omits the `gz_ss` resync and has no centering test.**
+  `sequences/deGRE.py:65-75` inlines the slab-select pulse and `trap4ge`s
+  `gz_ss`/`gz_ssr` but omits `gz_ss.delay = rf.delay - gz_ss.rise_time`
+  (which `lib/make_excitation_pulse.py:42` does). That is exactly the
+  failure `test_epical_trajectory_is_centered` exists to catch on the EPI
+  side, and deGRE has no equivalent -- currently benign only because
+  `trap4ge` is a no-op at today's `crt` (see 17). Add
+  `test_degre_excitation_is_centered`; it also answers the docstring's own
+  "unclear whether it's intentional".
+- [ ] **11. `apply_whitening`'s conjugation is right for the wrong stated
+  reason -- footgun.** `preprocessing/coils.py:38` says the conjugate in
+  `data @ W.conj().T` comes from transposing onto the row layout; it does
+  not (`(W @ x)^T = x^T @ W^T`, no conjugate). The real reason:
+  `compute_whitening_matrix` (`:26`) computes
+  `psi = (x.conj().T @ x) / N = E[conj(c_i) c_j]`, i.e. the *transpose* of
+  the standard covariance, so the correct whitener is `conj(inv(L))` --
+  exactly what the code applies. Meanwhile `compute_coil_covariance`
+  (`:45-49`) uses the opposite convention (standard covariance) and
+  `apply_coil_compression` (`:80`) correspondingly does *not* conjugate.
+  Two conventions in one module plus one wrong explanation invites a
+  "let's make these consistent" cleanup that silently breaks whitening.
+  Correct the comment; consider normalising both onto `E[c c^H]`.
+- [ ] **12. [verify] `resize_to_epi_grid` uses scipy's endpoint alignment,
+  not MATLAB's grid alignment.** `preprocessing/grid_resize.py:65-69`
+  calls `ndimage.zoom` with the default `grid_mode=False`, which aligns
+  first/last sample *centers*; `imresize3` (named as the reference) aligns
+  pixel *edges*, i.e. `grid_mode=True, mode='grid-constant'`. That is a
+  systematic sub-voxel shift and slight scale error, not just a different
+  kernel, and it applies to both consumers (`process_smaps` and
+  `run_b0map`'s field-map resize) -- so smaps and B0 maps are shifted the
+  same way relative to the EPI grid they're applied to. Decide the
+  intended convention; pin it with a synthetic-ramp round-trip test.
+- [ ] **13. `sequences/noise.py:41-44` -- dead arithmetic.**
+  `sys_seq.adc_dead_time` is set to `0` on `:42` then added on `:43`, so
+  the term is always zero. `pad_duration` is right by accident; the code
+  reads as if ADC dead time were accounted for. Drop the term, or read it
+  from `sys` before the zeroing.
+
+### Test & tooling health
+
+- [ ] **14. `uv run pytest` collects zero tests in the documented main
+  venv.** Nine `tests/test_preprocessing_*.py` modules
+  (`calibrate_delay`, `epi_gridding`, `nifti_io`, `preprocess`,
+  `recon_frames`, `recon_sigpy`, `run_b0map`, `run_rss`, `smaps`) import
+  `sigpy`/`nibabel` at module scope; pytest aborts the whole session on
+  collection errors (`Interrupted: 9 errors during collection`), so even
+  the core sequence tests never run. `recon`'s tests already do this right
+  (`tests/test_recon_operators.py:7-8`: `pytest.importorskip("torch")`),
+  and the `recon/` section below claims the main suite "still collects
+  without the `recon` venv active" -- make that true for `preprocessing`
+  too (`# noqa: E402` on the imports below the gate).
+- [ ] **15. `uv run ruff check .` fails with 21 errors** -- all `E501`, in
+  `ge/check.py:123`, `ge/validate_against_matlab.py:12,90`,
+  `ge/writeceq.py:253`, `lib/calc_te_tr_delays.py:55,74`,
+  `lib/make_readout_grads.py:188,194`, `params.py:150`,
+  `plotting/plotting.py:132,270`, `sampling/pd_sample.py:141`,
+  `sequences/ArbEPI.py:88,107,208,210`, `sequences/EPIcal.py:48,58`,
+  `sequences/noise.py:33,34`, `tests/test_gen_gaussian_pdf.py:42`.
+  Nothing else fires (no unused imports/variables anywhere). A red
+  baseline means the linter can't catch anything new. Optionally add a
+  pre-commit hook or CI step.
+- [ ] **16. The `test` extra isn't installed by `uv sync`.** `uv run
+  pytest` on a fresh checkout resolves pytest into an ephemeral env
+  without `numpy`, giving 27 `ModuleNotFoundError: No module named
+  'numpy'` collection errors that look like a broken repo. Document
+  `uv sync --extra test`, or move `pytest` into a default group.
+
+### Consistency & documentation
+
+- [ ] **17. `trap4ge` is currently a no-op. [measured]** `params.py:150`
+  sets `crt = 4e-6` and every `ScannerSpec` sets
+  `grad_raster_time = 4e-6`; pypulseq already puts every trapezoid on the
+  gradient raster, so the round-up can never change anything.
+  Instrumented across `make_excitation_pulse`/`make_prephasers`/
+  `make_spoilers`/`make_readout_grads`: **11 calls, 0 changed any
+  rise/flat/fall time or amplitude.** So three claims are inaccurate:
+  `lib/trap4ge.py:10-14`'s "both the Siemens (10us) and GE (4us) raster"
+  (`crt` is GE-only now); this file's "every gradient ... a GE-hardware-
+  timing requirement, not optional cleanup" (true in intent, vacuous in
+  effect); and the `_round_up_to_raster` epsilon fix plus the
+  `test_epical_trajectory_is_centered` failure it guards, neither of which
+  can fire while `crt == grad_raster_time`. Keep it (it's the right net if
+  `crt` returns to `20e-6`) but say so, and consider a test pinning the
+  no-op property so the situation stays visible.
+- [ ] **18. `slew_derate` docs contradict the code, twice.**
+  `params.py:35-38` says the derate covers "excitation, fat-sat,
+  prephasers, spoilers, and -- via the derated sys handed to
+  make_readout_grads -- the ky/kz blips". It doesn't: blips get
+  `blip_sys()`/`params.blip_slew` (`lib/readout_from_params.py:33-41`), as
+  the very next `Params` field comment correctly says.
+  `lib/readout_from_params.py:23-25` repeats the wrong claim.
+- [ ] **19. `epi_trajectory` default documented wrong.** The mask2epi
+  section below says the default is `'laminar'`; `params.py:301` sets
+  `'radial'`. Fix the doc (or the default, if `'laminar'` was intended).
+- [ ] **20. `main.py`'s seed comment contradicts `params.py`.**
+  `main.py:26-28` says "params.seed is None by default ... set it for a
+  reproducible mask"; `params.py:294` sets `seed = 0`. Every PNS number
+  quoted here and in README is seed-dependent, so this matters.
+- [ ] **21. Dangling "Open finding" cross-references and superseded
+  prose.** `params.py:275`, `ge/check.py:64` and this file all point at a
+  section now titled "PNS finding history (resolved 2026-08-27)". The
+  surrounding prose is stale in substance too: `params.py:276-277`'s "this
+  default now correctly blocks `main.py --ge` for EPIcal/ArbEPI/deGRE" is
+  false (79.8%, under the line -- and `.ok` doesn't gate at 80% anyway),
+  and `ge/check.py:64-66`'s "PNS in the 80-115% range ... still a real,
+  unresolved sequence-design problem" was resolved by POPE. Also document
+  the gate divergence itself: `ge/check.py:52-99` deliberately gates `.ok`
+  on the 100% (first-controlled-mode) line rather than MATLAB's 80%
+  throw, surfacing 80-100% as `WARN` -- neither the GE-export section
+  below nor README's PNS paragraph mentions it, so a docs-only reader
+  would expect `main.py --ge` to fail at 81%.
+- [ ] **22. README drift.** Remove `matlab_reference/` and its five
+  `dump_*.m` entries from the architecture tree (deleted in `58813fb`).
+  Add `recon/` -- the MSLR package (`ce2d2eb`) with its own extra is
+  absent from the tree and from README entirely (`grep -c recon/
+  README.md` -> 0). Replace `samp_locs.mat`/`kxoe<Nx>.mat` with
+  `scan_info.mat` at README lines 42, 43, 47, 206, 208 (consolidated in
+  `8071542`; README mentions `scan_info.mat` zero times, including in the
+  getting-started block that says what each call writes).
+- [ ] **23. `GRE.seq`/`GRE.pge` references outlive the sequence.** The
+  GE-export section below (and `ge/check.py:25,27`) cite validation
+  results for `GRE.seq`/`GRE.pge`; that sequence is now `deGRE`, a
+  dual-echo sequence with different timing, so the quoted acoustics
+  numbers (0.4024, over the 0.3 threshold) no longer describe anything
+  this repo produces. Re-measure against `deGRE.seq`, or mark them
+  historical.
+- [ ] **24. Stale references to removed MATLAB paths.**
+  `scanners.py:19-21` describes `ge_coil` as passed to MATLAB "when using
+  the MATLAB export path (ge/ge_export.py)" -- there is no MATLAB export
+  path; `ge_export.py` is pure Python. `sequences/ArbEPI.py:11` cites
+  "stage 8 of the port plan", which isn't in the repo.
+- [ ] **25. `mask2epi_radial`'s half-split docstring doesn't match the
+  code.** `lib/mask2epi.py:898-906` says each shot is split "at the point
+  nearest k-space center"; `:1006-1007` removes the center point and
+  splits the projection-sorted remainder **by count**
+  (`rest_idx[:target]`, `rest_idx[target:]`). When `center_idx != target`
+  those differ, and the "before" half then holds points on the far side of
+  center. Probably the right tradeoff (it's what guarantees the exact
+  per-half counts the fixed TE echo index needs) -- but say so.
+- [ ] **26. Two different `check_ge_feasibility` functions in `ge/`.**
+  `ge/check.py:198` takes `(Sequence, ScannerSpec)`; `ge/ge_export.py:20`
+  takes `(seq_path, Params)`, and `ge_export.py:14` import-aliases around
+  the collision. Rename the inner one, e.g. `check_seq_feasibility`.
+- [ ] **27. `ge/check.py:201`'s default `pns_wt` is neither human nor
+  phantom.** `(1.0, 1.0, 1.0)` is neither `[0.8, 1.0, 0.7]` nor
+  `[0, 0, 0]`. `ge_export.py` always passes `params.PNSwt` so production
+  is fine, but direct callers -- including `tests/test_ge_check.py:75` --
+  silently measure under a third weighting. Drop the default or set it to
+  the IEC human weights.
+- [ ] **28. Smaller consistency items.** `params.Ndummyshots` is used only
+  by `sequences/EPIcal.py:77` -- ArbEPI plays no dummy shots at all; say
+  that its steady-state prep comes from `discard_duration` instead, so the
+  asymmetry reads as intentional. `params.T1_degre` is stored on `Params`
+  but never read outside `params.py`. `lib/make_prephasers.py:3-4` claims
+  a duration sized for "the maximum-area direction", but each axis is
+  built independently and nothing equalizes them.
+  `sampling/gen_sampling_masks.py:3` says "spatiotemporally incoherent",
+  yet the `'caipi'` branch (`:57-58`) returns an identical mask every
+  frame (`frame_rng` unused for `caipi`/`ticaipi`). `ge/acoustics.py:15`'s
+  `MAXFREQ` is dead and `:69-70`'s odd-length fix-up is unreachable
+  (`8*n1` is always even); `:74` uses `ifftshift` where `fftshift` is the
+  semantically correct centering (identical for even lengths, which is all
+  that occurs -- but it would quietly diverge otherwise).
+  `plotting/plot_last_run.py:31-34` duplicates
+  `preprocessing/preprocess.py:_build_omegas`.
+
+### Conciseness & performance
+
+Measured on a full default-params `generate_arbepi` build (30 frames x 20
+shots, 41 400 blocks): **46.8 s total**; items 29-30 are 82% of it.
+
+- [ ] **29. Whole-sequence `calculate_kspace()` to extract 2 echoes --
+  16.7 s of 46.8 s. [measured]** `sequences/ArbEPI.py:236` computes the
+  trajectory for all ~2.5M ADC samples and keeps `2 * Nfid` of them (the
+  first two echoes of the first shot). pypulseq 1.5's `calculate_kspace`
+  takes no `time_range`, so assemble a throwaway single-shot `pp.Sequence`
+  from the already-built events (prephaser + `gro1` + two echo blocks) and
+  call it on that -- should drop 16.7 s to milliseconds.
+  `test_arbepi_kxoe_matches_epical` already pins the result.
+- [ ] **30. `_compute_schedules` is serial over independent frames --
+  21.7 s of 46.8 s. [measured]** `sequences/ArbEPI.py:94`'s per-frame loop
+  runs 30 fully independent `mask2epi_*` calls, each 20 shots of TSP-ish
+  optimization. `ProcessPoolExecutor` over frames cuts this to roughly
+  `21.7 / n_cores`.
+- [ ] **31. `main.py --ge` runs every feasibility check twice.**
+  `main.py:62-63` checks all four sequences, then `export_to_ge`
+  (`ge/ge_export.py:70-74`) re-reads each `.seq` and re-runs the identical
+  check -- 8 `seq.read()` calls, 8 whole-sequence PNS convolutions, 8
+  acoustics windows and 8 `seq2ceq` runs where 4 of each suffice. Keep the
+  pre-flight (failing before writing any `.pge` is the point); add a
+  `report=`/`skip_check=True` parameter.
+- [ ] **32. `plot_trajectory(frame_idx=...)` also does a whole-sequence
+  `calculate_kspace()`.** `plotting/plotting.py:121` computes the full
+  trajectory then `:131-133` slices one frame out; with
+  `main.py --plot --ge` that's a third full-sequence trajectory
+  computation in one run. Same fix shape as 29, or cache across
+  `plot_trajectory`/`plot_one_tr`/`plot_pns_one_tr` within one
+  `plot_last_run` call.
+- [ ] **33. `ReadoutGrads.max_blip_area` is dead.** Set in both branches
+  of the blip-matching block (`lib/make_readout_grads.py:186,192`),
+  returned at `:306`, never read. It was load-bearing pre-POPE
+  (`S = Nx*deltak + max_blip_area`); the geometry now uses
+  `2 * max(a1, a_d)` (`:228`).
+- [ ] **34. `sequences/EPIcal.py:44-45` -- needless intermediate.**
+  `scan_info` is bound only to pull `schedules` out of it on the next
+  line.
+- [ ] **35. `_bottleneck_2opt_order` evaluates no-op reversals.**
+  `lib/mask2epi.py:302`'s `for j in range(i, j_upper)` starts at `j == i`,
+  a single-element "reversal" that cannot change anything.
+  `range(i + 1, j_upper)` is equivalent and saves `O(m)` candidate
+  evaluations per pass.
+
 ## Commit conventions
 
 Do not commit as Claude: no `Co-Authored-By: Claude ...` trailer and no
