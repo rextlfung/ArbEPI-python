@@ -14,7 +14,268 @@ at its own root — everything else lives under
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
 for the full layout).
 
-## Open TODOs (review findings, 2026-09-01, against `646d9a2`)
+## Open TODOs (review findings, 2026-09-01 pass 3, against `b8757a7`)
+
+Findings from a third repo-wide review for correctness, consistency and
+conciseness, run against the tree as merged to `main`. Numbering
+**continues at 61** for the same reason pass 2 continued at 36: source
+files and this file's own prose cross-reference earlier item numbers by
+name (`preprocessing/grid_resize.py` and
+`tests/test_preprocessing_grid_resize.py` cite "item 12",
+`lib/make_prephasers.py` cites "item 28", the `trap4ge` paragraph cites
+"item 17"), so numbers are never reused.
+
+Same conventions: **[measured]** = reproduced by running the code, with
+the number quoted. **[verify]** = suspicious, but needs a judgement call
+against the MATLAB reference before acting.
+
+**Nothing from pass 2 has been fixed yet.** Items **36-60** below are all
+still open, as are **8, 13, 15, 17, 32, 33** carried from the 2026-08-31
+pass -- re-verified this pass by reproducing the recorded baseline
+exactly (20 `E501` ruff errors; 120 passed / 18 skipped) and by
+re-measuring items 36, 37, 38 and 43 directly (numbers below). This pass
+adds items 61-73 and supersedes the recorded numbers in items **43**,
+**46** and **47** (see 70 and 73's cross-references).
+
+Baseline at review time, all four combinations measured (the `output/`
+column is item 46's gate -- `output/` is gitignored, so "no" is what a
+fresh clone and any CI run see):
+
+| venv | `output/` present | `uv run pytest` |
+|---|---|---|
+| `uv sync --extra test --extra lint` | no | **120 passed, 18 skipped** |
+| `uv sync --extra test --extra lint` | yes | **125 passed, 13 skipped** |
+| `+ --extra preprocessing` | no | **149 passed, 14 skipped** |
+| `+ --extra preprocessing` | yes | **154 passed, 9 skipped** |
+
+`uv run ruff check .` -> 20 errors, all `E501`, unchanged (item 15). The
+9 residual skips in the richest configuration are 4 torch-gated
+`tests/test_recon_*.py` module skips plus 5 julia-gated cases in
+`tests/test_preprocessing_run_b0map.py`; nothing else is gated.
+
+Whole-sequence feasibility, re-measured this pass on a full default-params
+`main.py` build (GE_MR750, `PNSwt = [0.8, 1.0, 0.7]`, seed 0) -- all four
+sequences pass `.ok`:
+
+| sequence | peak PNS | acoustics | max grad | max slew |
+|---|---|---|---|---|
+| `ArbEPI.seq` | **79.8%** | **0.1484** | 50.00 mT/m | 119.0 T/m/s |
+| `EPIcal.seq` | 78.1% | 0.1484 | 50.00 mT/m | 119.0 T/m/s |
+| `deGRE.seq` | 77.4% | 0.2456 | 49.76 mT/m | 174.3 T/m/s |
+| `noise.seq` | 0.0% | 0.0000 | 0.00 mT/m | 0.0 T/m/s |
+
+ArbEPI's 79.8% and deGRE's 0.2456 both match what this file already
+records; ArbEPI's acoustics does not (see 66).
+
+### Correctness
+
+- [ ] **61. [measured] `deGRE.seq` declares the EPI FOV, not its own.**
+  `sequences/deGRE.py:237` writes `seq.set_definition('FOV', params.fov)`,
+  but every gradient in that sequence is built from `params.fov_degre`
+  (`deltak = [1 / f for f in params.fov_degre]` at `:85`, matrix
+  `N_degre`). Confirmed in the written file: `output/deGRE.seq`'s
+  `[DEFINITIONS]` block reads `FOV 0.216 0.216 0.0405` while the sequence
+  actually encodes `0.216 0.216 0.042` -- **1.5 mm / 3.6% wrong on z**
+  (x/y happen to match, since `fov_degre` tracks `fov` exactly there).
+  `ArbEPI.py`/`EPIcal.py` are both correct; this is deGRE-only, and it is
+  the same `fov`-vs-`fov_degre` confusion class as item 39. Fix:
+  `params.fov_degre`. Note the excitation slab thickness on `:74`
+  (`0.9 * params.fov[2]`) must *stay* on `params.fov` -- imaging the same
+  slab as the EPI sequence is deliberate, see that module's docstring --
+  so only the definition line changes.
+- [ ] **62. [measured] deGRE exports the *prescribed* `TE_degre` while
+  playing a different pair, and ΔTE is not preserved exactly -- correcting
+  item 37's claim that it is.** `delay_te` is computed per echo,
+  independently, as `ceil((te - te_min) / raster) * raster`
+  (`sequences/deGRE.py:164`). The two prescribed TEs differ by
+  `1 / fat_offres_freq` = 2236.90 us, which is **not** a multiple of the
+  4 us gradient raster (559.225 rasters), so the two ceils land on
+  different sub-raster residues and the difference does not survive.
+  Measured (folding in items 36/37's corrections to `te_min`): realized
+  TE = **3.120 / 5.356 ms** against prescribed **3.0369 / 5.2738 ms** --
+  83.1 us and 82.2 us late -- and realized ΔTE = **2.2360 ms vs 2.23690 ms
+  prescribed, 0.90 us short (0.040%)**. Two consequences. (a)
+  `sequences/ArbEPI.py:338` writes `params.TE_degre` (the *prescribed*
+  pair) into `scan_info.mat`, and `preprocessing/julia/b0map.jl` divides
+  the echo phase difference by that ΔTE to get Hz -- so every field map
+  carries a **0.040% scale error** (0.1 Hz at a 250 Hz offset). (b) Item
+  37's "`dTE` is preserved exactly, so the field-map scaling and the
+  `dTE = 1/fat_offres_freq` fat-cancellation argument are both unaffected"
+  is not quite right: preserved to 0.04%, not exactly (residual fat phase
+  0.0025 rad, still negligible). Both effects are small, but the exported
+  number should be the realized one. Cleanest fix: derive `delay_te[1]`
+  from `delay_te[0]` plus a raster-multiple offset, and export the
+  realized pair rather than `params.TE_degre`. The doc claim in item 37
+  needs correcting either way.
+- [ ] **63. [measured] The ADC window overruns `Tread`, so the last
+  samples of every echo are acquired while the ky/kz blip is already
+  playing -- the opposite of what the code says it does.**
+  `lib/make_readout_grads.py:309` comments "Delay blips to play after the
+  ADC window closes" and sets `gy_blip.delay = gz_blip.delay = Tread`.
+  But `Nfid = round(Tread / dwell / 4) * 4` (`:263`) rounds to the
+  *nearest* multiple of 4, in either direction. At default params:
+  `Tread` = 684.0 us, `Tread / dwell` = 342, `Nfid` = **344**, so the ADC
+  spans 688.0 us -- a **4.0 us / 2-sample overrun** past the blip's own
+  start. Magnitude is small: the unit blip accrues 2.08e-4 of its full
+  area in its first 4 us (it is still on the rise ramp), so at the largest
+  step this build uses (`max_ky_step` = 37) the worst-case ky error on
+  those two samples is **0.0077 index units = 0.036 m^-1 against
+  `deltak_y` = 4.63 m^-1, i.e. 0.17% of one k-space step**. Not a recall,
+  but worth fixing because the comment asserts the opposite and the error
+  grows as `dwell^2` (the overrun is bounded by `2 * dwell`), so a coarser
+  dwell or a different `Nx` makes it worse silently. Note the ±kmax
+  coverage loop just above is *not* also wrong: it integrates
+  `_composite_segments` out to `(Nfid - 0.5) * dwell`, over the whole
+  composite lobe, so it already accounts for the overrun. Fix: either
+  correct the comment, or floor instead of round
+  (`Nfid = floor(Tread / dwell / 4) * 4` -> 340 here), which costs a
+  slightly larger flat top to keep the same coverage.
+- [ ] **64. [measured] `run_rss.py`'s `_ift3` justifies its FFT-shift
+  convention with a premise that is false for this repo's actual matrix
+  size.** Its docstring defends `fftshift(ifftn(fftshift(.)))` (rather
+  than the conventional `fftshift(ifftn(ifftshift(.)))`) as "identical for
+  even-length axes, which every dimension in this pipeline is".
+  `params.py` sets `N = [240, 240, 45]` and `N_degre = [108, 108, 21]` --
+  **z is odd on both grids**. Measured on a length-45 axis, the two
+  conventions differ by **144% in relative complex value** (and by exactly
+  0 at n = 44, as claimed). The difference is a one-sample circular shift
+  of the k-space input, i.e. a pure linear phase ramp in image space, so
+  both current consumers happen to be immune -- `_rss_recon` takes
+  `np.abs` (measured magnitude difference 1.7e-16), and
+  `preprocessing/julia/b0map.jl`, which this file's preprocessing section
+  says uses "the same centered-FFT convention as `run_rss.py`'s `_ift3`",
+  differences two echoes on the same grid so the ramp cancels. But the
+  stated *reason* is wrong, and any future complex-valued consumer of
+  `_ift3` inherits the ramp silently on z. Fix the docstring to say the
+  convention is magnitude-/difference-safe rather than shift-equivalent,
+  or just switch the input to `ifftshift`. Related, and the third distinct
+  spelling of this same idea in the repo (item 44 covers the first two):
+  `ge/acoustics.py:77` uses `ifftshift` where
+  `check_grad_acoustics.m` uses `fftshift` -- provably equivalent there,
+  since `n1 + ZF_FAC * n1 = 8 * n1` is always even, as the comment two
+  lines above already argues for a different purpose.
+
+### Consistency & documentation
+
+- [ ] **65. [measured] `sequences/noise.py` is the only sequence that
+  never sets its `Name`/`FOV` definitions.** `ArbEPI.py:344-345`,
+  `EPIcal.py:141-142` and `deGRE.py:237-238` all call
+  `seq.set_definition('FOV', ...)` + `seq.set_definition('Name', seqname)`
+  before `seq.write(...)`; `noise.py:69` writes straight out. Confirmed in
+  the written file: `output/noise.seq`'s `[DEFINITIONS]` block has neither
+  key, so `generate_noise`'s `seqname` parameter reaches only the
+  filename. Nothing in `ge/` reads these definitions today, so this is
+  cosmetic -- but it is a gratuitous divergence in the one sequence file
+  that already diverges on `sys_seq` (item 56) and on `adc_dead_time`
+  (item 13), and it is the odd one out on console output too (it alone
+  prints `Validating sequence...` / `Sequence written to:` around its
+  timing check). Worth folding into whichever of 13/56 gets fixed first.
+- [ ] **66. [measured] The ArbEPI acoustics numbers in `ge/check.py` and
+  in this file are stale by 5x since the POPE switch, and the disclaimer
+  around them doesn't cover it.** Both cite `ArbEPI.seq: 0.028146 here vs
+  MATLAB's 0.02814424`. Today's `ArbEPI.seq` measures **0.1484** through
+  the same check -- a 5.3x change, from the asymmetric readout ramps
+  (`9ae28d5`). The surrounding "historical record, not a current claim"
+  disclaimer names only the `GRE.seq` -> `deGRE.seq` rename, so the
+  ArbEPI figures read as current when they are not. The *window* half of
+  that reproduction record does still hold exactly: measured
+  0.100000 s = **25000 samples** at the 4 us raster, matching the recorded
+  "25000 vs MATLAB's 25001". So re-record only the magnitude, and extend
+  the disclaimer to cover the POPE change as well as the rename. (The full
+  current four-sequence table is in this section's preamble above.)
+- [ ] **67. `preprocessing/nifti_io.py`'s module docstring describes
+  `run_b0map`'s pre-resize behavior.** It says the field map is written
+  "on the deGRE grid, so its voxel size comes from `fov_degre`, not
+  `fov`". `run_b0map.py:119-123` passes the *EPI*-grid `b0map_hz` with
+  `fov=seq_params.fov`, and its own comment two lines up says "now on the
+  EPI grid/fov like every other NIfTI this pipeline writes". `nifti_io`'s
+  docstring is the stale half, and it names the exact wrong value someone
+  would "restore" it to. Same class as item 50 (`preprocess.py`'s
+  docstring contradicting this file), just in the other direction.
+- [ ] **68. `tests/test_ge_check.py`'s two smoke tests check against a
+  different scanner than the sequences were built for.**
+  `test_check_seq_feasibility_runs` (`:75`) and
+  `test_check_seq_feasibility_noise_has_no_gradients` (`:91`) both
+  hardcode `SCANNERS['GE_UHP']`, but the `output/*.seq` files they read
+  were built under `params.py`'s `GE_MR750` -- different `max_grad`
+  (100 vs 50 mT/m) and a different `chronaxie`/`rheobase`/`alpha` triple,
+  so a different PNS model entirely. Their assertions are only `>= 0`, so
+  nothing is wrong today; but any strengthening of them would silently
+  measure the wrong hardware, and the sibling PNS regression test in the
+  same file (item 38's target) correctly uses `p.spec`. Use
+  `load_params().spec` here too, and note this interacts with item 46 --
+  these are exactly the tests that never run on a fresh checkout.
+- [ ] **69. `preprocessing/smaps.py`'s `cal_size` "crop" is a zero-*pad*
+  on z at this repo's real dimensions.** `estimate_smaps` resizes k-space
+  to `(ncoils, cal_size, cal_size, cal_size)` = 24^3, but
+  `Nz_degre = 21 < 24`, so sigpy pads z rather than cropping it. This is
+  *not* a geometry bug -- k-space zero-padding interpolates while
+  preserving FOV, so `process_smaps`' subsequent `fov_gre` arithmetic
+  stays correct -- but two docstring claims are then wrong: "center-crop
+  ksp_gre's spatial dims to this matrix size" is true only for x/y, and
+  "so EspiritCalib's own internal calibration-region crop becomes a no-op"
+  now means a 24-wide calibration region on z of which 3 rows are
+  synthetic zeros, which is a (small) real effect on the fit rather than a
+  no-op. Either clamp per axis (`min(cal_size, n)`) or state explicitly
+  that z is padded and why that is acceptable.
+
+### Test & tooling health
+
+- [ ] **70. [measured] Item 46 undercounts the `output/`-gated tests (5
+  cases, not 3), and item 47's recorded baselines don't reproduce in
+  either venv -- superseded by the table in this section's preamble.**
+  `test_check_seq_feasibility_runs` and `test_seq2ceq_self_consistency`
+  are each `@pytest.mark.parametrize`d over `['noise.seq', 'ArbEPI.seq']`,
+  so the gated set is **5 test cases across 3 test functions**, not 3
+  tests -- confirmed by the exact 5-test delta between the `output/`-
+  present and `output/`-absent rows of both venvs in the preamble table.
+  Item 47's recorded "123 passed, 15 skipped" (plain venv) and "157 passed
+  / 6 skipped" (preprocessing extras) both come from environments that no
+  longer reproduce; the current four measurements are 120/18, 125/13,
+  149/14 and 154/9. Re-record from the table above once item 46 is
+  settled, and fix item 46's own count while you're there.
+
+### Conciseness & performance
+
+- [ ] **71. [measured] Item 43's `trap4ge.flat_area` staleness is gated by
+  item 17, not just by having no consumer -- and the two should be fixed
+  together.** Item 43 calls the wrong `flat_area` "latent today" because
+  nothing reads it. There is a second, stronger reason it cannot currently
+  fire: while `crt == grad_raster_time`, `trap4ge`'s rounding changes
+  nothing (item 17), so `gin.area / gout.area` is *identically 1* and the
+  stored `flat_area` is exactly right -- measured, ratio 1.0000000 at
+  `crt = 4e-6`. Forcing the rounding to actually bite (`crt = 20e-6`, the
+  value item 17 says to revert to for Siemens dual-raster support) makes
+  it wrong immediately: stored `flat_area` **666.667 vs the correct
+  657.895, off by 1.33%**, and `pp.scale_grad` propagates the error
+  faithfully (scaled: stored 1333.33 vs correct 1315.79). So the one-line
+  fix item 43 proposes is a prerequisite for item 17's revert, not
+  independent cleanup -- worth saying so in both entries.
+- [ ] **72. Two dead expressions and one misleading name.** (a)
+  `sequences/deGRE.py:204`'s `pe2_steps[max(0, iZ - 1)]` sits inside
+  `... if iZ > 0 else 0.0`, so `iZ - 1 >= 0` always and the `max` can
+  never bind -- drop it (the neighbouring `pe1_steps[iY]` on `:203`
+  correctly has no such guard). (b) `preprocessing/recon_frames.py:97`
+  binds `smaps, _nvcoils = _load_smaps(...)` with a leading underscore
+  signalling "unused", then uses it at `:138` to populate
+  `seq_params_out['Nvcoils']` -- rename to `nvcoils`. Both are the same
+  class as the first review's item 34.
+- [ ] **73. `recon/lowrank.py`'s `pcount` buffer-reuse parameter is dead
+  in production.** `patchSVST` accepts `pcount` and forwards it to
+  `patches2img`, which zeroes and reuses it instead of allocating -- but
+  the only production caller, `recon/reconstruct.py`'s `g_prox`
+  (`:195`), never passes one, so every call allocates a fresh
+  `(Nx, Ny, Nz)` float32 count array (10.4 MB at this repo's real
+  240x240x45 dims, once per scale per iteration). PyTorch's caching
+  allocator makes that nearly free, so this is tidiness rather than a
+  measured cost -- but it is a parameter that exists solely to be passed
+  and never is. Either thread a persistent buffer through from
+  `run_recon`, or delete the parameter from both functions. Same
+  disposition question as item 49's `poweriter`, and both live in the
+  `recon/` module that item 49 already notes has no wired-up
+  non-validation entry point.
+
+## Still open: pass-2 review findings (2026-09-01, against `646d9a2`)
 
 Findings from a second repo-wide review for correctness, consistency and
 conciseness, run against the post-fix-pass tree. Numbering **continues at
