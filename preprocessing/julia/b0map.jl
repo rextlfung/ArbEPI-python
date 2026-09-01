@@ -11,7 +11,30 @@ Estimation in 3D MRI", IEEE TCI 2020).
 
 Usage:
     julia --project=preprocessing/julia preprocessing/julia/b0map.jl \
-        <gre_h5_path> <output_h5_path> [mask_threshold]
+        <gre_h5_path> <output_h5_path> [mask_threshold] [l2b] [niter]
+
+`niter` (default 30, MRIFieldmaps' own default) is `b0map`'s outer NCG
+iteration count -- exposed alongside `l2b` because raising l2b alone,
+holding niter fixed, measurably did *not* change the fit (tested l2b in
+[-6, 8], a 16384x range in the regularization weight beta=2^l2b, with
+identical results to 4 significant figures): the harder-to-optimize,
+more-regularized problem needs more outer iterations to actually reach its
+(smoother) optimum within the same NCG budget, or it just sits near
+wherever the unregularized-ish solve left off after 30 iterations.
+
+`l2b` (default -6.0, MRIFieldmaps' own default) is `b0map`'s log2
+roughness-regularization weight (beta = 2^l2b in its quadratic roughness
+penalty R(w) = 0.5*|C*w|^2, C a finite-difference matrix -- see b0map's own
+docstring). Exposed here (not previously) because this pipeline's real
+phantom data has a receive-coil-geometry-driven SNR gradient -- measured
+~2.7x lower GRE magnitude SNR at the object's center than near its
+periphery (coils are peripheral; sensitivity, and thus phase-based
+field-map reliability, falls off toward a large object's center) -- and the
+resulting under-regularized noise in that low-SNR region propagates through
+B0 correction into visible reconstruction artifacts (speckle, signal loss)
+concentrated exactly there. Raising l2b trades spatial resolution in the
+field map for less noise in low-SNR regions; see CLAUDE.md's recon/ section
+for the tuning this was chosen against.
 
 `mask_threshold` (default 0.1, matching MRIFieldmaps' own `b0init` default)
 sets the fraction of peak first-echo magnitude below which a voxel is
@@ -146,7 +169,10 @@ function romeo_finit(images, echotime, mask)
     dphi_unwrapped ./ Float32(2π * (echotime[2] - echotime[1]))
 end
 
-function main(gre_h5_path::AbstractString, output_h5_path::AbstractString, threshold::Real = 0.1)
+function main(
+    gre_h5_path::AbstractString, output_h5_path::AbstractString,
+    threshold::Real = 0.1, l2b::Real = -6.0, niter::Int = 30,
+)
     println("Loading '$gre_h5_path'...")
     images, echotime = load_gre_images(gre_h5_path)
     println("  images size (Nx, Ny, Nz, Ncoils, Nechoes): ", size(images))
@@ -159,8 +185,8 @@ function main(gre_h5_path::AbstractString, output_h5_path::AbstractString, thres
     finit = romeo_finit(images, echotime, mask)
     println("  finit range (Hz, masked): ", extrema(finit[mask]))
 
-    println("Running MRIFieldmaps.b0map...")
-    fhat, _times, _out = b0map(finit, images, echotime; mask, chat = true)
+    println("Running MRIFieldmaps.b0map (l2b=$l2b, niter=$niter)...")
+    fhat, _times, _out = b0map(finit, images, echotime; mask, chat = true, l2b, niter)
 
     mkpath(dirname(output_h5_path))
     h5open(output_h5_path, "w") do f
@@ -169,13 +195,16 @@ function main(gre_h5_path::AbstractString, output_h5_path::AbstractString, thres
         write_numpy_array(f, "mask", Array{Bool}(mask))
         f["TE_degre"] = collect(echotime)
         attributes(f)["mask_threshold"] = threshold
+        attributes(f)["l2b"] = l2b
     end
     println("Wrote '$output_h5_path'.")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    length(ARGS) in (2, 3) ||
-        error("usage: julia b0map.jl <gre_h5_path> <output_h5_path> [mask_threshold]")
-    args = length(ARGS) == 3 ? (ARGS[1], ARGS[2], parse(Float64, ARGS[3])) : (ARGS[1], ARGS[2])
+    length(ARGS) in (2, 3, 4, 5) ||
+        error("usage: julia b0map.jl <gre_h5_path> <output_h5_path> [mask_threshold] [l2b] [niter]")
+    args = (ARGS[1], ARGS[2], (length(ARGS) >= 3 ? (parse(Float64, ARGS[3]),) : ())...,
+            (length(ARGS) >= 4 ? (parse(Float64, ARGS[4]),) : ())...,
+            (length(ARGS) >= 5 ? (parse(Int, ARGS[5]),) : ())...)
     main(args...)
 end

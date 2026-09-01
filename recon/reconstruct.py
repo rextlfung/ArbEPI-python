@@ -21,6 +21,7 @@ import torch
 
 from recon.lowrank import img2patches, patch_nucnorm, patchSVST
 from recon.operators import build_encoding_operator, gather_ksp
+from recon.operators_b0 import build_encoding_operator_b0
 from recon.solvers import pogm_restart
 
 
@@ -129,7 +130,23 @@ def run_recon(
     mom: str = "fpgm",
     conv_tol: float = 1e-5,
     lambda_global: float = 1.0,
+    fn_b0map: str | None = None,
+    L_b0: int = 6,
+    nbins_b0: int = 128,
 ) -> ReconResult:
+    """fn_b0map: optional path to a run_b0map.py output (<seqname>_b0map.h5,
+    'b0map_hz' on the EPI grid -- see preprocessing/run_b0map.py). When
+    given, builds the encoding operator with time-segmented B0 off-
+    resonance correction (recon/operators_b0.py) instead of the plain
+    encoding operator -- reads per-sample acquisition time from fn_ksp's
+    'echo_times' dataset (preprocessing/preprocess.py's _build_echo_times;
+    (Ny,Nz,Nt), broadcast across Nx here since kx doesn't affect echo
+    time). L_b0/nbins_b0 are mri_exp_approx's segment count/histogram bins
+    (see operators_b0.py's module docstring for why L hasn't been swept
+    against a real error bound). sigma1A is not re-estimated internally for
+    the corrected operator -- the caller must supply one appropriate to it
+    (the B0-corrected operator's spectral norm is not guaranteed to match
+    the uncorrected operator's)."""
     device = torch.device(device)
     Nscales = len(patch_sizes)
 
@@ -154,7 +171,19 @@ def run_recon(
 
     print("Building encoding operator...")
     smaps_chw = smaps.permute(3, 0, 1, 2).contiguous()  # (Nc,Nx,Ny,Nz)
-    A = build_encoding_operator(smaps_chw, omega)
+    if fn_b0map is not None:
+        print(f"  Loading B0 field map from {fn_b0map} (L={L_b0}, nbins={nbins_b0})...")
+        b0map_hz = torch.from_numpy(_load_array(fn_b0map, "b0map_hz").astype(np.float32)).to(device)
+        assert tuple(b0map_hz.shape) == (Nx, Ny, Nz), (
+            f"b0map_hz shape {tuple(b0map_hz.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz})"
+        )
+        echo_times_2d = torch.from_numpy(_load_array(fn_ksp, "echo_times").astype(np.float32))
+        echo_times_s = echo_times_2d.to(device).unsqueeze(0).expand(Nx, -1, -1, -1).contiguous()
+        A = build_encoding_operator_b0(
+            smaps_chw, omega, b0map_hz, echo_times_s, L=L_b0, nbins=nbins_b0
+        )
+    else:
+        A = build_encoding_operator(smaps_chw, omega)
     ksp = gather_ksp(ksp0, A)  # (K,Nc,Nt) -- see operators.py for why gathered, not dense
     del ksp0
     if device.type == "cuda":
