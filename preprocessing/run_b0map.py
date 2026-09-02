@@ -17,6 +17,17 @@ Depends on preprocess()'s STEP 2 output (`<seqname>_gre.h5`, whitened +
 coil-compressed dual-echo GRE k-space + TE_degre), so run_preprocessing()
 must have already completed for each seqname before this.
 
+Also computes (or loads, if already cached by a prior recon_frames.py run)
+sensitivity maps on the deGRE grid via smaps.load_smaps, and passes them to
+b0map.jl as a `smap` argument -- see b0map.jl's own module docstring for
+why this replaces MRIFieldmaps' phase-contrast coil-combine fallback (a
+true matched-filter combine, expected to reduce field-map noise in this
+pipeline's real low-per-coil-SNR object-center regions). This means
+run_b0map() can now trigger ESPIRiT sensitivity-map estimation itself, not
+only recon_frames.py -- both share the same
+`<datdir>/recon/smaps_<seqname>_sigpy.h5` cache, so whichever stage runs
+first pays the (one-time) ESPIRiT cost.
+
 b0map.jl itself estimates entirely on the deGRE acquisition grid (that's
 where the dual-echo images/phase data live). This driver then resizes that
 result onto the *EPI* acquisition grid -- the shape/FOV a B0-corrected EPI
@@ -38,6 +49,7 @@ import numpy as np
 from preprocessing.config import PreprocessingConfig, load_config, load_seq_params, set_seq_paths
 from preprocessing.grid_resize import resize_to_epi_grid
 from preprocessing.nifti_io import save_recon_nifti
+from preprocessing.smaps import load_smaps
 
 _JULIA_DIR = os.path.join(os.path.dirname(__file__), 'julia')
 _JULIA_SCRIPT = os.path.join(_JULIA_DIR, 'b0map.jl')
@@ -63,11 +75,33 @@ def run_b0map(cfg: PreprocessingConfig) -> None:
             continue
         output_path = os.path.join(cfg.datdir, 'recon', f'{seqname}_b0map.h5')
 
+        paths = set_seq_paths(cfg, seqname)
+        seq_params = load_seq_params(paths)
+
+        # Best-effort: ensures <datdir>/recon/smaps_<seqname>_sigpy.h5
+        # exists with a deGRE-grid smaps_degre/emap_degre pair (estimating
+        # fresh via ESPIRiT if this is the first stage to need them) -- see
+        # smaps.load_smaps's docstring and b0map.jl's module docstring. Not
+        # a hard requirement: run_b0map() only ever depended on
+        # `ksp_gre_echoes` before this, and load_smaps additionally needs
+        # `ksp_gre` (preprocess.py's STEP 2 always writes both together, so
+        # this should never actually miss on real data) -- fall back to
+        # b0map.jl's pre-existing no-smap behavior rather than failing the
+        # whole field-map estimation over a missing/failed optional input.
+        smaps_path = os.path.join(cfg.datdir, 'recon', f'smaps_{seqname}_sigpy.h5')
+        try:
+            load_smaps(cfg, paths, seq_params)
+        except Exception as e:  # noqa: BLE001 -- optional input, degrade gracefully
+            print(f'WARNING [{seqname}]: could not load/estimate sensitivity maps ({e}) -- '
+                  'falling back to no smap.')
+            smaps_path = ''
+
         try:
             subprocess.run(
                 [
                     julia_bin, f'--project={_JULIA_DIR}', _JULIA_SCRIPT,
-                    gre_cache_path, output_path, str(cfg.b0map_mask_thresh),
+                    gre_cache_path, output_path, smaps_path, str(cfg.threshold_mask),
+                    str(cfg.b0map_mask_thresh), cfg.b0map_precon,
                 ],
                 check=True,
             )
@@ -75,8 +109,6 @@ def run_b0map(cfg: PreprocessingConfig) -> None:
             print(f"ERROR [{seqname}]: {e}\nSkipping...")
             continue
 
-        paths = set_seq_paths(cfg, seqname)
-        seq_params = load_seq_params(paths)
         with h5py.File(output_path, 'r') as f:
             b0map_hz_degre = f['b0map_hz'][()]
             mask_degre = f['mask'][()].astype(bool)

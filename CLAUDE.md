@@ -628,11 +628,15 @@ records; ArbEPI's acoustics does not (see 66).
   `sequences/deGRE.py:204`'s `pe2_steps[max(0, iZ - 1)]` sits inside
   `... if iZ > 0 else 0.0`, so `iZ - 1 >= 0` always and the `max` can
   never bind -- drop it (the neighbouring `pe1_steps[iY]` on `:203`
-  correctly has no such guard). (b) `preprocessing/recon_frames.py:97`
-  binds `smaps, _nvcoils = _load_smaps(...)` with a leading underscore
-  signalling "unused", then uses it at `:138` to populate
-  `seq_params_out['Nvcoils']` -- rename to `nvcoils`. Both are the same
-  class as the first review's item 34.
+  correctly has no such guard); still open. (b) [x] fixed, incidentally, by
+  the B0 field map investigation's `_load_smaps` ->
+  `preprocessing.smaps.load_smaps` move (see the `preprocessing/`/`recon/`
+  sections below): `preprocessing/recon_frames.py` used to bind
+  `smaps, _nvcoils = _load_smaps(...)` with a leading underscore
+  signalling "unused", then use it later to populate
+  `seq_params_out['Nvcoils']` -- the (now 4-tuple, `smaps_degre`/
+  `emap_degre` added) unpacking site renames it to `nvcoils`. Both were the
+  same class as the first review's item 34.
 - [ ] **73. `recon/lowrank.py`'s `pcount` buffer-reuse parameter is dead
   in production.** `patchSVST` accepts `pcount` and forwards it to
   `patches2img`, which zeroes and reuses it instead of allocating -- but
@@ -789,12 +793,16 @@ archived section below.
   explains what happened -- and leaves the checkpoint file open, on a
   path where the process is likely about to retry. Move the open + resume
   inside the `try`, or open `mf` with a `with`.
-- [ ] **41. `recon_frames._load_smaps` doesn't validate the smaps cache's
-  `Nvcoils`; `preprocess.py` does.** `preprocessing/preprocess.py:315-321`
+- [ ] **41. `smaps.load_smaps` doesn't validate the smaps cache's
+  `Nvcoils`; `preprocess.py` does.** [reference updated: this function was
+  `recon_frames._load_smaps` at review time, moved to
+  `preprocessing.smaps.load_smaps` by the B0 field map investigation (see
+  `preprocessing/`/`recon/` sections below) -- the bug itself is
+  unaffected by the move, still open.] `preprocessing/preprocess.py:315-321`
   guards the shared `smaps_<seqname>_sigpy.h5` cache with `smaps_valid =
   f.attrs.get('Nvcoils') == Nvcoils` and re-estimates on a mismatch.
-  `preprocessing/recon_frames.py:_load_smaps` reads the same file and
-  returns whatever is on disk. A cache left over from a run whose
+  `smaps.load_smaps` reads the same file and returns whatever is on disk.
+  A cache left over from a run whose
   noise/deGRE data selected a different `Nvcoils` then reaches
   `recon_fn(data, smaps)` with mismatched coil counts -- a shape error at
   best, a silently wrong reconstruction at worst. Port the same attr
@@ -2060,7 +2068,8 @@ small, self-contained Julia project (`Project.toml` + a pinned
 `Manifest.toml`, both committed) holding one script, `b0map.jl`, invoked
 as a subprocess by `preprocessing/run_b0map.py` (`julia
 --project=preprocessing/julia preprocessing/julia/b0map.jl <gre_h5>
-<output_h5> [mask_threshold]`) -- not embedded via PythonCall/juliacall,
+<output_h5> [smaps_h5] [eig_mask_threshold] [mask_threshold] [precon]`) --
+not embedded via PythonCall/juliacall,
 since there is no other Julia dependency anywhere in this pipeline to
 justify that weight, and a subprocess boundary mirrors how `raw_io.py`
 already isolates GE's proprietary GERecon SDK to one module rather than
@@ -2072,23 +2081,65 @@ network access is needed to run it.
 `b0map.jl` reads `ksp_gre_echoes`/`TE_degre` back from the cache, IFFTs
 each echo/coil to image space with the same centered-FFT convention as
 `run_rss.py`'s `_ift3` (`fftshift(ifft(fftshift(.)))` per axis), and calls
-`MRIFieldmaps.b0map(finit, images, echotime; mask, chat=true)` -- no
-`smap` argument: this pipeline's ESPIRiT maps (`smaps.py`) are estimated
-on a `cal_size`-cropped grid and resized to the *EPI* grid, neither of
-which matches the deGRE grid `images` lives on, so passing them without a
-matching resize step would violate `b0map`'s shape check; MRIFieldmaps'
-own phase-contrast coil combine (used automatically when `smap` is
-omitted) needs no such alignment. An explicit magnitude-threshold `mask`
-(default `0.1` x peak first-echo magnitude, matching `MRIFieldmaps.
-b0init`'s own default) is *not* optional here despite `b0map`'s own
-`mask` keyword defaulting to "every voxel": its no-`smap` coil-combine
-path divides by each voxel's coil sum-of-squares, and a synthetic
-all-zero-background test volume confirmed this produces a background
-0/0 = NaN that poisons Julia's `maximum()` and returns an all-NaN field
-map end to end (real scanner data has thermal noise everywhere so an
-exactly-zero voxel won't occur, but masking out background is standard
-practice for this package regardless, so the mask stays mandatory here
-rather than becoming a latent footgun).
+`MRIFieldmaps.b0map(finit, images, echotime; smap, mask, precon)`.
+`precon=:diag` (not `b0map`'s own default, `:ichol`) -- see the dedicated
+paragraph below for why. `smap`, when `preprocessing/smaps.py`'s
+`load_smaps` has a deGRE-grid sensitivity-map cache available (see that
+module's docstring: it now resizes the same `cal_size`-cropped ESPIRiT
+calibration onto *this* deGRE grid, not just the EPI grid), replaces
+MRIFieldmaps' own phase-contrast coil-combine fallback with a true
+matched-filter combine -- `run_b0map.py` computes/loads this best-effort
+(falls back to no `smap` if unavailable, e.g. no `ksp_gre` in the GRE
+cache, rather than failing field-map estimation over an optional input).
+An explicit magnitude-threshold `mask` (default `0.1` x peak first-echo
+magnitude, matching `MRIFieldmaps.b0init`'s own default), ANDed with an
+ESPIRiT-eigenvalue-based mask when `smap` is available, is *not* optional
+here despite `b0map`'s own `mask` keyword defaulting to "every voxel": its
+no-`smap` coil-combine path divides by each voxel's coil sum-of-squares,
+and a synthetic all-zero-background test volume confirmed this produces a
+background 0/0 = NaN that poisons Julia's `maximum()` and returns an
+all-NaN field map end to end (real scanner data has thermal noise
+everywhere so an exactly-zero voxel won't occur, but masking out
+background is standard practice for this package regardless, so the mask
+stays mandatory here rather than becoming a latent footgun).
+
+**`precon=:diag`, not MRIFieldmaps' own default `:ichol` -- the actual fix
+for a real, measured reconstruction artifact.** A B0-corrected
+reconstruction (see `recon/`'s "B0 off-resonance correction" subsection)
+kept showing salt-and-pepper speckle after landing on `L=32`; the field
+map itself turned out to be the cause, and specifically its optimizer, not
+its regularization weight. `l2b` (`b0map`'s log2 roughness-regularization
+weight) was swept across `[-6, 28]` -- a 16384x-to-270-million-x range in
+the actual `beta = 2^l2b` -- and had essentially no effect on the fitted
+field map's smoothness (`mean|Laplacian|` roughness flat at ~8.2-8.4
+throughout, confirmed both under-converged and via a full 2000-iteration
+NCG run at `l2b=4`, which was still measurably reducing cost yet converged
+to the same roughness as `l2b=-6`). Traced to `:ichol`'s preconditioner
+(`H = spdiagm(hcurv) + CC`) being built from the *same* `CC = beta * C'C`
+operator that appears in the gradient (`grad = hderiv + CC*w`) -- as
+`beta` grows, both numerator and denominator become `CC`-dominated and the
+preconditioned NCG step collapses toward `-w`, independent of `beta`.
+Switching to `precon=:diag` (`Hdiag = hcurv + diag(CC)`, no such
+numerator/denominator cancellation since only the diagonal of `CC` enters
+the preconditioner) fixed it directly: field-map roughness dropped ~4x
+under `:diag` vs `:ichol` at identical `l2b`/`niter`, and re-reconstructing
+with the `:diag` field map confirmed the fix at the image level too --
+B0-correction-induced excess image roughness (over an uncorrected
+baseline) dropped from +61.1 (`:ichol`) to +19.5 (`:diag`). This isn't
+data-specific: MRIFieldmaps.jl's own
+[`02-b0map.jl` example](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl/blob/main/docs/lit/examples/02-b0map.jl)
+independently notes "the diagonal preconditioner seems to be as effective
+as the incomplete Cholesky preconditioner" in this Julia port (unlike the
+original MATLAB implementation, where `ichol` is the expected/reliable
+win) -- though that comparison is about final-RMSE-vs-wall-time on its own
+canonical test case, not `l2b` sensitivity specifically, so it corroborates
+the outcome without independently confirming the mechanism above (traced
+directly in this pipeline's own code instead). With `precon=:diag` fixing
+the actual problem, `l2b`/`niter` were *removed* from `b0map.jl`'s exposed
+CLI arguments (they'd been added specifically to chase this bug) and
+MRIFieldmaps' own call is no longer passed them at all -- both silently
+revert to library defaults (`-6.0`/`30`), which is all that's needed once
+the preconditioner is right.
 
 **`finit` is built via [ROMEO.jl](https://github.com/korbinian90/ROMEO.jl)
 (Dymerska et al., "Phase unwrapping with a rapid opensource minimum
@@ -2192,6 +2243,17 @@ mechanics (manual buffer aliasing, forced `GC.gc()`/`CUDA.reclaim()`) since
 those exist only to fit Julia's broadcast-allocates-a-new-array semantics
 under a 48GB budget -- PyTorch's caching allocator and Python-float-times-
 complex64-tensor weak-type promotion don't have that problem.
+
+`recon/b0_correction.py`/`recon/operators_b0.py` add B0 off-resonance
+correction on top of the plain `GatheredSense` encoding operator above --
+see the dedicated "B0 off-resonance correction" subsection below for the
+full design and investigation history. `recon/save_result.py` persists a
+`ReconResult` to `.h5`/`.nii.gz`/`.json` (the "next piece" the rest of this
+section used to say was missing); `recon/run_b0_recon.py` is the driver
+that runs a real (not validation-only) B0-corrected reconstruction end to
+end. `recon/sweep_time_segments.py` and `recon/benchmark_b0_cost.py` are
+one-off analysis scripts (not part of the production path) that produced
+the numbers cited in that subsection.
 
 **`recon/operators.py`'s `GatheredSense`** is a custom `mirtorch.linear.
 linearmaps.LinearMap` subclass, not `mirtorch.linear.mri.Sense` directly --
@@ -2304,13 +2366,116 @@ Not yet ported from `../mslr-recon`: `src/activation.jl` (a standalone
 GLM task-activation module, not wired into the main pipeline even in the
 original) and `src/metrics.jl`/`scripts/report.jl` (tSNR maps and
 convergence-plot reporting) -- both are QA/visualization, not required for
-a working reconstruction path. `recon/reconstruct.py`'s `run_recon` also
-does not yet write its own `.mat`/`.nii.gz` output the way `../mslr-recon`'s
-`run_recon` does (`recon/validate_against_mslr.py` compares in-memory
-`ReconResult` fields directly instead) -- a `save_result` driver reusing
-`preprocessing/nifti_io.py`'s `save_recon_nifti` for the magnitude image
-would be the natural next piece if this becomes a routine (not just
-validation) reconstruction path.
+a working reconstruction path. `recon/save_result.py` now does write
+`ReconResult` to disk (`.h5` full-precision complex + solver trace,
+`.nii.gz`+`.json` magnitude image + metadata, reusing
+`preprocessing/nifti_io.py`'s `save_recon_nifti`) -- `recon/run_b0_recon.py`
+is the first real (not `validate_against_mslr.py`-style comparison-only)
+consumer of it.
+
+### B0 off-resonance correction
+
+Two-stage B0 correction on top of the plain `GatheredSense` encoding
+operator, consuming `preprocessing/run_b0map.py`'s field map
+(`<seqname>_b0map.h5`) and `preprocessing/preprocess.py`'s per-sample
+`echo_times`:
+
+- **`recon/b0_correction.py`'s `demodulate_smaps`** -- static, single-
+  segment correction: a per-voxel conjugate-phase phasor (evaluated at
+  the nominal TE) pre-multiplied into `smaps` before the encoding operator
+  is built, zero added per-iteration cost. Validated against a brute-force
+  synthetic ground truth (`tests/test_recon_b0_correction.py`): corrects
+  the dominant geometric-shift component well in a small-phase-excursion
+  regime (~98% forward-model error reduction), but only partially at this
+  pipeline's *real* scale (B0 up to +-300-350 Hz over an ETL=60, ~72ms
+  echo train -- tens of radians of phase drift, not a fraction of one):
+  ~5% error reduction, since a single TE-centered phase term can't track
+  how off-resonance phase keeps accruing differently across the echo
+  train. That gap is why time-segmented correction exists as a second
+  stage, not a redundant one.
+- **`recon/operators_b0.py`'s `GatheredSenseB0`** -- the fuller,
+  time-segmented stage, via `mirtorch.linear.mri.mri_exp_approx` (the same
+  min-max frequency-segmentation fit `mirtorch`'s own NUFFT-based
+  `Gmri`/`GmriGram` use). `build_encoding_operator_b0(smaps, omega,
+  b0map_hz, echo_times_s, L, nbins)` solves the segmentation fit once
+  against this pipeline's real per-frame-invariant ETL distinct echo
+  times (not once per frame -- an earlier version did, which also OOM'd a
+  real reconstruction by storing an independent per-frame copy of the
+  shared `(L,*N)` `c_phasors` tensor). `estimate_spectral_norm` (power
+  iteration) is required alongside it -- the B0-corrected operator's
+  spectral norm has no closed form the way the plain SENSE operator's does.
+
+**`L` (segment count): swept, not guessed.** The mirtorch-matching default
+`L=6` was never validated against this pipeline's real bandwidth-time
+product (`BT = Δf_range * T_readout ≈ 370 Hz * 0.072 s ≈ 27`) -- the one
+test that seemed to validate a small `L` (`test_more_segments_reduces_
+error_in_the_realistic_regime`'s "L=16 is ~exact" result) turned out to be
+an artifact of its own synthetic grid having only 12 distinct echo times,
+not evidence about the real `ETL=60` scale. `recon/sweep_time_segments.py`
+reproduces the ground-truth construction at the real scale (`Ny=ETL=60`,
+real field-map range/echo spacing) and sweeps `L` directly: there's a
+sharp, Nyquist-like phase transition around `L≈27-32` (matching the
+computed `BT`), not a gradual improvement curve -- `L=6` gives only ~35%
+error reduction (barely better than no correction at all), while `L≈31-32`
+is needed to get relative forward-model error under 1%. **Chose `L=32`**
+as the production value (the smallest swept `L` clearing that 1% bar),
+overriding `operators_b0.py`'s own `L=6` default at the call site.
+
+**Cost of that choice, measured not extrapolated**
+(`recon/benchmark_b0_cost.py`, synthetic tensors at this repo's real scale
+-- 240x240x45, 18 coils, 30 frames, `K≈288,000` samples/frame, on a free
+RTX A6000): one forward+adjoint pass costs `L=6`: 5.78s, `L=32`: 30.63s,
+`L=60` (`=ETL`, the accuracy ceiling): 57.40s -- essentially linear in `L`
+(the encoding operator loops over segments rather than batching them, by
+design, to keep peak memory at the single-segment footprint regardless of
+`L`; memory is not the bottleneck at any of these `L`, topping out around
+12.65GB at `L=60` on a 48GB GPU). Extrapolated to a full 101-iteration G+L
+reconstruction using this repo's own measured non-encoding overhead
+(~4.9s/iter): `L=6` ≈ 18 min, `L=32` ≈ 60 min, `L=60` ≈ 105 min --
+`L=60` costs ~1.75x `L=32` for no measurable accuracy gain past the
+`L≈32` threshold, so `L=32` is both the accuracy floor and the practical
+sweet spot, not a compromise between two competing costs.
+
+**Real reconstruction run**: `recon/run_b0_recon.py` (`--L 32`) reproduces
+the existing G+L (multi-scale) config already validated against
+`../mslr-recon` for the uncorrected case, saving to
+`<datdir>/recon/mslr_b0/G+L_L<L>/<name>_recon.*` (one directory per `L`,
+since `L` was under active investigation). `sigma1A` is measured fresh via
+power iteration for the B0-corrected operator, not reused from the
+uncorrected reference -- its spectral norm has no guaranteed relationship
+to the uncorrected operator's.
+
+**Field-map noise, not `L`, was the actual remaining artifact.** After
+landing on `L=32`, the B0-corrected reconstruction still showed a
+persistent salt-and-pepper speckle texture, distinguishable from this
+phantom's *real* air-bubble signal voids (confirmed by
+`preprocessing/gre_diagnostics.py`, which reconstructs the dual-echo deGRE
+images to NIfTI/PNG for direct visual comparison against the field map --
+the raw GRE images themselves are clean). Diagnosing this led to
+`preprocessing/julia/b0map.jl`'s `precon` fix below -- see that module's
+docstring for the full mechanism (`:ichol`'s preconditioner shares the
+same `CC` operator as the `l2b` regularization term, which numerically
+cancels `l2b`'s effect on the NCG descent direction once `CC` dominates;
+switching to `:diag` fixes it directly and is independently corroborated
+by MRIFieldmaps.jl's own example docs). Re-running the L=32 reconstruction
+with the `:diag`-preconditioned field map confirmed the fix at the image
+level, not just the field-map level: image-domain roughness
+(`mean|Laplacian(magnitude)|` over the object mask) excess *above* the
+uncorrected baseline dropped from +61.1 (`:ichol`) to +19.5 (`:diag`) --
+roughly a 3x reduction in B0-correction-induced speckle, while the
+legitimate boundary-sharpening effect of B0 correction is preserved (both
+still differ from the uncorrected baseline by a similar relative L2
+amount, ~13-16%, since correcting real geometric distortion is supposed to
+change the image).
+
+**Sensitivity-map rewiring (`preprocessing/smaps.py`'s `load_smaps`)**: a
+real methodological improvement made available at the same time, but *not*
+the fix for the above -- see `preprocessing/`'s section below for the
+detail. Measured to make no difference to field-map roughness on this
+phantom (whole-mask and by radial zone, including the low-SNR object
+center this change specifically targets) once `precon=:diag` is already in
+place, so it's infrastructure for future/noisier datasets, not something
+this dataset's own results depend on.
 
 See `README.md` for the getting-started walkthrough and the full
 `Getting started` / `GE export` usage examples.

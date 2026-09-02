@@ -15,11 +15,16 @@ EspiritCalib expects coils-first ([Ncoils, ...]), so estimate_smaps
 transposes at its boundary rather than propagating that convention further.
 """
 
+import os
+
+import h5py
 import numpy as np
 import sigpy as sp
 import sigpy.mri.app as mri_app
 
+from preprocessing.config import PreprocessingConfig, SeqParams, SeqPaths
 from preprocessing.grid_resize import resize_to_epi_grid
+from preprocessing.nifti_io import save_recon_nifti
 
 
 def estimate_smaps(
@@ -109,3 +114,93 @@ def process_smaps(
     rss = np.sqrt(np.sum(np.abs(smaps) ** 2, axis=-1))
     rss[rss < np.finfo(rss.dtype).eps] = 1
     return smaps / rss[..., None]
+
+
+def load_smaps(
+    cfg: PreprocessingConfig, paths: SeqPaths, seq_params: SeqParams
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """(smaps, smaps_degre, emap_degre, nvcoils): sensitivity maps on both
+    the EPI grid (the SENSE encoding operator's own grid) and the *deGRE*
+    grid (for preprocessing/julia/b0map.jl's `smap` argument -- see its
+    module docstring for why passing real smaps there, instead of leaving
+    B0 field-map estimation to MRIFieldmaps' phase-contrast coil-combine
+    fallback, is expected to reduce field-map noise in this pipeline's real
+    low-per-coil-SNR object-center regions); `emap_degre` is ESPIRiT's own
+    dominant-eigenvalue map, also resized to the deGRE grid, for an
+    optional ESPIRiT-informed image-support mask in b0map.jl (thresholded
+    the same way process_smaps already does for `eig_mask`) -- a
+    complement to its own magnitude-based mask, not a guaranteed fix for
+    the same reason a raw magnitude threshold already has known limits
+    near low-SNR/partial-volume voxels (see CLAUDE.md's recon/ section).
+
+    All three deGRE-grid arrays are resized from the same `cal_size`-
+    cropped ESPIRiT calibration (`smaps_raw`/`emap`, see `estimate_smaps`)
+    via `process_smaps`/`resize_to_epi_grid` -- deGRE-grid uses `fov_gre`
+    as both source *and* target FOV (only resolution changes, no z-crop),
+    EPI-grid is the existing crop+resize. Loads from/writes
+    `<datdir>/recon/smaps_<seqname>_sigpy.h5` (was `recon_frames.py`'s
+    private `_load_smaps` -- moved here, and extended with the
+    `smaps_degre`/`emap_degre` datasets, so `run_b0map.py` can reuse the
+    same cache instead of re-running ESPIRiT). An older cache written
+    before these existed is backfilled in place rather than re-estimating
+    from scratch (`smaps_raw`/`emap` are already cached).
+    """
+    fn_smaps = os.path.join(cfg.datdir, 'recon', f'smaps_{paths.seqname}_sigpy.h5')
+    fn_smaps_nifti = fn_smaps[: -len('.h5')] + '.nii.gz'
+    fov_degre = tuple(seq_params.fov_degre)
+    n_target_degre = (seq_params.Nx_degre, seq_params.Ny_degre, seq_params.Nz_degre)
+
+    if os.path.exists(fn_smaps):
+        print(f'Loading precomputed sensitivity maps from {fn_smaps}')
+        with h5py.File(fn_smaps, 'r') as f:
+            smaps, nvcoils = f['smaps'][()], int(f.attrs['Nvcoils'])
+            has_degre = 'smaps_degre' in f and 'emap_degre' in f
+            if has_degre:
+                smaps_degre, emap_degre = f['smaps_degre'][()], f['emap_degre'][()]
+            else:
+                smaps_raw, emap = f['smaps_raw'][()], f['emap'][()]
+        if not has_degre:
+            print(f'  Backfilling deGRE-grid smaps/emap into {fn_smaps}...')
+            smaps_degre = process_smaps(
+                smaps_raw, emap, fov_degre, fov_degre, n_target_degre, cfg.threshold_mask,
+            )
+            emap_degre = resize_to_epi_grid(emap, fov_degre, fov_degre, n_target_degre, order=3)
+            with h5py.File(fn_smaps, 'a') as f:
+                f.create_dataset('smaps_degre', data=smaps_degre)
+                f.create_dataset('emap_degre', data=emap_degre)
+        if not os.path.exists(fn_smaps_nifti):
+            # Backfill: cache was written before the NIfTI export existed.
+            save_recon_nifti(
+                fn_smaps[: -len('.h5')], smaps, fov=seq_params.fov,
+                seqname=paths.seqname, Nvcoils=nvcoils,
+            )
+        return smaps, smaps_degre, emap_degre, nvcoils
+
+    fn_gre = os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')
+    print('Sensitivity maps not found. Estimating via sigpy ESPIRiT...')
+    with h5py.File(fn_gre, 'r') as f:
+        ksp_gre = f['ksp_gre'][()]
+    nvcoils = ksp_gre.shape[-1]
+    smaps_raw, emap = estimate_smaps(ksp_gre)
+    smaps = process_smaps(
+        smaps_raw, emap, fov_degre, tuple(seq_params.fov),
+        (seq_params.Nx, seq_params.Ny, seq_params.Nz), cfg.threshold_mask,
+    )
+    smaps_degre = process_smaps(
+        smaps_raw, emap, fov_degre, fov_degre, n_target_degre, cfg.threshold_mask,
+    )
+    emap_degre = resize_to_epi_grid(emap, fov_degre, fov_degre, n_target_degre, order=3)
+    with h5py.File(fn_smaps, 'w') as f:
+        f.create_dataset('smaps_raw', data=smaps_raw)
+        f.create_dataset('emap', data=emap)
+        f.create_dataset('smaps', data=smaps)
+        f.create_dataset('smaps_degre', data=smaps_degre)
+        f.create_dataset('emap_degre', data=emap_degre)
+        f.attrs['Nvcoils'] = nvcoils
+    # Coil axis stands in for save_recon_nifti's "frames" axis -- FSLeyes'
+    # volume slider then scrolls through per-coil maps, magnitude-only
+    # (NIfTI has no complex dtype; see nifti_io module docstring).
+    save_recon_nifti(
+        fn_smaps[: -len('.h5')], smaps, fov=seq_params.fov, seqname=paths.seqname, Nvcoils=nvcoils,
+    )
+    return smaps, smaps_degre, emap_degre, nvcoils

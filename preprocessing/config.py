@@ -61,6 +61,12 @@ class PreprocessingConfig:
     # Fraction of peak first-echo GRE magnitude below which a voxel is
     # excluded from the fit -- matches MRIFieldmaps.jl's own b0init default.
     b0map_mask_thresh: float = 0.1
+    # NCG preconditioner -- :diag, not MRIFieldmaps' own :ichol default; see
+    # b0map.jl's module docstring for why (:ichol's regularization weight
+    # becomes ineffective, producing a visibly noisier field map). l2b/niter
+    # (roughness-regularization weight/NCG iteration count) are left at
+    # MRIFieldmaps' own defaults, not exposed here -- same docstring.
+    b0map_precon: str = 'diag'
 
     do_sense: bool = True
     use_parfor: bool = False

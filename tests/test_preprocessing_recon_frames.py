@@ -113,8 +113,8 @@ def test_recon_frames_estimates_smaps_when_no_cache(tmp_path, monkeypatch):
         calls['process_smaps'] = True
         return smaps_raw
 
-    monkeypatch.setattr('preprocessing.recon_frames.estimate_smaps', fake_estimate_smaps)
-    monkeypatch.setattr('preprocessing.recon_frames.process_smaps', fake_process_smaps)
+    monkeypatch.setattr('preprocessing.smaps.estimate_smaps', fake_estimate_smaps)
+    monkeypatch.setattr('preprocessing.smaps.process_smaps', fake_process_smaps)
 
     cfg = load_config(datdir=str(tmp_path), seqnames=[seqname])
     paths = set_seq_paths(cfg, seqname)

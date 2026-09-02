@@ -11,30 +11,46 @@ Estimation in 3D MRI", IEEE TCI 2020).
 
 Usage:
     julia --project=preprocessing/julia preprocessing/julia/b0map.jl \
-        <gre_h5_path> <output_h5_path> [mask_threshold] [l2b] [niter]
+        <gre_h5_path> <output_h5_path> [smaps_h5_path] [eig_mask_threshold] \
+        [mask_threshold] [precon]
 
-`niter` (default 30, MRIFieldmaps' own default) is `b0map`'s outer NCG
-iteration count -- exposed alongside `l2b` because raising l2b alone,
-holding niter fixed, measurably did *not* change the fit (tested l2b in
-[-6, 8], a 16384x range in the regularization weight beta=2^l2b, with
-identical results to 4 significant figures): the harder-to-optimize,
-more-regularized problem needs more outer iterations to actually reach its
-(smoother) optimum within the same NCG budget, or it just sits near
-wherever the unregularized-ish solve left off after 30 iterations.
+`precon` (default `:diag`, overriding `b0map`'s own default `:ichol`) is
+its NCG preconditioner -- the one parameter actually worth overriding here.
+`l2b`/`niter` (its regularization weight and NCG iteration count) are
+deliberately *not* exposed, despite an earlier investigation adding and
+sweeping both: `l2b` turned out to have essentially no effect on the fitted
+field map's smoothness under `:ichol`, regardless of `niter` -- traced to
+`:ichol`'s preconditioner (`H = spdiagm(hcurv) + CC`) being built from the
+*same* `CC = beta * C'C` roughness-penalty operator that appears in the
+gradient (`grad = hderiv + CC*w`): as `beta` grows, both numerator and
+denominator become CC-dominated and the preconditioned step `H^-1 * grad`
+collapses toward `-w` independent of `beta` (confirmed empirically:
+mean|Laplacian| roughness flat at ~8.2-8.4 for `l2b` in [-6, 28], a
+16384x-to-270-million-x range in beta, at both niter=30 and a fully
+2000-iteration-converged run). Switching `precon` to `:diag` instead fixes
+this directly -- `:diag`'s own preconditioner (`Hdiag = hcurv + diag(CC)`)
+doesn't have the same numerator/denominator cancellation, since it only
+uses `CC`'s diagonal, not the full matrix -- and gets a substantially
+smoother field map (roughness ~4x lower than `:ichol`'s at MRIFieldmaps'
+own `l2b`/`niter` defaults, -6.0/30, visibly confirmed in a real
+reconstruction: B0-corrected image roughness dropped from +61 excess over
+an uncorrected baseline to +19.5 -- see git history / session notes for the
+comparison figures). With `precon=:diag` fixing the actual problem, `l2b`
+reverts to being a non-load-bearing knob not worth the CLI surface area of
+exposing.
 
-`l2b` (default -6.0, MRIFieldmaps' own default) is `b0map`'s log2
-roughness-regularization weight (beta = 2^l2b in its quadratic roughness
-penalty R(w) = 0.5*|C*w|^2, C a finite-difference matrix -- see b0map's own
-docstring). Exposed here (not previously) because this pipeline's real
-phantom data has a receive-coil-geometry-driven SNR gradient -- measured
-~2.7x lower GRE magnitude SNR at the object's center than near its
-periphery (coils are peripheral; sensitivity, and thus phase-based
-field-map reliability, falls off toward a large object's center) -- and the
-resulting under-regularized noise in that low-SNR region propagates through
-B0 correction into visible reconstruction artifacts (speckle, signal loss)
-concentrated exactly there. Raising l2b trades spatial resolution in the
-field map for less noise in low-SNR regions; see CLAUDE.md's recon/ section
-for the tuning this was chosen against.
+Independent corroboration from MRIFieldmaps.jl's own maintainer: its
+[`02-b0map.jl` example/docs](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl/blob/main/docs/lit/examples/02-b0map.jl)
+compares `:I`/`:diag`/`:chol`/`:ichol` on its own canonical test case and
+closes with "it is interesting that in this Julia implementation the
+diagonal preconditioner seems to be as effective as the incomplete
+Cholesky preconditioner" -- i.e. this isn't specific to our data/problem,
+it's a known characteristic of this package's Julia port (unlike the
+original MATLAB implementation, where `ichol` is the expected/reliable
+win). That upstream comparison is about final RMSE-vs-wall-time, though,
+not about `l2b` sensitivity specifically -- it doesn't independently
+confirm the numerator/denominator-cancellation mechanism above, which was
+traced directly in this pipeline's own code.
 
 `mask_threshold` (default 0.1, matching MRIFieldmaps' own `b0init` default)
 sets the fraction of peak first-echo magnitude below which a voxel is
@@ -52,14 +68,26 @@ standard/expected use of this package regardless (its own README example
 and `b0init` both build a `finit` this same way) and removes any
 sensitivity to this edge case.
 
-Coil sensitivity maps (`smap`) are deliberately not passed: this pipeline's
-existing ESPIRiT maps (smaps.py) are estimated on a `cal_size`-cropped grid
-(24^3 by default) and then resized to the *EPI* acquisition grid --
-neither matches the deGRE grid this script's `images` array is defined on
-(Nx_degre, Ny_degre, Nz_degre), so passing them without a matching resize
-step would silently violate `b0map`'s `smap` shape check. MRIFieldmaps
-falls back to its own phase-contrast coil combine (Bernstein et al., MRM
-1994, eqn 13) when `smap` is omitted, which needs no such alignment.
+Coil sensitivity maps (`smap`) are now passed, when `smaps_h5_path` is
+given: `preprocessing/smaps.py`'s `load_smaps` resizes the same
+`cal_size`-cropped ESPIRiT calibration (`smaps_raw`/`emap`) it already
+produces for the *EPI* grid onto *this* deGRE grid too (`smaps_degre`,
+`emap_degre`, in `<datdir>/recon/smaps_<seqname>_sigpy.h5`), so `smap`'s
+shape now matches `images`' spatial dims exactly, satisfying `b0map`'s
+`smap` shape check. This replaces MRIFieldmaps' own phase-contrast
+coil-combine fallback (`coil_combine(images, nothing)`, Bernstein et al.,
+MRM 1994, eqn 13) with a true matched-filter combine
+(`coil_combine(images, smap)`, same reference, eqn 13's `smap`-provided
+branch) -- the fallback weights each coil by its own noisy first-echo
+image (`y1`) rather than a smooth sensitivity estimate, so its combine
+noise directly reflects each coil's raw per-voxel SNR, worst exactly in
+this pipeline's low-per-coil-SNR object-center regions (see the `l2b`
+paragraph above). `emap_degre` (ESPIRiT's dominant-eigenvalue map, also
+resized to this grid) is thresholded the same way `smaps.py`'s own
+`eig_mask` is and ANDed into `mask` -- a cheap, ESPIRiT-informed
+complement to the magnitude-only mask below, since it's already being
+loaded here regardless. When `smaps_h5_path` is empty (default), behavior
+is unchanged from before: no `smap`, `mask` is magnitude-only.
 
 `finit` (the NCG solve's starting point) is built here via
 [ROMEO.jl](https://github.com/korbinian90/ROMEO.jl) (Dymerska et al.,
@@ -171,7 +199,9 @@ end
 
 function main(
     gre_h5_path::AbstractString, output_h5_path::AbstractString,
-    threshold::Real = 0.1, l2b::Real = -6.0, niter::Int = 30,
+    smaps_h5_path::AbstractString = "",
+    eig_mask_threshold::Real = 0.2,
+    threshold::Real = 0.1, precon::Symbol = :diag,
 )
     println("Loading '$gre_h5_path'...")
     images, echotime = load_gre_images(gre_h5_path)
@@ -179,14 +209,37 @@ function main(
     println("  TE_degre (s): ", echotime)
 
     mask = magnitude_mask(images, threshold)
-    println("  mask: $(count(mask)) / $(length(mask)) voxels above $(threshold) x peak magnitude")
+    println("  magnitude mask: $(count(mask)) / $(length(mask)) voxels above $(threshold) x peak magnitude")
+
+    # Optional: real sensitivity maps (preprocessing/smaps.py's ESPIRiT
+    # calibration, resized to this deGRE grid) in place of MRIFieldmaps'
+    # phase-contrast coil-combine fallback -- see module docstring. Its
+    # eigenvalue map is also used to tighten the magnitude-based mask
+    # (same threshold convention as smaps.py's process_smaps' own
+    # eig_mask), a cheap addition once smap is already being loaded here;
+    # ROMEO unwrapping (below) uses this combined mask too, not just b0map.
+    smap = nothing
+    if !isempty(smaps_h5_path)
+        println("Loading sensitivity maps from '$smaps_h5_path'...")
+        h5open(smaps_h5_path, "r") do f
+            smap = read_numpy_array(f, "smaps_degre")
+            eig_mask = read_numpy_array(f, "emap_degre") .> eig_mask_threshold
+            mask = mask .& eig_mask
+        end
+        println("  combined (magnitude & ESPIRiT-eigenvalue) mask: " *
+                "$(count(mask)) / $(length(mask)) voxels")
+    end
 
     println("Unwrapping finit via ROMEO...")
     finit = romeo_finit(images, echotime, mask)
     println("  finit range (Hz, masked): ", extrema(finit[mask]))
 
-    println("Running MRIFieldmaps.b0map (l2b=$l2b, niter=$niter)...")
-    fhat, _times, _out = b0map(finit, images, echotime; mask, chat = true, l2b, niter)
+    # l2b/niter deliberately not passed -- MRIFieldmaps' own defaults
+    # (-6.0/30) are used implicitly; see module docstring's `precon`
+    # paragraph for why they're not worth exposing/overriding here.
+    println("Running MRIFieldmaps.b0map (precon=$precon, " *
+            "smap=$(isnothing(smap) ? "none" : "provided"))...")
+    fhat, _times, _out = b0map(finit, images, echotime; smap, mask, precon)
 
     mkpath(dirname(output_h5_path))
     h5open(output_h5_path, "w") do f
@@ -195,16 +248,21 @@ function main(
         write_numpy_array(f, "mask", Array{Bool}(mask))
         f["TE_degre"] = collect(echotime)
         attributes(f)["mask_threshold"] = threshold
-        attributes(f)["l2b"] = l2b
+        attributes(f)["precon"] = String(precon)
+        attributes(f)["used_smap"] = !isnothing(smap)
+        attributes(f)["eig_mask_threshold"] = eig_mask_threshold
     end
     println("Wrote '$output_h5_path'.")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    length(ARGS) in (2, 3, 4, 5) ||
-        error("usage: julia b0map.jl <gre_h5_path> <output_h5_path> [mask_threshold] [l2b] [niter]")
-    args = (ARGS[1], ARGS[2], (length(ARGS) >= 3 ? (parse(Float64, ARGS[3]),) : ())...,
+    2 <= length(ARGS) <= 6 ||
+        error("usage: julia b0map.jl <gre_h5_path> <output_h5_path> [smaps_h5_path] " *
+              "[eig_mask_threshold] [mask_threshold] [precon]")
+    args = (ARGS[1], ARGS[2],
+            (length(ARGS) >= 3 ? (ARGS[3],) : ())...,
             (length(ARGS) >= 4 ? (parse(Float64, ARGS[4]),) : ())...,
-            (length(ARGS) >= 5 ? (parse(Int, ARGS[5]),) : ())...)
+            (length(ARGS) >= 5 ? (parse(Float64, ARGS[5]),) : ())...,
+            (length(ARGS) >= 6 ? (Symbol(ARGS[6]),) : ())...)
     main(args...)
 end

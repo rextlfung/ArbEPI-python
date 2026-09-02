@@ -175,7 +175,9 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
   coils.py                      Noise whitening + PCA coil compression (plain numpy, replaces BART)
   epi_gridding.py               1D NUFFT ramp-sample regridding (sigpy, replaces MIRT/hmriutils)
   oephase.py                    Odd/even EPI ghost-correction estimation + application
-  smaps.py                      ESPIRiT sensitivity maps (sigpy, replaces BART) + mask/crop/resize/normalize
+  smaps.py                      ESPIRiT sensitivity maps (sigpy, replaces BART) + mask/crop/resize/normalize;
+                                 load_smaps caches both the EPI-grid and deGRE-grid resize (the latter for
+                                 run_b0map.py's smap/eig-mask inputs to b0map.jl -- see CLAUDE.md)
   cg_sense.py                   CG-SENSE solver
   recon_sigpy.py                Combined L1-wavelet + TV regularized SENSE (sigpy, replaces BART pics)
   matio.py                      Shared hdf5storage-compatible .mat reader (h5py-based)
@@ -188,16 +190,27 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
                                  (that's a separate, more advanced Julia pipeline)
   calibrate_delay.py            Automated k-space center delay tuning
   run_b0map.py                  Batch driver for B0 field map estimation (subprocess -> julia/b0map.jl)
+  gre_diagnostics.py            One-off: dual-echo deGRE images -> NIfTI/PNG, for visual QC against
+                                 the estimated field map
   julia/                        Self-contained Julia project (Project.toml + Manifest.toml, pinned):
                                  b0map.jl estimates a B0 field map from the deGRE dual-echo cache via
-                                 MRIFieldmaps.jl, with its initial guess unwrapped via ROMEO.jl -- see
-                                 CLAUDE.md's preprocessing/ section for the design
+                                 MRIFieldmaps.jl (precon=:diag, not its own :ichol default -- see
+                                 CLAUDE.md's preprocessing/ section for why), with its initial guess
+                                 unwrapped via ROMEO.jl
 recon/                        Multi-Scale Low-Rank (MSLR) fMRI reconstruction, ported from
                               ../mslr-recon (Julia/MIRT.jl) onto PyTorch/mirtorch
   operators.py                  GatheredSense: memory-efficient gathered-k-space SENSE operator
+  operators_b0.py               GatheredSenseB0: time-segmented B0 off-resonance correction (L=32
+                                 in production -- swept, not guessed, see CLAUDE.md)
+  b0_correction.py              Static (single-segment) B0 correction, the cheaper first stage
   lowrank.py                    Patch extraction/recombination + singular-value soft-thresholding
   solvers.py                    pogm_restart: PGM/FPGM/POGM with gradient restart, early stopping
-  reconstruct.py                Top-level run_recon driver (FISTA/POGM over locally-low-rank patches)
+  reconstruct.py                Top-level run_recon driver (FISTA/POGM over locally-low-rank patches),
+                                 with optional B0 correction via operators_b0.py
+  save_result.py                Persists a ReconResult to .h5/.nii.gz/.json
+  run_b0_recon.py               Driver for a real (non-validation) B0-corrected reconstruction
+  sweep_time_segments.py /      One-off analysis scripts (L accuracy sweep, L cost benchmark) --
+  benchmark_b0_cost.py           see CLAUDE.md's recon/ section for the numbers they produced
   validate_against_mslr.py      Field-by-field comparison vs. real ../mslr-recon (Julia) output
 tests/                       Unit tests (pytest)
 docs/demo/                   Static images embedded in this README's Demo section

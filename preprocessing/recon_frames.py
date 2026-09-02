@@ -19,7 +19,6 @@ writes the full format, so that branch can never be reached here.
 
 import concurrent.futures
 import functools
-import os
 import time
 from typing import Callable
 
@@ -27,51 +26,9 @@ import h5py
 import numpy as np
 
 from preprocessing.config import PreprocessingConfig, SeqParams, SeqPaths
-from preprocessing.nifti_io import save_recon_nifti
-from preprocessing.smaps import estimate_smaps, process_smaps
+from preprocessing.smaps import load_smaps
 
 ReconFn = Callable[[np.ndarray, np.ndarray], np.ndarray]
-
-
-def _load_smaps(
-    cfg: PreprocessingConfig, paths: SeqPaths, seq_params: SeqParams
-) -> tuple[np.ndarray, int]:
-    fn_smaps = os.path.join(cfg.datdir, 'recon', f'smaps_{paths.seqname}_sigpy.h5')
-    fn_smaps_nifti = fn_smaps[: -len('.h5')] + '.nii.gz'
-    if os.path.exists(fn_smaps):
-        print(f'Loading precomputed sensitivity maps from {fn_smaps}')
-        with h5py.File(fn_smaps, 'r') as f:
-            smaps, nvcoils = f['smaps'][()], int(f.attrs['Nvcoils'])
-        if not os.path.exists(fn_smaps_nifti):
-            # Backfill: cache was written before the NIfTI export existed.
-            save_recon_nifti(
-                fn_smaps[: -len('.h5')], smaps, fov=seq_params.fov,
-                seqname=paths.seqname, Nvcoils=nvcoils,
-            )
-        return smaps, nvcoils
-
-    fn_gre = os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')
-    print('Sensitivity maps not found. Estimating via sigpy ESPIRiT...')
-    with h5py.File(fn_gre, 'r') as f:
-        ksp_gre = f['ksp_gre'][()]
-    nvcoils = ksp_gre.shape[-1]
-    smaps_raw, emap = estimate_smaps(ksp_gre)
-    smaps = process_smaps(
-        smaps_raw, emap, tuple(seq_params.fov_degre), tuple(seq_params.fov),
-        (seq_params.Nx, seq_params.Ny, seq_params.Nz), cfg.threshold_mask,
-    )
-    with h5py.File(fn_smaps, 'w') as f:
-        f.create_dataset('smaps_raw', data=smaps_raw)
-        f.create_dataset('emap', data=emap)
-        f.create_dataset('smaps', data=smaps)
-        f.attrs['Nvcoils'] = nvcoils
-    # Coil axis stands in for save_recon_nifti's "frames" axis -- FSLeyes'
-    # volume slider then scrolls through per-coil maps, magnitude-only
-    # (NIfTI has no complex dtype; see nifti_io module docstring).
-    save_recon_nifti(
-        fn_smaps[: -len('.h5')], smaps, fov=seq_params.fov, seqname=paths.seqname, Nvcoils=nvcoils,
-    )
-    return smaps, nvcoils
 
 
 def _recon_one_frame(data: np.ndarray, recon_fn: ReconFn, smaps: np.ndarray) -> np.ndarray:
@@ -94,7 +51,7 @@ def recon_frames(
     """
     Nx, Ny, Nz = seq_params.Nx, seq_params.Ny, seq_params.Nz
 
-    smaps, _nvcoils = _load_smaps(cfg, paths, seq_params)
+    smaps, _smaps_degre, _emap_degre, nvcoils = load_smaps(cfg, paths, seq_params)
 
     with h5py.File(paths.recon, 'r') as f:
         nframes_avail = f['ksp_epi_zf'].shape[4]
@@ -135,6 +92,6 @@ def recon_frames(
     seq_params_out = {
         'Nx': Nx, 'Ny': Ny, 'Nz': Nz,
         'fov': seq_params.fov, 'volume_tr': seq_params.volume_tr,
-        'Nvcoils': _nvcoils, 'Nframes': nframes,
+        'Nvcoils': nvcoils, 'Nframes': nframes,
     }
     return img, seq_params_out, runtime_s
