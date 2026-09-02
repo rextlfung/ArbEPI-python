@@ -71,6 +71,21 @@ def _rho_grid(ny: int, nx: int) -> np.ndarray:
     return np.sqrt(yn**2 + xn**2)
 
 
+def _aniso_radii(
+    r: np.ndarray, slope: float, nx: int, ny: int, decay: float, aniso: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-axis exclusion-ellipse radii at a given binary-search `slope`.
+    `aniso == 1.0` is the aspect-matched baseline (see `pd_sample`'s
+    `aniso` docstring); `aniso > 1` grows `radius_y` and shrinks
+    `radius_x` by the same factor, so their product -- and hence the 2D
+    point density the binary search is tuning -- is unaffected away from
+    the `>= 1` floor."""
+    base = (1 + r ** (1 / decay) * slope) / max(nx, ny)
+    radius_x = np.maximum(base * nx / aniso, 1)
+    radius_y = np.maximum(base * ny * aniso, 1)
+    return radius_x, radius_y
+
+
 def _calib_rho(target_samples: int, nx: int, ny: int, calib_frac: float) -> float:
     """Radius (in the normalized units of `_rho_grid`) of a centered,
     aspect-matched ellipse whose pixel area is `calib_frac * target_samples`."""
@@ -185,6 +200,7 @@ def pd_sample(
     tol: float = 0.1,
     decay: float = 1.0,
     max_search_iters: int = 50,
+    aniso: float = 1.0,
 ) -> np.ndarray:
     """
     Parameters
@@ -207,6 +223,38 @@ def pd_sample(
     max_search_iters : cap on binary-search iterations -- see module
         docstring point 2. The exact target count is enforced regardless
         of whether the search converges within this budget.
+    aniso : exclusion-ellipse aspect multiplier, default 1.0 (no change from
+        prior behavior). The baseline ellipse (`radius_y ~ ny`,
+        `radius_x ~ nx`) is aspect-matched to the grid, which makes it
+        isotropic in *physical* k-space -- equal aliasing distance in mm
+        along both axes, given isotropic resolution -- not anisotropic the
+        way the axis-scaled radii might suggest. `aniso` scales
+        `radius_y *= aniso` and `radius_x /= aniso` (product held fixed,
+        so 2D point density and the accel search above are undisturbed):
+        `aniso > 1` biases undersampling further towards the `ny` axis
+        (pass `Ny` there for more acceleration along ky, e.g. when the
+        in-plane FOV is much larger than the slice FOV and the resulting
+        mm-scale aliasing is judged more benign along that axis), `aniso
+        < 1` towards `nx`. Prototype knob: validated so far for exact
+        sample count, calibration-region coverage, and
+        `mask2epi_radial`'s shot/ETL split (all intact at aniso 1/2/3 on
+        this repo's production Ny/Nz/R). A single-frame (frame 0, seed 0)
+        `ge/check.py` feasibility check at aniso=2.0 measured peak PNS
+        78.6% vs the aniso=1.0 baseline's 78.9% (no regression there,
+        acoustics roughly halved) -- but the documented worst frame for
+        this build is frame 10 at 78.9%'s neighborhood (79.84% at
+        aniso=1.0, ~0.2% margin to the 80% line, see CLAUDE.md's "PNS
+        finding history"), which this single-frame check does not cover.
+        Re-run the full-build, worst-frame feasibility check (not just
+        frame 0) before using a non-default value in production, and treat
+        the conditioning improvement itself as an untested hypothesis --
+        confirming it needs a real g-factor/SENSE comparison with actual
+        coil sensitivity maps (`preprocessing/smaps.py`), not a mask-only
+        proxy (a mask-only PSF sidelobe check was tried and found
+        structurally unable to speak to this: it measures incoherence,
+        which any anisotropy necessarily reduces relative to the
+        isotropic-in-mm baseline regardless of whether that anisotropy
+        helps or hurts parallel-imaging conditioning).
 
     Returns
     -------
@@ -251,8 +299,7 @@ def pd_sample(
     for _ in range(max_search_iters):
         slope = (slope_max + slope_min) / 2
 
-        radius_x = np.maximum((1 + r ** (1 / decay) * slope) * nx / max(nx, ny), 1)
-        radius_y = np.maximum((1 + r ** (1 / decay) * slope) * ny / max(nx, ny), 1)
+        radius_x, radius_y = _aniso_radii(r, slope, nx, ny, decay, aniso)
 
         # Reseed to the same fixed value every iteration -- see module
         # docstring point 1.

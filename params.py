@@ -121,6 +121,7 @@ class Params:
     pd_calib_frac: float
     pd_crop_corner: bool
     pd_decay: float
+    pd_aniso: float  # see sampling/pd_sample.py's `aniso` param -- 1.0 = no change, isotropic-in-mm
     rand_gaussian_sigma: np.ndarray | None
     seed: int | None  # passed to gen_sampling_masks' rng; None = unseeded (fresh mask each run)
 
@@ -286,6 +287,14 @@ def load_params(output_dir: str = 'output') -> Params:
     pd_calib_frac = 0.3
     pd_crop_corner = True
     pd_decay = 1.4
+    # 1.0 = isotropic-in-mm (the ellipse's grid-unit aspect already matches
+    # Ny:Nz, which cancels out against Ny/Nz differing FOVs at isotropic
+    # resolution -- see sampling/pd_sample.py's `aniso` docstring). In-plane
+    # FOV (216mm) >> slice FOV (40.5mm) here, so a value > 1.0 biases
+    # undersampling further towards ky, where the resulting mm-scale
+    # aliasing is expected to be more benign -- prototype/unvalidated for
+    # PNS and reconstruction conditioning at any non-default value.
+    pd_aniso = 1.0
     rand_gaussian_sigma = None
     # None = a fresh unseeded rng each run (current default behavior). Set
     # to an int for a reproducible mask, e.g. to compare epi_trajectory
@@ -354,6 +363,7 @@ def load_params(output_dir: str = 'output') -> Params:
         pd_calib_frac=pd_calib_frac,
         pd_crop_corner=pd_crop_corner,
         pd_decay=pd_decay,
+        pd_aniso=pd_aniso,
         rand_gaussian_sigma=rand_gaussian_sigma,
         seed=seed,
         epi_trajectory=epi_trajectory,

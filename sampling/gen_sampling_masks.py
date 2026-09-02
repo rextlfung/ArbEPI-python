@@ -66,6 +66,7 @@ def gen_sampling_masks(
                 calib_frac=params.pd_calib_frac,
                 crop_corner=params.pd_crop_corner,
                 decay=params.pd_decay,
+                aniso=params.pd_aniso,
             )
         elif method == 'rand':
             weights = gen_gaussian_pdf([Ny, Nz], rand_gaussian_sigma)
