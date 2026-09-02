@@ -387,6 +387,83 @@ mirtorch's own Gmri default" claims are accurate as stated.
   shared `preprocessing/` helper alongside `matio.py`), and fix item 64's
   docstring once, in one place.
 
+### Addendum (second pass-4 review, against `f00e2ee`)
+
+A second, independently-run pass-4 review covered the same `b67bcc0` B0
+commit and reached the same conclusions on items 74/79-84/86-89 (including
+the identical `mri_exp_approx` Hz-vs-milliseconds finding recorded in the
+preamble above, arrived at separately by reading the same mirtorch
+source). Only the items below were not already covered; all four were
+re-verified against `f00e2ee`, not just against `b67bcc0`, so the code
+they cite is current.
+
+**Two items above are already resolved by `f00e2ee`** and can be closed
+without further work: **79** (`b0map.jl` records `l2b` but not `niter`)
+and **80** (`l2b`/`niter` unreachable from `run_b0map.py`). That commit
+removed both CLI arguments outright -- `b0map.jl:237` now reads "l2b/niter
+deliberately not passed -- MRIFieldmaps' own defaults", the writer block
+no longer emits an `l2b` attribute, and `config.py:64-69` documents the
+choice as deliberate and backed by an actual sweep (flat roughness for
+`l2b` in [-6, 28] at both `niter=30` and convergence, with `precon=:diag`
+identified as the real fix). Nothing is unreachable and nothing
+half-recorded any more.
+
+- [ ] **92. Four committed source files name an AI model ("Fable") as the
+  authority for a design decision.** `recon/operators_b0.py:28` and
+  `recon/run_b0_recon.py:18` ("not swept against a real error bound the
+  way Fable's staged plan recommends"), `recon/operators_b0.py:55` ("see
+  CLAUDE.md/Fable's discussion of why GatheredSense itself had to avoid
+  ..."), and `tests/test_recon_b0_correction.py:137` ("the honest, weaker
+  claim Fable's plan makes for this regime"). Item 82 quotes the first of
+  these while making a different point (that the sweep did happen), so the
+  attribution problem itself is unrecorded. This repo's own "Commit
+  conventions" section directs that commits carry no AI identity and read
+  as the user's own; source shipped by those commits is the same question,
+  and a reader has no way to resolve "Fable's staged plan" against
+  anything in the repository. All four sentences already state the real
+  technical reason alongside the name -- delete the attribution, or cite
+  the actual reference (Sutton/Noll/Fessler for the signal model,
+  `sweep_time_segments.py` for the L bound). Fixing item 82's docstrings
+  covers three of the four sites; the test file's is separate.
+- [ ] **93. `run_recon(fn_b0map=...)` silently accepts a `sigma1A`
+  measured for the *uncorrected* operator.** `recon/reconstruct.py:146`'s
+  docstring is explicit -- "sigma1A is not re-estimated internally for the
+  corrected operator -- the caller must supply one appropriate to it" --
+  but nothing enforces it: `sigma1A` is an ordinary required kwarg
+  (`:128`) consumed as `L = Nscales * sigma1A**2` (`:194`) with no
+  reference to whether `fn_b0map` was given. `run_b0_recon.py` does the
+  right thing (power-iterates via `estimate_spectral_norm` first) but is
+  the only caller that does, and the failure mode is ugly: a too-small
+  `sigma1A` means a too-small Lipschitz constant, so POGM takes an
+  over-long step and diverges rather than failing cleanly, after however
+  many minutes the run has already burned. Cheapest fix preserving the
+  current contract: accept `sigma1A=None` and, when it is None, call
+  `estimate_spectral_norm` on the operator just built -- which also
+  resolves half of item 49's "no wired-up way to run a fresh
+  reconstruction" for the B0 path. Interacts with item 76: whatever
+  iteration count that item settles on becomes this path's default too.
+- [ ] **94. `recon/run_b0_recon.py` re-implements `run_recon`'s smaps
+  load + RSS normalization verbatim.** `:79-81` is a line-for-line copy of
+  `recon/reconstruct.py:154-156`. Item 89 covers the `GatheredSenseB0` /
+  `GatheredSense` duplication but not this one, and this copy is the more
+  dangerous of the two: the whole purpose of `run_b0_recon`'s preamble is
+  to measure `sigma1A` for the operator `run_recon` will build moments
+  later, so any future change to how smaps are normalized silently
+  desynchronizes the estimate from the reconstruction it is estimated for
+  -- with no error, just a wrong step size. Note this is the *same* class
+  of bug as item 74's omega divergence, in the same function, for the same
+  reason. Factor the load+normalize into one helper both call.
+- [ ] **95. `run_b0map.py`'s two `# noqa: BLE001` codes are inert, and one
+  is doubly so.** `preprocessing/run_b0map.py:94` (`except Exception`) and
+  `:108` (`except subprocess.CalledProcessError`) both carry `BLE001`
+  suppressions. `BLE` isn't in `pyproject.toml`'s `select = ["E", "F",
+  "I"]`, so neither does anything today (item 48's territory) -- and
+  `:108` catches a *narrow* exception, so `BLE001` would not fire there
+  even if `BLE` were enabled. The explanatory comments are worth keeping;
+  the codes are cargo-culted from the five sibling batch drivers, whose
+  `except Exception` form does match the rule. Fold into item 48, whose
+  proposed `B` ruleset would newly flag `:108`'s suppression as unused.
+
 ## Still open: pass-3 review findings (2026-09-01, against `b8757a7`)
 
 Findings from a third repo-wide review for correctness, consistency and
