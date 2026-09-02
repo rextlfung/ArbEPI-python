@@ -14,7 +14,380 @@ at its own root — everything else lives under
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
 for the full layout).
 
-## Open TODOs (review findings, 2026-09-01 pass 3, against `b8757a7`)
+## Open TODOs (review findings, 2026-09-02 pass 4, against `b67bcc0`)
+
+Findings from a fourth repo-wide review, the first to cover `b67bcc0`
+("Add B0 off-resonance correction to recon/, plus GRE/field-map
+diagnostics") -- ~1400 lines across 8 new modules and 2 new test files
+that no earlier pass saw. Numbering **continues at 74** for the same
+reason every pass continues rather than restarts: source files and this
+file's own prose cross-reference earlier item numbers by name, so numbers
+are never reused.
+
+Same conventions: **[measured]** = reproduced by running the code (or by
+arithmetic on shapes the code fixes), with the number quoted.
+**[verify]** = suspicious, but needs a judgement call against the
+reference implementation before acting.
+
+**Nothing from passes 2 or 3 has been fixed.** Items **61-73** are all
+still open, as are **36-60** and **8, 13, 15, 17, 32, 33** -- spot-checked
+this pass by re-confirming the exact code each names is unchanged
+(`deGRE.py:237`'s `params.fov` for item 61, `deGRE.py:204`'s
+`max(0, iZ - 1)` for 72a, `EPIcal.py:76`'s 1-based shot loop for 60,
+`recon_frames.py:101`'s `min(cfg.Nframes, ...)` for 42, `trap4ge.py`'s
+still-absent `flat_area` write for 43, `noise.py:42-43`'s zeroed
+`adc_dead_time` for 13, and `noise.py`'s still-absent `set_definition`
+calls for 65).
+
+Baseline at review time (`uv sync --extra test --extra lint`, plain main
+venv, no `output/` directory):
+
+| check | pass 3 recorded | this pass |
+|---|---|---|
+| `uv run ruff check .` | 20 errors (all `E501`) | **31 errors** (see 86) |
+| `uv run pytest` | 120 passed, 18 skipped | **120 passed, 20 skipped** (see 87) |
+
+Only the plain-venv row was re-measured; the three other combinations in
+pass 3's table shift by the same +2 skips (both new test modules are
+torch-gated, not `output/`- or sigpy-gated) but were not re-run.
+
+One thing checked and found **correct**, recorded so nobody "fixes" it:
+`mri_exp_approx`'s calling convention. Read directly from
+mirtorch 0.3.1's `mirtorch/linear/mri.py`, the pinned dependency: the
+signature is `mri_exp_approx(b0, bins, lseg, t)`, so
+`operators_b0.py:212`'s `mri_exp_approx(b0_neg, nbins, L, unique_t_ms)`
+has `nbins`/`L` in the right order; the function expects `b0` in **Hz**
+and `t` in **milliseconds** (it divides by 1000 internally, twice -- once
+for the segment centers, once for the fit target), which is why passing
+`echo_times_s * 1000` against an unscaled Hz field map is right and not a
+1000x error; and the `tl` it returns is already back in **seconds**.
+`Gmri`'s own defaults really are `L=6, nbins=20`, so both "matching
+mirtorch's own Gmri default" claims are accurate as stated.
+
+### Correctness
+
+- [ ] **74. [measured] `run_b0_recon.py` re-introduces the exact-zero
+  sampling-mask inference that pass-1 item 7 removed -- under the same
+  function name as the fixed one, and at the cost of an extra full ~11 GB
+  read.** `recon/reconstruct.py:69`'s `_load_omega` was changed by item 7
+  to prefer the authoritative `omegas` dataset over deriving the mask from
+  `ksp != 0`, with a docstring explaining that a real sample rounding to
+  exactly `0+0j` after phase correction silently becomes "not acquired"
+  and that no per-coil check can catch it. `recon/run_b0_recon.py:41`
+  defines its *own* `_load_omega(fn_ksp)` whose entire body is
+  `_load_array(fn_ksp, "ksp_epi_zf")[:, :, :, 0, :] != 0` -- exactly the
+  derivation item 7 called a bug, on coil 0 alone (so not even the
+  fallback branch's per-coil consistency assert applies). The mask it
+  produces feeds `build_encoding_operator_b0`, whose per-frame `idx` then
+  decides which k-space locations the whole B0-corrected reconstruction
+  fits. The same fix removes a large cost: `omegas` is `(Ny,Nz,Nt)` bool
+  (a few hundred KB) while this reads the full `(Nx,Ny,Nz,Nc,Nt)`
+  archive, which that function's own docstring measures at ~23 s and
+  concedes means "ksp_epi_zf gets loaded twice across this driver". Read
+  `omegas` and the second load disappears entirely, along with the
+  docstring's whole coil-0-slicing-is-slower digression. Fix: import and
+  reuse `reconstruct._load_omega`, or read the dataset directly.
+- [ ] **75. [measured] `build_encoding_operator_b0` materializes 2.2 GB of
+  per-frame `b_weights` that hold only 60xL distinct values -- 3.3x the
+  shared-`c_phasors` cost the same function was already refactored to
+  avoid.** `operators_b0.py:231`'s `b = b_by_echo[pos]` is advanced
+  indexing, so each of the `Nt` frames gets an independent, fully
+  materialized `(K, L)` complex64 tensor. At this repo's real scale
+  (`Nx,Ny,Nz = 240,240,45`, `R ~ 9` so `K = 288000`, `Nt = 30`) and the
+  `L = 32` the sweep script argues for: `288000 * 32 * 8 B = 73.7 MB` per
+  frame, **2.21 GB total**, every byte of it a gather from the same
+  `(ETL, L) = (60, 32)` table -- 15360 distinct values, 61 KB. For
+  comparison the shared `c_phasors` this function's own docstring
+  describes being refactored to share across frames (after an L=16
+  version "push[ed] a real reconstruction into a CUDA OOM") is
+  `32 * 2592000 * 8 B = 664 MB`. So the redundancy that was fixed is now
+  the *smaller* of the two. Fix: keep `pos` per frame (int64:
+  `288000 * 8 B = 2.3 MB` per frame, 69 MB total, ~32x smaller; int32
+  halves that again) plus the one shared `b_by_echo` table, and index
+  inside `_apply`/`_apply_adjoint` -- `self.b_weights[:, il:il+1]` becomes
+  `b_table[pos, il:il+1]`, the same gather, just not precomputed 30 times.
+- [ ] **76. `estimate_spectral_norm` runs a fixed 30 power iterations with
+  no convergence check, and the error it can make is the unsafe one.**
+  `operators_b0.py:236` iterates exactly `niter` times and returns
+  `A.apply(x).norm()`. Power iteration approaches `sigma1` **from below**,
+  so a not-yet-converged result is an *under*-estimate; `run_recon` then
+  computes `L = Nscales * sigma1A**2` (`reconstruct.py:194`) as POGM's
+  Lipschitz constant, and an under-estimated `L` means a step size `1/L`
+  that is too *large* -- the divergence direction, not the slow-but-safe
+  one. Nothing downstream re-checks it: `run_b0_recon.py` prints the value
+  next to the uncorrected reference, which catches a wild miss by eye but
+  only if someone is watching. The repo already contains the right
+  pattern -- `recon/solvers.py:188`'s `poweriter` takes `niter=200,
+  tol=1e-6` and returns early on a converged ratio -- and it is the same
+  computation, which is the disposition question item 49 raised (see 89).
+  Fix: iterate to a tolerance, or keep 30 iterations and multiply by a
+  small safety factor, but say which and why.
+- [ ] **77. [measured] `operators_b0.py`'s `nbins` docstring blames a
+  weighting that mirtorch does not do.** It describes `mri_exp_approx` as
+  fitting from "an *equal-width*, magnitude-weighted histogram of
+  `b0map_hz`'s *entire* range" and argues that at `nbins=20` "nearly all
+  the histogram's magnitude-weighted mass falls into 1-3 bins near zero".
+  mirtorch 0.3.1's `_uniform_histogram` is
+  `histogram.scatter_add(0, indices, torch.ones_like(values))` -- a plain
+  **voxel-count** histogram with no magnitude weighting anywhere in the
+  call path (MIRT's own `mri_exp_approx` does accept a weight vector;
+  mirtorch's port dropped it). The conclusion is unaffected and if
+  anything stronger -- background dominates by count too, and the measured
+  row-sum evidence ([0.12, 2.89] at nbins=20 vs [0.9985, 1.0022] at
+  nbins=100) stands on its own -- but the stated mechanism is wrong, and
+  it is the sentence someone would reason from when picking `nbins` for a
+  differently-shaped field map. Fix the two "magnitude-weighted" phrases;
+  note while there that the equal-width range is set by `b0.amin()`/
+  `amax()` over the whole volume, which is what actually makes an
+  asymmetric in-object range expensive in bins.
+- [ ] **78. `gre_diagnostics.py` computes `n_echoes` generically, then
+  hardcodes two echoes.** `preprocessing/gre_diagnostics.py:48` reads
+  `n_echoes = ksp_echoes.shape[3]` and builds `img_echoes` over
+  `range(n_echoes)`, but `:79-80` index `img_echoes[..., 1]` and
+  `te_degre[1]` unconditionally, and `:83`'s ratio panel assumes exactly
+  two. `preprocessing/config.py:185` defaults `n_echoes_degre` to `1` for
+  a `scan_info.mat` snapshot written before the dual-echo upgrade -- which
+  this file's own `preprocessing/` section describes as a deliberate,
+  supported case ("a durable, non-regeneratable per-acquisition data
+  record, not something to raise `KeyError` on") -- and on such a dataset
+  this is a bare `IndexError` from a diagnostic script whose whole purpose
+  is being run when something already looks wrong. Same line, `:46`'s
+  `te_degre = f.attrs["TE_degre"]` is an unguarded `KeyError` on the same
+  class of older cache, since `preprocess.py` writes that attr only
+  "whenever `seq_params.TE_degre` is available". Either guard both, or
+  assert `n_echoes == 2` up front with a message naming the cause.
+- [ ] **79. `b0map.jl` records `l2b` in its output attributes but not
+  `niter` -- the one parameter its own new docstring says `l2b` is
+  meaningless without.** The commit adds both as CLI overrides and adds a
+  docstring paragraph reporting that raising `l2b` alone, holding `niter`
+  at 30, "measurably did *not* change the fit (tested l2b in [-6, 8], a
+  16384x range ... with identical results to 4 significant figures)". The
+  output block then writes `attributes(f)["l2b"] = l2b` and stops there.
+  So a `<seqname>_b0map.h5` on disk records the knob that provably does
+  nothing on its own and omits the one that makes it bite: two field maps
+  from `l2b=4, niter=30` and `l2b=4, niter=300` are materially different
+  and indistinguishable after the fact. One line, next to the `l2b` one.
+
+### Consistency & documentation
+
+- [ ] **80. `b0map.jl`'s new `l2b`/`niter` overrides are unreachable from
+  the Python driver, so the batch pipeline cannot produce the tuned field
+  map the docstring describes.** `preprocessing/run_b0map.py:67-73` builds
+  the subprocess argv as `[julia, --project, script, gre_cache_path,
+  output_path, str(cfg.b0map_mask_thresh)]` -- three positional args, no
+  fourth or fifth -- and `PreprocessingConfig` (`config.py:60-63`) carries
+  only `b0map_mask_thresh`. The regularization tuning the commit adds
+  these parameters *for* (a measured ~2.7x SNR gradient toward the
+  object's center, propagating under-regularized field-map noise into
+  visible reconstruction artifacts) can therefore only be exercised by
+  invoking `julia` by hand, outside the driver, and never reproducibly
+  from a config. Fix: add `b0map_l2b`/`b0map_niter` to
+  `PreprocessingConfig` and pass them through, defaulting to b0map.jl's
+  own `-6.0`/`30` so existing behavior is unchanged.
+- [ ] **81. Three docstrings still call time-segmented correction
+  "not-yet-implemented" in the commit that implements it.**
+  `recon/b0_correction.py`'s module docstring says the residual blur
+  "needs full time-segmented correction (a separate, not-yet-implemented
+  stage)"; `tests/test_recon_b0_correction.py`'s
+  `test_realistic_regime_only_partly_corrects` docstring closes with the
+  same phrase verbatim; and `b0_correction.py`'s sign-convention paragraph
+  says the convention "has not yet been verified against a real
+  reconstruction" while `run_b0_recon.py` exists precisely to run one.
+  `recon/operators_b0.py` landed in the same commit and its own docstring
+  correctly describes itself as "the actual fix that regime needs", so the
+  repo now states both things. The static stage is still worth keeping
+  (it is the cheap sign/scale check, and `test_l1_matches_static_
+  correction` ties the two stages together), so this is a wording fix, not
+  a deletion.
+- [ ] **82. `L = 6` is still the default in four places after the sweep
+  concluded 32.** `b67bcc0`'s own commit message says
+  `sweep_time_segments.py`/`benchmark_b0_cost.py` "motivated picking L=32
+  over the L=6 default (L=6 badly under-resolves this pipeline's real
+  ETL=60 bandwidth-time product; L=32 is the smallest swept L keeping
+  forward-model error under 1%)". Nothing in the tree reflects that:
+  `operators_b0.py:144` `L: int = 6`, `reconstruct.py:132` `L_b0: int =
+  6`, `run_b0_recon.py:58` `L_b0: int = 6` and `:140`
+  `--L ... default=6`. Worse, three docstrings assert the sweep never
+  happened -- `operators_b0.py`'s module docstring ("not swept against a
+  real error bound the way Fable's staged plan recommends -- see
+  CLAUDE.md's `recon/` section for that open item"), `run_b0_recon.py`'s
+  ("not swept against a real min-max error bound"), and `run_recon`'s new
+  parameter docs ("see operators_b0.py's module docstring for why L hasn't
+  been swept") -- while `recon/sweep_time_segments.py` sits in the same
+  directory doing exactly that sweep and printing "Smallest swept L with
+  rel_error < 1%". Decide the default, set it in all four places, and
+  replace the three docstring paragraphs with the sweep's actual numbers
+  (which are not recorded anywhere in the repo -- only in the commit
+  message). Note `L = 32` interacts directly with item 75: at L=32 the
+  per-frame `b_weights` redundancy is 2.2 GB, which is the regime the
+  earlier L=16 OOM came from.
+- [ ] **83. Every "see CLAUDE.md's `recon/` section" pointer the new code
+  adds is dangling, and two existing CLAUDE.md claims about `recon/` are
+  now false.** Four new cross-references point at content this file does
+  not contain: `operators_b0.py`'s and `run_b0_recon.py`'s "see CLAUDE.md's
+  recon/ section for that open item" (there is no L-sweep open item),
+  `b0map.jl`'s "see CLAUDE.md's recon/ section for the tuning this was
+  chosen against" (no such tuning is recorded), and
+  `benchmark_b0_cost.py`'s "the smaller Julia/Python benchmark numbers
+  already documented there" for the *uncorrected* operator (that comparison
+  is real and is in the `recon/` section -- this one only half-lands, since
+  it also cites a real-scale table that does not exist). In the other
+  direction: item 53 states "There is no `recon/operators_b0.py`
+  (`recon/` holds `__init__`, `lowrank`, `operators`, `reconstruct`,
+  `solvers`, `validate_against_mslr`) and the working tree is clean, so the
+  uncommitted work it warns about is gone" -- the file now exists, the
+  directory now holds twelve modules, and item 12's warning about the
+  `grid_mode=True` alignment change shifting `smaps`/`b0map_hz` relative to
+  the EPI grid is live again and has a concrete target
+  (`GatheredSenseB0`'s `c_phasors`). Item 49's "run_recon still has no
+  `save_result` driver" and the `recon/` section's "a `save_result` driver
+  reusing `preprocessing/nifti_io.py`'s `save_recon_nifti` ... would be the
+  natural next piece" are likewise both answered by `recon/save_result.py`,
+  which does exactly that. Retarget the four pointers, correct 53 and 49,
+  and give the `recon/` section a B0 subsection covering the sign
+  convention, the ms/Hz calling convention noted in this section's
+  preamble, the `nbins` finding, and whatever 82 settles on for L.
+- [ ] **84. README's architecture tree has re-drifted -- seven modules
+  missing, the same failure pass-1 item 22 fixed once.** `README.md:195`'s
+  `recon/` block lists `operators.py`, `lowrank.py`, `solvers.py`,
+  `reconstruct.py`, `validate_against_mslr.py` and stops; the directory now
+  also holds `b0_correction.py`, `operators_b0.py`, `save_result.py`,
+  `run_b0_recon.py`, `sweep_time_segments.py` and `benchmark_b0_cost.py`.
+  The `preprocessing/` block above it omits `gre_diagnostics.py`. Since
+  README's tree is the only place the repo enumerates its own modules for
+  a newcomer, and item 22 already had to repair it once, consider whether
+  it should list directories with a one-line purpose instead of every file.
+  While there: `pyproject.toml`'s `recon` extra comment says "see
+  recon/README or top-level docs for the CUDA wheel selection this machine
+  needs" -- there is no `recon/README` (pre-existing, not from this commit).
+- [ ] **85. `tests/test_recon_operators_b0.py`'s "realistic regime" is the
+  toy grid `sweep_time_segments.py` was written to replace, and its tests
+  pin the `nbins` value the code documents as broken.**
+  `test_more_segments_reduces_error_in_the_realistic_regime` asserts
+  `err_l16 < 0.1 * err_l8`, commented "L16 >= the 12 distinct ky times in
+  this small synthetic grid, so it's essentially exact".
+  `sweep_time_segments.py`'s module docstring says of that exact test:
+  "That test's own 'L=16 is ~exact' finding is an artifact of its toy grid
+  having only 12 distinct echo times (L>=12 trivially resolves every one
+  exactly); it says nothing about whether L=6 ... is adequate at the real
+  ETL=60 scale". So the test's name and docstring claim the realistic
+  regime while the analysis script says it is not one -- and a real
+  regression (say, L=32 silently becoming inadequate) cannot fail it.
+  Separately, `_build_b0_operator` defaults `nbins=20` and every test uses
+  that or 10, i.e. exactly the setting `operators_b0.py`'s docstring
+  identifies as "the actual root cause ... of a real signal-loss-plus-
+  incoherent-noise failure on real reconstructions", which also means the
+  suite should be tripping `_check_b_weight_row_sums`' warning throughout.
+  Fix: rename the test to say "toy grid", fold `sweep_time_segments.py`'s
+  real-scale fixture in as the actual realistic-regime test (it is already
+  written, and its docstring admits it duplicates the test helpers to avoid
+  a `recon/` -> `tests/` import -- which inverts once the fixture lives in
+  `tests/`), and add one case at the production `nbins=128` that asserts no
+  row-sum warning fires.
+
+### Test & tooling health
+
+- [ ] **86. [measured] Lint debt grew 55% and is no longer all `E501`.**
+  `uv run ruff check .` reports **31 errors**, up from the 20 items 15/70
+  record. All 11 new ones are in files this commit added --
+  `recon/benchmark_b0_cost.py` (4x `E501`, plus the repo's first-ever
+  `F401` and `F841`), `recon/sweep_time_segments.py` (3x `E501`),
+  `preprocessing/gre_diagnostics.py` (2x `E501`) -- and the pre-existing 20
+  are unchanged, so this is purely the new code. The two non-`E501`
+  findings are real dead code, not style: `benchmark_b0_cost.py:29` imports
+  `GatheredSense` and never uses it (only `build_encoding_operator` is
+  called), and `:86`'s `y = A.apply(x0)` is assigned but never read -- the
+  adjoint on the next line is timed against the independent random `y0`
+  instead, which is fine for a cost benchmark but means the variable is
+  simply garbage. `ruff --fix` clears the `F401`; the rest is manual.
+  Item 15's "now the only standing lint debt in the repo" no longer holds.
+- [ ] **87. [measured] The entire B0 feature is invisible to the default
+  test command.** `uv run pytest` in the documented main venv is now
+  **120 passed, 20 skipped** (was 120/18). The two added skips are
+  `tests/test_recon_b0_correction.py` and
+  `tests/test_recon_operators_b0.py`, both whole-module
+  `pytest.importorskip("torch")` -- so all ~1400 lines added by `b67bcc0`,
+  including every sign-convention and adjoint check written specifically to
+  guard them, run zero times in the environment CLAUDE.md's Commands
+  section tells a contributor to use. That is the documented pattern for
+  `recon/` and not wrong on its own, but the skip ledger is now 6
+  torch-gated modules + 9 sigpy/nibabel-gated + 5 `output/`-gated cases
+  (item 70's corrected count, re-confirmed exactly this pass), i.e. the
+  majority of this repo's test surface is dark by default. Worth deciding
+  once, at the level of items 46/70 rather than per-module: either CI
+  installs the extras, or this file says plainly which fraction of the
+  suite a plain `uv run pytest` actually exercises.
+- [ ] **88. `benchmark_b0_cost.py` documents its own headline measurement
+  backwards.** Its docstring promises to report "the static, L-independent
+  memory cost of building the operator itself (b_weights across all frames
+  + the shared c_phasors tensor)". Both named components scale linearly
+  with L -- `c_phasors` is `(L, *N)` and `b_weights` is `(K, L)` per frame
+  (item 75's 664 MB and 2.21 GB at L=32) -- and the script's own
+  `build_mem` column measures exactly that L-dependence, printed once per
+  swept L in a table whose whole point is comparing L values. Fix the
+  sentence; the number it prints is the right one.
+
+### Conciseness & performance
+
+- [ ] **89. `GatheredSenseB0` is `GatheredSense` copied verbatim plus two
+  factors, and `estimate_spectral_norm` is `poweriter` written a second
+  time.** `operators_b0.py:83-107`'s `_apply`/`_apply_adjoint` reproduce
+  `operators.py:49-66` line for line -- the same `reshape(Nc,-1).T`
+  gather, the same `kc_full` scatter, and in particular the same
+  `fftshift(fftn(ifftshift(.)))` / `ifftshift`-then-`fftshift` convention
+  that `operators.py`'s module docstring spends a paragraph justifying and
+  that `tests/test_recon_operators.py` verifies -- with `c_phasors[il]`
+  and `b_weights[:,il]` inserted. Both copies must now stay in sync
+  through any future change to that convention. `GatheredSenseB0`'s own
+  docstring states the reduction ("L=1, b_weights=1, c_phasors=1 recovers
+  it exactly") and
+  `test_estimate_spectral_norm_matches_full_sampling_unity_case` proves it
+  numerically, so the collapse is already justified and tested: make
+  `GatheredSense` the `L=1` case, or have it subclass/delegate. Likewise
+  `estimate_spectral_norm` (`operators_b0.py:236`) computes exactly what
+  `recon/solvers.py:188`'s `poweriter` computes, minus the tolerance check
+  (item 76) -- and `poweriter` is the dead function item 49 asked to
+  either wire up or delete. `run_b0_recon.py` is the wiring item 49 wanted;
+  the resolution is now to keep one implementation, take `poweriter`'s
+  `tol`, and put it next to the operators it measures rather than inside
+  the B0-specific module (it is documented as taking "any mirtorch
+  LinearMap/BlockDiagonal"). Minor, same file: `:127`'s function-body
+  `import warnings` is the only one in the repo -- `lib/calc_te_tr_delays.py`
+  and `preprocessing/preprocess.py` both import it at module level.
+- [ ] **90. [measured] `echo_times_s` is materialized 240x redundantly on
+  the GPU, in both callers.** `reconstruct.py:181` and
+  `run_b0_recon.py:88` both do
+  `echo_times_2d.to(device).unsqueeze(0).expand(Nx, -1, -1, -1)
+  .contiguous()`, turning preprocessing's `(Ny,Nz,Nt)` array into a dense
+  `(Nx,Ny,Nz,Nt)` one: at real dims that is **311 MB** of float32 on the
+  device, expanded from **1.30 MB** of distinct values, and
+  `build_encoding_operator_b0` reads it only at each frame's sampled flat
+  indices. The `.contiguous()` is what forces it -- `expand` alone is a
+  free stride-0 view, and `reshape(-1)[idx]` on the expanded view would
+  work directly. Cheaper still: index the `(Ny,Nz,Nt)` array with
+  `idx // Nz`-style arithmetic and skip the broadcast entirely. On a
+  pipeline whose docstrings repeatedly cite CUDA OOMs at this exact scale,
+  311 MB for a value that varies along none of the axis it is copied
+  across is worth reclaiming. (Both call sites are two lines apart in
+  spirit and identical in text -- a shared helper would fix both, and is
+  the same duplication as 74's `_load_omega`.)
+- [ ] **91. `_ift3` now exists three times, and the newest copy inherits
+  item 64's false justification on the one grid where it bites.**
+  `preprocessing/gre_diagnostics.py:29` is a verbatim copy of
+  `preprocessing/run_rss.py`'s `_ift3` (`fftshift(ifftn(fftshift(.)))`),
+  and `preprocessing/julia/b0map.jl` implements the same convention a third
+  time in Julia. Item 64 records that the `fftshift`-on-input spelling
+  differs from the conventional `ifftshift` by a one-sample circular shift
+  on odd-length axes, and is safe here only because every consumer takes a
+  magnitude or a difference. `gre_diagnostics.py` runs on the **deGRE**
+  grid, where `Nz_degre = 21` is odd -- it is magnitude-only too
+  (`np.sqrt(np.sum(np.abs(...)**2))`), so still safe, but it is now the
+  third place a future complex-valued consumer could pick the pattern up
+  from. Import `run_rss._ift3` rather than copying it (or hoist it into a
+  shared `preprocessing/` helper alongside `matio.py`), and fix item 64's
+  docstring once, in one place.
+
+## Still open: pass-3 review findings (2026-09-01, against `b8757a7`)
 
 Findings from a third repo-wide review for correctness, consistency and
 conciseness, run against the tree as merged to `main`. Numbering
