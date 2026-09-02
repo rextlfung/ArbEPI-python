@@ -14,6 +14,203 @@ at its own root — everything else lives under
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
 for the full layout).
 
+## Open TODOs (review findings, 2026-09-02 pass 5, against `25457b8`)
+
+A fifth repo-wide review. The source tree has **not changed** since the
+two pass-4 reviews below completed (`25457b8`, the commit this pass
+starts from, only touched CLAUDE.md itself -- confirmed via `git diff
+main HEAD --stat` against the last source commit, `f00e2ee`) -- so every
+item recorded in the pass-4 sections is reproducibly still open exactly
+as written, with no re-verification needed beyond re-running the two
+baseline checks: `uv run ruff check .` still reports **31 errors** (29
+`E501` + the same `F401`/`F841` pair, item 86) and `uv run pytest` still
+reports **120 passed, 20 skipped**, both byte-for-byte matching the
+recorded pass-4 numbers. Items 79 and 80 remain the only pass-4-or-
+earlier items already resolved (by `f00e2ee`, see that pass's addendum).
+
+Since nothing in the tree changed, this pass did not re-derive findings
+already on record -- it instead ran four independent fresh-eyes reviews
+over the areas that had the least dedicated attention in the B0-focused
+pass-4 reviews: `ge/`, `sampling/`+`lib/`(minus the already-heavily-
+reviewed mask2epi/readout-grads/trap4ge/calc_te_tr_delays files)+
+`plotting/`+root config, `preprocessing/`'s non-B0 modules, and
+`recon/`'s non-B0 modules plus overall doc-vs-code consistency. Six new
+findings came out of that (items 96-101 below); everything each review
+flagged as a candidate was independently re-verified against the actual
+source in this pass before being recorded (not simply transcribed from
+the sub-review). Numbering **continues at 96** for the same reason every
+pass continues rather than restarts.
+
+Same conventions: **[measured]** = reproduced by running the code (or by
+arithmetic on shapes the code fixes), with the number quoted.
+**[verify]** = suspicious, but needs a judgement call against the
+reference implementation before acting.
+
+### Correctness
+
+- [ ] **96. [measured] `plot_psf` has its `fftshift`/`ifftshift` backwards,
+  mis-centering the PSF by one voxel on any odd-length axis -- live at
+  this repo's real dimensions.** `plotting/plotting.py:197` computes
+  `psf = np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(omega)))`. Every
+  other centered-array convention in this codebase (`plot_sampling_mask`'s
+  `ky_samp = (ys - Ny/2) * deltak_y` two lines up in the same file;
+  `mask2epi.py`'s `cy, cz = Ny/2, Nz/2`) treats `omega`'s array index
+  `N/2` as `k = 0` -- correctly un-centering it for a transform needs
+  `ifftshift` on the *input* and `fftshift` on the *output*
+  (`fftshift(ifft2(ifftshift(x)))`), the reverse of what's written here.
+  `fftshift`/`ifftshift` are identical on even-length axes, so this is
+  invisible on `Ny` (240, even) but not on `Nz` (45, odd, per `params.py`'s
+  default `N = [240, 240, 45]`). Measured directly: for an all-ones mask
+  the true PSF is a single delta at `(Ny//2, Nz//2)`; the code's formula
+  places it at `(Ny//2, Nz//2 + 1)`. At the real production scale
+  (`Ny,Nz = 240,45`) the code's PSF magnitude equals the correct one
+  circularly shifted by exactly +1 sample along z (`np.roll(correct, 1,
+  axis=1)` matches to `4.3e-18`, float noise; the same shift along the
+  even y-axis does not match, confirming the bug is isolated to the odd
+  axis as the shift-convention analysis predicts). Not the same bug class
+  as items 44/64 (`_ift3` and friends): those swap only *one* shift, which
+  item 64 proves is a harmless linear phase ramp under `np.abs()`; this
+  swaps *both*, which does not cancel (as measured above -- `psf_mag`
+  itself, not just the complex value, is shifted). Diagnostic-only impact
+  (`output/psf.png` via `--plot`, never feeds sequence generation, GE
+  export, or reconstruction) but a real, visible defect with zero test
+  coverage (`grep -rn "plot_psf" tests/` -> no hits). Fix:
+  `np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(omega)))`.
+- [ ] **97. [measured] `Emax_n` is silently wrong for any segment whose
+  gradient energy is always exactly zero -- live on this repo's own
+  shipped `noise.seq` -> `noise.pge` export.** `ge/ceq.py:56-57` defaults
+  `Emax_val: float = 0.0`, `Emax_n: int = 1`; `ge/seq2ceq.py:169-171`'s
+  gradient-heating loop only overwrites them on strict `e_total >
+  seg.Emax_val`. A segment whose combined gradient energy is genuinely
+  `0.0` in every instance never satisfies that condition, so `Emax_n`
+  stays at the class default `1` -- a hardcoded row number belonging to
+  whichever segment occupies row 1 of the whole sequence, not necessarily
+  (and, as measured, not actually) a row belonging to *this* segment.
+  `ge/writeceq.py:242` writes that incoherent value verbatim into the
+  `.pge` binary. Measured by running `seq2ceq()` on the real
+  `output/noise.seq` (this repo's own sequence with genuinely zero
+  gradient energy throughout, per CLAUDE.md's own "0.0 mT/m max grad /
+  0.0 T/m/s max slew" record): segment 2's own rows start at 121
+  (`seg.rows == [121]`), yet its exported `Emax_n` is `1`, which
+  `ceq.loop[0, 0] == 1` confirms belongs to segment 1. Re-ran the same
+  check on `ArbEPI.seq`/`EPIcal.seq`/`deGRE.seq` (all nonzero-energy
+  everywhere) and every segment's `Emax_n` correctly resolves to itself --
+  confirming the mechanism works whenever energy is nonzero and only
+  breaks in the always-zero-energy case. Distinct from the already-
+  documented "stale 1-indexed column choice" deviation in the same
+  function (that one is about *which columns* feed `e_total`, not about
+  this default-value fallback when `e_total` is legitimately zero
+  everywhere). Practical GE-PSD-interpreter impact of a wrong `Emax_n` on
+  a no-gradient segment is unverified (no way to run the real interpreter
+  here), but the exported value is objectively incoherent. Fix: seed
+  `Emax_n` from `seg.rows[0]` (the segment's own first row) rather than a
+  cross-segment constant `1`, so the zero-energy case degrades to "this
+  segment's own first instance" instead of "segment 1's".
+- [ ] **98. Three of `seq2ceq`'s four block-walking loops assume the final
+  segment instance is complete, and the first one to walk off the end
+  raises a raw, unhelpful `KeyError` rather than an actionable error.**
+  `ge/seq2ceq.py:74`'s "detect variable delay blocks" loop
+  (`while n <= ceq.nMax`), `:117`'s loop-table construction (same guard),
+  and `:159`'s gradient-heating loop (`while n < ceq.nMax`) all stride `n`
+  forward in `nBlocksInSegment`-sized steps with no check that the last
+  segment instance actually has that many blocks left. Only the
+  consistency-check loop at `:138-144` guards this (`if n +
+  seg.nBlocksInSegment > ceq.nMax: break`) -- the other three don't share
+  its pattern. Reproduced with a minimal synthetic pypulseq sequence (two
+  complete TRID-segment instances, a third truncated to just its
+  TRID-label block): `seq2ceq()` crashes inside the first, unguarded loop
+  at `ge/seq2ceq.py:77` with `KeyError: 6` from deep inside
+  `pypulseq.Sequence.block.get_block` -- not one of this file's own
+  actionable `ValueError`s used for other malformed-input cases nearby.
+  Confirmed this never fires on any of the four real `output/*.seq` files
+  this repo ships (their final instances are all complete) -- latent, not
+  live -- but `seq2ceq(seq)` sits on `check_seq_feasibility`'s production
+  path (`ge/check.py:237`, used by both `ge_export.py`'s pre-flight check
+  and `main.py --ge`), so a future sequence-generator bug or a
+  debugging/truncation script that ever produced a mid-TR-truncated
+  sequence would surface as an opaque `KeyError` instead of a clear
+  diagnostic. Fix: apply the same `if n + seg.nBlocksInSegment >
+  ceq.nMax: break` (or raise with a clear message) to the other three
+  loops.
+- [ ] **99. [measured] `preprocessing/cg_sense.py` infers its sampling
+  mask from a single coil's exact-zero values -- the same bug class items
+  7/74 already fixed elsewhere in the repo, still live in this file.**
+  `preprocessing/cg_sense.py:54-55` is `mask =
+  np.abs(np.take(kdata_zf, 0, axis=coil_dim)) > 0` -- derived from coil
+  index 0 alone. Item 74's own docstring (quoting item 7) explains exactly
+  this risk generically ("no per-coil check can catch it"), and that fix
+  never touched `preprocessing/`. The sibling Stage-2 driver in the same
+  package does this safely: `preprocessing/recon_sigpy.py:65`'s `weights =
+  (sp.rss(ksp_cf, axes=(0,)) > 0)` uses the root-sum-of-squares across
+  *all* coils, so the two drivers are now inconsistent, and `cg_sense.py`
+  is the weaker one. Measured failure mode: with coil 0 forced to all
+  zeros, `cg_sense()` raises a numpy `RuntimeWarning: invalid value
+  encountered in scalar divide` (the first CG step computes `alpha =
+  rsold / ... = 0/0`) and returns an all-NaN reconstruction, silently --
+  easy to miss inside `run_cg_sense.py`'s per-sequence `except Exception`
+  batch loop. Caveat: `cg_sense.py` runs on `ksp_epi_zf` *after* Stage 1's
+  PCA coil compression, so "coil 0" here is the dominant virtual coil (a
+  weighted combination of all physical channels), not a single physical
+  receive element -- a genuinely dead physical coil is unlikely to zero
+  that virtual coil exactly, so the everyday trigger probability is lower
+  than a naive reading suggests, but the structural defect and its
+  measured catastrophic-and-silent failure mode are real. Fix: derive the
+  mask from `recon_frames`'s already-available `omegas` dataset, or at
+  minimum switch to an RSS-across-coils check matching `recon_sigpy.py`.
+
+### Consistency & documentation
+
+- [ ] **100. Item 84's README-architecture-tree claim was already fixed by
+  `f00e2ee`, but neither pass-4 addendum said so -- only its
+  `pyproject.toml` sub-claim is still open.** Item 84 lists six `recon/`
+  modules and `gre_diagnostics.py` as missing from README's architecture
+  tree. `f00e2ee` (titled "Fix B0 field map noise: switch b0map.jl's NCG
+  preconditioner to :diag") touched `README.md` in the same commit and
+  added exactly these: `README.md:193` lists `gre_diagnostics.py` under
+  `preprocessing/`, and `:203-213` list `operators_b0.py`,
+  `b0_correction.py`, `save_result.py`, `run_b0_recon.py`,
+  `sweep_time_segments.py`/`benchmark_b0_cost.py` under `recon/` --
+  confirmed current against the real directory listing. The pass-4
+  addendum explicitly re-verified items 74/79-84/86-89 against `f00e2ee`
+  and marked 79/80 resolved, but not 84, even though 84's main claim was
+  fixed by that same commit. Only 84's other sub-claim -- `pyproject.toml`
+  `:43-44`'s dangling "see recon/README" comment (no `recon/README*`
+  exists) -- is still accurate and still open. Narrow item 84 to just
+  that one line.
+- [ ] **101. Two small doc gaps, worth folding into the next general docs
+  pass.** (a) `preprocessing/matio.py:7-9`'s module docstring still
+  quotes `schedules`' pre-echo-time shape (`h5py raw (2, 60, 20, 30)` ->
+  logical `(30, 20, 60, 2)`, "`Nframes x Nshots x ETL x 2` layout"),
+  stale since `8071542` ("Resize B0 field maps to the EPI grid, add
+  per-echo timing, consolidate scan_info.mat") made it `x3` -- confirmed
+  against `sequences/ArbEPI.py:299-301`'s 3-channel concatenation and this
+  file's own ".mat file format" section. `read_mat_array`'s `.transpose()`
+  is shape-agnostic, so there's no functional bug, only a stale worked
+  example; update the two shape tuples and the channel count. (Not the
+  same array as `lib/mask2epi.py:75`'s own, still-correct "`ETL x 2`"
+  comment -- that one describes `mask2epi`'s internal array *before*
+  `ArbEPI.py` appends the echo-time column.) (b) `README.md:22`'s core-
+  dependency sentence ("Depends on `pypulseq` ..., numpy, scipy,
+  matplotlib, hdf5storage, and numba") omits `tqdm`, which
+  `pyproject.toml:19` lists as a real core (non-optional) dependency and
+  which `sequences/ArbEPI.py:23`/`sequences/deGRE.py:48` both actually
+  import. Add it to the list.
+
+### Conciseness & performance
+
+- [ ] **102. `preprocessing/epi_gridding.py`'s `reconecho()` is dead
+  code.** Defined and documented at `:34-51` (including a docstring
+  cross-reference from `rampsamp2cart`'s own docstring), but has zero
+  callers anywhere in the repo or its tests (`grep -rn "reconecho\b"
+  --include=*.py .` matches only the definition and its own docstring
+  mentions; `grep -rn reconecho tests/` -> no hits). Everything that
+  actually grids EPI data goes through `rampsampepi2cart`/
+  `rampsamp2cart`, which reimplement the same per-echo NUFFT+DCF logic
+  inline instead of calling it. Not the same dead-field class as items 33
+  or 73 (those are struct fields/parameters, not a whole unused
+  function). Either delete it, or wire `rampsamp2cart`'s inner loop to
+  call it (it would need batching to be useful as-is).
+
 ## Open TODOs (review findings, 2026-09-02 pass 4, against `b67bcc0`)
 
 Findings from a fourth repo-wide review, the first to cover `b67bcc0`
