@@ -5,11 +5,11 @@ conjugate-phase demodulation baked into the coil sensitivity maps before the
 encoding operator is built, at zero added per-iteration cost. This corrects
 the dominant geometric-shift component of EPI off-resonance distortion; it
 does not correct the residual blur/ghosting from differential phase accrual
-across the echo train -- that needs full time-segmented correction (a
-separate, not-yet-implemented stage), and is why this is deliberately
-implemented first: cheap enough to validate the field map's sign/scale
-conventions in isolation before building the more expensive machinery on
-top of them.
+across the echo train -- that needs the full time-segmented correction
+stage (recon/operators_b0.py's GatheredSenseB0), and this module was
+deliberately implemented first: cheap enough to validate the field map's
+sign/scale conventions in isolation before building the more expensive
+machinery on top of them.
 
 Sign convention: the forward signal model (Sutton, Noll, Fessler, "Fast,
 iterative image reconstruction for MRI in the presence of field
@@ -33,11 +33,14 @@ physical convention).
 This assumes preprocessing/run_b0map.py's b0map_hz (from MRIFieldmaps.jl,
 Lin & Fessler -- the same Fessler lineage as the TSP reference above, so a
 priori likely to share this same sign convention by construction) already
-follows it. That has not yet been verified against a real reconstruction --
-the only real check is whether applying this correction visibly reduces
-(not worsens) distortion on real off-resonance data. Flip the sign of
-b0map_hz at the call site (`demodulate_smaps(smaps, -b0map_hz, te_s)`) if a
-real comparison shows this is backwards.
+follows it. Verified against a real reconstruction, not just assumed:
+recon/run_b0_recon.py's real runs (see CLAUDE.md's recon/ B0 subsection)
+show the field map reducing, not worsening, distortion, and the
+correction's expected geometric-sharpening effect is preserved after the
+b0map.jl preconditioner fix (precon=:diag) that separately addressed
+field-map-noise-induced speckle. Flip the sign of b0map_hz at the call
+site (`demodulate_smaps(smaps, -b0map_hz, te_s)`) if a future dataset's
+comparison ever shows this backwards.
 """
 
 import math

@@ -3,8 +3,8 @@ B0 correction (recon/operators_b0.py), replicating the existing G+L
 (multi-scale) config already validated against ../mslr-recon
 (recon/validate_against_mslr.py) for the *uncorrected* case, and saving
 results under <datdir>/recon/mslr_b0/G+L_L<L_b0>/ (recon/save_result.py) --
-one directory per L, since L is under active investigation, not settled.
-(Matches the convention already on disk from the L=6/10/16 runs.)
+one directory per L (matches the convention already on disk from the
+L=6/10/16 runs made during the sweep below).
 
 sigma1A is not reused from the uncorrected reference: the B0-corrected
 operator's spectral norm has no known closed form (mri_exp_approx's B
@@ -13,10 +13,9 @@ operators_b0.py), so it's measured here via power iteration
 (estimate_spectral_norm) before the real reconstruction runs, on the actual
 per-dataset smaps/omega/b0map/echo_times rather than assumed.
 
-L (segment count) is a fixed engineering default (6, matching mirtorch's
-own Gmri default), not swept against a real min-max error bound the way
-Fable's staged plan recommends -- see CLAUDE.md's recon/ section for that
-open item; --L lets it be overridden per run without a code change.
+L (segment count) defaults to 32 -- see operators_b0.py's module docstring
+for the real-scale sweep (recon/sweep_time_segments.py) that settled it;
+--L still lets it be overridden per run without a code change.
 
 Usage (from repo root, .venv-recon):
     .venv-recon/bin/python -m recon.run_b0_recon <datdir> <name>
@@ -67,7 +66,7 @@ def _load_omega(fn_ksp: str, Nx: int) -> np.ndarray:
     return ksp0_coil0 != 0
 
 
-def main(datdir: str, name: str, L_b0: int = 6, nbins_b0: int = 128, device: str = "cuda") -> None:
+def main(datdir: str, name: str, L_b0: int = 32, nbins_b0: int = 128, device: str = "cuda") -> None:
     device_t = torch.device(device)
     recon_dir = os.path.join(datdir, "recon")
     fn_ksp = os.path.join(recon_dir, "ArbEPI_epi_zf.h5")
@@ -147,7 +146,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("datdir")
     parser.add_argument("name", help="'laminar' or 'radial' -- matches mslr/G+L/<name>_recon.mat")
-    parser.add_argument("--L", type=int, default=6, dest="L_b0")
+    parser.add_argument("--L", type=int, default=32, dest="L_b0")
     parser.add_argument("--nbins", type=int, default=128, dest="nbins_b0")
     args = parser.parse_args()
     main(args.datdir, args.name, L_b0=args.L_b0, nbins_b0=args.nbins_b0)

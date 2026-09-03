@@ -158,7 +158,7 @@ def run_recon(
     conv_tol: float = 1e-5,
     lambda_global: float = 1.0,
     fn_b0map: str | None = None,
-    L_b0: int = 6,
+    L_b0: int = 32,
     nbins_b0: int = 128,
 ) -> ReconResult:
     """fn_b0map: optional path to a run_b0map.py output (<seqname>_b0map.h5,
@@ -169,8 +169,8 @@ def run_recon(
     'echo_times' dataset (preprocessing/preprocess.py's _build_echo_times;
     (Ny,Nz,Nt), broadcast across Nx here since kx doesn't affect echo
     time). L_b0/nbins_b0 are mri_exp_approx's segment count/histogram bins
-    (see operators_b0.py's module docstring for why L hasn't been swept
-    against a real error bound). sigma1A defaults to None, in which case it
+    (see operators_b0.py's module docstring for the real-scale sweep that
+    settled L_b0=32). sigma1A defaults to None, in which case it
     is measured here via power iteration (operators_b0.estimate_spectral_
     norm) on the operator actually built -- required when fn_b0map is set,
     since the B0-corrected operator's spectral norm is not guaranteed to

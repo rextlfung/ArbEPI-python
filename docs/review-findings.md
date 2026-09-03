@@ -309,14 +309,14 @@ below described). Original numbers kept for provenance:
   hatch for a collaborator-supplied mask, used by calling
   `generate_arbepi(omegas, ...)` directly rather than through
   `gen_sampling_masks`.
-- [ ] **53. [needs retargeting] The item-12-era warning in CLAUDE.md
-  points at a file that has since been created; the pointer is now stale
-  in the other direction.** Historical: item 12's caveat said
-  `recon/operators_b0.py` didn't exist yet; it now does (`recon/` holds
-  twelve modules), and the `grid_mode=True` alignment change it warned
-  about is live again with a concrete target (`GatheredSenseB0`'s
-  `c_phasors`). Worth a line in CLAUDE.md's `recon/`/B0 section
-  connecting the two rather than leaving the pointer dangling.
+- [x] **53.** Resolved: added a paragraph to CLAUDE.md's B0
+  off-resonance correction subsection connecting `grid_resize.py`'s
+  `grid_mode=True` alignment fix to its concrete target --
+  `GatheredSenseB0.c_phasors`/`demodulate_smaps`'s phasor are both
+  per-voxel functions of `b0map_hz` on the (resized) EPI grid, so a future
+  alignment regression there would silently mis-register the field map
+  against the encoding operator, not just against the diagnostics
+  `grid_resize.py`'s own docstring measures.
 - [x] **54.** Resolved: `params.py`'s `seed` comment now correctly states
   that `seed = 0` (int, reproducible) is the actual default, and `None`
   (unseeded, fresh mask each run) is the alternative -- matching
@@ -362,42 +362,44 @@ below described). Original numbers kept for provenance:
 - [x] **80. `l2b`/`niter` unreachable from `run_b0map.py`.** Resolved by
   the same `f00e2ee` commit that fixed item 79 -- nothing is unreachable
   because nothing is exposed to reach.
-- [ ] **81. Three docstrings still call time-segmented B0 correction
-  "not-yet-implemented" in the commit that implements it.**
-  `recon/b0_correction.py`'s module docstring says the residual blur
-  "needs full time-segmented correction (a separate, not-yet-implemented
-  stage)"; `tests/test_recon_b0_correction.py`'s
-  `test_realistic_regime_only_partly_corrects` docstring closes with the
-  same phrase; `b0_correction.py`'s sign-convention paragraph says it
-  "has not yet been verified against a real reconstruction" while
-  `run_b0_recon.py` exists precisely to do that. `recon/operators_b0.py`
-  landed in the same commit and correctly describes itself as "the actual
-  fix that regime needs" -- the repo now states both things. Wording fix,
-  not a deletion (the static stage is still worth keeping as the cheap
-  sign/scale check).
-- [ ] **82. `L=6` is still the default in four places after the sweep
-  concluded 32.** `operators_b0.py:144`, `reconstruct.py:132`,
-  `run_b0_recon.py:58` and `:140`'s CLI default all still say `L=6`, and
-  three docstrings assert the sweep never happened
-  (`operators_b0.py`/`run_b0_recon.py`'s "not swept against a real error
-  bound"/"see CLAUDE.md's recon/ section for that open item") while
-  `recon/sweep_time_segments.py` sits in the same directory doing exactly
-  that sweep. Decide the default, set it in all four places, and replace
-  the docstring paragraphs with the sweep's actual numbers (recorded only
-  in a commit message today, not in the repo). Interacts with item 75 (at
-  L=32 the per-frame `b_weights` redundancy is 2.2 GB).
-- [ ] **83. Every "see CLAUDE.md's `recon/` section" pointer the B0 code
-  adds is dangling, and two pre-existing CLAUDE.md claims about `recon/`
-  are now false.** Four cross-references point at content CLAUDE.md
-  doesn't contain (an L-sweep open item that doesn't exist as such; a
-  `b0map.jl` tuning comparison that isn't recorded; a real-scale benchmark
-  table that doesn't exist). In the other direction, CLAUDE.md's item 53
-  and item 49 both describe `recon/` state that the B0 commit has since
-  answered (`recon/operators_b0.py` now exists; `recon/save_result.py` now
-  exists). Retarget the four pointers, correct 53/49 (see item 53 above),
-  and give CLAUDE.md's `recon/` section a B0 subsection covering the sign
-  convention, the ms/Hz calling convention, the `nbins` finding, and
-  whatever item 82 settles on for `L`.
+- [x] **81.** Resolved: all three sites fixed. `recon/b0_correction.py`'s
+  module docstring now names the time-segmented stage as implemented
+  (`recon/operators_b0.py`'s `GatheredSenseB0`) rather than
+  "not-yet-implemented"; its sign-convention paragraph now says the
+  convention *was* verified against a real reconstruction (via
+  `run_b0_recon.py`'s real runs, see CLAUDE.md's recon/ B0 subsection --
+  item 83) instead of claiming it wasn't;
+  `tests/test_recon_b0_correction.py`'s matching phrase was fixed in the
+  same edit as item 92's Fable removal (same paragraph). Kept the static
+  stage itself unchanged -- still worth keeping as the cheap sign/scale
+  check.
+- [x] **82.** Resolved: `L=32` is now the default in all four places
+  (`operators_b0.py`'s `build_encoding_operator_b0`, `reconstruct.py`'s
+  `run_recon`'s `L_b0`, `run_b0_recon.py`'s `main`'s `L_b0`, and its `--L`
+  CLI default). Replaced the three docstrings that asserted the sweep
+  never happened with the sweep's actual numbers (BT~=27, sharp
+  phase-transition at L=27-32, L=6 only ~35% error reduction vs. L=32's
+  <1% forward-model error) and a pointer to `recon/sweep_time_segments.py`
+  instead of a dangling CLAUDE.md reference. Verified with the real
+  `torch`/`mirtorch` extras: all 32 `tests/test_recon_*.py` cases still
+  pass with the new default (including the operator-construction and
+  adjoint-consistency checks). Interacts with item 75 (already fixed --
+  the per-frame `b_weights` redundancy this would have cost at L=32 no
+  longer applies, since that item removed the materialization entirely).
+- [x] **83.** Resolved: CLAUDE.md's pre-existing "B0 off-resonance
+  correction" subsection (it already covered the two-stage design and the
+  `L` sweep in detail) now also covers the `nbins` finding (the real
+  root-cause of the signal-loss/incoherent-noise failure, previously
+  undocumented in CLAUDE.md despite two source-code pointers to it) and a
+  sign-convention/`mri_exp_approx` Hz-vs-milliseconds-calling-convention
+  paragraph. Fixed the stale "overriding `operators_b0.py`'s own `L=6`
+  default" phrasing now that item 82 made `L=32` the direct default in
+  all four places, not an override. All source-code "see CLAUDE.md's
+  recon/ section" pointers (`operators_b0.py` x4, `run_b0_recon.py`,
+  `b0_correction.py`, `benchmark_b0_cost.py`) now resolve to real content
+  in that subsection -- confirmed by re-reading each one against the
+  updated section. Also fixed a stale `echo_times_s` parameter name in
+  the subsection's own prose (item 90 renamed it to `echo_times_yz`).
 - [x] **84.** Resolved: `pyproject.toml`'s `recon` extra comment now
   points only at CLAUDE.md's `recon/` section (and says explicitly that
   no `recon/README` exists), dropping the dangling "see recon/README"
@@ -417,19 +419,14 @@ below described). Original numbers kept for provenance:
   grid", fold `sweep_time_segments.py`'s real-scale fixture in as the
   actual realistic-regime test, and add one case at production `nbins=128`
   asserting no row-sum warning fires.
-- [ ] **92. Four committed source files name an AI model ("Fable") as
-  the authority for a design decision.** `recon/operators_b0.py:28`,
-  `recon/run_b0_recon.py:18`, `recon/operators_b0.py:55`, and
-  `tests/test_recon_b0_correction.py:137` all attribute a technical
-  decision to "Fable's staged plan" with no way for a reader to resolve
-  that reference against anything in the repository. All four sentences
-  already state the real technical reason alongside the name -- delete
-  the attribution, or cite the actual reference (Sutton/Noll/Fessler for
-  the signal model, `sweep_time_segments.py` for the L bound). Fixing
-  item 82's docstrings covers three of the four sites; the test file's is
-  separate. This repo's own CLAUDE.md "Commit conventions" section
-  already directs that commits carry no AI identity; source shipped by
-  those commits is the same question.
+- [x] **92.** Resolved: all four "Fable" citations removed. Three were
+  covered by item 82's docstring rewrites (`operators_b0.py`'s module
+  docstring and its `GatheredSenseB0` docstring -- the latter rewritten
+  already by item 89's subclass/delegate change -- and `run_b0_recon.py`'s
+  module docstring), each replaced with the real reasoning
+  (`recon/sweep_time_segments.py`'s sweep for the L bound). The fourth,
+  `tests/test_recon_b0_correction.py:137`, was separate -- fixed alongside
+  item 81 in the same docstring edit (both were the same paragraph).
 - [x] **95.** Resolved: removed both inert `# noqa: BLE001` codes from
   `preprocessing/run_b0map.py`, keeping the explanatory comments they were
   attached to (`:94`'s "optional input, degrade gracefully" and `:108`'s

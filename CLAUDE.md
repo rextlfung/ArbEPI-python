@@ -2700,13 +2700,34 @@ operator, consuming `preprocessing/run_b0map.py`'s field map
   time-segmented stage, via `mirtorch.linear.mri.mri_exp_approx` (the same
   min-max frequency-segmentation fit `mirtorch`'s own NUFFT-based
   `Gmri`/`GmriGram` use). `build_encoding_operator_b0(smaps, omega,
-  b0map_hz, echo_times_s, L, nbins)` solves the segmentation fit once
+  b0map_hz, echo_times_yz, L, nbins)` solves the segmentation fit once
   against this pipeline's real per-frame-invariant ETL distinct echo
   times (not once per frame -- an earlier version did, which also OOM'd a
   real reconstruction by storing an independent per-frame copy of the
   shared `(L,*N)` `c_phasors` tensor). `estimate_spectral_norm` (power
   iteration) is required alongside it -- the B0-corrected operator's
   spectral norm has no closed form the way the plain SENSE operator's does.
+  `GatheredSenseB0` subclasses `recon/operators.py`'s `GatheredSense`,
+  delegating to its `_apply`/`_apply_adjoint` for the per-segment
+  FFT/gather and scatter/IFFT/coil-combine rather than duplicating that
+  math a second time.
+
+**Sign convention and `mri_exp_approx`'s Hz/ms calling convention.**
+Both stages share one convention, derived from Sutton, Noll, Fessler
+("Fast, iterative image reconstruction for MRI in the presence of field
+inhomogeneities," IEEE TMI 2003) and cross-checked against
+`mirtorch.linear.mri.Gmri`'s own demo notebook, not just re-derived: the
+forward operator needs `exp(+i 2*pi*b0map_hz(r)*t)` multiplied into the
+image before the spatial-encoding FFT -- see `recon/b0_correction.py`'s
+module docstring for the full sign derivation. `mri_exp_approx(b0, bins,
+lseg, t)` (read directly from mirtorch 0.3.1's own source, the pinned
+dependency) expects `b0` in **Hz** and `t` in **milliseconds** (it divides
+by 1000 internally, twice), and returns `tl` already in **seconds** -- so
+`operators_b0.py` passing `echo_times_s * 1000` against an unscaled-Hz
+field map is correct, not a units bug, and `-b0map_hz` (not `+`) is what
+composes correctly with `mri_exp_approx`'s own internal sign to reproduce
+the physically-correct convention above (matching `Gmri`'s own
+`zmap=-b0` call, which exists for the same reason).
 
 **`L` (segment count): swept, not guessed.** The mirtorch-matching default
 `L=6` was never validated against this pipeline's real bandwidth-time
@@ -2721,8 +2742,28 @@ sharp, Nyquist-like phase transition around `L≈27-32` (matching the
 computed `BT`), not a gradual improvement curve -- `L=6` gives only ~35%
 error reduction (barely better than no correction at all), while `L≈31-32`
 is needed to get relative forward-model error under 1%. **Chose `L=32`**
-as the production value (the smallest swept `L` clearing that 1% bar),
-overriding `operators_b0.py`'s own `L=6` default at the call site.
+as the production value (the smallest swept `L` clearing that 1% bar) --
+`operators_b0.py`'s `build_encoding_operator_b0`, `reconstruct.py`'s
+`run_recon`, and `run_b0_recon.py`'s `main`/`--L` all default to `L=32`
+directly now, not overridden at each call site.
+
+**`nbins`: the histogram width `mri_exp_approx` fits its segmentation
+against, and a real signal-loss-plus-incoherent-noise bug in its own
+right, independent of `L`.** `mri_exp_approx` builds its fit from an
+*equal-width*, plain voxel-count histogram (mirtorch 0.3.1's
+`_uniform_histogram` -- no magnitude weighting, unlike MIRT's original,
+whose weight-vector argument mirtorch's port dropped) of `b0map_hz`'s
+*entire* range, background included and unmasked. At this pipeline's real
+scale (~half the volume near-zero background, in-object range wide and
+asymmetric -- roughly -300 to +70 Hz, not symmetric around 0), mirtorch's
+own `Gmri` default `nbins=20` puts nearly all the histogram's mass into
+1-3 bins near zero, making the `(nbins, L)` least-squares fit severely
+ill-conditioned everywhere else: measured per-sample `b_weights` row sums
+(`operators_b0.py`'s `_check_b_weight_row_sums` -- each row should sum to
+~1.0 when well-conditioned) ranged `[0.12, 2.89]` at `nbins=20` vs.
+`[0.9985, 1.0022]` at `nbins=100` on the same real data. `nbins=128`
+(comfortably past that threshold) is the production default; raise it
+further before lowering it.
 
 **Cost of that choice, measured not extrapolated**
 (`recon/benchmark_b0_cost.py`, synthetic tensors at this repo's real scale
@@ -2779,6 +2820,18 @@ phantom (whole-mask and by radial zone, including the low-SNR object
 center this change specifically targets) once `precon=:diag` is already in
 place, so it's infrastructure for future/noisier datasets, not something
 this dataset's own results depend on.
+
+**`grid_resize.py`'s `grid_mode=True` alignment fix (see
+`preprocessing/`'s section below) is directly load-bearing here.**
+`GatheredSenseB0.c_phasors` and `demodulate_smaps`'s phasor are both
+per-voxel functions of `b0map_hz`, which reaches the encoding operator
+already resized onto the EPI grid by that same code path -- a
+pixel-center-vs-edge alignment error there would silently mis-register
+the field map against `smaps`/the image grid the operator actually
+applies to, not just against the deGRE-grid diagnostics `grid_resize.py`'s
+own docstring measures. Any future change to that resize convention needs
+re-checking against a real B0-corrected reconstruction, not just the
+grid-alignment unit test.
 
 See `README.md` for the getting-started walkthrough and the full
 `Getting started` / `GE export` usage examples.

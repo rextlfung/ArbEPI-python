@@ -24,9 +24,15 @@ exp(+2j*pi*b0map_hz*t) demodulation -- see recon/b0_correction.py's
 docstring for the full derivation and the reference (Sutton, Noll, Fessler,
 IEEE TMI 2003) this is cross-checked against.
 
-L (segment count) here is a fixed engineering default (matching mirtorch's
-own Gmri default), not swept against a real error bound the way Fable's
-staged plan recommends -- see CLAUDE.md's recon/ section for that open item.
+L (segment count) defaults to 32 here, not mirtorch's own Gmri default of
+6 -- recon/sweep_time_segments.py's real-scale sweep (real ETL=60 field-
+map range/echo spacing) found a sharp, Nyquist-like phase transition
+around L=27-32, matching this repo's real bandwidth-time product
+(BT = field-map range * echo-train duration ~= 27); L=6 gives only ~35%
+forward-model error reduction (barely better than no correction), while
+L=32 is the smallest swept value that gets relative forward-model error
+under 1%. See that script and CLAUDE.md's recon/ section (B0 subsection)
+for the full sweep and the cost-vs-L tradeoff (recon/benchmark_b0_cost.py).
 """
 
 import warnings
@@ -142,7 +148,7 @@ def build_encoding_operator_b0(
     omega: torch.Tensor,
     b0map_hz: torch.Tensor,
     echo_times_yz: torch.Tensor,
-    L: int = 6,
+    L: int = 32,
     nbins: int = 128,
 ) -> BlockDiagonal:
     """smaps: (Nc,Nx,Ny,Nz) complex64. omega: (Nx,Ny,Nz,Nt) bool, same
