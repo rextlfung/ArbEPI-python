@@ -184,7 +184,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
             f'params.TE_degre {params.TE_degre * 1e3} ms is below the minimum achievable TE '
             f'{te_min * 1e3:.3f} ms for at least one echo -- increase TE_degre.'
         )
-    te_realized = te_min + delay_te  # the pair actually played -- exported below, not the prescribed one
+    te_realized = te_min + delay_te  # pair actually played -- exported below, not prescribed
     tr_min = (
         max(pp.calc_duration(rf), pp.calc_duration(gz_ss))
         + pp.calc_duration(gz_ssr)

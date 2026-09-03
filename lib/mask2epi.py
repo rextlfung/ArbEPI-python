@@ -289,7 +289,12 @@ def _bottleneck_2opt_order(
         top_idx = list(top_idx) + [-1] * (3 - len(top_idx))
         top_vals = list(top_vals) + [-np.inf] * (3 - len(top_vals))
 
-        def max_excl(p: int, q: int) -> float:
+        def max_excl(p: int, q: int, top_idx=top_idx, top_vals=top_vals) -> float:
+            # top_idx/top_vals bound as default args (not read from the
+            # enclosing closure) so this doesn't silently start reading a
+            # later pass's rebound values if ever deferred past this pass
+            # (ruff B023 -- currently safe since every call happens within
+            # the same pass that defines it, but a real footgun otherwise).
             excl = {p, q}
             for idx, val in zip(top_idx, top_vals):
                 if idx not in excl:

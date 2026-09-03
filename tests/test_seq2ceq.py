@@ -1,5 +1,8 @@
 """Self-consistency smoke test for ge/seq2ceq.py against real generated
-sequences in output/ (run `uv run python main.py` first if missing).
+sequences, built into a session-scoped tmp dir by the built_seq_dir
+fixture (tests/conftest.py) rather than read from output/ -- output/ is
+gitignored, so reading from it meant this test silently skipped on every
+fresh checkout/CI run (docs/review-findings.md item 46).
 
 noise.seq exercises pure-delay blocks and multi-instance segments;
 ArbEPI.seq additionally exercises the two mechanisms the port hinges on:
@@ -9,22 +12,16 @@ segment-consistency check warns on a mis-ported polarity or shape
 comparison, so the no-warnings assertion is the real test here.
 """
 
-from pathlib import Path
-
 import numpy as np
 import pypulseq as pp
 import pytest
 
 from ge.seq2ceq import seq2ceq
 
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / 'output'
-
 
 @pytest.mark.parametrize('seq_name', ['noise.seq', 'ArbEPI.seq'])
-def test_seq2ceq_self_consistency(seq_name, recwarn):
-    seq_path = OUTPUT_DIR / seq_name
-    if not seq_path.exists():
-        pytest.skip(f'{seq_path} not found; run `uv run python main.py` first')
+def test_seq2ceq_self_consistency(built_seq_dir, seq_name, recwarn):
+    seq_path = built_seq_dir / seq_name
 
     seq = pp.Sequence()
     seq.read(str(seq_path))

@@ -32,7 +32,7 @@ import time
 
 import torch
 
-from recon.operators import GatheredSense, build_encoding_operator
+from recon.operators import build_encoding_operator
 from recon.operators_b0 import build_encoding_operator_b0
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -89,7 +89,7 @@ def _build_inputs():
 def _time_forward_adjoint(A, x0, y0):
     torch.cuda.synchronize()
     t0 = time.perf_counter()
-    y = A.apply(x0)
+    _ = A.apply(x0)  # timed for wall-clock cost, result unused -- same as the adjoint call below
     torch.cuda.synchronize()
     t_fwd = time.perf_counter() - t0
 

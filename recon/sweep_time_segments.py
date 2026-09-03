@@ -107,7 +107,7 @@ def _build_operator(smaps: torch.Tensor, b0map_hz: torch.Tensor, t_frame_s: torc
     b, c, _tl = mri_exp_approx(b0_neg, nbins, L, t_ms)
     N = (Nx, Ny, Nz)
     c = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)
-    pos = torch.arange(b.shape[0], device=b.device)  # identity gather, see GatheredSenseB0's docstring
+    pos = torch.arange(b.shape[0], device=b.device)  # identity gather (see GatheredSenseB0)
     return GatheredSenseB0(smaps, full_mask, pos, b.to(smaps.dtype), c)
 
 

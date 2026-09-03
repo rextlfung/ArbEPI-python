@@ -34,6 +34,13 @@ created this file (2026-09-03, against `8baadb1`).
 
 ## Current baseline (2026-09-03, against `8baadb1`)
 
+Historical snapshot at the time this file was created -- **superseded by
+items 46/86's fixes below**: `uv run ruff check .` is now 29 errors, all
+`E501` (item 86 cleared the `F401`/`F841`); `uv run pytest` is now 126
+passed/15 skipped *regardless* of whether `output/` is present (item 46's
+`built_seq_dir` fixture removed the environment-dependence the two rows
+below described). Original numbers kept for provenance:
+
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **31
   errors** -- 29 `E501` + 1 `F401` + 1 `F841` (see item 86 for the
   breakdown by file).
@@ -356,17 +363,10 @@ created this file (2026-09-03, against `8baadb1`).
   "now on the EPI grid/fov like every other NIfTI this pipeline writes".
   `nifti_io`'s docstring is the stale half, and names the exact wrong
   value someone would "restore" it to.
-- [ ] **68. `tests/test_ge_check.py`'s two smoke tests check against a
-  different scanner than the sequences were built for.**
-  `test_check_seq_feasibility_runs` and
-  `test_check_seq_feasibility_noise_has_no_gradients` both hardcode
-  `SCANNERS['GE_UHP']`, but the `output/*.seq` files they read were built
-  under `params.py`'s `GE_MR750` -- different `max_grad` (100 vs 50 mT/m)
-  and a different PNS coefficient triple. Assertions are only `>= 0` today
-  so nothing is wrong yet, but any strengthening would silently measure
-  the wrong hardware. Use `load_params().spec` here too, matching the
-  sibling PNS regression test in the same file. Interacts with item 46/70
-  (these tests never run on a fresh checkout anyway).
+- [x] **68.** Resolved alongside item 46: both smoke tests now call
+  `check_seq_feasibility(seq, load_params().spec)` instead of hardcoding
+  `SCANNERS['GE_UHP']`, matching the scanner the fixture-built sequences
+  actually use (and the sibling PNS regression test's own pattern).
 - [ ] **69. `preprocessing/smaps.py`'s `cal_size` "crop" is a zero-*pad*
   on z at this repo's real dimensions.** `estimate_smaps` resizes
   k-space to `(ncoils, cal_size, cal_size, cal_size)` = 24^3, but
@@ -504,78 +504,55 @@ created this file (2026-09-03, against `8baadb1`).
 
 ## Test & tooling health
 
-- [ ] **15. [superseded by item 86's updated count] `uv run ruff check .`
-  lint debt.** Originally 20 errors, all `E501`; item 86 below has the
-  current, larger count (31, no longer all `E501`). Kept only as a
-  pointer -- act on item 86's breakdown instead.
-- [ ] **46. The tests that gate on `output/*.seq` silently skip on a
-  fresh checkout.** `tests/test_ge_check.py`/`test_seq2ceq.py`
-  `pytest.skip` when `output/noise.seq`/`output/ArbEPI.seq` are missing --
-  which is every clone and every CI run, since `output/` is gitignored.
-  Item 70 below corrects this item's own test *count* (5 cases across 3
-  functions, not 3 tests); the underlying gate is the same. Fix
-  demonstrated by the PNS test in the same file: build a small sequence
-  into `tmp_path` inside the test.
-- [ ] **47. [superseded by the Current Baseline table above] This
-  document's recorded pytest baseline should always be read from the
-  Current Baseline section, not from this item's original historical
-  numbers.** Kept only as a pointer for the "why does this item exist"
-  question a future reader might have.
-- [ ] **48. Ruff's `B` (flake8-bugbear) ruleset finds 45 issues the
-  current `select = ["E", "F", "I"]` can't see; two are worth acting on
-  regardless of whether `B` is ever enabled.** `B023` at
-  `lib/mask2epi.py:294` -- `max_excl` closes over `top_idx`/`top_vals`,
-  rebound on every pass of the enclosing loop; currently safe (defined
-  and consumed within one pass) but a genuine footgun in the hottest
-  function in the file. `ARG001` at `ge/writeceq.py:103` -- a
-  `parent_by_id` parameter never used in the body. The rest is `B905`
-  (12x `zip` without `strict=`), `B028` (3x `warnings.warn` with no
-  `stacklevel`, including both of `calc_te_tr_delays`' TE/TR warnings,
-  exactly where a caller-side line number would help), `ARG005`/`ARG001`
-  in test doubles/callbacks, and one `B011` `assert False` in
-  `tests/test_gen_sampling_masks.py:47`. Consider adding `B` to
-  `[tool.ruff.lint] select` after clearing the two above; item 95 would
-  add one more finding (an inert `noqa`) once `B` is on.
-- [ ] **49. [superseded -- see items 89 and 93] `recon/solvers.py`'s
-  `poweriter` was dead, and `run_recon` had no wired-up non-validation
-  entry point.** Original finding: `poweriter` had zero callers, while
-  `run_recon`'s `sigma1A` was a required kwarg with nothing to supply it
-  outside `validate_against_mslr.py`. Since then, `recon/save_result.py`
-  and `recon/run_b0_recon.py` (added by the B0 commit) answer the "no
-  wired-up driver" half; the `poweriter`-vs-`estimate_spectral_norm`
-  duplication and the missing-fallback problem are now tracked precisely
-  by items 89 and 93 respectively. Kept only as a pointer.
-- [ ] **70. [measured, supersedes the original counts in items 43/46/47]
-  Item 46 undercounted the `output/`-gated tests (5 cases across 3
-  functions, not 3 tests).** `test_check_seq_feasibility_runs` and
-  `test_seq2ceq_self_consistency` are each parametrized over
-  `['noise.seq', 'ArbEPI.seq']`. Current numbers are in the Current
-  Baseline section above (120/20 without `output/`, 125/15 with it, plain
-  venv); a fuller preprocessing-extras breakdown was last measured at
-  149/154 passed and is not re-verified here.
-- [ ] **86. [measured] Lint debt is 31 errors, no longer all `E501`.**
-  `uv run ruff check .` reports 31 errors (see Current Baseline). All 11
-  non-baseline-`E501` ones are in files the B0 commit added --
-  `recon/benchmark_b0_cost.py` (4x `E501`, plus the repo's first-ever
-  `F401` and `F841`), `recon/sweep_time_segments.py` (3x `E501`),
-  `preprocessing/gre_diagnostics.py` (2x `E501`). The two non-`E501`
-  findings are real dead code: `benchmark_b0_cost.py:29` imports
-  `GatheredSense` and never uses it (only `build_encoding_operator` is
-  called), and `:86`'s `y = A.apply(x0)` is assigned but never read (the
-  adjoint on the next line times against the independent `y0` instead).
-  `ruff --fix` clears the `F401`; the rest is manual.
-- [ ] **87. [measured] The entire B0 feature is invisible to the default
-  test command.** The 20 skips in the plain-venv baseline include
-  `tests/test_recon_b0_correction.py` and `tests/test_recon_operators_
-  b0.py`, both whole-module `pytest.importorskip("torch")` -- so all
-  ~1400 lines the B0 commit added, including every sign-convention and
-  adjoint check written specifically to guard them, run zero times in the
-  environment CLAUDE.md's Commands section tells a contributor to use.
-  Documented pattern for `recon/`, not wrong on its own, but the skip
-  ledger is now the majority of this repo's test surface by count. Worth
-  deciding once (CI installs the extras, or this doc says plainly which
-  fraction of the suite a plain `uv run pytest` exercises) rather than
-  per-module.
+- [x] **15.** Closed as superseded -- see item 86's breakdown instead.
+- [x] **46.** Resolved: added `tests/conftest.py`'s session-scoped
+  `built_seq_dir` fixture, which builds `ArbEPI.seq`/`noise.seq`
+  (`Nframes=1` for speed) into a tmp dir once and is shared across all 5
+  previously-gated cases in `test_ge_check.py`/`test_seq2ceq.py`, instead
+  of each test independently reading (and `pytest.skip`ping on) `output/`.
+  Folded in item 68's fix in the same edit (both files now pass
+  `load_params().spec` instead of hardcoding `SCANNERS['GE_UHP']`).
+  Verified: `rm -rf output && uv run pytest` -> same 126 passed/15 skipped
+  as with `output/` present -- the 5 cases now always run instead of
+  being environment-dependent, at a total cost of ~11s for all of them
+  (the fixture's build is amortized across every dependent test).
+- [x] **47.** Closed as superseded -- read the pytest baseline from the
+  Current Baseline section, not this item.
+- [x] **48.** Resolved the two actionable findings: `lib/mask2epi.py`'s
+  `max_excl` now binds `top_idx`/`top_vals` as default arguments instead
+  of relying on the enclosing loop's closure (B023 -- was safe today,
+  fixed the footgun anyway); `ge/writeceq.py`'s `_max_realized_slew` no
+  longer takes the unused `parent_by_id` parameter (ARG001), and its one
+  call site updated to match. Left the rest (45 total `B` findings minus
+  these two) as-is -- `B905`/`B028`/test-double `ARG`s -- since adding `B`
+  to `[tool.ruff.lint] select` wholesale is a separate decision this item
+  didn't ask for. Verified: full test suite unaffected, and a live
+  `main.py --ge` run (which exercises `_max_realized_slew` via
+  `writeceq`) still writes all four `.pge` files correctly.
+- [x] **49.** Closed as superseded -- both halves resolved: item 93 (`run_
+  recon`'s `sigma1A` fallback) is fixed, item 89's `poweriter` duplication
+  is fixed (only the `GatheredSenseB0`/`GatheredSense` half remains open
+  under item 89 itself).
+- [x] **70.** Closed as superseded/informational -- the 5-cases-across-3-
+  functions count is folded into item 46's fix below; read baselines from
+  the Current Baseline section.
+- [x] **86.** Resolved the two real (non-`E501`) findings:
+  `recon/benchmark_b0_cost.py` no longer imports unused `GatheredSense`,
+  and the discarded `A.apply(x0)` timing result is now named `_` (matching
+  the adjoint call's own `_ = A.adjoint(y0)` two lines down) instead of
+  a silently-unused `y`. `E501` debt (29 errors, unchanged in count and
+  files) is untouched -- pure line-length style across many files, out of
+  this item's scope. Verified: `uv run ruff check .` -> 29 errors, all
+  `E501`, matching the pre-B0-commit baseline exactly (`F401`/`F841` both
+  gone).
+- [x] **87.** Closed: this item asked for a decision between "CI installs
+  the extras" (out of scope for a local code-review pass -- no CI config
+  exists in this repo to change) and "this doc says plainly which
+  fraction of the suite a plain `uv run pytest` exercises" -- the latter
+  is already done, in this file's own "Current baseline" section above
+  ("Skip composition at full richness: 6 torch-gated ... = most of the
+  skip count is opt-in extras working as intended, not broken tests").
+  No further action.
 - [x] **88.** Resolved: `benchmark_b0_cost.py`'s docstring now says
   `build_mem` is dominated by `c_phasors` (linear in L, 664 MB at L=32),
   with only the small per-frame `pos` index arrays (item 75's fix, 69 MB
