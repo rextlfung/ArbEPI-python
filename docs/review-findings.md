@@ -674,30 +674,16 @@ below described). Original numbers kept for provenance:
   `_density_compensation`'s own "ports reconecho.m" both still refer to
   the *original MATLAB* file this port's DCF logic came from, not the
   deleted Python function, so left as-is.
-- [ ] **105. [measured] `recon_frames.py`'s `use_parfor=True` path
-  re-pickles/re-transmits the full `smaps` array once per frame, not once
-  total.** `preprocessing/recon_frames.py:73-75` binds `smaps` into
-  `functools.partial(_recon_one_frame, recon_fn=recon_fn, smaps=smaps)`
-  and passes the resulting `worker` to `executor.map(worker,
-  frame_data)`. `ProcessPoolExecutor.map` pickles each dispatched task
-  (callable + bound args) independently onto its internal call queue --
-  binding a large array via `partial` does not send it once; it gets
-  re-serialized per task. Verified with a minimal reproduction
-  (a module-level class wrapping an array, instrumented `__reduce__`
-  call-counting, run through `ProcessPoolExecutor.map` exactly as this
-  code does): confirmed one pickle of the bound array per dispatched
-  task, not one for the pool's lifetime. At this repo's own documented
-  production scale (`Nx,Ny,Nz,Nvcoils=240,240,45,18`, `Nframes=30`),
-  `smaps` is `240*240*45*18*8` bytes ~= 356 MiB (complex64); with
-  `use_parfor=True` that's re-pickled and piped to a worker process on
-  every one of the 30 frames -- roughly 10.4 GiB of redundant IPC
-  serialization for data that never changes across frames, on a module
-  whose surrounding design (the frame-by-frame HDF5 streaming a few
-  lines above, explicitly commented against exceeding physical RAM) is
-  otherwise careful about exactly this kind of cost. No test coverage of
-  the `use_parfor=True` path at all (`grep -rn "use_parfor" tests/` ->
-  nothing) -- it's an opt-in feature (`cfg.use_parfor`, default `False`),
-  so nothing in this repo's own pipeline is affected until someone
-  enables it. Fix: pass `smaps` via `ProcessPoolExecutor(initializer=...,
-  initargs=(smaps,))` (set once per worker process) or a shared-memory
-  array, rather than binding it into the per-task callable.
+- [x] **105.** Resolved: `preprocessing/recon_frames.py`'s `use_parfor=True`
+  path now passes `recon_fn`/`smaps` via
+  `ProcessPoolExecutor(initializer=_init_worker, initargs=(recon_fn,
+  smaps))` -- set once per worker process at pool startup, stored in a
+  module-level `_worker_state` dict, read back by
+  `_recon_one_frame_worker` -- instead of binding them into the per-task
+  callable via `functools.partial` (which `executor.map` re-pickled once
+  per dispatched frame). The unused `functools` import was removed.
+  Verified functionally with a standalone `ProcessPoolExecutor` +
+  `_init_worker`/`_recon_one_frame_worker` reproduction (real
+  multiprocessing, not just imports): results match a plain serial
+  computation exactly across 5 dispatched frames. Serial
+  (`use_parfor=False`) path unchanged.
