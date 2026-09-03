@@ -24,8 +24,13 @@ import nibabel as nib
 import numpy as np
 
 
-def load_lowres_calib_recon(datdir: str, seqname: str = 'ArbEPI') -> tuple[np.ndarray, dict]:
-    fn_base = os.path.join(datdir, 'recon', 'basic', f'{seqname}_recon_lowres_calib')
+def load_lowres_calib_recon(
+    datdir: str, seqname: str = 'ArbEPI', variant: str = ''
+) -> tuple[np.ndarray, dict]:
+    """variant: '' for the plain (uncorrected) recon, 'b0' for
+    recon/lowres_calib_recon_b0.py's B0-corrected output."""
+    suffix = f'_{variant}' if variant else ''
+    fn_base = os.path.join(datdir, 'recon', 'basic', f'{seqname}_recon_lowres_calib{suffix}')
     img = np.asarray(nib.load(f'{fn_base}.nii.gz').dataobj)  # [Nx, Ny, Nz, Nframes], magnitude
     with open(f'{fn_base}.json') as f:
         meta = json.load(f)
@@ -86,12 +91,15 @@ def temporal_stability(img: np.ndarray, mask: np.ndarray, tr_s: float) -> dict:
 
 
 def main(
-    datdirs: list[str], seqname: str = 'ArbEPI', tr_s: float = 2.0, skip_frames: int = 0
+    datdirs: list[str], seqname: str = 'ArbEPI', tr_s: float = 2.0, skip_frames: int = 0,
+    variant: str = '',
 ) -> None:
     results = {}
     for datdir in datdirs:
         label = os.path.basename(os.path.normpath(datdir))
-        img, meta = load_lowres_calib_recon(datdir, seqname)
+        if variant:
+            label = f'{label} ({variant})'
+        img, meta = load_lowres_calib_recon(datdir, seqname, variant)
         if skip_frames:
             print(f'(dropping first {skip_frames} frame(s) as a non-steady-state transient)')
             img = img[..., skip_frames:]
@@ -116,7 +124,7 @@ def main(
         else os.path.join(datdirs[0], 'recon', 'basic')
     )
     labels = list(results.keys())
-    suffix = f'_skip{skip_frames}' if skip_frames else ''
+    suffix = (f'_{variant}' if variant else '') + (f'_skip{skip_frames}' if skip_frames else '')
 
     # --- Figure 1: per-frame ROI-mean signal + linear fit, one panel per dataset ---
     fig, axes = plt.subplots(1, len(labels), figsize=(6 * len(labels), 4), squeeze=False)
@@ -178,5 +186,9 @@ if __name__ == '__main__':
         '--skip-frames', type=int, default=0,
         help='drop this many leading frames before computing stats (non-steady-state transient)',
     )
+    parser.add_argument(
+        '--variant', default='',
+        help="'' for the plain recon, 'b0' for recon/lowres_calib_recon_b0.py's output",
+    )
     args = parser.parse_args()
-    main(args.datdirs, args.seqname, args.tr, args.skip_frames)
+    main(args.datdirs, args.seqname, args.tr, args.skip_frames, args.variant)
