@@ -91,7 +91,7 @@ def rampsampepi2cart(
     dco = rampsamp2cart(dr2[:, 0::2, :], kxo, nx, fov_cm)  # odd echoes (MATLAB 1-based odd)
     dce = rampsamp2cart(dr2[:, 1::2, :], kxe, nx, fov_cm)  # even echoes
 
-    dc = np.empty((nx, etl) + dr2.shape[2:], dtype=complex)
+    dc = np.empty((nx, etl) + dr2.shape[2:], dtype=np.result_type(dco, dce))
     dc[:, 0::2] = dco
     dc[:, 1::2] = dce
     return dc.reshape((nx,) + dr_shape[1:])

@@ -62,6 +62,13 @@ def seq2ceq(seq: pp.Sequence, verbose: bool = False) -> Ceq:
             nBlocksInSegment=nb,
             blockIDs=np.zeros(nb, dtype=int),
             rows=row0 + np.arange(nb),
+            # Seed Emax_n from this segment's own first row, not the
+            # dataclass's cross-segment default of 1 -- the gradient-heating
+            # loop below only overwrites it on a strict e_total >
+            # seg.Emax_val, so a segment with exactly-zero energy
+            # everywhere (e.g. noise.seq) would otherwise keep an Emax_n
+            # belonging to whichever segment happens to occupy row 1.
+            Emax_n=row0,
         ))
         seg_index[int(unique_trids[i])] = i
 
@@ -73,6 +80,8 @@ def seq2ceq(seq: pp.Sequence, verbose: bool = False) -> Ceq:
     n = int(trid_rows[0])
     while n <= ceq.nMax:
         i = seg_index[trids[n]]
+        if n + ceq.segments[i].nBlocksInSegment - 1 > ceq.nMax:
+            break  # final segment instance truncated; nothing more to check
         for j in range(ceq.segments[i].nBlocksInSegment):
             b = seq.get_block(n)
             if block_duration[i, j] == -1:
@@ -119,6 +128,8 @@ def seq2ceq(seq: pp.Sequence, verbose: bool = False) -> Ceq:
             n += 1
             continue
         seg = ceq.segments[seg_index[trids[n]]]
+        if n + seg.nBlocksInSegment - 1 > ceq.nMax:
+            break  # final segment instance truncated; nothing more to record
         for j in range(seg.nBlocksInSegment):
             b = seq.get_block(n)
             p = int(seg.blockIDs[j])
@@ -161,6 +172,8 @@ def seq2ceq(seq: pp.Sequence, verbose: bool = False) -> Ceq:
         seg_id = int(ceq.loop[n - 1, 0])
         assert seg_id >= 1, f'row {n}: block outside any segment instance'
         seg = ceq.segments[seg_id - 1]
+        if n + seg.nBlocksInSegment > ceq.nMax:
+            break  # final segment instance truncated; nothing more to score
         n_first = n
         e_total = 0.0
         for j in range(seg.nBlocksInSegment):

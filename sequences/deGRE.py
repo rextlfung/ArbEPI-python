@@ -154,7 +154,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     # see params.py). te_min doesn't depend on which echo, since both
     # echoes share the same excitation/prephasing timing.
     te_min = (
-        max(pp.calc_duration(rf), pp.calc_duration(gz_ss)) / 2
+        max(pp.calc_duration(rf), pp.calc_duration(gz_ss)) - (rf.delay + pp.calc_rf_center(rf)[0])
         + pp.calc_duration(gz_ssr)
         + pp.calc_duration(gx_pre)
         + adc.delay
@@ -171,9 +171,9 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         max(pp.calc_duration(rf), pp.calc_duration(gz_ss))
         + pp.calc_duration(gz_ssr)
         + delay_te
-        + pp.calc_duration(gx_pre)
+        + max(pp.calc_duration(gx_pre), pp.calc_duration(gy_pre), pp.calc_duration(gz_pre))
         + pp.calc_duration(gx)
-        + pp.calc_duration(gx_spoil)
+        + max(pp.calc_duration(gx_spoil), pp.calc_duration(gy_pre), pp.calc_duration(gz_pre))
     )
     delay_tr = np.array([math.ceil((params.TR_degre - tr) / raster) * raster for tr in tr_min])
     if np.any(delay_tr < 0):
@@ -201,7 +201,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         for iY in range(params.Ny_degre):
             # Phase-encode steps off during dummy and gain-cal shots
             y_step = pe1_steps[iY] if iZ > 0 else 0.0
-            z_step = pe2_steps[max(0, iZ - 1)] if iZ > 0 else 0.0
+            z_step = pe2_steps[iZ - 1] if iZ > 0 else 0.0
 
             for c in range(len(params.TE_degre)):
                 # RF spoiling
@@ -234,7 +234,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         print(error_report)
 
     # Write Pulseq .seq file
-    seq.set_definition('FOV', params.fov)
+    seq.set_definition('FOV', params.fov_degre)
     seq.set_definition('Name', seqname)
     seq.write(os.path.join(params.output_dir, f'{seqname}.seq'))
 

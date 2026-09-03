@@ -31,6 +31,7 @@ def trap4ge(gin: SimpleNamespace, common_raster_time: float, sys: pp.Opts) -> Si
 
     if abs(gin.area) > 1e-6:
         gout.amplitude = gout.amplitude * gin.area / gout.area
+        gout.flat_area = gout.amplitude * gout.flat_time
 
     gout.area = gin.area
 

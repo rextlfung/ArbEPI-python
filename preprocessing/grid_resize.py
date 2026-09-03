@@ -80,6 +80,12 @@ def resize_to_epi_grid(
     """
     Nx_src, Ny_src, Nz_src = vol.shape[:3]
     Nx, Ny, Nz = n_target
+    if not np.allclose(fov_src[:2], fov[:2], rtol=1e-6, atol=1e-6):
+        raise ValueError(
+            f'resize_to_epi_grid: source x/y FOV {fov_src[:2]} does not match '
+            f'target x/y FOV {fov[:2]} -- only z is cropped/resized here, so '
+            f'x/y must already agree.'
+        )
     if fov_src[2] < fov[2]:
         raise ValueError(
             f'resize_to_epi_grid: target z-FOV ({fov[2]:.4f} m) exceeds '

@@ -55,7 +55,7 @@ def recon_frames(
 
     with h5py.File(paths.recon, 'r') as f:
         nframes_avail = f['ksp_epi_zf'].shape[4]
-        nframes = min(cfg.Nframes, nframes_avail)
+        nframes = int(min(cfg.Nframes, nframes_avail))
         if nframes < nframes_avail:
             print(
                 f'Reconstructing {nframes} of {nframes_avail} available frames '

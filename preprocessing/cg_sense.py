@@ -51,8 +51,14 @@ def cg_sense(
     coil_dim = num_dims - 1
     spatial_dims = tuple(range(num_dims - 1))
 
-    mask = np.abs(np.take(kdata_zf, 0, axis=coil_dim)) > 0
-    mask = np.expand_dims(mask, coil_dim)
+    # RSS across all coils, not a single coil's exact-zero check: a single
+    # coil can legitimately be all-zero at a sampled location (e.g. after
+    # PCA coil compression concentrates signal in the dominant virtual
+    # coils), which would otherwise silently mark real samples as
+    # unsampled and drive CG's first step to a 0/0 NaN. Matches
+    # recon_sigpy.py's `sp.rss(ksp_cf, axes=(0,)) > 0` mask, coil axis
+    # adjusted for this module's [*spatial, Ncoils] layout.
+    mask = np.sqrt(np.sum(np.abs(kdata_zf) ** 2, axis=coil_dim, keepdims=True)) > 0
 
     def E(x):
         return mask * _fftc(sens_maps * x, spatial_dims)

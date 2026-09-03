@@ -194,7 +194,7 @@ def plot_psf(omega: np.ndarray, params: Params, frame_idx: int = 0) -> matplotli
     Ny, Nz = params.Ny, params.Nz
     res_y, res_z = params.res[1], params.res[2]
 
-    psf = np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(omega)))
+    psf = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(omega)))
     psf_mag = np.abs(psf)
 
     y_vals = (np.arange(Ny) - Ny / 2) * res_y

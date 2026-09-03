@@ -90,7 +90,7 @@ def _compare_gradients(g1, g2) -> bool:
             and g1.fall_time == g2.fall_time
             and g1.delay == g2.delay
         )
-    return g1.shape_id == g2.shape_id
+    return g1.shape_id == g2.shape_id and g1.delay == g2.delay
 
 
 def _compare_adc(adc1, adc2) -> bool:

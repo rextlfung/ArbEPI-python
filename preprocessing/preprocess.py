@@ -382,24 +382,24 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     total_shots_expected = shots_per_frame * Nframes
 
     os.makedirs(os.path.dirname(paths.recon), exist_ok=True)
-    if os.path.exists(paths.recon):
-        mf = h5py.File(paths.recon, 'a')
-        start_frame = resume_start_frame(mf, epi_reader, shots_per_frame)
-    else:
-        print(f'Pre-allocating output file: {paths.recon}')
-        mf = h5py.File(paths.recon, 'w')
-        mf.create_dataset(
-            'ksp_epi_zf',
-            shape=(Nx, Ny, Nz, Nvcoils, Nframes),
-            dtype=np.complex64,
-            chunks=(Nx, Ny, Nz, Nvcoils, 1),
-        )
-        mf.create_dataset('omegas', data=_build_omegas(schedules, Ny, Nz))
-        mf.create_dataset('echo_times', data=_build_echo_times(schedules, echo_times, Ny, Nz))
-        mf.attrs['n_frames_discard'] = NframesDiscard
-        start_frame = 0
-
+    resuming = os.path.exists(paths.recon)
+    mf = h5py.File(paths.recon, 'a' if resuming else 'w')
     try:
+        if resuming:
+            start_frame = resume_start_frame(mf, epi_reader, shots_per_frame)
+        else:
+            print(f'Pre-allocating output file: {paths.recon}')
+            mf.create_dataset(
+                'ksp_epi_zf',
+                shape=(Nx, Ny, Nz, Nvcoils, Nframes),
+                dtype=np.complex64,
+                chunks=(Nx, Ny, Nz, Nvcoils, 1),
+            )
+            mf.create_dataset('omegas', data=_build_omegas(schedules, Ny, Nz))
+            mf.create_dataset('echo_times', data=_build_echo_times(schedules, echo_times, Ny, Nz))
+            mf.attrs['n_frames_discard'] = NframesDiscard
+            start_frame = 0
+
         print(f'Processing frames {start_frame + 1}-{Nframes} ({shots_per_frame} shots/frame)...')
         for frame in range(start_frame, Nframes):
             print(f'  Frame {frame + 1} / {Nframes}')

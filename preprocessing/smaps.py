@@ -147,10 +147,25 @@ def load_smaps(
     """
     fn_smaps = os.path.join(cfg.datdir, 'recon', f'smaps_{paths.seqname}_sigpy.h5')
     fn_smaps_nifti = fn_smaps[: -len('.h5')] + '.nii.gz'
+    fn_gre = os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')
     fov_degre = tuple(seq_params.fov_degre)
     n_target_degre = (seq_params.Nx_degre, seq_params.Ny_degre, seq_params.Nz_degre)
 
-    if os.path.exists(fn_smaps):
+    # Guard against a stale cache from a run with a different Nvcoils (e.g.
+    # coil-compression settings changed since the cache was written) --
+    # matching preprocess.py's own smaps_valid check. Falls through to
+    # re-estimation below on mismatch, same as if fn_smaps didn't exist. If
+    # fn_gre isn't available to check against (e.g. already cleaned up),
+    # trust the existing cache rather than failing outright.
+    smaps_cache_valid = os.path.exists(fn_smaps)
+    if smaps_cache_valid and os.path.exists(fn_gre):
+        with h5py.File(fn_smaps, 'r') as f:
+            cached_nvcoils = int(f.attrs['Nvcoils'])
+        with h5py.File(fn_gre, 'r') as f:
+            current_nvcoils = f['ksp_gre'].shape[-1]
+        smaps_cache_valid = cached_nvcoils == current_nvcoils
+
+    if smaps_cache_valid:
         print(f'Loading precomputed sensitivity maps from {fn_smaps}')
         with h5py.File(fn_smaps, 'r') as f:
             smaps, nvcoils = f['smaps'][()], int(f.attrs['Nvcoils'])
@@ -176,7 +191,8 @@ def load_smaps(
             )
         return smaps, smaps_degre, emap_degre, nvcoils
 
-    fn_gre = os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')
+    if os.path.exists(fn_smaps):
+        print(f'Cached sensitivity maps at {fn_smaps} have stale Nvcoils -- re-estimating.')
     print('Sensitivity maps not found. Estimating via sigpy ESPIRiT...')
     with h5py.File(fn_gre, 'r') as f:
         ksp_gre = f['ksp_gre'][()]

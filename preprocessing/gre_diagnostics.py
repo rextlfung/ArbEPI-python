@@ -43,9 +43,21 @@ def main(datdir: str, seqname: str) -> None:
 
     with h5py.File(fn_gre, "r") as f:
         ksp_echoes = f["ksp_gre_echoes"][()]  # (Nx,Ny,Nz,n_echoes,Nc)
+        if "TE_degre" not in f.attrs:
+            raise ValueError(
+                f"{fn_gre} has no TE_degre attr -- this GRE cache predates the "
+                "dual-echo upgrade (n_echoes_degre=1), so there's no second "
+                "echo for this dual-echo diagnostic to compare against."
+            )
         te_degre = f.attrs["TE_degre"]
 
     n_echoes = ksp_echoes.shape[3]
+    if n_echoes != 2:
+        raise ValueError(
+            f"gre_diagnostics assumes a dual-echo deGRE acquisition, got "
+            f"n_echoes={n_echoes} from {fn_gre} -- the echo2/ratio panels "
+            "below don't generalize to other echo counts."
+        )
     print(f"ksp_gre_echoes: {ksp_echoes.shape}, TE_degre={te_degre}")
 
     img_echoes = np.stack(

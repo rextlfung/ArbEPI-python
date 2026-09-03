@@ -73,8 +73,8 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
 
     rf_count = 1
 
-    for shot in range(-params.Ndummyshots + 1, params.Nshots + 1):
-        is_dummy = shot < 1
+    for shot in range(-params.Ndummyshots, params.Nshots):
+        is_dummy = shot < 0
         TRID = 1 if is_dummy else 2  # TRID 1 = dummy, TRID 2 = real (see Pulseq on GE manual)
 
         # Fat-sat
