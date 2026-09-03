@@ -68,38 +68,19 @@ created this file (2026-09-03, against `8baadb1`).
   bug. Documented with a comment in `ge/acoustics.py` so nobody "fixes" it
   later. Kept on this list only as a flagged judgement call, not an action
   item.
-- [ ] **13. `sequences/noise.py:41-44` -- dead `adc_dead_time`
-  arithmetic.** `sys_seq.adc_dead_time` is set to `0` then immediately
-  added back, so the term is always zero and `pad_duration` is right only
-  by accident (it reads as if ADC dead time were accounted for). Drop the
-  term, or read it from `sys` before the zeroing.
-- [ ] **36. [measured] `deGRE`'s realized TR is ~8.24 ms, not the
-  prescribed 8.0 ms -- a live 3% timing error.** `sequences/deGRE.py`'s
-  `tr_min` charges the spoiler block only `pp.calc_duration(gx_spoil)`,
-  but that block also plays `pp.scale_grad(gy_pre, -y_step)` and
-  `pp.scale_grad(gz_pre, -z_step)`, and a pypulseq block's duration is its
-  longest event. Measured at default params: `gx_spoil` 760 us,
-  `gy_pre`/`gz_pre` 1000 us each, so the real block is 1000 us and
-  `tr_min` under-estimates by **240 us** per TR. Consequences: (a)
-  `params.alpha_degre` (the Ernst angle) no longer matches the TR actually
-  played; (b) the `delay_tr < 0` guard is evaluated against the
-  under-estimated minimum, so it can pass when the true minimum doesn't
-  fit; (c) the scan runs 3% longer than planned. Fix:
-  `max(pp.calc_duration(gx_spoil), pp.calc_duration(gy_pre),
-  pp.calc_duration(gz_pre))`. Take the same `max` over the prephase block
-  while there (currently a no-op since all three happen to be `Tpre`
-  today, but the same latent shape).
-- [ ] **37. [measured] `deGRE`'s `te_min` still uses the RF-block-midpoint
-  measure that `calc_te_tr_delays` was already fixed for -- 80 us late.**
-  `sequences/deGRE.py:157` computes `max(calc_duration(rf),
-  calc_duration(gz_ss)) / 2`, the RF *block*'s midpoint, not the physical
-  RF center `lib/calc_te_tr_delays.py` now uses (`rf.delay +
-  pp.calc_rf_center(rf)[0]`). Measured: `te_min` as coded 2.7680 ms vs.
-  2.8480 ms corrected -- 80.0 us under-estimate on both echoes. Since both
-  echoes shift by the same 80 us, `dTE` is preserved to within ~0.9 us
-  (see item 62), so the fat-cancellation and field-map-scaling arguments
-  are unaffected -- but the absolute TE is simply wrong, and the repo now
-  carries two different "time from RF to echo" definitions in two files.
+- [x] **13.** Resolved by `1ebb2bb`: `sequences/noise.py` now captures
+  `sys.adc_dead_time` before zeroing `sys_seq`'s copy, so `pad_duration`
+  adds the real dead time instead of always adding zero.
+- [x] **36.** Resolved by `1ebb2bb`: `sequences/deGRE.py`'s `tr_min` now
+  takes `max()` over `gx_pre`/`gy_pre`/`gz_pre` and over
+  `gx_spoil`/`gy_pre`/`gz_pre`, instead of charging the prephase/spoiler
+  blocks only their x-axis gradient's duration.
+- [x] **37.** Resolved by `1ebb2bb`: `sequences/deGRE.py`'s `te_min` now
+  uses the same `max(calc_duration(rf), calc_duration(gz_ss)) - (rf.delay
+  + pp.calc_rf_center(rf)[0])` formula `lib/calc_te_tr_delays.py` uses,
+  instead of the RF block's midpoint. Item 62 (ΔTE export precision) is a
+  separate, not-yet-fixed follow-on that needs cross-module coordination
+  with `sequences/ArbEPI.py`'s `scan_info.mat` writer.
 - [ ] **38. [measured] The 80% PNS regression test guards a *different*
   sequence than the one the repo ships.**
   `test_arbepi_default_params_peak_pns_under_normal_mode_limit`
@@ -112,51 +93,24 @@ created this file (2026-09-03, against `8baadb1`).
   real 30-frame build exceeds 80%. Fix options: build the worst frame
   (pick `argmax` of per-frame blip steps), parametrize over several
   frames, or accept the ~5x cost of a full `Nframes=30` build in the test.
-- [ ] **39. `resize_to_epi_grid` raises on a z-FOV mismatch but silently
-  mis-registers on an x/y one.** `preprocessing/grid_resize.py` checks
-  `fov_src[2] < fov[2]` and raises, then crops z only -- x/y go straight to
-  `ndimage.zoom` with no FOV check at all, so smaps/B0 map come out
-  geometrically wrong with no error if `fov_src[:2] != fov[:2]`. Dormant
-  today only because `N_degre = ceil(fov / res_degre - 1e-9)` happens to
-  make x/y match exactly at current values (216mm / 2mm = 108). Fix:
-  raise unless `fov_src[:2]` and `fov[:2]` agree to a tolerance, matching
-  the z check's strictness.
-- [ ] **40. `preprocess()` leaks the output HDF5 handle when the resume
-  fast-forward fails.** `preprocessing/preprocess.py:386-387` opens `mf =
-  h5py.File(paths.recon, 'a')` and calls `resume_start_frame(...)`
-  *outside* the surrounding `try/finally`. On a short archive (exactly the
-  case resume exists to survive), `epi_reader.next_frame()` raises a bare
-  `StopIteration` -- bypassing the friendly `RuntimeError` that would
-  otherwise explain what happened -- and leaves the checkpoint file open on
-  a path likely about to retry. Move the open + resume inside the `try`,
-  or open `mf` with a `with`.
-- [ ] **41. `smaps.load_smaps` doesn't validate the smaps cache's
-  `Nvcoils`; `preprocess.py` does.** `preprocessing/preprocess.py:315-321`
-  guards the shared `smaps_<seqname>_sigpy.h5` cache with `smaps_valid =
-  f.attrs.get('Nvcoils') == Nvcoils` and re-estimates on mismatch;
-  `smaps.load_smaps` reads the same file with no such check, so a stale
-  cache from a run with a different `Nvcoils` reaches `recon_fn(data,
-  smaps)` mismatched -- a shape error at best, a silently wrong
-  reconstruction at worst. Port the same attr check across.
-- [ ] **42. `recon_frames`'s frame cap can be a float.**
-  `PreprocessingConfig.Nframes` is typed `float`, default `float('inf')`;
-  `recon_frames.py` does `nframes = min(cfg.Nframes, nframes_avail)` then
-  `range(nframes)`. `min(inf, 30)` returns the int so the default works,
-  but any float override (`cfg.Nframes = 10.0`, natural given the declared
-  type) raises `TypeError: 'float' object cannot be interpreted as an
-  integer`. Wrap in `int()`.
-- [ ] **43. `trap4ge` overwrites `.area` but leaves `.flat_area` at its
-  pre-rescale value.** `lib/trap4ge.py` rebuilds the trapezoid at a dummy
-  amplitude, rescales `gout.amplitude` to preserve `gin.area`, sets
-  `gout.area = gin.area`, but never touches `gout.flat_area`. Currently a
-  no-op in practice (see item 17: `crt == grad_raster_time` means the
-  rescale never actually changes anything, so `flat_area` happens to stay
-  correct too -- measured ratio 1.0000000). Item 71 shows the two items
-  are coupled: forcing the rounding to actually bite (`crt = 20e-6`)
-  reproduces the `flat_area` error immediately (666.667 vs. correct
-  657.895, 1.33% off), so this fix is a prerequisite for ever reverting
-  item 17's `crt` back to `20e-6`. One line:
-  `gout.flat_area = gout.amplitude * gout.flat_time`.
+- [x] **39.** Resolved by `1ebb2bb`: `resize_to_epi_grid` now raises
+  (`np.allclose(fov_src[:2], fov[:2], rtol=1e-6, atol=1e-6)`) on an x/y FOV
+  mismatch, matching the existing z check's strictness.
+- [x] **40.** Resolved by `1ebb2bb`: `preprocess()` now opens `mf` and
+  calls `resume_start_frame(...)` inside the `try/finally`, so a short
+  archive's `StopIteration` during resume both closes the handle and gets
+  converted to the friendly `RuntimeError`.
+- [x] **41.** Resolved by `1ebb2bb`: `smaps.load_smaps` now compares the
+  cached `Nvcoils` attr against the current `<seqname>_gre.h5`'s
+  `ksp_gre.shape[-1]` before trusting the smaps cache, re-estimating on
+  mismatch (falls back to trusting the cache only if the GRE file isn't
+  available to check against).
+- [x] **42.** Resolved by `1ebb2bb`: `recon_frames.py` now wraps
+  `min(cfg.Nframes, nframes_avail)` in `int()`.
+- [x] **43.** Resolved by `1ebb2bb`: `lib/trap4ge.py` now sets
+  `gout.flat_area = gout.amplitude * gout.flat_time` after rescaling,
+  alongside the existing `gout.area` update. Also resolves item 71's
+  prerequisite for reverting item 17's `crt`.
 - [ ] **44. Two different FFT-shift conventions on the same axis, in the
   same odd/even-phase pipeline.** `preprocessing/oephase.py`'s
   `epiphasecorrect` uses `fftshift(ifft(fftshift(.)))` (mirrored coming
@@ -178,16 +132,10 @@ created this file (2026-09-03, against `8baadb1`).
   `Sequence/calc_pns.py` sampling pattern (hence [verify], not a plain
   bug): decide whether to match pypulseq or compute slew from the
   trapezoid parameters directly.
-- [ ] **61. [measured] `deGRE.seq` declares the EPI FOV, not its own.**
-  `sequences/deGRE.py:237` writes `seq.set_definition('FOV',
-  params.fov)`, but every gradient in that sequence is built from
-  `params.fov_degre`. Confirmed in the written file: `output/deGRE.seq`'s
-  `[DEFINITIONS]` reads `FOV 0.216 0.216 0.0405` while the sequence
-  actually encodes `0.216 0.216 0.042` -- 1.5 mm / 3.6% wrong on z (x/y
-  happen to match since `fov_degre` tracks `fov` there). Fix:
-  `params.fov_degre`. The excitation slab thickness (`0.9 * params.fov[2]`)
-  must stay on `params.fov` -- imaging the same slab as the EPI sequence is
-  deliberate -- so only the definition line changes.
+- [x] **61.** Resolved by `1ebb2bb`: `sequences/deGRE.py` now calls
+  `seq.set_definition('FOV', params.fov_degre)`. Confirmed in a fresh
+  build: `output/deGRE.seq`'s `[DEFINITIONS]` now reads `FOV 0.216 0.216
+  0.042`, matching the sequence's actual encoding.
 - [ ] **62. [measured] deGRE exports the *prescribed* `TE_degre` while
   playing a slightly different pair; ΔTE is not preserved exactly.**
   `delay_te` is computed per echo independently as `ceil((te - te_min) /
@@ -204,20 +152,13 @@ created this file (2026-09-03, against `8baadb1`).
   exactly zero. Both small, but the exported number should be the
   realized one. Fix: derive `delay_te[1]` from `delay_te[0]` plus a
   raster-multiple offset, and export the realized pair.
-- [ ] **63. [measured] The ADC window overruns `Tread` by 2 samples, so
-  the last samples of every echo are acquired while the ky/kz blip is
-  already playing -- the opposite of what the code's comment says.**
-  `lib/make_readout_grads.py:309` comments "Delay blips to play after the
-  ADC window closes" and sets blip delays to `Tread`, but `Nfid =
-  round(Tread / dwell / 4) * 4` rounds to the *nearest* multiple of 4. At
-  default params: `Tread/dwell = 342`, `Nfid = 344`, so the ADC spans
-  688.0 us -- a 4.0 us / 2-sample overrun past the blip's start. Worst-case
-  ky error on those two samples: 0.17% of one k-space step (small, but the
-  comment asserts the opposite, and the error grows as `dwell^2`). Note
-  the ±kmax coverage loop is *not* also wrong -- it already integrates out
-  to `(Nfid - 0.5) * dwell`, accounting for the overrun. Fix: correct the
-  comment, or floor instead of round (`Nfid = floor(...) * 4` -> 340),
-  which costs a slightly larger flat top for the same coverage.
+- [x] **63.** Partially resolved by `1ebb2bb`: `lib/make_readout_grads.py`'s
+  comment now states what actually happens (blips can start up to 2
+  samples before the ADC window closes) instead of the opposite. The
+  functional rounding itself is unchanged (still `round`, not `floor`) --
+  that's a real timing/coverage tradeoff (a slightly larger flat top),
+  left as a deliberate choice for whoever wants to spend that margin, not
+  applied here.
 - [ ] **64. [measured] `run_rss.py`'s `_ift3` justifies its FFT-shift
   convention with a premise that's false for this repo's actual matrix
   size.** Its docstring defends `fftshift(ifftn(fftshift(.)))` as
@@ -236,20 +177,13 @@ created this file (2026-09-03, against `8baadb1`).
   repo); also related, `ge/acoustics.py:77` uses `ifftshift` where the
   MATLAB original uses `fftshift` -- provably equivalent there since
   `n1 + ZF_FAC*n1` is always even.
-- [ ] **74. [measured] `run_b0_recon.py` re-introduces the exact-zero
-  sampling-mask inference that item 7 removed elsewhere -- under the same
-  function name, at the cost of an extra ~11 GB read.**
-  `recon/reconstruct.py:69`'s `_load_omega` was fixed to prefer the
-  authoritative `omegas` dataset over `ksp != 0`, with a docstring
-  explaining a real sample rounding to exactly `0+0j` silently becomes
-  "not acquired." `recon/run_b0_recon.py:41` defines its *own*
-  `_load_omega(fn_ksp)` whose entire body is `_load_array(fn_ksp,
-  "ksp_epi_zf")[:, :, :, 0, :] != 0` -- exactly the bug item 7 removed, on
-  coil 0 alone, feeding `build_encoding_operator_b0`'s per-frame sampling
-  mask. Also costs real time: `omegas` is a few hundred KB while this
-  reads the full `(Nx,Ny,Nz,Nc,Nt)` archive a second time (~23 s per that
-  function's own docstring). Fix: import and reuse
-  `reconstruct._load_omega`, or read `omegas` directly.
+- [x] **74.** Resolved by `1ebb2bb`: `recon/run_b0_recon.py`'s
+  `_load_omega` now reads the authoritative `omegas` dataset directly via
+  `h5py` (mirroring `reconstruct._load_omega`'s non-fallback path),
+  falling back to the coil-0 `!= 0` derivation (with a printed warning)
+  only for a recon file written before `omegas` existed -- removing both
+  the mask-correctness bug and the redundant full-archive read in the
+  common case.
 - [ ] **75. [measured] `build_encoding_operator_b0` materializes 2.2 GB of
   per-frame `b_weights` that hold only 60xL distinct values -- 3.3x the
   shared-`c_phasors` cost the same function was already refactored to
@@ -263,18 +197,13 @@ created this file (2026-09-03, against `8baadb1`).
   two. Fix: keep `pos` per frame (2.3 MB/frame int64, 69 MB total) plus
   the one shared `b_by_echo` table, and index inside
   `_apply`/`_apply_adjoint` instead of precomputing 30 times.
-- [ ] **76. `estimate_spectral_norm` runs a fixed 30 power iterations with
-  no convergence check, and the error it can make is the unsafe one.**
-  `operators_b0.py:236` iterates exactly `niter` times. Power iteration
-  approaches `sigma1` *from below*, so an under-converged result
-  under-estimates POGM's Lipschitz constant `L = Nscales * sigma1A**2`
-  (`reconstruct.py:194`), giving a step size that's too *large* -- the
-  divergence direction. Nothing downstream re-checks it (`run_b0_recon.py`
-  only prints the value next to the uncorrected reference). The repo
-  already has the right pattern: `recon/solvers.py:188`'s `poweriter`
-  takes `niter=200, tol=1e-6` with early return on convergence, for the
-  same computation (see item 89's disposition question). Fix: iterate to
-  a tolerance, or keep 30 iterations with a documented safety factor.
+- [x] **76.** Resolved by `1ebb2bb`: `operators_b0.py`'s
+  `estimate_spectral_norm` now delegates to `recon/solvers.py`'s
+  `poweriter(A.apply, A.adjoint, x0, niter=niter, tol=tol)` (defaults
+  changed from a fixed `niter=30` to `niter=200, tol=1e-6`, matching
+  `poweriter`'s own defaults) instead of its own fixed-30-iteration loop
+  with no convergence check. Also resolves half of item 89's duplication.
+  `run_b0_recon.py`'s call site no longer pins `niter=30`.
 - [ ] **77. [measured] `operators_b0.py`'s `nbins` docstring blames a
   weighting mirtorch does not do.** It describes `mri_exp_approx` as
   fitting from a "magnitude-weighted histogram" -- but mirtorch 0.3.1's
@@ -288,164 +217,53 @@ created this file (2026-09-03, against `8baadb1`).
   note the equal-width range is set by `b0.amin()`/`amax()` over the whole
   volume, which is what actually makes an asymmetric in-object range
   expensive in bins.
-- [ ] **78. `gre_diagnostics.py` computes `n_echoes` generically, then
-  hardcodes two echoes.** `preprocessing/gre_diagnostics.py:48` reads
-  `n_echoes = ksp_echoes.shape[3]` generically, but `:79-80` index
-  `img_echoes[..., 1]`/`te_degre[1]` unconditionally and `:83`'s ratio
-  panel assumes exactly two. `config.py:185` defaults `n_echoes_degre` to
-  `1` for a pre-dual-echo `scan_info.mat` snapshot -- a deliberately
-  supported case per this repo's own convention -- so on such a dataset
-  this is a bare `IndexError` in a diagnostic script whose whole purpose
-  is being run when something already looks wrong. `:46`'s `te_degre =
-  f.attrs["TE_degre"]` is similarly an unguarded `KeyError` on the same
-  class of older cache. Either guard both, or assert `n_echoes == 2` up
-  front with a message naming the cause.
-- [ ] **93. `run_recon(fn_b0map=...)` silently accepts a `sigma1A`
-  measured for the *uncorrected* operator.** `recon/reconstruct.py:146`'s
-  own docstring says "sigma1A is not re-estimated internally for the
-  corrected operator -- the caller must supply one appropriate to it", but
-  nothing enforces it: `sigma1A` is an ordinary required kwarg consumed as
-  `L = Nscales * sigma1A**2` with no reference to `fn_b0map`.
-  `run_b0_recon.py` does the right thing (power-iterates first) but is the
-  only caller that does; a too-small `sigma1A` means a too-small
-  Lipschitz constant, so POGM diverges rather than failing cleanly, after
-  however long the run has already burned. Fix: accept `sigma1A=None` and
-  call `estimate_spectral_norm` on the built operator when it's `None`.
-  Interacts with item 76 (whatever iteration count it settles on becomes
-  this path's default too).
-- [ ] **96. [measured] `plot_psf` has its `fftshift`/`ifftshift` backwards,
-  mis-centering the PSF by one voxel on any odd-length axis -- live at
-  this repo's real dimensions.** `plotting/plotting.py:197` computes
-  `psf = np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(omega)))`, the
-  reverse of the correct `fftshift(ifft2(ifftshift(x)))` for un-centering
-  an array whose index `N/2` represents `k=0` (the convention every other
-  centered array in this codebase uses). Invisible on `Ny` (240, even),
-  live on `Nz` (45, odd, per `params.py`'s default `N`). Measured: for an
-  all-ones mask the true PSF is a delta at `(Ny//2, Nz//2)`; the code's
-  formula places it at `(Ny//2, Nz//2 + 1)` -- at real scale the code's
-  PSF magnitude equals the correct one circularly shifted by exactly +1
-  sample along z (`np.roll` matches to float noise). Not the same bug
-  class as items 44/64/91 (those swap only one shift, cancelling under
-  `np.abs()`); this swaps both, which does not cancel. Diagnostic-only
-  impact (`output/psf.png` via `--plot`, zero test coverage). Fix:
-  `np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(omega)))`.
-- [ ] **97. [measured] `Emax_n` is silently wrong for any segment whose
-  gradient energy is always exactly zero -- live on this repo's own
-  shipped `noise.seq` -> `noise.pge` export.** `ge/ceq.py:56-57` defaults
-  `Emax_val: float = 0.0`, `Emax_n: int = 1`; `ge/seq2ceq.py:169-171`'s
-  gradient-heating loop only overwrites them on strict `e_total >
-  seg.Emax_val`, so a segment with genuinely `0.0` energy everywhere never
-  satisfies that condition and `Emax_n` stays at the hardcoded class
-  default `1` -- a row number belonging to whichever segment occupies row
-  1, not this segment. `ge/writeceq.py:242` writes that incoherent value
-  verbatim into the `.pge` binary. Measured on `output/noise.seq`:
-  segment 2's own rows start at 121 (`seg.rows == [121]`), yet its
-  exported `Emax_n` is `1`, which belongs to segment 1. Re-ran on
-  `ArbEPI.seq`/`EPIcal.seq`/`deGRE.seq` (nonzero energy everywhere) and
-  every segment's `Emax_n` correctly resolves to itself. Distinct from
-  the already-documented stale-column-choice deviation in the same
-  function (that's about *which columns* feed `e_total`, not this
-  default-value fallback). Fix: seed `Emax_n` from `seg.rows[0]` rather
-  than the cross-segment constant `1`.
-- [ ] **98. Three of `seq2ceq`'s four block-walking loops assume the
-  final segment instance is complete, and the first to walk off the end
-  raises a raw `KeyError` rather than an actionable error.**
-  `ge/seq2ceq.py:74`'s variable-delay-block-detection loop, `:117`'s
-  loop-table construction, and `:159`'s gradient-heating loop all stride
-  `n` forward in `nBlocksInSegment`-sized steps with no check the last
-  instance has that many blocks left. Only the consistency-check loop at
-  `:138-144` guards this (`if n + seg.nBlocksInSegment > ceq.nMax:
-  break`). Reproduced with a synthetic sequence (two complete
-  TRID-segment instances, a third truncated to just its TRID-label
-  block): crashes at `ge/seq2ceq.py:77` with `KeyError: 6` from inside
-  pypulseq's `get_block`, not one of this file's own actionable
-  `ValueError`s. Never fires on any real shipped `output/*.seq` (their
-  final instances are complete), but `seq2ceq(seq)` sits on
-  `check_seq_feasibility`'s production path, so a future generator bug or
-  truncation script would surface an opaque `KeyError`. Fix: apply the
-  same guard to the other three loops.
-- [ ] **99. [measured] `preprocessing/cg_sense.py` infers its sampling
-  mask from a single coil's exact-zero values -- the same bug class items
-  7/74 already fixed elsewhere, still live in this file.**
-  `preprocessing/cg_sense.py:54-55` is `mask = np.abs(np.take(kdata_zf, 0,
-  axis=coil_dim)) > 0`, derived from coil index 0 alone. The sibling
-  Stage-2 driver does this safely: `recon_sigpy.py:65`'s `weights =
-  (sp.rss(ksp_cf, axes=(0,)) > 0)` uses RSS across *all* coils, so the two
-  drivers are now inconsistent. Measured failure mode: with coil 0 forced
-  to all zeros, `cg_sense()` raises `RuntimeWarning: invalid value
-  encountered in scalar divide` (first CG step: `alpha = rsold/... =
-  0/0`) and returns an all-NaN reconstruction, silently -- easy to miss
-  inside `run_cg_sense.py`'s per-sequence `except Exception` batch loop.
-  Caveat: `cg_sense.py` runs on `ksp_epi_zf` *after* Stage 1's PCA coil
-  compression, so "coil 0" is the dominant virtual coil, lowering the
-  everyday trigger probability -- but the structural defect and its
-  catastrophic-and-silent failure mode are real. Fix: derive the mask
-  from `recon_frames`'s already-available `omegas` dataset, or at minimum
-  switch to an RSS-across-coils check matching `recon_sigpy.py`.
-- [ ] **103. [measured] `sampling/ticaipi_sample.py`'s "exact coverage
-  over R frames" guarantee is false whenever the balanced `(Ry, Rz)`
-  factorization doesn't evenly divide `(Ny, Nz)` -- silently, with no
-  error and no test coverage of the failure case.** The module docstring
-  states as an unqualified guarantee: "the union over R consecutive
-  frames covers k-space exactly once." The implementation gets there by
-  taking the fixed-offset base pattern (`caipi_sample(N, R, 0)`) and
-  applying two *global* `np.roll`s (`y_shift` on axis 0, `kz_offset` on
-  axis 1) as `frame_idx` advances -- which only tiles k-space exactly once
-  when `Ny % Ry == 0` and `Nz % Rz == 0`; a global roll only permutes
-  residue classes correctly when the spacing evenly divides the grid.
-  Measured directly (summing all R per-frame boolean masks and checking
-  the union equals exactly 1 everywhere), reproduced independently:
-  `(Ny,Nz,R)=(240,45,4)` -> `Ry,Rz=2,2`, max overlap 2, **not** fully
-  covered; `(240,45,6)` -> `Ry,Rz=3,2`, max overlap 2, **not** fully
-  covered; `(240,45,9)`, this repo's actual production `R`, -> `Ry,Rz=3,3`,
-  which happens to divide evenly, fully covered. A ~1100-combination
-  sweep (in the original review) found the failure condition holds
-  exactly wherever the divisibility check fails (485/1100, 44%, fail) --
-  not a rounding artifact, a structural mismatch between `caipi_sample`'s
-  per-column-group internal offsetting and `ticaipi_sample`'s post-hoc
-  global roll on top of it. `tests/test_ticaipi_sample.py`'s
-  `test_ticaipi_full_coverage_over_R_frames` is parametrized only over
-  `([12,8],4)`, `([24,16],6)`, `([90,60],6)` -- all three happen to land on
-  evenly-dividing `Ry,Rz` pairs, so the suite never exercises the failure
-  case. Latent in this repo's own shipped config only because
-  `params.py` fixes `sampling_method='pd'` (not `'ticaipi'`) and the
-  production `R=9`/`Ny,Nz=240,45` happens to divide evenly -- but
-  `'ticaipi'` is a fully supported, documented `sampling_method` option,
-  and any user who switches to it with a different `R` (6, 7, 8, 10 are
-  all natural choices) silently gets some k-space locations
-  double-sampled and others never acquired, with no assertion or warning.
-  Fix: either raise when `Ny % Ry != 0 or Nz % Rz != 0` and document the
-  divisibility requirement, or pass the per-frame offset through to
-  `caipi_sample`'s own `shift_offset` parameter per-column-group instead
-  of a post-hoc global roll (which is what would make the guarantee hold
-  generally).
-- [ ] **104. `ge/blocks.py:93`'s `_compare_gradients` never checks
-  `.delay` for non-trapezoid ('grad'-type) gradients, unlike its own trap
-  branch two lines above.** The trap branch (`:85-92`) compares
-  `rise_time`/`flat_time`/`fall_time`/`delay`; the non-trap branch is just
-  `return g1.shape_id == g2.shape_id`, with no delay check at all.
-  `seq2ceq.py`'s `compare_blocks`/`ParentBlock` registration
-  (`:96-125`) uses this to decide whether a block instance is "the same
-  parent" as an already-registered one; the first matching instance's
-  `.delay` becomes the representative, and `writeceq.py`'s `_write_grad`
-  serializes only that one delay into the `.pge` for every dynamic
-  instance sharing that parent. The only 'grad'-type (arbitrary/extended
-  trapezoid) gradient this repo produces is the POPE composite readout
-  `gro` (`lib/make_readout_grads.py:301`, via `pp.add_gradients`), so two
-  instances sharing a `shape_id` but played at genuinely different
-  in-block delays would silently dedup to one parent and corrupt the
-  exported timing for the rest. Verified dormant, not live: grouped every
-  'grad'-type event in all four shipped sequences by `(axis, shape_id)`
-  -- 3 distinct shapes each in `ArbEPI.seq`/`EPIcal.seq`, 0 with more than
-  one distinct `.delay` (`deGRE.seq`/`noise.seq` have no 'grad'-type
-  events at all). No dedicated test exists for `ge/blocks.py`'s
-  comparison logic (`grep -rl "compare_blocks\|_compare_gradients"
-  tests/` -> nothing); it's only reached incidentally by
-  `test_seq2ceq.py`'s whole-sequence smoke test, which never hits this
-  path today. Same disposition as items 43/71/98 (latent, not live) --
-  but a real asymmetry in the dedup logic that a future timing tweak to
-  the composite readout could trip silently. Fix: add a `g1.delay ==
-  g2.delay` check to the non-trap branch too.
+- [x] **78.** Resolved by `1ebb2bb`: `gre_diagnostics.py` now raises a
+  clear `ValueError` naming the cause (pre-dual-echo cache) when
+  `TE_degre` is missing from the GRE cache's attrs, and asserts
+  `n_echoes == 2` before the echo2/ratio panels that assumed it -- instead
+  of a bare `KeyError`/`IndexError`.
+- [x] **93.** Resolved by `1ebb2bb`: `run_recon`'s `sigma1A` now defaults
+  to `None`; when `None` and `fn_b0map` is set, it's measured
+  automatically via `estimate_spectral_norm` on the operator actually
+  built. Calling without `fn_b0map` and without `sigma1A` now raises a
+  clear `ValueError` instead of silently needing a value with no
+  auto-estimate path. `run_b0_recon.py`'s own pre-measured `sigma1A` is
+  still passed explicitly, so its behavior is unchanged.
+- [x] **96.** Resolved by `1ebb2bb`: `plotting/plotting.py`'s `plot_psf`
+  now computes `np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(omega)))`.
+  Verified: for an all-ones `(240, 45)` mask the PSF magnitude now peaks
+  at exactly `(Ny//2, Nz//2) = (120, 22)`, matching the analytic delta.
+- [x] **97.** Resolved by `1ebb2bb`: `ge/seq2ceq.py` now seeds each
+  `Segment`'s `Emax_n` from its own first row (`row0`) at construction
+  time, instead of leaving it at the dataclass's cross-segment default of
+  `1` for a segment whose energy never exceeds the initial `Emax_val=0.0`.
+- [x] **98.** Resolved by `1ebb2bb`: the same `nBlocksInSegment` bounds
+  guard the consistency-check loop already had is now applied to the
+  other three block-walking loops in `ge/seq2ceq.py` (variable-delay
+  detection, loop-table construction, gradient-heating) -- each `break`s
+  before reading past the final, possibly-truncated segment instance.
+  Verified: full test suite (`uv run pytest`) still passes, including
+  `test_seq2ceq.py`'s whole-sequence smoke tests.
+- [x] **99.** Resolved by `1ebb2bb`: `cg_sense.py`'s mask is now RSS
+  across all coils (`np.sqrt(np.sum(np.abs(kdata_zf) ** 2, axis=coil_dim,
+  keepdims=True)) > 0`), matching `recon_sigpy.py`'s `sp.rss(...) > 0`
+  approach, instead of a single coil's exact-zero check.
+- [x] **103.** Resolved by `1ebb2bb`: `ticaipi_sample` now raises a
+  `ValueError` when `Ny % Ry != 0 or Nz % Rz != 0`, naming the offending
+  `(Ny,Nz)`/`(Ry,Rz)`/`R`, instead of silently double-sampling/missing
+  locations. Verified against the item's own measured repro:
+  `(240,45,4)` and `(240,45,6)` now raise; `(240,45,9)` (this repo's
+  actual production `R`) still passes. Existing
+  `tests/test_ticaipi_sample.py` cases all use evenly-dividing configs and
+  still pass unchanged. Chose "raise" over reworking `caipi_sample` to
+  pass a per-frame `shift_offset` (the item's other option, which would
+  make the guarantee hold generally) -- raising is the smaller, safer
+  change and this repo's own shipped config never hits it.
+- [x] **104.** Resolved by `1ebb2bb`: `ge/blocks.py`'s `_compare_gradients`
+  non-trap branch now also checks `g1.delay == g2.delay`, matching the
+  trap branch. Verified: full test suite still passes, including
+  `test_seq2ceq.py`'s whole-sequence smoke tests over `ArbEPI.seq`/
+  `EPIcal.seq` (the only sequences with 'grad'-type events).
 
 ## Consistency & documentation
 
@@ -515,25 +333,16 @@ created this file (2026-09-03, against `8baadb1`).
 - [ ] **55. `params.py`'s `PNSwt` comment points the wrong direction.**
   `:274-275` says "see the 'PNS-driven slew limits' comment below"; that
   comment is above it, not below.
-- [ ] **56. `sequences/noise.py` builds its `pp.Sequence` on the derated
-  system; `ArbEPI.py`/`EPIcal.py` deliberately use full-hardware
-  `params.sys`.** `noise.py:41` is `sys_seq = copy.deepcopy(sys)` where
-  `sys = derated_sys(params)`, while the other two use
-  `copy.deepcopy(params.sys)` with a comment explaining why (the POPE
-  fall ramp deliberately runs above the derate). `noise.seq` has no
-  gradients so nothing observable changes, but the three files now
-  disagree about which system object goes into `pp.Sequence` with no note
-  that the divergence is intentional. Make it match, or say why not.
-- [ ] **65. [measured] `sequences/noise.py` is the only sequence that
-  never sets its `Name`/`FOV` definitions.** `ArbEPI.py`/`EPIcal.py`/
-  `deGRE.py` all call `seq.set_definition('FOV', ...)` +
-  `seq.set_definition('Name', seqname)` before `seq.write(...)`;
-  `noise.py:69` writes straight out. Confirmed in the written file:
-  `output/noise.seq`'s `[DEFINITIONS]` block has neither key.
-  Nothing in `ge/` reads these today, so cosmetic -- but it's a
-  gratuitous divergence in the one sequence file that already diverges on
-  `sys_seq` (item 56) and `adc_dead_time` (item 13). Worth folding into
-  whichever of 13/56 gets fixed first.
+- [x] **56.** Resolved by `1ebb2bb`: `noise.py`'s `sys_seq` now builds
+  from `copy.deepcopy(params.sys)` (full hardware), matching
+  `ArbEPI.py`/`EPIcal.py`, with a comment explaining the choice has no
+  observable effect here (no gradients) but avoids the gratuitous
+  divergence. Folded in with item 13's fix in the same commit.
+- [x] **65.** Resolved by `1ebb2bb`, folded in with items 13/56:
+  `noise.py` now calls `seq.set_definition('FOV', params.fov)` +
+  `seq.set_definition('Name', seqname)` before `seq.write(...)`. Verified
+  in a fresh build: `output/noise.seq`'s `[DEFINITIONS]` block now has
+  both keys.
 - [ ] **66. [measured] The ArbEPI acoustics numbers in `ge/check.py` and
   CLAUDE.md are stale by 5x since the POPE switch.** Both historically
   cited `ArbEPI.seq: 0.028146 here vs MATLAB's 0.02814424`. Today's
@@ -805,38 +614,18 @@ created this file (2026-09-03, against `8baadb1`).
   scatter, differing only in what they write. One function returning both
   arrays would halve the index arithmetic and make it structurally
   impossible for the two grids to fall out of alignment.
-- [ ] **59. `epi_gridding.rampsampepi2cart` forces complex128 output.**
-  `dc = np.empty((nx, etl) + dr2.shape[2:], dtype=complex)` regardless of
-  input dtype, in a pipeline that's otherwise complex64 end to end
-  (`preprocess.py` writes `ksp_epi_zf` as `np.complex64`). Doubles the
-  per-frame working set for no precision that survives the cast on the
-  way out. Use `dr.dtype`, or `np.result_type(dco, dce)`.
-- [ ] **60. `sequences/EPIcal.py`'s shot loop is 1-based where
-  `ArbEPI.py`'s is 0-based.** `for shot in range(-params.Ndummyshots + 1,
-  params.Nshots + 1)` vs. `for shot in range(params.Nshots)`. `shot` is
-  used for nothing but `is_dummy = shot < 1`, so the 1-based offset buys
-  nothing and re-introduces the MATLAB indexing convention CLAUDE.md's
-  "Index convention" section says this port deliberately left behind.
-  `range(-Ndummyshots, Nshots)` with `is_dummy = shot < 0` reads the same
-  and matches the rest of the repo.
-- [ ] **71. [measured] Item 43's `trap4ge.flat_area` staleness is gated
-  by item 17, not just by having no consumer -- fix the two together.**
-  While `crt == grad_raster_time`, `trap4ge`'s rounding changes nothing
-  (item 17), so `gin.area / gout.area` is identically 1 and the stored
-  `flat_area` is exactly right by coincidence (measured ratio 1.0000000
-  at `crt=4e-6`). Forcing the rounding to bite (`crt=20e-6`, the value
-  item 17 says to revert to for Siemens dual-raster support) makes it
-  wrong immediately (stored 666.667 vs. correct 657.895, 1.33% off), and
-  `pp.scale_grad` propagates the error faithfully. So item 43's one-line
-  fix is a prerequisite for item 17's revert, not independent cleanup.
-- [ ] **72(a). Dead expression in `deGRE.py`.**
-  `sequences/deGRE.py:204`'s `pe2_steps[max(0, iZ - 1)]` sits inside
-  `... if iZ > 0 else 0.0`, so `iZ - 1 >= 0` always and the `max` can
-  never bind -- drop it (the neighbouring `pe1_steps[iY]` correctly has no
-  such guard). (Part (b) of the original item -- the `_load_smaps`
-  leading-underscore-then-used naming issue -- was already fixed
-  incidentally by the `preprocessing/smaps.py` rewiring; not carried
-  forward here.)
+- [x] **59.** Resolved by `1ebb2bb`: `rampsampepi2cart` now allocates `dc`
+  with `dtype=np.result_type(dco, dce)` instead of hardcoded `complex`
+  (complex128).
+- [x] **60.** Resolved by `1ebb2bb`: `EPIcal.py`'s shot loop is now
+  `range(-params.Ndummyshots, params.Nshots)` with `is_dummy = shot < 0`,
+  0-based like the rest of the repo. Confirmed `shot` is used for nothing
+  else in the loop body before making the change.
+- [x] **71.** Resolved by item 43's fix in `1ebb2bb`: `trap4ge.flat_area`
+  is now always kept correct, so this is no longer a live prerequisite
+  gating a future item-17 `crt` revert -- it's simply fixed.
+- [x] **72(a).** Resolved by `1ebb2bb`: `sequences/deGRE.py` now reads
+  `pe2_steps[iZ - 1]`, dropping the dead `max(0, ...)`.
 - [ ] **73. `recon/lowrank.py`'s `pcount` buffer-reuse parameter is dead
   in production.** `patchSVST` accepts `pcount` and forwards it to
   `patches2img`, which zeroes and reuses it instead of allocating -- but
@@ -856,11 +645,12 @@ created this file (2026-09-03, against `8baadb1`).
   justifies at length -- with `c_phasors[il]`/`b_weights[:,il]` inserted.
   `GatheredSenseB0`'s own docstring states the L=1 reduction and a test
   proves it numerically, so the collapse is already justified: make
-  `GatheredSense` the L=1 case, or subclass/delegate. Likewise
-  `estimate_spectral_norm` computes exactly what `recon/solvers.py:188`'s
-  `poweriter` computes, minus the tolerance check (item 76) -- keep one
-  implementation, take `poweriter`'s `tol`, put it next to the operators
-  it measures. Minor, same file: `:127`'s function-body `import warnings`
+  `GatheredSense` the L=1 case, or subclass/delegate.
+  **[partially resolved by `1ebb2bb`, item 76]** `estimate_spectral_norm`
+  no longer duplicates `poweriter` -- it now calls
+  `recon/solvers.py`'s `poweriter` directly. The remaining, still-open
+  half is the `GatheredSenseB0`/`GatheredSense` `_apply`/`_apply_adjoint`
+  duplication. Minor, same file: `:127`'s function-body `import warnings`
   is the only one in the repo not at module level.
 - [ ] **90. [measured] `echo_times_s` is materialized 240x redundantly on
   the GPU, in both callers.** `reconstruct.py:181` and
