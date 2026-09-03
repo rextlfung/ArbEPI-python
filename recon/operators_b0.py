@@ -43,34 +43,47 @@ class GatheredSenseB0(LinearMap):
     """GatheredSense (recon/operators.py) plus time-segmented B0 correction.
 
     smaps: (Nc,*N) complex64. samp: (*N,) bool -- K True entries.
-    b_weights: (K,L) complex -- per-sampled-k-space-location time-
-        interpolation coefficients.
+    pos: (K,) int64 -- for each sampled location, its row index into
+        b_by_echo. c_phasors/b_by_echo are looked up by index inside
+        _apply/_apply_adjoint rather than gathered into a (K,L) tensor up
+        front -- b_by_echo is typically shared across many GatheredSenseB0
+        instances (see build_encoding_operator_b0, where every frame's
+        `pos` indexes the same frame-invariant table), and materializing
+        each instance's own (K,L) gather duplicates that shared table's
+        data L/(rows of b_by_echo) times over (measured 3.3x the shared
+        c_phasors cost at this repo's real L=32 scale -- see
+        docs/review-findings.md item 75). Pass `pos = torch.arange(K)` and
+        `b_by_echo` already shaped (K,L) to recover the old one-tensor-per-
+        instance behavior exactly (the gather is then the identity).
+    b_by_echo: (n_rows,L) complex -- per-segment time-interpolation
+        coefficient table, indexed by `pos`.
     c_phasors: (L,*N) complex -- per-segment, per-voxel demodulation
         phasors.
-    Both from mri_exp_approx (see build_encoding_operator_b0).
+    b_by_echo/c_phasors both from mri_exp_approx (see
+    build_encoding_operator_b0).
 
-    Forward: y = sum_l b_weights[:,l] * gather(FFT(smaps * c_phasors[l] * x)).
+    Forward: y = sum_l b_by_echo[pos,l] * gather(FFT(smaps * c_phasors[l] * x)).
     A straightforward generalization of GatheredSense._apply/_apply_adjoint
-    (L=1, b_weights=1, c_phasors=1 recovers it exactly) -- looped and
-    accumulated per segment rather than batched over L, so peak memory
-    stays at the single-segment footprint regardless of L (see
-    CLAUDE.md/Fable's discussion of why GatheredSense itself had to avoid
-    a dense per-k-space-shaped-tensor representation in the first place --
-    the same memory pressure applies here, one level up).
+    (L=1, b_by_echo=ones(K,1), pos=arange(K), c_phasors=1 recovers it
+    exactly) -- looped and accumulated per segment rather than batched over
+    L, so peak memory stays at the single-segment footprint regardless of L
+    (see CLAUDE.md's recon/ section for why GatheredSense itself had to
+    avoid a dense per-k-space-shaped-tensor representation in the first
+    place -- the same memory pressure applies here, one level up).
     """
 
     def __init__(
         self, smaps: torch.Tensor, samp: torch.Tensor,
-        b_weights: torch.Tensor, c_phasors: torch.Tensor,
+        pos: torch.Tensor, b_by_echo: torch.Tensor, c_phasors: torch.Tensor,
     ):
         N = tuple(smaps.shape[1:])
         Nc = smaps.shape[0]
         idx = torch.nonzero(samp.reshape(-1), as_tuple=False).squeeze(-1)
-        assert b_weights.shape[0] == idx.numel(), (
-            f"b_weights has {b_weights.shape[0]} rows, expected {idx.numel()} sampled locations"
+        assert pos.shape[0] == idx.numel(), (
+            f"pos has {pos.shape[0]} entries, expected {idx.numel()} sampled locations"
         )
-        assert c_phasors.shape == (b_weights.shape[1],) + N, (
-            f"c_phasors shape {tuple(c_phasors.shape)} != (L,*N) = {(b_weights.shape[1],) + N}"
+        assert c_phasors.shape == (b_by_echo.shape[1],) + N, (
+            f"c_phasors shape {tuple(c_phasors.shape)} != (L,*N) = {(b_by_echo.shape[1],) + N}"
         )
         super().__init__(N, (idx.numel(), Nc))
         self.smaps = smaps
@@ -78,8 +91,9 @@ class GatheredSenseB0(LinearMap):
         self.N = N
         self.Nc = Nc
         self.dims = tuple(range(1, len(N) + 1))
-        self.L = b_weights.shape[1]
-        self.b_weights = b_weights
+        self.L = b_by_echo.shape[1]
+        self.pos = pos
+        self.b_by_echo = b_by_echo
         self.c_phasors = c_phasors
 
     def _apply(self, x: torch.Tensor) -> torch.Tensor:
@@ -91,13 +105,15 @@ class GatheredSenseB0(LinearMap):
                 dim=self.dims,
             )
             kc_flat = kc.reshape(self.Nc, -1).T  # (prod(N),Nc), spatial C-order flatten
-            y = y + self.b_weights[:, il : il + 1] * kc_flat[self.idx, :]
+            b_il = self.b_by_echo[self.pos, il : il + 1]  # (K,1), gathered lazily
+            y = y + b_il * kc_flat[self.idx, :]
         return y
 
     def _apply_adjoint(self, y: torch.Tensor) -> torch.Tensor:
         x = torch.zeros(self.N, dtype=self.smaps.dtype, device=y.device)
         for il in range(self.L):
-            yw = y * self.b_weights[:, il : il + 1].conj()  # (K,Nc)
+            b_il = self.b_by_echo[self.pos, il : il + 1].conj()  # (K,1)
+            yw = y * b_il  # (K,Nc)
             kc_full = torch.zeros(math.prod(self.N), self.Nc, dtype=y.dtype, device=y.device)
             kc_full[self.idx, :] = yw
             kc_full = kc_full.T.reshape(self.Nc, *self.N)
@@ -158,23 +174,30 @@ def build_encoding_operator_b0(
     0 at unsampled locations (unused there, never gathered).
 
     nbins: mri_exp_approx builds its segmentation fit from an *equal-width*,
-    magnitude-weighted histogram of b0map_hz's *entire* range (background
-    included, unmasked) -- mirtorch's own Gmri default (20) turned out to be
-    roughly half MIRT.jl's own recommended default (nhist=40, see
+    plain voxel-count histogram of b0map_hz's *entire* range (background
+    included, unmasked; mirtorch 0.3.1's `_uniform_histogram` is
+    `histogram.scatter_add(0, indices, torch.ones_like(values))` -- no
+    magnitude weighting anywhere in the call path, unlike MIRT's original
+    `mri_exp_approx`, whose weight-vector argument mirtorch's port
+    dropped) -- mirtorch's own Gmri default (20) turned out to be roughly
+    half MIRT.jl's own recommended default (nhist=40, see
     ../mirt/mri/mri_exp_approx.m) even before accounting for anything
     dataset-specific, and was measured to badly under-resolve this
     pipeline's real field maps: ~half the volume is near-zero background
     and the in-object range is wide and asymmetric (this repo's real
     acquisitions span roughly -300 to +70 Hz, not symmetric around 0), so
-    at nbins=20 nearly all the histogram's magnitude-weighted mass falls
-    into 1-3 bins near zero and the (bins x L) least-squares fit becomes
-    severely ill-conditioned everywhere else -- confirmed as the actual
-    root cause (not L) of a real signal-loss-plus-incoherent-noise failure
-    on real reconstructions: per-sample b_weights row sums (see
+    at nbins=20 nearly all the histogram's *voxel-count* mass falls into
+    1-3 bins near zero (background dominates by sheer count, not
+    magnitude) and the (bins x L) least-squares fit becomes severely
+    ill-conditioned everywhere else -- confirmed as the actual root cause
+    (not L) of a real signal-loss-plus-incoherent-noise failure on real
+    reconstructions: per-sample b_weights row sums (see
     _check_b_weight_row_sums) ranged [0.12, 2.89] at nbins=20 vs
-    [0.9985, 1.0022] at nbins=100 on the same real data. 128 is a round
-    number comfortably past that threshold; raise it further before
-    lowering it.
+    [0.9985, 1.0022] at nbins=100 on the same real data. The equal-width
+    range itself is set by `b0.amin()`/`amax()` over the whole volume,
+    which is what actually makes an asymmetric in-object range expensive
+    in bins. 128 is a round number comfortably past that threshold; raise
+    it further before lowering it.
 
     Returns an operator (Nx,Ny,Nz,Nt) -> (K,Nc,Nt), the same contract as
     build_encoding_operator (including `.A[it].idx`) -- a drop-in
@@ -213,6 +236,7 @@ def build_encoding_operator_b0(
     unique_t_ms = torch.unique(t0_ms, sorted=True)
     b_by_echo, c, _tl = mri_exp_approx(b0_neg, nbins, L, unique_t_ms)
     _check_b_weight_row_sums(b_by_echo, "shared (frame 0's distinct echo times)")
+    b_by_echo = b_by_echo.to(smaps.dtype)  # (n_unique_t,L), shared across every frame below
     c_phasors = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)  # (Nvox,L)->(L,Nvox)->(L,*N)
 
     frames = []
@@ -230,8 +254,7 @@ def build_encoding_operator_b0(
             "a subset of frame 0's distinct times -- the frame-invariant-timing "
             "assumption this function relies on doesn't hold for this dataset."
         )
-        b = b_by_echo[pos]
-        frames.append(GatheredSenseB0(smaps, samp, b.to(smaps.dtype), c_phasors))
+        frames.append(GatheredSenseB0(smaps, samp, pos, b_by_echo, c_phasors))
     return BlockDiagonal(frames)
 
 

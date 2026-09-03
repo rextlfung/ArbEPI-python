@@ -26,7 +26,11 @@ def _build_b0_operator(smaps, samp, b0map_hz, t_frame_s, L, nbins=20):
     b, c, _tl = mri_exp_approx(b0_neg, nbins, L, t_ms)
     N = tuple(smaps.shape[1:])
     c = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)
-    return GatheredSenseB0(smaps, samp, b.to(smaps.dtype), c)
+    # b is already one row per sampled location -- pos=arange is the
+    # identity gather, recovering GatheredSenseB0's old one-tensor-per-
+    # instance behavior exactly (see its docstring).
+    pos = torch.arange(b.shape[0], device=b.device)
+    return GatheredSenseB0(smaps, samp, pos, b.to(smaps.dtype), c)
 
 
 def test_l1_matches_static_correction():
@@ -173,8 +177,9 @@ def test_estimate_spectral_norm_matches_full_sampling_unity_case():
     full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
 
     b_weights = torch.ones(Nx * Ny * Nz, 1, dtype=torch.complex64, device=DEVICE)
+    pos = torch.arange(Nx * Ny * Nz, device=DEVICE)
     c_phasors = torch.ones(1, Nx, Ny, Nz, dtype=torch.complex64, device=DEVICE)
-    A = GatheredSenseB0(smaps, full_mask, b_weights, c_phasors)
+    A = GatheredSenseB0(smaps, full_mask, pos, b_weights, c_phasors)
 
     x0 = _complex_randn(Nx, Ny, Nz, seed=61)
     sigma1 = estimate_spectral_norm(A, x0, niter=30)

@@ -116,9 +116,18 @@ def compute_oephase(
     Ports preprocess.m's STEP 4 oephase computation.
     """
     oephase_data = rampsampepi2cart(ksp_cal, kxo, kxe, nx, fov_x_cm)
-    # fftshift/ifftshift with no axes argument shift *every* axis, matching
-    # MATLAB's no-dim fftshift(oephase_data)/ifftshift(...) here exactly.
-    oephase_data = np.fft.ifftshift(np.fft.ifft(np.fft.fftshift(oephase_data), n=nx, axis=0))
+    # ifftshift-in/fftshift-out on axis 0 -- the standard centered-IFFT
+    # pairing, matching oephase.py's epiphasecorrect (see its docstring)
+    # rather than the MATLAB original's literal fftshift-in/ifftshift-out
+    # spelling. Identical to the old spelling at this repo's current
+    # Nx=240 (even) -- only a real difference for an odd nx. fftshift/
+    # ifftshift with no axes argument still shift *every* axis (not just
+    # axis 0): safe here regardless of parity, since etl (axis 1) is
+    # asserted even by getoephase, the cal-shots axis (axis 2) is averaged
+    # out by np.mean below (order-invariant), and the coil axis (axis 3)
+    # is summed over in getoephase (also order-invariant) -- so a circular
+    # reorder on either of those axes has no effect on the result.
+    oephase_data = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(oephase_data), n=nx, axis=0))
     oephase_mean = np.mean(oephase_data, axis=2)  # average over cal shots (MATLAB dim 3)
     a, _ = getoephase(oephase_mean)
     return a

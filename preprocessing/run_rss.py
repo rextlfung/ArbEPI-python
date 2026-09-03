@@ -18,9 +18,16 @@ def _ift3(d: np.ndarray) -> np.ndarray:
     """Centered inverse 3D FFT, batched over the trailing (coil) axis.
     Ports toppe.utils.ift3.m's sub_ift3: fftshift(ifftn(fftshift(D))) per
     coil -- note this is fftshift on *both* sides, not the more common
-    ifftshift-before/fftshift-after pairing (identical for even-length
-    axes, which every dimension in this pipeline is, but replicated
-    literally rather than assumed equivalent)."""
+    ifftshift-before/fftshift-after pairing, replicated literally rather
+    than switched to the conventional spelling. These are NOT shift-
+    equivalent on an odd-length axis (a one-sample circular shift of the
+    k-space input, i.e. a pure linear phase ramp in image space) --
+    params.py's N_degre has Nz_degre=21 (odd), so this does bite on that
+    grid. Safe here only because every consumer of this function takes a
+    magnitude (`_rss_recon`) or a difference of two same-grid transforms
+    (preprocessing/julia/b0map.jl's mirror of this convention), both of
+    which cancel the ramp -- a future complex-valued consumer would
+    inherit it silently."""
     axes = (0, 1, 2)
     return np.fft.fftshift(np.fft.ifftn(np.fft.fftshift(d, axes=axes), axes=axes), axes=axes)
 

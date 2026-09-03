@@ -104,17 +104,28 @@ def epiphasecorrect(d: np.ndarray, a: np.ndarray) -> np.ndarray:
     space. Ports epiphasecorrect.m.
 
     d: [nx, etl, ...] raw (Cartesian) EPI data.
+
+    Uses the standard `fftshift(ifft(ifftshift(.)))` / `fftshift(fft(
+    ifftshift(.)))` centered-FFT pairing on axis 0 (not the `fftshift`-
+    on-both-sides spelling epiphasecorrect.m's own MATLAB source uses) --
+    verified to round-trip to the identity (unmodified `d` in, unmodified
+    `d` out) to float64 precision for both even and odd `nx`, unlike the
+    MATLAB spelling, which only round-trips for even `nx` (identical to
+    this spelling there, so no behavior change at this repo's current
+    Nx=240; a real, not just cosmetic, difference for an odd `nx`). Same
+    convention question as preprocess.py's compute_oephase and
+    run_rss.py's _ift3 -- see docs/review-findings.md item 44.
     """
     nx, etl = d.shape[0], d.shape[1]
     d_shape = d.shape
     d = d.reshape(nx, etl, -1)
 
-    x = np.fft.fftshift(np.fft.ifft(np.fft.fftshift(d, axes=0), axis=0), axes=0)
+    x = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(d, axes=0), axis=0), axes=0)
 
     x_coord = (np.arange(nx) - nx / 2 + 0.5) / nx
     th = (a[0] + a[1] * x_coord)[:, None]  # [nx, 1], same for every even echo
 
     x[:, 1::2, :] = x[:, 1::2, :] * np.exp(-1j * th)[:, :, None]
 
-    dc = np.fft.fftshift(np.fft.fft(np.fft.fftshift(x, axes=0), axis=0), axes=0)
+    dc = np.fft.fftshift(np.fft.fft(np.fft.ifftshift(x, axes=0), axis=0), axes=0)
     return dc.reshape(d_shape)

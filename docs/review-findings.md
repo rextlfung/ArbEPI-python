@@ -59,15 +59,10 @@ created this file (2026-09-03, against `8baadb1`).
 
 ## Correctness
 
-- [ ] **8. [verify -- judgement call, not currently a bug]
-  `check_grad_acoustics` scores every gradient axis against every axis's
-  forbidden bands.** Checked against `../ArbEPI/lib/check_grad_acoustics.m`
-  directly: its own loop (`for lg=1:n3, for l1=1:length(bands), for
-  l2=1:size(bands{l1},1)`, storing the full `lg x l1` cross product) has
-  the *exact* same structure -- this is a faithful port, not an indexing
-  bug. Documented with a comment in `ge/acoustics.py` so nobody "fixes" it
-  later. Kept on this list only as a flagged judgement call, not an action
-  item.
+- [x] **8.** Closed as not-a-bug: `check_grad_acoustics`'s axis
+  cross-product is a faithful port of `../ArbEPI/lib/check_grad_acoustics.m`'s
+  identical loop structure, already documented with a comment in
+  `ge/acoustics.py`. No code change.
 - [x] **13.** Resolved by `1ebb2bb`: `sequences/noise.py` now captures
   `sys.adc_dead_time` before zeroing `sys_seq`'s copy, so `pad_duration`
   adds the real dead time instead of always adding zero.
@@ -81,18 +76,16 @@ created this file (2026-09-03, against `8baadb1`).
   instead of the RF block's midpoint. Item 62 (ΔTE export precision) is a
   separate, not-yet-fixed follow-on that needs cross-module coordination
   with `sequences/ArbEPI.py`'s `scan_info.mat` writer.
-- [ ] **38. [measured] The 80% PNS regression test guards a *different*
-  sequence than the one the repo ships.**
-  `test_arbepi_default_params_peak_pns_under_normal_mode_limit`
-  (`tests/test_ge_check.py:98`) builds with `Nframes=1`, seeing only frame
-  0's mask. Measured seed=0, GE_MR750: frame 0 = 78.92%, frame 10 (the
-  full build's peak) = 79.84% -- the shipped config sits ~0.9 points
-  closer to the 80% limit than the guard measures, because frame 0 never
-  plays the largest kz blip (steps 3, 6, 10, 11, 14 do). Given
-  `blip_slew=105` leaves only ~0.2% margin, the guard can pass while the
-  real 30-frame build exceeds 80%. Fix options: build the worst frame
-  (pick `argmax` of per-frame blip steps), parametrize over several
-  frames, or accept the ~5x cost of a full `Nframes=30` build in the test.
+- [x] **38.** Resolved: `test_arbepi_default_params_peak_pns_under_normal_mode_limit`
+  now builds the full default-`Nframes` (30) sequence instead of
+  `Nframes=1`, so it measures the real worst frame rather than frame 0.
+  Chose "accept the full-build cost" over the other two options the item
+  offered (picking `argmax` of per-frame blip steps, or parametrizing over
+  several frames) -- simplest and matches the "real worst frame" guarantee
+  exactly, and the cost is modest (~11s measured, not the ~5x pessimistic
+  estimate the item guessed). Verified: peak PNS now measures 79.84%
+  (frame 10), exactly matching CLAUDE.md's/this doc's recorded worst-frame
+  number, and the test still passes under the 80% limit.
 - [x] **39.** Resolved by `1ebb2bb`: `resize_to_epi_grid` now raises
   (`np.allclose(fov_src[:2], fov[:2], rtol=1e-6, atol=1e-6)`) on an x/y FOV
   mismatch, matching the existing z check's strictness.
@@ -111,27 +104,35 @@ created this file (2026-09-03, against `8baadb1`).
   `gout.flat_area = gout.amplitude * gout.flat_time` after rescaling,
   alongside the existing `gout.area` update. Also resolves item 71's
   prerequisite for reverting item 17's `crt`.
-- [ ] **44. Two different FFT-shift conventions on the same axis, in the
-  same odd/even-phase pipeline.** `preprocessing/oephase.py`'s
-  `epiphasecorrect` uses `fftshift(ifft(fftshift(.)))` (mirrored coming
-  back), while `preprocessing/preprocess.py`'s `compute_oephase` uses
-  `ifftshift(ifft(fftshift(.)))`. Identical for even `nx` (the only case
-  in production, `Nx=240`), diverge by one sample for odd `nx`. Pick one
-  convention for both, or state explicitly at both sites that even-`Nx` is
-  assumed -- same trap class `_center_out` already warns about in
-  `lib/mask2epi.py`. (Related to items 64/91's third and fourth spellings
-  of the same convention question elsewhere in the repo.)
-- [ ] **45. [verify] `check_seq_feasibility`'s `max_slew` under-reports
-  ramps shorter than ~2 gradient rasters.** `ge/check.py:228` computes
-  `np.abs(np.diff(gw_tm, axis=1) / dt).max()` over bin-center samples. For
-  a ramp `>= 2*dt` the interior differences recover the true slew exactly
-  (today's POPE ramps are ~50 rasters, so this is currently accurate), but
-  a 1-raster ramp -- which `trap4ge`'s no-op rounding (item 17) permits for
-  a small trapezoid -- would read at roughly half its real slew, in the
-  wrong direction for a hard `.ok` gate. Inherited from pypulseq's own
-  `Sequence/calc_pns.py` sampling pattern (hence [verify], not a plain
-  bug): decide whether to match pypulseq or compute slew from the
-  trapezoid parameters directly.
+- [x] **44.** Resolved: both `preprocessing/oephase.py`'s `epiphasecorrect`
+  and `preprocessing/preprocess.py`'s `compute_oephase` now use the same
+  standard `fftshift(ifft(ifftshift(.)))` / `fftshift(fft(ifftshift(.)))`
+  centered-FFT pairing on axis 0 (ifftshift *before* the transform,
+  fftshift after -- the textbook-correct one, not `epiphasecorrect`'s old
+  fftshift-on-both-sides spelling or `compute_oephase`'s old mixed
+  fftshift-in/ifftshift-out). Verified: for even `nx` this is numerically
+  identical to the old code on both functions (fftshift == ifftshift
+  there), so this repo's current `Nx=240` production behavior is
+  unchanged. Added odd-`nx` coverage:
+  `tests/test_preprocessing_oephase.py::test_epiphasecorrect_removes_odd_even_mismatch`
+  is now parametrized over `nx in [64, 63]` (both pass) -- and its
+  `_img_to_kspace`/`_kspace_to_img` test helpers were updated to the same
+  standard convention, since the previous helpers only round-tripped
+  correctly for even `nx` themselves. `compute_oephase`'s deliberate
+  whole-array (not just axis-0) shift is unaffected by this change for any
+  axis whose length isn't guaranteed even, since the other two axes are
+  either averaged (`np.mean` over cal shots) or summed
+  (`getoephase`'s per-coil accumulation) downstream -- both operations
+  invariant to a circular reorder. `_center_out`'s odd-length trap in
+  `lib/mask2epi.py` is unrelated (a different function, not touched).
+  Items 64/91 (the other two spellings of this same convention question,
+  in `run_rss.py`/`gre_diagnostics.py`) are tracked separately.
+- [x] **45.** Closed as not live today: `check_seq_feasibility`'s
+  bin-center `max_slew` sampling only under-reports ramps shorter than ~2
+  gradient rasters, and this repo's POPE readout ramps are ~50 rasters
+  (accurate today). Matches pypulseq's own `calc_pns.py` sampling
+  convention, so not a plain bug either. Revisit if a future ramp design
+  ever approaches the 1-2 raster range. No code change.
 - [x] **61.** Resolved by `1ebb2bb`: `sequences/deGRE.py` now calls
   `seq.set_definition('FOV', params.fov_degre)`. Confirmed in a fresh
   build: `output/deGRE.seq`'s `[DEFINITIONS]` now reads `FOV 0.216 0.216
@@ -159,24 +160,18 @@ created this file (2026-09-03, against `8baadb1`).
   that's a real timing/coverage tradeoff (a slightly larger flat top),
   left as a deliberate choice for whoever wants to spend that margin, not
   applied here.
-- [ ] **64. [measured] `run_rss.py`'s `_ift3` justifies its FFT-shift
-  convention with a premise that's false for this repo's actual matrix
-  size.** Its docstring defends `fftshift(ifftn(fftshift(.)))` as
-  "identical for even-length axes, which every dimension in this pipeline
-  is" -- but `params.py` sets `N = [240, 240, 45]` and `N_degre = [108,
-  108, 21]`, z odd on both. Measured on a length-45 axis: the two
-  conventions differ by 144% in relative complex value (0 at n=44, as
-  claimed). The difference is a one-sample circular shift of the k-space
-  input -- a pure linear phase ramp in image space -- so both current
-  consumers are immune (`_rss_recon` takes `np.abs`; `b0map.jl` differences
-  two echoes on the same grid, cancelling the ramp), but the stated
-  *reason* is wrong and any future complex-valued consumer inherits the
-  ramp silently on z. Fix the docstring to say magnitude-/difference-safe
-  rather than shift-equivalent, or switch the input to `ifftshift`. Same
-  convention question as items 44 and 91 (three total spellings in the
-  repo); also related, `ge/acoustics.py:77` uses `ifftshift` where the
-  MATLAB original uses `fftshift` -- provably equivalent there since
-  `n1 + ZF_FAC*n1` is always even.
+- [x] **64.** Resolved: `preprocessing/run_rss.py`'s `_ift3` docstring now
+  states the convention is magnitude-/difference-safe (not
+  shift-equivalent), names the odd `Nz_degre=21` case where it actually
+  bites, and explains why both current consumers (`_rss_recon`'s `np.abs`,
+  `b0map.jl`'s echo-difference) are immune. Left the FFT-shift spelling
+  itself unchanged (switching to `ifftshift` was the other option offered
+  by this item, but changing behavior wasn't necessary once the docstring
+  is honest about it, and `_ift3` is a literal port of
+  `toppe.utils.ift3.m`). `ge/acoustics.py:77`'s `ifftshift` remains
+  provably equivalent to the MATLAB original there (`n1 + ZF_FAC*n1` is
+  always even) -- not touched. See item 91 for the still-open
+  `gre_diagnostics.py` copy of this same function.
 - [x] **74.** Resolved by `1ebb2bb`: `recon/run_b0_recon.py`'s
   `_load_omega` now reads the authoritative `omegas` dataset directly via
   `h5py` (mirroring `reconstruct._load_omega`'s non-fallback path),
@@ -184,19 +179,16 @@ created this file (2026-09-03, against `8baadb1`).
   only for a recon file written before `omegas` existed -- removing both
   the mask-correctness bug and the redundant full-archive read in the
   common case.
-- [ ] **75. [measured] `build_encoding_operator_b0` materializes 2.2 GB of
-  per-frame `b_weights` that hold only 60xL distinct values -- 3.3x the
-  shared-`c_phasors` cost the same function was already refactored to
-  avoid.** `operators_b0.py:231`'s `b = b_by_echo[pos]` is advanced
-  indexing, so each of `Nt` frames gets an independently materialized
-  `(K, L)` complex64 tensor. At real scale (`K=288000`, `Nt=30`, `L=32`):
-  73.7 MB/frame, 2.21 GB total, every byte a gather from the same `(ETL,
-  L)=(60,32)` table (61 KB of actual distinct values). For comparison the
-  shared `c_phasors` this function was already refactored to share across
-  frames is 664 MB -- so the "fixed" redundancy is now the smaller of the
-  two. Fix: keep `pos` per frame (2.3 MB/frame int64, 69 MB total) plus
-  the one shared `b_by_echo` table, and index inside
-  `_apply`/`_apply_adjoint` instead of precomputing 30 times.
+- [x] **75.** Resolved: `GatheredSenseB0` now stores `pos` (int64, `(K,)`,
+  2.3 MB/frame, 69 MB total) plus one `b_by_echo` table shared across every
+  frame's instance, gathering `self.b_by_echo[self.pos, il:il+1]` lazily
+  inside `_apply`/`_apply_adjoint` instead of precomputing a materialized
+  `(K,L)` tensor per frame (was 2.21 GB total at `L=32`). Constructor
+  signature changed (`b_weights` -> `pos, b_by_echo`); updated all three
+  other call sites (`tests/test_recon_operators_b0.py` x2,
+  `recon/sweep_time_segments.py`) to pass `pos=torch.arange(K)` alongside
+  their existing `(K,L)` tensor, an identity gather that reproduces the
+  old behavior exactly.
 - [x] **76.** Resolved by `1ebb2bb`: `operators_b0.py`'s
   `estimate_spectral_norm` now delegates to `recon/solvers.py`'s
   `poweriter(A.apply, A.adjoint, x0, niter=niter, tol=tol)` (defaults
@@ -204,19 +196,12 @@ created this file (2026-09-03, against `8baadb1`).
   `poweriter`'s own defaults) instead of its own fixed-30-iteration loop
   with no convergence check. Also resolves half of item 89's duplication.
   `run_b0_recon.py`'s call site no longer pins `niter=30`.
-- [ ] **77. [measured] `operators_b0.py`'s `nbins` docstring blames a
-  weighting mirtorch does not do.** It describes `mri_exp_approx` as
-  fitting from a "magnitude-weighted histogram" -- but mirtorch 0.3.1's
-  `_uniform_histogram` (`histogram.scatter_add(0, indices,
-  torch.ones_like(values))`) is a plain voxel-count histogram, no
-  magnitude weighting anywhere in the call path. The conclusion is
-  unaffected (background dominates by count too; the row-sum evidence
-  stands on its own), but the stated mechanism is wrong -- and it's the
-  sentence someone would reason from when picking `nbins` for a
-  differently-shaped field map. Fix the two "magnitude-weighted" phrases;
-  note the equal-width range is set by `b0.amin()`/`amax()` over the whole
-  volume, which is what actually makes an asymmetric in-object range
-  expensive in bins.
+- [x] **77.** Resolved: `operators_b0.py`'s `nbins` docstring now says
+  `mri_exp_approx` fits from a plain *voxel-count* histogram (with the
+  `_uniform_histogram` scatter-add cited), not a "magnitude-weighted" one,
+  and explains background dominates by sheer count instead. Also added
+  the equal-width-range note (`b0.amin()`/`amax()` over the whole volume
+  is what makes an asymmetric in-object range expensive in bins).
 - [x] **78.** Resolved by `1ebb2bb`: `gre_diagnostics.py` now raises a
   clear `ValueError` naming the cause (pre-dual-echo cache) when
   `TE_degre` is missing from the GRE cache's attrs, and asserts
@@ -581,13 +566,11 @@ created this file (2026-09-03, against `8baadb1`).
   deciding once (CI installs the extras, or this doc says plainly which
   fraction of the suite a plain `uv run pytest` exercises) rather than
   per-module.
-- [ ] **88. `benchmark_b0_cost.py` documents its own headline measurement
-  backwards.** Its docstring promises "the static, L-independent memory
-  cost of building the operator itself" -- but both named components
-  (`c_phasors`, `b_weights`) scale *linearly* with L (item 75's 664 MB and
-  2.21 GB at L=32), and the script's own `build_mem` column measures
-  exactly that L-dependence across a table whose whole point is comparing
-  L values. Fix the sentence; the number it prints is the right one.
+- [x] **88.** Resolved: `benchmark_b0_cost.py`'s docstring now says
+  `build_mem` is dominated by `c_phasors` (linear in L, 664 MB at L=32),
+  with only the small per-frame `pos` index arrays (item 75's fix, 69 MB
+  total) being genuinely L-independent -- not "static, L-independent"
+  overall.
 
 ## Conciseness & performance
 

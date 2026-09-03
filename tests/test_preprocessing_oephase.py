@@ -47,22 +47,30 @@ def test_getoephase_recovers_injected_linear_phase():
 
 
 def _img_to_kspace(x_img):
-    return np.fft.fftshift(np.fft.fft(np.fft.fftshift(x_img, axes=0), axis=0), axes=0)
+    # Standard centered-FFT pairing (ifftshift-in/fftshift-out), the exact
+    # inverse of _kspace_to_img below -- matches epiphasecorrect's own
+    # convention (see its docstring), so this round-trips correctly for
+    # both even and odd nx, unlike the fftshift-on-both-sides spelling.
+    return np.fft.fftshift(np.fft.fft(np.fft.ifftshift(x_img, axes=0), axis=0), axes=0)
 
 
 def _kspace_to_img(d):
-    return np.fft.fftshift(np.fft.ifft(np.fft.fftshift(d, axes=0), axis=0), axes=0)
+    return np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(d, axes=0), axis=0), axes=0)
 
 
-def test_epiphasecorrect_removes_odd_even_mismatch():
+@pytest.mark.parametrize('nx', [64, 63])
+def test_epiphasecorrect_removes_odd_even_mismatch(nx):
     # epiphasecorrect operates on Cartesian *k-space* (it does its own
     # ifft/correct/fft round trip internally), unlike getoephase which
     # expects data already ifft'd to image space -- so the synthetic
     # image-space profile has to be forward-FFT'd before being handed in,
     # and the output FFT'd back to image space before re-checking with
-    # getoephase.
+    # getoephase. Parametrized over odd nx too (docs/review-findings.md
+    # item 44): epiphasecorrect's ifftshift-in/fftshift-out convention
+    # round-trips exactly regardless of parity, unlike the previous
+    # fftshift-on-both-sides spelling, which only did for even nx.
     rng = np.random.default_rng(7)
-    nx, etl, ncoils = 64, 20, 4
+    etl, ncoils = 20, 4
     a0_true, a1_true = 0.4, 0.9
 
     x_img = _synthetic_echo_train(nx, etl, ncoils, a0_true, a1_true, rng)
