@@ -56,13 +56,17 @@ def test_l1_matches_static_correction():
     assert rel_diff < 1e-3, f"L=1 should match static correction closely, got rel_diff={rel_diff}"
 
 
-def test_more_segments_reduces_error_in_the_realistic_regime():
-    """This repo's real acquisitions (B0 up to +-350 Hz, ETL=60 at ~1.2ms
-    spacing) is exactly the regime tests/test_recon_b0_correction.py's
-    test_realistic_regime_only_partly_corrects found static correction
-    barely helps in (~5% error reduction). Time segmentation exists
-    specifically to fix that -- confirm error drops substantially as L
-    grows, well beyond what static (L=1) achieves."""
+def test_more_segments_reduces_error_in_a_toy_grid():
+    """NOT the realistic regime, despite the fixture's B0/ETL parameters
+    looking real -- this grid has only 12 distinct echo times, so L>=12
+    trivially resolves every one exactly (see the L16 assertion below).
+    recon/sweep_time_segments.py's own module docstring documents this
+    explicitly: its finding "says nothing about whether L=6 ... is
+    adequate at the real ETL=60 scale." See
+    test_more_segments_reduces_error_at_real_scale below for the actual
+    realistic-regime check, which reuses that script's real-scale ground
+    truth directly. Kept as a cheap, fast sanity check that more segments
+    monotonically help at all -- not a stand-in for the real-scale test."""
     img, smaps, b0map_hz, te, y_true_flat = _setup(seed_offset=31, b0_max_hz=350.0, dt_echo=0.0012)
     Nx, Ny, Nz = smaps.shape[1:]
     full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
@@ -99,6 +103,64 @@ def test_more_segments_reduces_error_in_the_realistic_regime():
     )
     assert err_l16 < 0.1 * err_l8, (
         f"L=16 (>= distinct ky times) should be ~exact (err_l16={err_l16})"
+    )
+
+
+def test_more_segments_reduces_error_at_real_scale():
+    """The actual realistic-regime check (real ETL=60, real field-map
+    range -300 to +70 Hz), regression-guarding the conclusion
+    recon/sweep_time_segments.py's real-scale sweep found: L=32 (the
+    production default, item 82) keeps relative forward-model error under
+    1%, while L=6 (mirtorch's own Gmri default, no longer used here)
+    doesn't come close -- a sharp, Nyquist-like phase transition around
+    L=27-32 (matching this scale's bandwidth-time product BT ~= 27), not a
+    gradual curve. Reuses sweep_time_segments.py's own real-scale ground
+    truth/operator-construction helpers directly, rather than a third copy
+    of them."""
+    from recon.sweep_time_segments import _build_operator, _setup_real_scale
+
+    img, smaps, b0map_hz, t_per_ky, y_true_flat = _setup_real_scale(seed=200)
+    Nx, Ny, Nz = smaps.shape[1:]
+    t_frame = t_per_ky.reshape(1, Ny, 1).expand(Nx, Ny, Nz).contiguous()
+
+    def err(L, nbins=128):
+        A = _build_operator(smaps, b0map_hz, t_frame, L=L, nbins=nbins)
+        y_hat = A.apply(img)
+        return (y_hat - y_true_flat).norm().item() / y_true_flat.norm().item()
+
+    err_l6 = err(6)
+    err_l32 = err(32)
+    print(f"real-scale forward-model error: L=6 {err_l6:.4f}, L=32 {err_l32:.4f}")
+    assert err_l32 < 0.01, (
+        f"L=32 should keep relative forward-model error under 1% (got {err_l32:.4f})"
+    )
+    assert err_l6 > 5 * err_l32, (
+        f"L=6 should be far worse than L=32 at this scale (err_l6={err_l6:.4f}, "
+        f"err_l32={err_l32:.4f}) -- if not, the sweep's L=32 conclusion needs revisiting"
+    )
+
+
+def test_production_nbins_avoids_row_sum_warning(recwarn):
+    """operators_b0.py's own docstring identifies nbins=20 (mirtorch's
+    Gmri default, used throughout this file's other tests) as the actual
+    root cause of a real signal-loss-plus-incoherent-noise failure --
+    confirm the production default (nbins=128) doesn't trip
+    _check_b_weight_row_sums' ill-conditioning warning, at real scale."""
+    from recon.operators_b0 import build_encoding_operator_b0
+    from recon.sweep_time_segments import _setup_real_scale
+
+    _img, smaps, b0map_hz, t_per_ky, _y_true_flat = _setup_real_scale(seed=201)
+    Nx, Ny, Nz = smaps.shape[1:]
+    Nt = 1
+    omega = torch.ones(Nx, Ny, Nz, Nt, dtype=torch.bool, device=smaps.device)
+    echo_times_yz = t_per_ky.reshape(Ny, 1, 1).expand(Ny, Nz, Nt).contiguous()
+
+    build_encoding_operator_b0(smaps, omega, b0map_hz, echo_times_yz, L=32, nbins=128)
+
+    row_sum_warnings = [w for w in recwarn.list if "b_weights row sums" in str(w.message)]
+    assert not row_sum_warnings, (
+        f"production nbins=128 should not trigger the ill-conditioning warning, got: "
+        f"{[str(w.message) for w in row_sum_warnings]}"
     )
 
 

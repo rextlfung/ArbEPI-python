@@ -404,21 +404,23 @@ below described). Original numbers kept for provenance:
   points only at CLAUDE.md's `recon/` section (and says explicitly that
   no `recon/README` exists), dropping the dangling "see recon/README"
   half.
-- [ ] **85. `tests/test_recon_operators_b0.py`'s "realistic regime" is
-  the toy grid `sweep_time_segments.py` was written to replace, and its
-  tests pin the `nbins` value the code documents as broken.**
-  `test_more_segments_reduces_error_in_the_realistic_regime` asserts
-  `err_l16 < 0.1 * err_l8`, commented "L16 >= the 12 distinct ky times in
-  this small synthetic grid, so it's essentially exact" --
-  `sweep_time_segments.py`'s own module docstring calls this test's
-  finding "an artifact of its toy grid... it says nothing about whether
-  L=6 is adequate at the real ETL=60 scale." Separately, `_build_b0_
-  operator` defaults `nbins=20` and every test uses that or 10 -- exactly
-  the setting `operators_b0.py`'s docstring identifies as the actual root
-  cause of a real signal-loss failure. Fix: rename the test to say "toy
-  grid", fold `sweep_time_segments.py`'s real-scale fixture in as the
-  actual realistic-regime test, and add one case at production `nbins=128`
-  asserting no row-sum warning fires.
+- [x] **85.** Resolved, all three parts. Renamed
+  `test_more_segments_reduces_error_in_the_realistic_regime` to
+  `test_more_segments_reduces_error_in_a_toy_grid`, with a docstring that
+  explicitly says it's not the realistic regime and points at the new
+  real-scale test. Added `test_more_segments_reduces_error_at_real_scale`,
+  which imports `recon/sweep_time_segments.py`'s own
+  `_setup_real_scale`/`_build_operator` helpers directly (real ETL=60,
+  real field-map range -300 to +70 Hz -- not a fourth copy of that ground
+  truth) and asserts `L=32` keeps forward-model error under 1% while
+  `L=6` is at least 5x worse, turning the sweep's one-off finding into a
+  regression guard. Added `test_production_nbins_avoids_row_sum_warning`,
+  asserting `nbins=128` (production default) doesn't trip
+  `_check_b_weight_row_sums`' ill-conditioning warning at real scale
+  (using `recwarn`, not just eyeballing stdout). Verified with the real
+  `torch`/`mirtorch` extras: all 34 `tests/test_recon_*.py` cases pass
+  (was 32 -- the two new tests both pass on first try, no flakiness
+  observed).
 - [x] **92.** Resolved: all four "Fable" citations removed. Three were
   covered by item 82's docstring rewrites (`operators_b0.py`'s module
   docstring and its `GatheredSenseB0` docstring -- the latter rewritten
@@ -436,20 +438,14 @@ below described). Original numbers kept for provenance:
   so there was nothing left for these codes to suppress.
 - [x] **100.** Closed as superseded -- item 84 above is the corrected,
   now-resolved version; nothing further to point at.
-- [ ] **101. Two small doc gaps, worth folding into the next general docs
-  pass.** (a) `preprocessing/matio.py:7-9`'s module docstring still
-  quotes `schedules`' pre-echo-time shape (`h5py raw (2, 60, 20, 30)` ->
-  logical `(30, 20, 60, 2)`), stale since the dual-echo upgrade made it
-  `x3` -- confirmed against `sequences/ArbEPI.py:299-301`'s 3-channel
-  concatenation. `read_mat_array`'s `.transpose()` is shape-agnostic, so
-  no functional bug, just a stale worked example -- update the two shape
-  tuples and channel count. (Not the same array as
-  `lib/mask2epi.py:75`'s own, still-correct "ETL x 2" comment, which
-  describes the array *before* `ArbEPI.py` appends the echo-time column.)
-  (b) `README.md:22`'s core-dependency sentence omits `tqdm`, which
-  `pyproject.toml:19` lists as a real core dependency and which
-  `sequences/ArbEPI.py:23`/`sequences/deGRE.py:48` both actually import.
-  Add it to the list.
+- [x] **101.** Resolved, both parts. (a) `preprocessing/matio.py`'s module
+  docstring now quotes the current shapes (`h5py raw (3, 60, 20, 30)` ->
+  logical `(30, 20, 60, 3)`) and explains the third channel is
+  `sequences/ArbEPI.py`'s appended echo-time column -- `lib/mask2epi.py:75`'s
+  own "ETL x 2" comment is untouched, since it correctly describes the
+  array before that channel is appended. (b) README's core-dependency
+  sentence now lists `tqdm` alongside pypulseq/numpy/scipy/matplotlib/
+  hdf5storage/numba.
 - [x] **106.** Resolved: `preprocessing/calibrate_delay.py`'s
   `_matlab_round` docstring now says "also duplicated in grid_resize.py",
   the real third copy, instead of `smaps.py` (which has no such

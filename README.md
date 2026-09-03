@@ -19,7 +19,7 @@ Managed with [uv](https://docs.astral.sh/uv/):
 uv sync --extra test
 ```
 
-Depends on `pypulseq` (from PyPI), numpy, scipy, matplotlib, hdf5storage, and numba (see `pyproject.toml`; versions pinned in `uv.lock`).
+Depends on `pypulseq` (from PyPI), numpy, scipy, matplotlib, hdf5storage, numba, and tqdm (see `pyproject.toml`; versions pinned in `uv.lock`).
 
 ## Getting started
 
