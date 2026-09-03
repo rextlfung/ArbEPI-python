@@ -18,6 +18,17 @@ is exactly the "ramp-up" half of a transition event and its `fall_time`
 the "ramp-down" half, so POPE maps directly onto per-trapezoid
 rise/fall slews with no waveform reordering.
 
+Each ramp here uses one constant slew for its whole duration, not the
+POPE paper's *adaptive* shape (hardware-max slew until predicted PNS
+hits 99%, then throttle) -- investigated and closed, do not retry without
+reading CLAUDE.md's "Investigated and closed" PNS paragraph first: a
+prototype against the real ge/pns.py model showed any hardware-max burst
+at the front of a rise ramp creates a *new*, larger PNS peak nearby
+rather than lowering the original one, because this train's chronaxie
+(334us) is comparable to or longer than the whole rise/fall/blip cycle --
+there's no quiet stretch to hide a burst in. The paper's adaptive gain
+comes from a longer-flat-top regime this repo's ETL=60 train doesn't have.
+
 Geometry notation used throughout (see also the derivation in the repo's
 CLAUDE.md): t_s = blip_duration/2; r/flat/d = rise/flat/fall times; A =
 amplitude; a1 = A*t_s^2/(2r) = area of the first t_s of the rise ramp

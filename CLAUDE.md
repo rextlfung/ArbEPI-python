@@ -441,6 +441,61 @@ are for `PNSwt = [0.8, 1.0, 0.7]` on GE_MR750 with the seed=0 mask, and
 any change to scanner, mask seed, `R`/`ETL`, or resolution needs the
 check re-run (the regression test and `main.py --ge` both do).
 
+**Investigated and closed (2026-09-03): the POPE paper's *adaptive*
+ramp (hardware-max slew until predicted PNS hits 99%, then throttle to a
+constant "steady-state" slew for the rest of the ramp) does not help
+here, and should not be retried without addressing the reason below
+first.** The paper's own description (Methods, Fig. 2B) is a genuinely
+different design from what this repo implements: `lib/make_readout_grads.py`
+throttles the *entire* rise ramp to one constant slew
+(`ro_slew_rise=100`), whereas the paper only throttles the *tail* of the
+ramp and lets the early part run at full hardware slew (250 T/m/s on
+their Siemens system) -- worth trying since a nerve-integration PNS
+kernel weights recent slew history much more than distant history, so
+front-loading fast slew where it's furthest from the instant being
+evaluated should, naively, lower PNS at that instant. A prototype tested
+this directly against the real PNS model: took the actual full-dims
+seed=0 `ArbEPI` build at shipped params (rise=100, fall=120, blip=105,
+baseline peak PNS 78.9%, matching the 79.84% figure above), located every
+one of the 1200 real rise ramps in the sampled `gx` waveform (uniformly
+496us/124 samples, confirmed by `diff(gx)/dt`), and replaced each one --
+at *fixed total duration and fixed endpoints*, so nothing downstream
+(flat top, fall, blips) retimes -- with a two-piece ramp: GE_MR750's
+200 T/m/s hardware-max slew for a leading fraction tau, then whatever
+constant slew finishes the same delta-G in the remainder, i.e. exactly
+the paper's shape. Result: peak PNS (evaluated as the true global max
+over the whole sequence via `ge/pns.py`'s real IEC 60601-2-33 model, not
+just at the original ramp-end instant) **increases monotonically for
+every tau > 0 tested**, with no minimum away from tau=0 -- +0.16pp at
+tau=25us, +0.33pp at 50us, a sharp knee to +11.3pp by 100us, +35pp by
+200us. Mechanism: the naive "recent slew dominates" intuition is correct
+*at the original evaluation instant*, but it says nothing about the rest
+of the timeline -- concentrating any nontrivial duration of 200 T/m/s
+slew creates a *new* competing PNS peak right at the end of that burst,
+and in this repo's train that new peak wins immediately. The reason it
+wins so fast is timing density: `chronaxie` (334us, GE_MR750) is
+comparable to or longer than the entire rise/fall/blip cycle here (rise
+496us ~= 1.5 chronaxie, fall 416us ~= 1.25 chronaxie, separated by only a
+~54-58us blip window) -- there is no PNS-quiet stretch within one cycle
+long enough to hide a hardware-max burst without it landing immediately
+next to the already-hot fall+blip turnaround (the same RSS-hotspot
+coupling the sweep lessons above already document). This is the likely
+resolution of the discrepancy between this repo's own POPE gain (~3%
+echo-spacing reduction, symmetric-100 1108us -> POPE 1076us) and the
+paper's headlined 7-38.8% (their Fig. 2E, resolution-dependent): their
+benefit comes from long flat-tops/readouts relative to ramp duration and
+chronaxie, which this repo's ETL=60 tightly-packed 3D-EPI train does not
+have. **Conclusion: do not implement the adaptive/bang-then-throttle
+ramp shape as a standalone change** -- it is strictly worse than the
+current constant-slew rise in this design's PNS/timing regime, not just
+unproven. It could conceivably become viable if the cycle geometry
+changes enough to open up a genuine quiet stretch (materially longer
+flat top/lower ETL, or a much shorter chronaxie scanner profile) --
+re-run this same prototype methodology against the real `ge/pns.py`
+model and real generated sequence before trying again, rather than
+re-deriving it from the paper's numbers alone, since those numbers come
+from a different PNS model (Siemens SAFE) and a different timing regime.
+
 `params.py`'s `Params` dataclass carries the selected `ScannerSpec` itself
 as `params.spec` (rather than duplicating `max_grad`/`max_slew`/`b1_max`/
 `ge_coil`/`pislquant`/etc. as separate derived fields, as it did when the
