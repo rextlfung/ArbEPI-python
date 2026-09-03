@@ -115,16 +115,20 @@ def main(
         print(f'  ROI tSNR (undetrended): {stats["roi_tsnr"]:.1f}')
         print(f'  median per-voxel tSNR: {stats["median_voxel_tsnr"]:.1f}')
 
-    # Comparison figures (one panel per dataset) go in the datdirs' common
-    # parent when there's more than one, or that single dataset's own
-    # recon/basic/ otherwise.
-    out_dir = (
-        os.path.commonpath([os.path.normpath(d) for d in datdirs])
-        if len(datdirs) > 1
-        else os.path.join(datdirs[0], 'recon', 'basic')
-    )
+    # Comparison figures (one panel per dataset) are saved next to each
+    # dataset's own .nii.gz -- i.e. a copy in every datdir's recon/basic/,
+    # not a shared parent directory, so each dataset's folder stays
+    # self-contained even when the figure itself compares multiple datasets.
+    out_dirs = [os.path.join(d, 'recon', 'basic') for d in datdirs]
     labels = list(results.keys())
     suffix = (f'_{variant}' if variant else '') + (f'_skip{skip_frames}' if skip_frames else '')
+
+    def _save_fig(name: str) -> None:
+        fn = f'lowres_temporal_stability_{name}{suffix}.png'
+        for out_dir in out_dirs:
+            os.makedirs(out_dir, exist_ok=True)
+            plt.savefig(os.path.join(out_dir, fn), dpi=130)
+        print(f'Wrote {fn} to: {", ".join(out_dirs)}')
 
     # --- Figure 1: per-frame ROI-mean signal + linear fit, one panel per dataset ---
     fig, axes = plt.subplots(1, len(labels), figsize=(6 * len(labels), 4), squeeze=False)
@@ -140,9 +144,7 @@ def main(
         )
         ax.legend()
     plt.tight_layout()
-    fn1 = os.path.join(out_dir, f'lowres_temporal_stability_roi_signal{suffix}.png')
-    plt.savefig(fn1, dpi=130)
-    print(f'\nWrote {fn1}')
+    _save_fig('roi_signal')
 
     # --- Figure 2: tSNR map, central slice, one panel per dataset ---
     fig, axes = plt.subplots(1, len(labels), figsize=(5 * len(labels), 4.5), squeeze=False)
@@ -155,9 +157,7 @@ def main(
         ax.set_yticks([])
         plt.colorbar(im, ax=ax, fraction=0.046)
     plt.tight_layout()
-    fn2 = fn1.replace('roi_signal', 'tsnr_map')
-    plt.savefig(fn2, dpi=130)
-    print(f'Wrote {fn2}')
+    _save_fig('tsnr_map')
 
     # --- Figure 3: frame-to-frame difference vs frame 0, central slice ---
     fig, axes = plt.subplots(1, len(labels), figsize=(5 * len(labels), 4.5), squeeze=False)
@@ -172,9 +172,7 @@ def main(
         ax.set_yticks([])
         plt.colorbar(im, ax=ax, fraction=0.046)
     plt.tight_layout()
-    fn3 = fn1.replace('roi_signal', 'last_minus_first')
-    plt.savefig(fn3, dpi=130)
-    print(f'Wrote {fn3}')
+    _save_fig('last_minus_first')
 
 
 if __name__ == '__main__':
