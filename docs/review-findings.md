@@ -296,21 +296,19 @@ below described). Original numbers kept for provenance:
   `test_preprocess_scatter_frame_places_data_at_correct_indices`, which
   doesn't exist -- the real name is
   `test_scatter_frame_places_data_at_correct_indices`.
-- [ ] **51. `ge/coppe.py` and `ge/README.md` are invisible in CLAUDE.md.**
-  Zero mentions of "coppe" even though the GE export section enumerates
-  every other `ge/` module by name, and `coppe.py` is the largest file in
-  the directory (582 lines, plus its own README and test file). Add a
-  sentence: SSH-copies a folder of `.pge` files to the scanner
-  (auto-allocating `pge2` entry numbers), UM-lab-internal, not part of the
-  `main.py --ge` path.
-- [ ] **52. `sampling/external_mask.py` is unreferenced and undocumented
-  on both sides.** Zero occurrences in CLAUDE.md; README's architecture
-  tree summarizes `sampling/` without it. `gen_sampling_masks` has no
-  `'external'` branch, so using it means bypassing the documented entry
-  point and calling `generate_arbepi(omegas, ...)` by hand. Decide which
-  it is and document it: wire in as a fifth `params.sampling_method` (needs
-  a path parameter on `Params`), or document it in both files as a
-  deliberate manual escape hatch for collaborator-supplied masks.
+- [x] **51.** Resolved: added a bullet to CLAUDE.md's GE `.pge` export
+  section describing `ge/coppe.py` (SSH-copies `.pge` files to the
+  scanner, auto-allocates `pge2`/v7 entry numbers, UM-lab-internal, not
+  part of `main.py --ge`) and pointing at `ge/README.md` for usage/SSH
+  setup.
+- [x] **52.** Resolved via the documentation option (not wired in as a
+  fifth `sampling_method` -- that would need a path parameter on `Params`
+  and is a larger change than this item's scope): added a bullet to
+  CLAUDE.md's architecture notes and a line in README's directory tree
+  describing `sampling/external_mask.py` as a deliberate manual escape
+  hatch for a collaborator-supplied mask, used by calling
+  `generate_arbepi(omegas, ...)` directly rather than through
+  `gen_sampling_masks`.
 - [ ] **53. [needs retargeting] The item-12-era warning in CLAUDE.md
   points at a file that has since been created; the pointer is now stale
   in the other direction.** Historical: item 12's caveat said
@@ -335,16 +333,13 @@ below described). Original numbers kept for provenance:
   `seq.set_definition('Name', seqname)` before `seq.write(...)`. Verified
   in a fresh build: `output/noise.seq`'s `[DEFINITIONS]` block now has
   both keys.
-- [ ] **66. [measured] The ArbEPI acoustics numbers in `ge/check.py` and
-  CLAUDE.md are stale by 5x since the POPE switch.** Both historically
-  cited `ArbEPI.seq: 0.028146 here vs MATLAB's 0.02814424`. Today's
-  `ArbEPI.seq` measures **0.1484** through the same check (see the
-  Current Baseline table above) -- a 5.3x change from the asymmetric
-  readout ramps. The disclaimer around these numbers names only the
-  `GRE.seq` -> `deGRE.seq` rename, not the POPE change. The *window* half
-  of the reproduction record still holds exactly (25000 samples at the 4
-  us raster, matching MATLAB's 25001). Re-record only the magnitude in
-  CLAUDE.md, and extend the disclaimer to cover the POPE change too.
+- [x] **66.** Resolved: both `ge/check.py`'s module docstring and
+  CLAUDE.md's matching paragraph now extend the disclaimer around
+  `ArbEPI.seq: 0.028146 here vs MATLAB's 0.02814424` to cover the POPE
+  readout change (5.3x, to 0.1484), not just the `GRE.seq` -> `deGRE.seq`
+  rename -- both now point at `docs/review-findings.md`'s "Current
+  baseline" table for the current number, and state the window-duration
+  half of the reproduction still holds exactly.
 - [x] **67.** Resolved: `preprocessing/nifti_io.py`'s module docstring now
   says the field map is written on the EPI grid (`fov`, not `fov_degre`),
   matching what `run_b0map.py` actually does and its own adjacent comment.

@@ -145,7 +145,9 @@ Only entry points and tightly-coupled global config sit at the repo root — mir
 params.py                   Params dataclass + load_params() (replaces params.m)
 scanners.py                 ScannerSpec hardware profiles (GE_MR750, GE_UHP)
 main.py                     Generate all 4 sequences, mirrors ArbEPI/main.m; --plot/--ge flags
-sampling/                   Sampling mask generators (caipi, ticaipi, pd, rand)
+sampling/                   Sampling mask generators (caipi, ticaipi, pd, rand); external_mask.py
+                              is a manual escape hatch for a collaborator-supplied mask, not a
+                              fifth params.sampling_method -- see CLAUDE.md
 lib/
   mask2epi.py                Core algorithm: partitions a 2D mask into EPI trajectories
                               (mask2epi_laminar / mask2epi_radial, selected by params.epi_trajectory)

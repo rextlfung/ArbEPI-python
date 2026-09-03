@@ -1988,8 +1988,15 @@ matches to <0.04% relative error (`GRE.seq`: 0.4024 here vs MATLAB's
 earlier open question (a fixed 1s window vs. MATLAB's shorter blockRange
 window giving different magnitudes, `GRE.seq` 0.312 vs 0.402) is resolved:
 matching MATLAB's window definition reproduces MATLAB's number directly,
-it was purely a window-choice gap, not an algorithm mismatch. The residual
-gap (MATLAB's
+it was purely a window-choice gap, not an algorithm mismatch. **The
+window-duration half of this reproduction still holds exactly today; the
+`ArbEPI.seq` acoustics *magnitude* does not** -- the switch to the
+asymmetric POPE readout changed it 5.3x, to 0.1484 (see
+`docs/review-findings.md`'s "Current baseline" table for the current
+whole-sequence numbers), so `0.028146`/`0.02814424` here are historical
+only, on both counts (the `GRE.seq` -> `deGRE.seq` rename *and* the POPE
+readout change) -- not just the rename this paragraph originally flagged.
+The residual gap (MATLAB's
 per-segment `segment_dead_time`/`segment_ringdown_time` padding,
 ~117us/segment, a GE-Ceq-interpreter artifact with no Pulseq-timeline
 equivalent) is deliberately not reproduced -- confirmed negligible above.
@@ -2117,6 +2124,23 @@ no longer called them, for the same reason.
   independent bugs found (in both `../ArbEPI/lib/pd_sample.m` and real
   SigPy) that motivated this, and why `numba` (narrowly, for just this one
   function) is still a dependency.
+- **`ge/coppe.py`** SSH-copies a folder of `.pge` files (e.g. `output/*.pge`)
+  to the scanner, auto-allocating unused `pge2`/v7 entry numbers (0-9999)
+  and writing each file's `pgeN.entry` — the pull-based two-hop transfer
+  TOPPEpsdSourceCode's UserGuide documents doing by hand. University of
+  Michigan fMRI lab-internal (server names are lab-specific); not part of
+  `main.py --ge`'s own export path, and not needed to generate or validate
+  `.pge` files. See `ge/README.md` for usage and SSH key setup.
+- **`sampling/external_mask.py`**'s `load_external_mask` is a deliberate
+  manual escape hatch, not a fifth `params.sampling_method` --
+  `gen_sampling_masks` has no `'external'` branch for it. Loads a
+  precomputed 2D `(ky, kz)` or 3D `(ky, kz, t)` mask from an outside
+  collaborator's own v5 `.mat` file (`scipy.io.loadmat`, not
+  `hdf5storage.loadmat` -- v5, not this repo's own v7.3 convention) for a
+  sample-selection method this repo doesn't itself implement. Using it
+  means calling `sequences.ArbEPI.generate_arbepi(omegas, params)`
+  directly with the loaded array in place of `gen_sampling_masks`'s
+  output, bypassing `main.py`'s documented entry point by hand.
 
 ### `preprocessing/` -- raw scanner data -> zero-filled k-space, ported from `../epi-preprocessing`
 
