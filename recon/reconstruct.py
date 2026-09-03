@@ -103,6 +103,15 @@ def _load_omega(
     return omega
 
 
+def _load_echo_times(fn_ksp: str, device: torch.device) -> torch.Tensor:
+    """(Ny,Nz,Nt) echo-time array (seconds since RF excitation), moved to
+    device at its native shape -- shared by both B0-recon call sites
+    (run_recon here and run_b0_recon.py) so neither has to duplicate the
+    broadcast-to-(Nx,Ny,Nz,Nt) pattern build_encoding_operator_b0 no
+    longer needs (see its docstring and docs/review-findings.md item 90)."""
+    return torch.from_numpy(_load_array(fn_ksp, "echo_times").astype(np.float32)).to(device)
+
+
 def _reg_weights(
     patch_sizes: list[tuple[int, int, int]], Nt: int, N_voxels: int, lambda_global: float
 ) -> list[float]:
@@ -181,10 +190,9 @@ def run_recon(
         assert tuple(b0map_hz.shape) == (Nx, Ny, Nz), (
             f"b0map_hz shape {tuple(b0map_hz.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz})"
         )
-        echo_times_2d = torch.from_numpy(_load_array(fn_ksp, "echo_times").astype(np.float32))
-        echo_times_s = echo_times_2d.to(device).unsqueeze(0).expand(Nx, -1, -1, -1).contiguous()
+        echo_times_yz = _load_echo_times(fn_ksp, device)
         A = build_encoding_operator_b0(
-            smaps_chw, omega, b0map_hz, echo_times_s, L=L_b0, nbins=nbins_b0
+            smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0
         )
     else:
         A = build_encoding_operator(smaps_chw, omega)

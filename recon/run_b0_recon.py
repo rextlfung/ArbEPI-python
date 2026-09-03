@@ -34,7 +34,7 @@ import torch
 
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
 from recon.operators_b0 import build_encoding_operator_b0, estimate_spectral_norm
-from recon.reconstruct import _load_array, run_recon
+from recon.reconstruct import _load_array, _load_echo_times, run_recon
 from recon.save_result import save_result
 from recon.validate_against_mslr import _read_julia_mat
 
@@ -96,11 +96,10 @@ def main(datdir: str, name: str, L_b0: int = 6, nbins_b0: int = 128, device: str
 
     omega = torch.from_numpy(_load_omega(fn_ksp, Nx)).to(device_t)
     b0map_hz = torch.from_numpy(_load_array(fn_b0map, "b0map_hz").astype(np.float32)).to(device_t)
-    echo_times_2d = torch.from_numpy(_load_array(fn_ksp, "echo_times").astype(np.float32))
-    echo_times_s = echo_times_2d.to(device_t).unsqueeze(0).expand(Nx, -1, -1, -1).contiguous()
+    echo_times_yz = _load_echo_times(fn_ksp, device_t)
 
     print(f"Estimating sigma1(A) for the B0-corrected operator (L={L_b0}, nbins={nbins_b0})...")
-    A = build_encoding_operator_b0(smaps_chw, omega, b0map_hz, echo_times_s, L=L_b0, nbins=nbins_b0)
+    A = build_encoding_operator_b0(smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0)
     Nt = omega.shape[-1]  # A is the full BlockDiagonal over every frame, size_in=(Nx,Ny,Nz,Nt)
     x0 = torch.randn(Nx, Ny, Nz, Nt, dtype=torch.complex64, device=device_t)
     sigma1A = estimate_spectral_norm(A, x0)
@@ -108,7 +107,7 @@ def main(datdir: str, name: str, L_b0: int = 6, nbins_b0: int = 128, device: str
         f"  sigma1A (B0-corrected) = {sigma1A:.6f}  "
         f"(uncorrected reference: {ref['sigma1A']:.6f})"
     )
-    del A, smaps_raw, smaps, smaps_chw, omega, b0map_hz, echo_times_2d, echo_times_s, x0
+    del A, smaps_raw, smaps, smaps_chw, omega, b0map_hz, echo_times_yz, x0
     if device_t.type == "cuda":
         torch.cuda.empty_cache()
 

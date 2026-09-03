@@ -437,6 +437,16 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     print(f'EPI processing complete. Output: {paths.recon}')
 
 
+def _iy_iz(schedules: np.ndarray, frame: int) -> tuple[np.ndarray, np.ndarray]:
+    """(ky, kz) index pair for every acquisition in one frame, flattened --
+    the exact indices _build_omegas and _build_echo_times each scatter
+    their own payload onto. Factored out (docs/review-findings.md item 58)
+    so the two can't drift out of alignment with each other."""
+    iy = schedules[frame, :, :, 0].ravel()
+    iz = schedules[frame, :, :, 1].ravel()
+    return iy, iz
+
+
 def _build_omegas(schedules: np.ndarray, Ny: int, Nz: int) -> np.ndarray:
     """Rebuild the binary sampling mask [Ny, Nz, Nframes] from the 0-based
     schedule -- omegas[iy, iz, frame] is True iff that location is
@@ -444,8 +454,7 @@ def _build_omegas(schedules: np.ndarray, Ny: int, Nz: int) -> np.ndarray:
     Nframes = schedules.shape[0]
     omegas = np.zeros((Ny, Nz, Nframes), dtype=bool)
     for frame in range(Nframes):
-        iy = schedules[frame, :, :, 0].ravel()
-        iz = schedules[frame, :, :, 1].ravel()
+        iy, iz = _iy_iz(schedules, frame)
         omegas[iy, iz, frame] = True
     return omegas
 
@@ -465,7 +474,6 @@ def _build_echo_times(
     Nframes = schedules.shape[0]
     t = np.zeros((Ny, Nz, Nframes), dtype=np.float64)
     for frame in range(Nframes):
-        iy = schedules[frame, :, :, 0].ravel()
-        iz = schedules[frame, :, :, 1].ravel()
+        iy, iz = _iy_iz(schedules, frame)
         t[iy, iz, frame] = echo_times[frame].ravel()
     return t

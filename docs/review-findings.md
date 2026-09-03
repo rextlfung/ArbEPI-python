@@ -578,12 +578,20 @@ below described). Original numbers kept for provenance:
   `max(pinned)` out of the loop. Neither changes any result -- both are
   exact-predicate rewrites, so `tests/test_mask2epi.py`'s existing
   crossing-count assertions are the regression guard.
-- [ ] **58. `preprocessing/preprocess.py`'s `_build_omegas` and
-  `_build_echo_times` are the same loop written twice** -- same
-  `schedules[frame, :, :, 0/1].ravel()` indices, same `(Ny, Nz, Nframes)`
-  scatter, differing only in what they write. One function returning both
-  arrays would halve the index arithmetic and make it structurally
-  impossible for the two grids to fall out of alignment.
+- [x] **58.** Resolved, via a smaller change than "merge into one
+  function": factored the duplicated `schedules[frame, :, :,
+  0/1].ravel()` indexing out into a shared `_iy_iz(schedules, frame)`
+  helper both `_build_omegas` and `_build_echo_times` now call, rather
+  than fully merging the two into a single function. Kept the two public
+  functions and their independent call sites/tests unchanged (both are
+  separately unit-tested with different fixtures, and the call site
+  writes `omegas`/`echo_times` as two separate HDF5 datasets) -- the
+  actual duplication this item flagged (the index computation, not the
+  scatter-target dtype/shape) is now single-sourced, which is what makes
+  the two grids structurally unable to drift apart. Verified against the
+  real `preprocessing` extras venv (`uv sync --extra test --extra
+  preprocessing`): both `test_build_omegas_marks_scheduled_locations` and
+  `test_build_echo_times_places_values_at_scheduled_locations` pass.
 - [x] **59.** Resolved by `1ebb2bb`: `rampsampepi2cart` now allocates `dc`
   with `dtype=np.result_type(dco, dce)` instead of hardcoded `complex`
   (complex128).
@@ -596,17 +604,15 @@ below described). Original numbers kept for provenance:
   gating a future item-17 `crt` revert -- it's simply fixed.
 - [x] **72(a).** Resolved by `1ebb2bb`: `sequences/deGRE.py` now reads
   `pe2_steps[iZ - 1]`, dropping the dead `max(0, ...)`.
-- [ ] **73. `recon/lowrank.py`'s `pcount` buffer-reuse parameter is dead
-  in production.** `patchSVST` accepts `pcount` and forwards it to
-  `patches2img`, which zeroes and reuses it instead of allocating -- but
-  the only production caller, `recon/reconstruct.py`'s `g_prox`, never
-  passes one, so every call allocates a fresh `(Nx,Ny,Nz)` float32 count
-  array (10.4 MB at real dims, once per scale per iteration). PyTorch's
-  caching allocator makes this nearly free (tidiness, not a measured
-  cost), but it's a parameter that exists solely to be passed and never
-  is. Either thread a persistent buffer through from `run_recon`, or
-  delete the parameter from both functions. Same disposition question as
-  item 89's `poweriter`.
+- [x] **73.** Resolved: deleted the `pcount` parameter from both
+  `patches2img` and `patchSVST` (confirmed no caller -- production or
+  test -- ever passed one; `patches2img` now always allocates its own
+  count buffer, same as the old default-`None` path). Chose deletion over
+  threading a persistent buffer through `run_recon`, since nothing
+  measured the allocation as a real cost (PyTorch's caching allocator
+  already makes it near-free) -- unlike item 89's `poweriter`, where the
+  duplication was a second *implementation*, not just an unused
+  parameter.
 - [ ] **89. `GatheredSenseB0` is `GatheredSense` copied verbatim plus two
   factors, and `estimate_spectral_norm` is `poweriter` written a second
   time.** `operators_b0.py:83-107`'s `_apply`/`_apply_adjoint` reproduce
@@ -622,28 +628,28 @@ below described). Original numbers kept for provenance:
   half is the `GatheredSenseB0`/`GatheredSense` `_apply`/`_apply_adjoint`
   duplication. Minor, same file: `:127`'s function-body `import warnings`
   is the only one in the repo not at module level.
-- [ ] **90. [measured] `echo_times_s` is materialized 240x redundantly on
-  the GPU, in both callers.** `reconstruct.py:181` and
-  `run_b0_recon.py:88` both do `echo_times_2d.to(device).unsqueeze(0)
-  .expand(Nx,-1,-1,-1).contiguous()`, turning a `(Ny,Nz,Nt)` array into a
-  dense `(Nx,Ny,Nz,Nt)` one: 311 MB of float32 at real dims, expanded
-  from 1.30 MB of distinct values -- and `build_encoding_operator_b0`
-  reads it only at each frame's sampled flat indices. The `.contiguous()`
-  is what forces the materialization (`expand` alone is a free stride-0
-  view). Cheaper: index the `(Ny,Nz,Nt)` array with `idx // Nz`-style
-  arithmetic and skip the broadcast, or at minimum share one helper
-  between the two identical call sites (same duplication class as item
-  74's `_load_omega`).
-- [ ] **91. `_ift3` now exists three times, and the newest copy inherits
-  item 64's false justification on the one grid where it bites.**
-  `preprocessing/gre_diagnostics.py:29` is a verbatim copy of
-  `preprocessing/run_rss.py`'s `_ift3`, and `preprocessing/julia/
-  b0map.jl` implements the same convention a third time in Julia.
-  `gre_diagnostics.py` runs on the deGRE grid, where `Nz_degre=21` is
-  odd -- still safe today (magnitude-only, `np.sqrt(np.sum(np.abs(...)
-  **2))`), but now the third place a future complex-valued consumer could
-  pick the pattern up from. Import `run_rss._ift3` rather than copying
-  it, and fix item 64's docstring once, in one place.
+- [x] **90.** Resolved: `build_encoding_operator_b0` now takes
+  `echo_times_yz` at its native `(Ny,Nz,Nt)` shape and looks up each
+  sampled location via `echo_times_flat[idx % (Ny*Nz), it]` (torch's
+  C-order flatten of the `(Nx,Ny,Nz)` mask means `idx % (Ny*Nz)` is
+  exactly the `(Ny,Nz)` index, since echo time is constant across `ix`) --
+  no more `.expand(Nx,-1,-1,-1).contiguous()` materialization. Both call
+  sites (`reconstruct.py`, `run_b0_recon.py`) now share one
+  `_load_echo_times(fn_ksp, device)` helper (added next to `_load_omega`,
+  same duplication class as item 74) instead of duplicating the load+
+  broadcast. Verified the indexing identity numerically (`idx %
+  (Ny*Nz)`-based lookup vs. the old dense-broadcast-then-index result,
+  exact match on synthetic data) and updated
+  `tests/test_recon_operators_b0.py`'s fixture/assertions to match the
+  new signature; couldn't run the torch-gated test suite itself in this
+  environment (no `.venv-recon` available here).
+- [x] **91.** Resolved (the Python half -- `preprocessing/julia/b0map.jl`'s
+  Julia copy is a separate language, not mergeable): `gre_diagnostics.py`
+  now does `from preprocessing.run_rss import _ift3` instead of keeping a
+  verbatim copy, so item 64's docstring fix (already applied to
+  `run_rss.py`) now covers this consumer too automatically. Verified no
+  circular import (`run_rss.py` doesn't import `gre_diagnostics`) and no
+  new lint/test regressions.
 - [ ] **94. `recon/run_b0_recon.py` re-implements `run_recon`'s smaps
   load + RSS normalization verbatim.** `:79-81` is a line-for-line copy
   of `recon/reconstruct.py:154-156`. More dangerous than item 89's
@@ -654,15 +660,14 @@ below described). Original numbers kept for provenance:
   wrong step size (same bug class as item 74's omega divergence, in the
   same function, for the same reason). Factor the load+normalize into one
   helper both call.
-- [ ] **102. `preprocessing/epi_gridding.py`'s `reconecho()` is dead
-  code.** Defined and documented (including a docstring cross-reference
-  from `rampsamp2cart`'s own docstring), but zero callers anywhere in the
-  repo or its tests. Everything that actually grids EPI data goes through
-  `rampsampepi2cart`/`rampsamp2cart`, which reimplement the same per-echo
-  NUFFT+DCF logic inline instead of calling it. Not the same class as
-  items 33/73 (those are struct fields/parameters, not a whole unused
-  function). Either delete it, or wire `rampsamp2cart`'s inner loop to
-  call it (needs batching to be useful as-is).
+- [x] **102.** Resolved: deleted `reconecho()` from
+  `preprocessing/epi_gridding.py` (confirmed zero callers anywhere in the
+  repo or its tests before removing). `_density_compensation` and
+  `rampsamp2cart`/`rampsampepi2cart` -- the functions actually used --
+  are untouched; the module docstring's "ports ... reconecho.m" and
+  `_density_compensation`'s own "ports reconecho.m" both still refer to
+  the *original MATLAB* file this port's DCF logic came from, not the
+  deleted Python function, so left as-is.
 - [ ] **105. [measured] `recon_frames.py`'s `use_parfor=True` path
   re-pickles/re-transmits the full `smaps` array once per frame, not once
   total.** `preprocessing/recon_frames.py:73-75` binds `smaps` into

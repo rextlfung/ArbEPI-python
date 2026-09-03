@@ -7,9 +7,11 @@ the B0 field-map pipeline's intermediate volumes (finit_hz, b0map_hz, mask)
 artifact traces back to the GRE data itself or the field-map estimation,
 rather than the B0-corrected recon operator (recon/operators_b0.py).
 
-Same centered-IFFT convention as preprocessing/run_rss.py's _ift3
-(fftshift(ifftn(fftshift(.))) per axis) and b0map.jl's own image-space
-conversion (see its module docstring in CLAUDE.md).
+Imports _ift3 from preprocessing/run_rss.py rather than keeping its own
+copy (fftshift(ifftn(fftshift(.))) per axis -- see that function's own
+docstring for the magnitude-/difference-safety caveat on odd axes), the
+same convention b0map.jl's own image-space conversion uses in Julia (see
+its module docstring in CLAUDE.md).
 
 Usage (from repo root, .venv-preprocessing):
     .venv-preprocessing/bin/python -m preprocessing.gre_diagnostics <datdir> <seqname>
@@ -24,11 +26,7 @@ import numpy as np
 
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
 from preprocessing.nifti_io import save_recon_nifti
-
-
-def _ift3(d: np.ndarray) -> np.ndarray:
-    axes = (0, 1, 2)
-    return np.fft.fftshift(np.fft.ifftn(np.fft.fftshift(d, axes=axes), axes=axes), axes=axes)
+from preprocessing.run_rss import _ift3
 
 
 def main(datdir: str, seqname: str) -> None:

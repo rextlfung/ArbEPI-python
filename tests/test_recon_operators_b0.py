@@ -125,8 +125,11 @@ def test_adjoint_is_self_consistent():
 def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
     """build_encoding_operator_b0's BlockDiagonal-of-GatheredSenseB0 should
     apply identically to manually building each frame's operator the way
-    _build_b0_operator does above, confirming the broadcast/gather plumbing
-    (echo_times_s across Nx, per-frame idx) is wired correctly end to end."""
+    _build_b0_operator does above, confirming the gather plumbing
+    (echo_times_yz's idx % (Ny*Nz) lookup, per-frame idx) is wired
+    correctly end to end. echo_times_s (Nx-expanded) is built here only
+    for _build_b0_operator's own per-frame (Nx,Ny,Nz)-shaped contract, not
+    passed to build_encoding_operator_b0 itself (see its docstring)."""
     Nx, Ny, Nz, Nc, Nt, L = 5, 6, 4, 2, 3, 3
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=50)
     b0map_hz = _complex_randn(Nx, Ny, Nz, seed=51).real * 100
@@ -153,7 +156,7 @@ def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
     echo_times_2d = echo_times_yz.unsqueeze(-1).expand(Ny, Nz, Nt).contiguous()  # (Ny,Nz,Nt)
     echo_times_s = echo_times_2d.unsqueeze(0).expand(Nx, -1, -1, -1).contiguous()
 
-    A = build_encoding_operator_b0(smaps, omega, b0map_hz, echo_times_s, L=L, nbins=10)
+    A = build_encoding_operator_b0(smaps, omega, b0map_hz, echo_times_2d, L=L, nbins=10)
 
     x = _complex_randn(Nx, Ny, Nz, Nt, seed=53)
     y_batched = A.apply(x)

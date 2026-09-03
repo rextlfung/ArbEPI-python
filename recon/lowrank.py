@@ -43,9 +43,7 @@ def img2patches(img: torch.Tensor, patch_size, stride_size) -> torch.Tensor:
     return torch.stack(patches, dim=0)
 
 
-def patches2img(
-    P: torch.Tensor, patch_size, stride_size, og_size, pcount: torch.Tensor | None = None
-) -> torch.Tensor:
+def patches2img(P: torch.Tensor, patch_size, stride_size, og_size) -> torch.Tensor:
     """Inverse of img2patches: recombine via overlap-averaging."""
     _, _, Nt = P.shape
     Nx, Ny, Nz = og_size
@@ -56,10 +54,7 @@ def patches2img(
     starts_z = _patch_starts(Nz, psz, stride_size[2])
 
     img = torch.zeros(Nx, Ny, Nz, Nt, dtype=P.dtype, device=P.device)
-    if pcount is None:
-        pcount = torch.zeros(Nx, Ny, Nz, dtype=torch.float32, device=P.device)
-    else:
-        pcount.zero_()
+    pcount = torch.zeros(Nx, Ny, Nz, dtype=torch.float32, device=P.device)
 
     ip = 0
     for sz in starts_z:
@@ -125,7 +120,7 @@ def _unit_block_svst(img: torch.Tensor, beta: float) -> tuple[torch.Tensor, torc
 
 
 def patchSVST(
-    img: torch.Tensor, beta: float, patch_size, stride_size, pcount: torch.Tensor | None = None
+    img: torch.Tensor, beta: float, patch_size, stride_size
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Apply patch-wise SVST to a 4-D image (Nx,Ny,Nz,Nt) with threshold beta.
     Returns (img_thresholded, reg), reg = nuclear norm of the result summed
@@ -137,5 +132,5 @@ def patchSVST(
 
     P = img2patches(img, patch_size, stride_size)
     result, reg_per_patch = SVST(P, beta)
-    img_out = patches2img(result, patch_size, stride_size, (Nx, Ny, Nz), pcount=pcount)
+    img_out = patches2img(result, patch_size, stride_size, (Nx, Ny, Nz))
     return img_out, reg_per_patch.sum()

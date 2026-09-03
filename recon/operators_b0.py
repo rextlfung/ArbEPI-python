@@ -158,7 +158,7 @@ def build_encoding_operator_b0(
     smaps: torch.Tensor,
     omega: torch.Tensor,
     b0map_hz: torch.Tensor,
-    echo_times_s: torch.Tensor,
+    echo_times_yz: torch.Tensor,
     L: int = 6,
     nbins: int = 128,
 ) -> BlockDiagonal:
@@ -167,11 +167,16 @@ def build_encoding_operator_b0(
     build_encoding_operator's own contract). b0map_hz: (Nx,Ny,Nz) real, Hz
     -- same EPI grid as smaps, which preprocessing/run_b0map.py's grid
     resize now guarantees (b0map_hz used to live on a different, coarser
-    deGRE grid; see grid_resize.py). echo_times_s: (Nx,Ny,Nz,Nt) real,
-    seconds since RF excitation at each sampled location -- broadcast
-    across Nx from preprocessing's (Ny,Nz,Nt) echo_times array (kx doesn't
-    affect echo time; see preprocessing/preprocess.py's _build_echo_times),
-    0 at unsampled locations (unused there, never gathered).
+    deGRE grid; see grid_resize.py). echo_times_yz: (Ny,Nz,Nt) real,
+    seconds since RF excitation at each sampled location -- preprocessing's
+    own native shape (kx doesn't affect echo time; see
+    preprocessing/preprocess.py's _build_echo_times), read directly rather
+    than broadcast to a dense (Nx,Ny,Nz,Nt) tensor first (311 MB from 1.3
+    MB of distinct values at this repo's real scale -- see
+    docs/review-findings.md item 90): a flat sample index into the
+    (Nx,Ny,Nz) mask maps onto this array's flat (Ny,Nz) index via `idx %
+    (Ny*Nz)`, since torch's C-order flatten gives idx = ix*Ny*Nz + iy*Nz +
+    iz and the echo time is constant across ix.
 
     nbins: mri_exp_approx builds its segmentation fit from an *equal-width*,
     plain voxel-count histogram of b0map_hz's *entire* range (background
@@ -228,11 +233,14 @@ def build_encoding_operator_b0(
     """
     Nt = omega.shape[-1]
     N = tuple(smaps.shape[1:])
+    Ny, Nz = N[1], N[2]
+    n_yz = Ny * Nz
+    echo_times_flat = echo_times_yz.reshape(n_yz, Nt)  # (Ny*Nz,Nt), no Nx broadcast
     b0_neg = (-b0map_hz).to(torch.float32)  # see module docstring's sign-convention note
 
     samp0 = omega[..., 0]
     idx0 = torch.nonzero(samp0.reshape(-1), as_tuple=False).squeeze(-1)
-    t0_ms = (echo_times_s[..., 0].reshape(-1)[idx0] * 1000).to(torch.float32)
+    t0_ms = (echo_times_flat[idx0 % n_yz, 0] * 1000).to(torch.float32)
     unique_t_ms = torch.unique(t0_ms, sorted=True)
     b_by_echo, c, _tl = mri_exp_approx(b0_neg, nbins, L, unique_t_ms)
     _check_b_weight_row_sums(b_by_echo, "shared (frame 0's distinct echo times)")
@@ -243,7 +251,7 @@ def build_encoding_operator_b0(
     for it in range(Nt):
         samp = omega[..., it]
         idx = torch.nonzero(samp.reshape(-1), as_tuple=False).squeeze(-1)
-        t_ms = (echo_times_s[..., it].reshape(-1)[idx] * 1000).to(torch.float32)
+        t_ms = (echo_times_flat[idx % n_yz, it] * 1000).to(torch.float32)
         # Map each sample's time to its row in b_by_echo, rather than
         # assuming a fixed order -- an explicit exact-match check, so a
         # dataset that ever breaks the frame-invariant-timing assumption
