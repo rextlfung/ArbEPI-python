@@ -562,23 +562,43 @@ below described). Original numbers kept for provenance:
 
 ## Conciseness & performance
 
-- [ ] **57. [measured] Pass 3 (`_euclidean_uncross_refine`) is now ~90%
-  of `mask2epi_radial` and the single largest remaining hot spot in
-  sequence generation.** Full 30-frame build is ~18 s on 4 cores, of
-  which `_compute_schedules` is ~7.6 s. Profiling one frame (0.94 s
-  total): `_euclidean_uncross_refine` 1.22 s cumulative vs.
-  `_sum_2opt_refine` 0.09 s and `_bottleneck_2opt_order` 0.03 s. Two
-  pure-Python inner loops dominate: `_segments_cross`/`ccw` at 289,428
-  scalar calls (0.47 s) and `span_has_pinned` at 108,530 generator
-  constructions over a <=3-element frozenset (0.15 s). Two cheap,
-  low-risk wins: (a) vectorize `_count_crossings`' all-pairs orientation
-  test with numpy (a fixed O(m^2) cross-product over an `(m,2)` array,
-  four broadcasted `ccw` evaluations, no Python loop needed); (b) replace
-  `span_has_pinned`'s `any(i <= p <= j for p in pinned)` with a
-  precomputed sorted array plus `bisect`, or hoist `min(pinned)`/
-  `max(pinned)` out of the loop. Neither changes any result -- both are
-  exact-predicate rewrites, so `tests/test_mask2epi.py`'s existing
-  crossing-count assertions are the regression guard.
+- [x] **57.** Resolved, with a correction to this item's own attribution
+  along the way. Both suggested wins landed: (b) `span_has_pinned` now
+  does a single `bisect.bisect_left` lookup against a `pinned` array
+  sorted once outside the hot loop, instead of building/iterating a fresh
+  `any(...)` generator on every call. (a) The orientation test itself is
+  vectorized -- but profiling first (`cProfile` on
+  `_compute_one_frame_schedule` for the real worst frame, params.py
+  defaults) showed **`_count_crossings` was not the dominant caller this
+  item's own text named** -- it's called only ~26 times per frame
+  (negligible). The actual source of the 289k-call figure is
+  `_euclidean_uncross_refine`'s Stage-2 crossing-*detection* loop (a
+  separate `for i: for j: if _segments_cross(...): break` scan that reran
+  on every one of up to 40 passes) -- confirmed by re-profiling after
+  vectorizing only `_count_crossings`, which left the scalar `ccw` call
+  count essentially unchanged (133,400 -> still triggered by the
+  detection loop). Fix: factored the vectorized all-pairs orientation
+  test into a shared `_crossing_matrix(pts)` helper, used by both
+  `_count_crossings` (`np.count_nonzero`) and a new
+  `_find_first_crossing(pts)` (`np.argmax` on the flattened boolean
+  matrix returns the same first-(i,j)-in-row-major-order result the
+  scalar early-break scan found) -- the latter now replaces the Stage-2
+  detection loop directly. `_segments_cross`/scalar `ccw` are unchanged
+  and still used by `tests/test_mask2epi.py` as an independent oracle
+  (kept, not deleted). Verified both vectorized functions equivalent to
+  the original scalar loop on 5000+ random trials (small-integer grids
+  with shared endpoints/collinear points, plus continuous coordinates up
+  to m=80) before touching production code. All 37
+  `tests/test_mask2epi.py` cases pass, and a full `main.py --ge` build
+  reproduces the exact recorded PNS/acoustics baseline (79.8/78.1/77.4/
+  0.0% peak PNS, 0.1484/0.1484/0.2556/0.0000 acoustics) -- the schedule
+  computation is unchanged in output, only faster. Measured on the real
+  worst frame (frame 10, default params): single-frame cost 0.474s ->
+  0.332s (-30%); full 30-frame `_compute_schedules` (parallel, 4 workers):
+  0.976s -> 0.565s (-42%) -- both real before/after timings on this
+  environment's current hardware, not the item's original (now stale)
+  "~18s/7.6s" figures, which predate several other optimizations already
+  landed by earlier passes.
 - [x] **58.** Resolved, via a smaller change than "merge into one
   function": factored the duplicated `schedules[frame, :, :,
   0/1].ravel()` indexing out into a shared `_iy_iz(schedules, frame)`
