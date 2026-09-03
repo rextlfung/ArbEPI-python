@@ -40,7 +40,7 @@ for a truncated anatomical/field-map volume).
 
 Note this changes the resize step's output values relative to this
 function's pre-existing behavior (previously `grid_mode=False`, i.e.
-pixel-center-aligned) -- CLAUDE.md's item 12 finding. No test elsewhere in
+pixel-center-aligned) -- docs/review-findings.md's item 12 finding. No test elsewhere in
 this repo pinned a specific interpolated value against the old convention:
 the one real end-to-end validation on real data (`run_rss.py` against a
 MATLAB/BART RSS reference, see CLAUDE.md) reconstructs via
