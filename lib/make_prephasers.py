@@ -7,7 +7,7 @@ own independently-computed one, since a pypulseq block's duration is set by
 its longest gradient event anyway -- a shorter axis-specific duration would
 just mean that axis's own trapezoid finishes early and idles for the rest
 of the block, with no benefit (a real, if not previously live, consistency
-bug in this port -- see CLAUDE.md item 28).
+bug in this port -- see docs/review-findings.md item 28).
 """
 
 from types import SimpleNamespace

@@ -21,7 +21,7 @@ import torch
 
 from recon.lowrank import img2patches, patch_nucnorm, patchSVST
 from recon.operators import build_encoding_operator, gather_ksp
-from recon.operators_b0 import build_encoding_operator_b0
+from recon.operators_b0 import build_encoding_operator_b0, estimate_spectral_norm
 from recon.solvers import pogm_restart
 
 
@@ -103,6 +103,33 @@ def _load_omega(
     return omega
 
 
+def _load_echo_times(fn_ksp: str, device: torch.device) -> torch.Tensor:
+    """(Ny,Nz,Nt) echo-time array (seconds since RF excitation), moved to
+    device at its native shape -- shared by both B0-recon call sites
+    (run_recon here and run_b0_recon.py) so neither has to duplicate the
+    broadcast-to-(Nx,Ny,Nz,Nt) pattern build_encoding_operator_b0 no
+    longer needs (see its docstring and docs/review-findings.md item 90)."""
+    return torch.from_numpy(_load_array(fn_ksp, "echo_times").astype(np.float32)).to(device)
+
+
+def _load_normalized_smaps(
+    fn_smaps: str, device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Loads smaps and RSS-normalizes it. Returns (smaps, smaps_chw):
+    smaps is (Nx,Ny,Nz,Nc) complex64, each voxel's coil vector scaled to
+    unit RSS; smaps_chw is (Nc,Nx,Ny,Nz), the layout
+    build_encoding_operator{,_b0} expect. Shared by run_recon (here) and
+    run_b0_recon.py, which used to duplicate this verbatim -- a real
+    desync risk since run_b0_recon's whole purpose is measuring sigma1A
+    for the operator run_recon builds moments later (see
+    docs/review-findings.md item 94)."""
+    smaps_raw = torch.from_numpy(_load_array(fn_smaps, "smaps").astype(np.complex64)).to(device)
+    smaps_rss = smaps_raw.abs().pow(2).sum(dim=-1, keepdim=True).sqrt()
+    smaps = smaps_raw / (smaps_rss + torch.finfo(torch.float32).eps)
+    smaps_chw = smaps.permute(3, 0, 1, 2).contiguous()
+    return smaps, smaps_chw
+
+
 def _reg_weights(
     patch_sizes: list[tuple[int, int, int]], Nt: int, N_voxels: int, lambda_global: float
 ) -> list[float]:
@@ -125,13 +152,13 @@ def run_recon(
     patch_sizes: list[tuple[int, int, int]],
     strides: list[tuple[int, int, int]],
     niters: int = 200,
-    sigma1A: float,
+    sigma1A: float | None = None,
     device: torch.device | str = "cuda",
     mom: str = "fpgm",
     conv_tol: float = 1e-5,
     lambda_global: float = 1.0,
     fn_b0map: str | None = None,
-    L_b0: int = 6,
+    L_b0: int = 32,
     nbins_b0: int = 128,
 ) -> ReconResult:
     """fn_b0map: optional path to a run_b0map.py output (<seqname>_b0map.h5,
@@ -142,18 +169,20 @@ def run_recon(
     'echo_times' dataset (preprocessing/preprocess.py's _build_echo_times;
     (Ny,Nz,Nt), broadcast across Nx here since kx doesn't affect echo
     time). L_b0/nbins_b0 are mri_exp_approx's segment count/histogram bins
-    (see operators_b0.py's module docstring for why L hasn't been swept
-    against a real error bound). sigma1A is not re-estimated internally for
-    the corrected operator -- the caller must supply one appropriate to it
-    (the B0-corrected operator's spectral norm is not guaranteed to match
-    the uncorrected operator's)."""
+    (see operators_b0.py's module docstring for the real-scale sweep that
+    settled L_b0=32). sigma1A defaults to None, in which case it
+    is measured here via power iteration (operators_b0.estimate_spectral_
+    norm) on the operator actually built -- required when fn_b0map is set,
+    since the B0-corrected operator's spectral norm is not guaranteed to
+    match the uncorrected operator's, and supplying a too-small sigma1A
+    silently makes POGM's step size too large (divergence, not a clean
+    failure). Pass sigma1A explicitly to skip this measurement (e.g. when
+    reusing a previously-measured value)."""
     device = torch.device(device)
     Nscales = len(patch_sizes)
 
     print("Loading sensitivity maps...")
-    smaps_raw = torch.from_numpy(_load_array(fn_smaps, "smaps").astype(np.complex64)).to(device)
-    smaps_rss = smaps_raw.abs().pow(2).sum(dim=-1, keepdim=True).sqrt()
-    smaps = smaps_raw / (smaps_rss + torch.finfo(torch.float32).eps)
+    smaps, smaps_chw = _load_normalized_smaps(fn_smaps, device)
     print(f"  Sensitivity maps: {tuple(smaps.shape)}")
 
     print("Loading k-space...")
@@ -169,21 +198,34 @@ def run_recon(
     counts = omega.sum(dim=(0, 1, 2))
     assert torch.all(counts == counts[0]), "Frames have differing sample counts"
 
-    print("Building encoding operator...")
-    smaps_chw = smaps.permute(3, 0, 1, 2).contiguous()  # (Nc,Nx,Ny,Nz)
+    print("Building encoding operator...")  # smaps_chw already computed above
     if fn_b0map is not None:
         print(f"  Loading B0 field map from {fn_b0map} (L={L_b0}, nbins={nbins_b0})...")
         b0map_hz = torch.from_numpy(_load_array(fn_b0map, "b0map_hz").astype(np.float32)).to(device)
         assert tuple(b0map_hz.shape) == (Nx, Ny, Nz), (
             f"b0map_hz shape {tuple(b0map_hz.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz})"
         )
-        echo_times_2d = torch.from_numpy(_load_array(fn_ksp, "echo_times").astype(np.float32))
-        echo_times_s = echo_times_2d.to(device).unsqueeze(0).expand(Nx, -1, -1, -1).contiguous()
+        echo_times_yz = _load_echo_times(fn_ksp, device)
         A = build_encoding_operator_b0(
-            smaps_chw, omega, b0map_hz, echo_times_s, L=L_b0, nbins=nbins_b0
+            smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0
         )
     else:
         A = build_encoding_operator(smaps_chw, omega)
+
+    if sigma1A is None:
+        if fn_b0map is None:
+            raise ValueError(
+                "run_recon: sigma1A must be supplied when fn_b0map is not set -- "
+                "the plain SENSE operator's spectral norm has no cheap closed-form "
+                "estimate wired up here, so auto-estimation only covers the "
+                "B0-corrected path."
+            )
+        print("  sigma1A not supplied -- measuring via power iteration...")
+        x0 = torch.randn(Nx, Ny, Nz, Nt, dtype=torch.complex64, device=device)
+        sigma1A = estimate_spectral_norm(A, x0)
+        print(f"    sigma1A (B0-corrected) = {sigma1A:.6f}")
+        del x0
+
     ksp = gather_ksp(ksp0, A)  # (K,Nc,Nt) -- see operators.py for why gathered, not dense
     del ksp0
     if device.type == "cuda":

@@ -43,23 +43,30 @@ def estimate_smaps(
     outputting one set of maps", so unlike BART's ecalib there's no
     emaps(...,end)-style selection among several map sets to do).
 
-    cal_size: center-crop ksp_gre's spatial dims to this matrix size (per
-        axis) before running ESPIRiT, rather than passing the full
-        acquisition grid. sigpy's EspiritCalib allocates a coil-covariance
-        array sized to its *entire* input k-space's spatial shape (not
-        just calib_width -- `AHA = zeros(image_shape + (Ncoils, Ncoils))`
-        in its own source), so passing a full 3D acquisition grid directly
-        is impractical: confirmed against real project data, a
+    cal_size: resize ksp_gre's spatial dims to this matrix size (per axis)
+        before running ESPIRiT, rather than passing the full acquisition
+        grid -- a center-*crop* only on axes where the source is larger
+        than cal_size; at this repo's real deGRE dims (Nz_degre=21 < 24)
+        sigpy's `sp.resize` zero-*pads* z instead, so the calibration
+        region there is 24 samples wide with 3 synthetic-zero rows, a
+        small real effect on the fit rather than a true no-op (see below).
+        sigpy's EspiritCalib allocates a coil-covariance array sized to
+        its *entire* input k-space's spatial shape (not just calib_width
+        -- `AHA = zeros(image_shape + (Ncoils, Ncoils))` in its own
+        source), so passing a full 3D acquisition grid directly is
+        impractical: confirmed against real project data, a
         108^3/12-coil GRE volume allocated 2.9GB for that one array alone
         and, combined with a non-vectorized per-calibration-kernel Python
         loop, thrashed 14GB+ of memory and never completed in over an hour
-        (killed). Cropping k-space reduces resolution while preserving
-        FOV -- process_smaps() already resizes the result up to the EPI
-        target grid afterward regardless of what resolution ESPIRiT itself
-        ran at, so there's no need to calibrate at full acquisition
-        resolution. Default matches calib_width (24) so EspiritCalib's own
-        internal calibration-region crop becomes a no-op and the
-        covariance/eigenmap stage runs at the same small size throughout.
+        (killed). Resizing k-space this way reduces resolution while
+        preserving FOV -- process_smaps() already resizes the result up
+        to the EPI target grid afterward regardless of what resolution
+        ESPIRiT itself ran at, so there's no need to calibrate at full
+        acquisition resolution. Default matches calib_width (24) so
+        EspiritCalib's own internal calibration-region crop becomes a
+        no-op on x/y (where the source is >= 24) and the covariance/
+        eigenmap stage runs at the same small size throughout; z is the
+        one axis where that "no-op" claim doesn't fully hold, per above.
     """
     ksp_coils_first = np.moveaxis(ksp_gre, -1, 0)
     if cal_size is not None:
@@ -147,10 +154,25 @@ def load_smaps(
     """
     fn_smaps = os.path.join(cfg.datdir, 'recon', f'smaps_{paths.seqname}_sigpy.h5')
     fn_smaps_nifti = fn_smaps[: -len('.h5')] + '.nii.gz'
+    fn_gre = os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')
     fov_degre = tuple(seq_params.fov_degre)
     n_target_degre = (seq_params.Nx_degre, seq_params.Ny_degre, seq_params.Nz_degre)
 
-    if os.path.exists(fn_smaps):
+    # Guard against a stale cache from a run with a different Nvcoils (e.g.
+    # coil-compression settings changed since the cache was written) --
+    # matching preprocess.py's own smaps_valid check. Falls through to
+    # re-estimation below on mismatch, same as if fn_smaps didn't exist. If
+    # fn_gre isn't available to check against (e.g. already cleaned up),
+    # trust the existing cache rather than failing outright.
+    smaps_cache_valid = os.path.exists(fn_smaps)
+    if smaps_cache_valid and os.path.exists(fn_gre):
+        with h5py.File(fn_smaps, 'r') as f:
+            cached_nvcoils = int(f.attrs['Nvcoils'])
+        with h5py.File(fn_gre, 'r') as f:
+            current_nvcoils = f['ksp_gre'].shape[-1]
+        smaps_cache_valid = cached_nvcoils == current_nvcoils
+
+    if smaps_cache_valid:
         print(f'Loading precomputed sensitivity maps from {fn_smaps}')
         with h5py.File(fn_smaps, 'r') as f:
             smaps, nvcoils = f['smaps'][()], int(f.attrs['Nvcoils'])
@@ -176,7 +198,8 @@ def load_smaps(
             )
         return smaps, smaps_degre, emap_degre, nvcoils
 
-    fn_gre = os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')
+    if os.path.exists(fn_smaps):
+        print(f'Cached sensitivity maps at {fn_smaps} have stale Nvcoils -- re-estimating.')
     print('Sensitivity maps not found. Estimating via sigpy ESPIRiT...')
     with h5py.File(fn_gre, 'r') as f:
         ksp_gre = f['ksp_gre'][()]

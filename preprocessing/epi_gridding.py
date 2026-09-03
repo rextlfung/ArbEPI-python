@@ -31,26 +31,6 @@ def _density_compensation(kx: np.ndarray) -> np.ndarray:
     return dcf / dcf.max()
 
 
-def reconecho(
-    y: np.ndarray, nx: int, kx: np.ndarray, fov_cm: float, dcf: np.ndarray | None = None
-) -> np.ndarray:
-    """1D NUFFT reconstruction of a single ramp-sampled EPI echo.
-
-    y: [nr] complex ramp-sampled data.
-    kx: [nr] k-space sample locations (cycles/cm).
-    fov_cm: FOV (cm) along x.
-    dcf: precomputed density compensation; computed from kx if not given
-        (pass it in when reconstructing many echoes with the same
-        trajectory, to avoid recomputing it every call -- mirrors
-        reconecho.m's [A,dcf] precompute-once pattern, minus the NUFFT
-        operator object itself, which sigpy doesn't need built up front).
-    """
-    if dcf is None:
-        dcf = _density_compensation(kx)
-    coord = (kx * fov_cm)[:, None]
-    return sigpy.nufft_adjoint(y * dcf, coord, oshape=(nx,))
-
-
 def rampsamp2cart(dr: np.ndarray, kx: np.ndarray, nx: int, fov_cm: float) -> np.ndarray:
     """Interpolate ramp-sampled data onto a Cartesian grid along axis 0.
 
@@ -91,7 +71,7 @@ def rampsampepi2cart(
     dco = rampsamp2cart(dr2[:, 0::2, :], kxo, nx, fov_cm)  # odd echoes (MATLAB 1-based odd)
     dce = rampsamp2cart(dr2[:, 1::2, :], kxe, nx, fov_cm)  # even echoes
 
-    dc = np.empty((nx, etl) + dr2.shape[2:], dtype=complex)
+    dc = np.empty((nx, etl) + dr2.shape[2:], dtype=np.result_type(dco, dce))
     dc[:, 0::2] = dco
     dc[:, 1::2] = dce
     return dc.reshape((nx,) + dr_shape[1:])

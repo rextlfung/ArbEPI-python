@@ -272,7 +272,7 @@ def load_params(output_dir: str = 'output') -> Params:
     # IEC 60601-2-33:2022-recommended PNS channel weights -- see CLAUDE.md's
     # "PNS finding history" for why this was zero (disabling the PNS check
     # entirely) for most of this port's lifetime, and how the current
-    # slew/blip tuning (see the "PNS-driven slew limits" comment below)
+    # slew/blip tuning (see the "PNS-driven slew limits" comment above)
     # brought the full ArbEPI build back under the 80% normal-mode line
     # with this weighting.
     PNSwt = np.array([0.8, 1.0, 0.7]) # human
@@ -287,10 +287,12 @@ def load_params(output_dir: str = 'output') -> Params:
     pd_crop_corner = True
     pd_decay = 1.4
     rand_gaussian_sigma = None
-    # None = a fresh unseeded rng each run (current default behavior). Set
-    # to an int for a reproducible mask, e.g. to compare epi_trajectory
-    # settings against the same sampling mask -- main.py passes this
-    # straight to gen_sampling_masks(..., rng=np.random.default_rng(seed)).
+    # Default (0) is an int for a reproducible mask -- every PNS/timing
+    # number quoted in CLAUDE.md/README is seed-dependent, so this is what
+    # main.py's own default build actually uses. Pass None instead for a
+    # fresh unseeded rng each run -- main.py passes this straight to
+    # gen_sampling_masks(..., rng=np.random.default_rng(seed)), and
+    # np.random.default_rng(None) is unseeded, matching that fallback.
     seed = 0
 
     # Sampling trajectory: which mask2epi_* variant orders each shot's echo

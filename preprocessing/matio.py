@@ -5,11 +5,13 @@ convention); h5py reads the raw on-disk layout, so anything with more than
 one non-singleton axis needs a full transpose to recover the logical shape
 hdf5storage.loadmat would give. Verified empirically against a real
 output/scan_info.mat: h5py's raw read of `schedules` comes back as
-(2, 60, 20, 30), while the true logical shape (matching hdf5storage.loadmat,
-and this repo's own documented Nframes x Nshots x ETL x 2 layout) is
-(30, 20, 60, 2) -- exactly `raw.transpose()`. For vectors/scalars this is a
-no-op on the values (only a singleton axis moves), so applying it
-unconditionally, as read_mat_array does, is always correct.
+(3, 60, 20, 30), while the true logical shape (matching hdf5storage.loadmat,
+and this repo's own documented Nframes x Nshots x ETL x 3 layout -- (ky,
+kz, echo_time), since sequences/ArbEPI.py appends the echo-time channel
+onto the original 2-channel (ky, kz) schedule) is (30, 20, 60, 3) --
+exactly `raw.transpose()`. For vectors/scalars this is a no-op on the
+values (only a singleton axis moves), so applying it unconditionally, as
+read_mat_array does, is always correct.
 
 Use this for every hdf5storage-written .mat this repo reads (never
 scipy.io, per CLAUDE.md; never a bare h5py read without the transpose).

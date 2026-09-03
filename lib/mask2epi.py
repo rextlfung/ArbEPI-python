@@ -64,6 +64,7 @@ existing MATLAB-side reconstruction code can read unchanged, happens once at
 the save boundary in sequences/ArbEPI.py — not here.)
 """
 
+import bisect
 import math
 from typing import Sequence
 
@@ -289,7 +290,12 @@ def _bottleneck_2opt_order(
         top_idx = list(top_idx) + [-1] * (3 - len(top_idx))
         top_vals = list(top_vals) + [-np.inf] * (3 - len(top_vals))
 
-        def max_excl(p: int, q: int) -> float:
+        def max_excl(p: int, q: int, top_idx=top_idx, top_vals=top_vals) -> float:
+            # top_idx/top_vals bound as default args (not read from the
+            # enclosing closure) so this doesn't silently start reading a
+            # later pass's rebound values if ever deferred past this pass
+            # (ruff B023 -- currently safe since every call happens within
+            # the same pass that defines it, but a real footgun otherwise).
             excl = {p, q}
             for idx, val in zip(top_idx, top_vals):
                 if idx not in excl:
@@ -333,25 +339,70 @@ def _segments_cross(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray, p4: np.ndarr
     return (d1 > 0) != (d2 > 0) and (d3 > 0) != (d4 > 0)
 
 
+def _crossing_matrix(pts: np.ndarray) -> np.ndarray:
+    """(n_seg, n_seg) bool matrix (n_seg = m-1): entry [i, j] is True iff
+    segments i and j of the open path `pts` visits properly cross AND
+    j >= i + 2 (the same non-adjacency exclusion _count_crossings'
+    docstring explains -- no special case for the first/last segment pair,
+    since that exclusion is only valid for a *closed* tour). Returns a
+    (0, 0) array for m < 4 (no possible crossing).
+
+    Vectorized: a fixed O(m^2) all-pairs orientation test, broadcasting
+    the four `ccw` evaluations _segments_cross uses rather than looping in
+    Python -- shared core for _count_crossings (sum) and
+    _euclidean_uncross_refine's first-crossing search (argmax), both of
+    which used to call _segments_cross directly in a Python double loop:
+    measured 289k such calls (0.47s/frame) at this repo's real hot-loop
+    scale, with the crossing-search loop (not _count_crossings, whose own
+    call count is negligible -- ~30 calls/frame) the actual dominant
+    caller (see docs/review-findings.md item 57). Verified equivalent to
+    the scalar loop on 5000+ random trials (small-integer grids with
+    shared endpoints/collinear points, and continuous coordinates up to
+    m=80)."""
+    m = len(pts)
+    if m < 4:
+        return np.zeros((0, 0), dtype=bool)
+    seg_a, seg_b = pts[:-1], pts[1:]  # (n_seg, 2) each
+    n_seg = len(seg_a)
+
+    def ccw(a, b, c):
+        return (c[..., 1] - a[..., 1]) * (b[..., 0] - a[..., 0]) - (b[..., 1] - a[..., 1]) * (
+            c[..., 0] - a[..., 0]
+        )
+
+    p1, p2 = seg_a[:, None, :], seg_b[:, None, :]  # broadcast over j (axis 1)
+    p3, p4 = seg_a[None, :, :], seg_b[None, :, :]  # broadcast over i (axis 0)
+    d1, d2 = ccw(p3, p4, p1), ccw(p3, p4, p2)
+    d3, d4 = ccw(p1, p2, p3), ccw(p1, p2, p4)
+    crosses = ((d1 > 0) != (d2 > 0)) & ((d3 > 0) != (d4 > 0))
+
+    i_idx = np.arange(n_seg)[:, None]
+    j_idx = np.arange(n_seg)[None, :]
+    return crosses & (j_idx >= i_idx + 2)
+
+
 def _count_crossings(pts: np.ndarray) -> int:
     """Number of properly-crossing (non-adjacent, non-endpoint-sharing)
-    segment pairs along the open path `pts` visits in order.
+    segment pairs along the open path `pts` visits in order -- see
+    _crossing_matrix's docstring for the exclusion rule and the
+    vectorization this relies on."""
+    return int(np.count_nonzero(_crossing_matrix(pts)))
 
-    No special case for the first/last segment pair: that exclusion is
-    only valid for a *closed* tour, where segments 0 and m-2 are adjacent
-    (segment m-2 ends where segment 0 begins). These paths are open, so
-    for m > 3 the first and last segments are ordinary non-adjacent
-    segments (the `range(i + 2, ...)` bound already excludes true
-    adjacency) that can genuinely cross -- e.g. a periphery-to-periphery
-    crossing in a mask2epi_radial shot's two spoke ends, which this
-    function exists to detect for pass 3 (_euclidean_uncross_refine)."""
-    m = len(pts)
-    n = 0
-    for i in range(m - 1):
-        for j in range(i + 2, m - 1):
-            if _segments_cross(pts[i], pts[i + 1], pts[j], pts[j + 1]):
-                n += 1
-    return n
+
+def _find_first_crossing(pts: np.ndarray) -> tuple[int, int] | None:
+    """(i, j) of the first crossing pair in row-major (i ascending, then j
+    ascending) order -- the same pair a `for i: for j: ... break` scalar
+    search would find first -- or None if the path has no crossing.
+    Vectorized via _crossing_matrix (see its docstring); `np.argmax` on a
+    boolean array returns the index of the first True entry, which for a
+    C-order-flattened (n_seg, n_seg) matrix is exactly the first (i, j) in
+    that same row-major order."""
+    crosses = _crossing_matrix(pts)
+    if not crosses.any():
+        return None
+    n_seg = crosses.shape[1]
+    flat = int(np.argmax(crosses.reshape(-1)))
+    return divmod(flat, n_seg)
 
 
 def _euclidean_uncross_refine(
@@ -423,12 +474,12 @@ def _euclidean_uncross_refine(
     between them -- unlike the reversal loop, a swap doesn't displace
     anything strictly between `i` and `j`, so a pinned point there isn't
     at risk and doesn't need to block the move.) Stage 2 directly detects
-    any remaining
-    geometric crossing (`_segments_cross`) and greedily applies the first
-    fixing reversal or swap found that respects `max_allowed` and doesn't
-    increase weighted-Euclidean length beyond a small tolerance -- honest
-    because crossing count, not weighted-Euclidean length, is the actual
-    thing this pass exists to reduce.
+    any remaining geometric crossing (`_find_first_crossing`) and greedily
+    applies the first fixing reversal or swap found that respects
+    `max_allowed` and doesn't increase weighted-Euclidean length beyond a
+    small tolerance -- honest because crossing count, not
+    weighted-Euclidean length, is the actual thing this pass exists to
+    reduce.
     """
     order = order.copy()
     m = len(order)
@@ -439,8 +490,18 @@ def _euclidean_uncross_refine(
     diff = coords[:, None, :] - coords[None, :, :]
     De = np.sqrt((diff[..., 0] * deltak[0]) ** 2 + (diff[..., 1] * deltak[1]) ** 2)
 
+    # Precomputed once (pinned is small and fixed for the whole call), so
+    # span_has_pinned below is a single bisect lookup instead of building
+    # and iterating a fresh generator on every call -- measured 108,530
+    # calls (0.15s/frame) at this repo's real hot-loop scale (see
+    # docs/review-findings.md item 57). |pinned| is tiny (endpoints plus
+    # at most one interior center position), so the algorithmic win is
+    # negligible; the real cost was per-call Python/generator overhead.
+    pinned_sorted = sorted(pinned)
+
     def span_has_pinned(i: int, j: int) -> bool:
-        return any(i <= p <= j for p in pinned)
+        pos = bisect.bisect_left(pinned_sorted, i)
+        return pos < len(pinned_sorted) and pinned_sorted[pos] <= j
 
     # Stage 1: strict weighted-Euclidean descent.
     for _ in range(max_passes):
@@ -527,16 +588,10 @@ def _euclidean_uncross_refine(
     seen = {tuple(order.tolist())}
     for _ in range(max_passes):
         pts = coords[order]
-        crossing = None
-        for i in range(m - 1):
-            for j in range(i + 2, m - 1):
-                # No closed-tour special case here either -- see
-                # _count_crossings' docstring.
-                if _segments_cross(pts[i], pts[i + 1], pts[j], pts[j + 1]):
-                    crossing = (i, j)
-                    break
-            if crossing is not None:
-                break
+        # Vectorized search (see _find_first_crossing's docstring) --
+        # this loop, not _count_crossings, is the actual dominant caller
+        # of the scalar orientation test at real hot-loop scale (item 57).
+        crossing = _find_first_crossing(pts)
         if crossing is None:
             break
 

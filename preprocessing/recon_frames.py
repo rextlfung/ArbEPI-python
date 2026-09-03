@@ -18,7 +18,6 @@ writes the full format, so that branch can never be reached here.
 """
 
 import concurrent.futures
-import functools
 import time
 from typing import Callable
 
@@ -39,6 +38,27 @@ def _recon_one_frame(data: np.ndarray, recon_fn: ReconFn, smaps: np.ndarray) -> 
         return None
 
 
+_worker_state: dict = {}
+
+
+def _init_worker(recon_fn: ReconFn, smaps: np.ndarray) -> None:
+    """ProcessPoolExecutor initializer: sets recon_fn/smaps once per worker
+    process at pool startup, instead of binding them into the per-task
+    callable via functools.partial -- ProcessPoolExecutor.map pickles each
+    dispatched task (callable + bound args) independently, so a
+    functools.partial(..., smaps=smaps) re-serializes the full smaps array
+    (356 MiB at this repo's real 240x240x45x18-coil scale) once per frame,
+    not once for the pool's lifetime (see docs/review-findings.md item
+    105). Module-level dict rather than a global assigned in this
+    function's body, so ruff doesn't need a `global` statement."""
+    _worker_state['recon_fn'] = recon_fn
+    _worker_state['smaps'] = smaps
+
+
+def _recon_one_frame_worker(data: np.ndarray) -> np.ndarray:
+    return _recon_one_frame(data, _worker_state['recon_fn'], _worker_state['smaps'])
+
+
 def recon_frames(
     cfg: PreprocessingConfig, paths: SeqPaths, seq_params: SeqParams, recon_fn: ReconFn
 ) -> tuple[np.ndarray, dict, float]:
@@ -46,8 +66,10 @@ def recon_frames(
 
     recon_fn(data, smaps) -> [Nx,Ny,Nz] image for one frame. Must be
     picklable (e.g. a functools.partial of a module-level function, not a
-    lambda/closure) if cfg.use_parfor is True, since it's sent to worker
-    processes via concurrent.futures.ProcessPoolExecutor.
+    lambda/closure) if cfg.use_parfor is True: it's sent to each worker
+    process once at pool startup (via ProcessPoolExecutor's initializer/
+    initargs, along with smaps -- not re-pickled per dispatched frame, see
+    _init_worker).
     """
     Nx, Ny, Nz = seq_params.Nx, seq_params.Ny, seq_params.Nz
 
@@ -55,7 +77,7 @@ def recon_frames(
 
     with h5py.File(paths.recon, 'r') as f:
         nframes_avail = f['ksp_epi_zf'].shape[4]
-        nframes = min(cfg.Nframes, nframes_avail)
+        nframes = int(min(cfg.Nframes, nframes_avail))
         if nframes < nframes_avail:
             print(
                 f'Reconstructing {nframes} of {nframes_avail} available frames '
@@ -70,9 +92,10 @@ def recon_frames(
         # 240x240x45x18x30 volume), which OOM-kills the process.
         frame_data = (f['ksp_epi_zf'][:, :, :, :, frame] for frame in range(nframes))
         if cfg.use_parfor:
-            worker = functools.partial(_recon_one_frame, recon_fn=recon_fn, smaps=smaps)
-            with concurrent.futures.ProcessPoolExecutor() as executor:
-                results = list(executor.map(worker, frame_data))
+            with concurrent.futures.ProcessPoolExecutor(
+                initializer=_init_worker, initargs=(recon_fn, smaps)
+            ) as executor:
+                results = list(executor.map(_recon_one_frame_worker, frame_data))
         else:
             results = [_recon_one_frame(data, recon_fn, smaps) for data in frame_data]
     runtime_s = time.time() - t_start

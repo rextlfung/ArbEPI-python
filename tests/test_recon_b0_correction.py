@@ -134,12 +134,12 @@ def test_realistic_regime_only_partly_corrects():
     B0 maps spanning roughly +-300-350 Hz over an ETL=60 echo train, ~1.2ms
     per echo -- a total phase excursion of tens of radians, far outside
     static correction's small-signal regime tested above. Confirm the
-    honest, weaker claim Fable's plan makes for this regime: correction
-    still helps (removes the TE-centered systematic term) but only
-    partially, nowhere near test_static_correction_...'s near-elimination
-    -- documenting exactly why full time-segmented correction (a separate,
-    not-yet-implemented stage) is still needed for real data, not just a
-    theoretical concern."""
+    honest, weaker claim this regime actually supports: correction still
+    helps (removes the TE-centered systematic term) but only partially,
+    nowhere near test_static_correction_...'s near-elimination --
+    documenting exactly why the full time-segmented correction stage
+    (recon/operators_b0.py's GatheredSenseB0) is needed for real data, not
+    just a theoretical concern."""
     img, smaps, b0map_hz, te, y_true_flat = _setup(
         seed_offset=2, b0_max_hz=350.0, dt_echo=0.0012,
     )

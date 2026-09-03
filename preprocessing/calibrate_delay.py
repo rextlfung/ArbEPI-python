@@ -29,8 +29,8 @@ from preprocessing.preprocess import apply_delay, load_kxoe
 
 def _matlab_round(x: float) -> int:
     """See preprocessing/oephase.py's _matlab_round (also duplicated in
-    smaps.py) -- MATLAB rounds half away from zero; only ever called here
-    on a non-negative value."""
+    grid_resize.py) -- MATLAB rounds half away from zero; only ever called
+    here on a non-negative value."""
     return int(np.floor(x + 0.5))
 
 

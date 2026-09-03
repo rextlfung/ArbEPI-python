@@ -1,6 +1,8 @@
 """Self-consistency smoke test for ge/check.py (ge/pns.py + ge/acoustics.py
-wired together) against real generated sequences in output/ (run
-`uv run python main.py` first if missing).
+wired together) against real generated sequences, built into a
+session-scoped tmp dir by the built_seq_dir fixture (tests/conftest.py)
+rather than read from output/ -- output/ is gitignored, so reading from it
+meant these tests silently skipped on every fresh checkout/CI run.
 
 Numerical correctness of the underlying algorithms is validated against
 real MATLAB output separately (ge/validate_pns.py, ge/acoustics.py's
@@ -8,8 +10,6 @@ module docstring, and CLAUDE.md's PNS finding) -- this only checks the
 pipeline runs and returns sane values on real sequences, since that
 cross-check needs a local MATLAB install this suite can't assume.
 """
-
-from pathlib import Path
 
 import pypulseq as pp
 import pytest
@@ -20,9 +20,7 @@ from ge.check import (
     FeasibilityReport,
     check_seq_feasibility,
 )
-from scanners import SCANNERS
-
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / 'output'
+from params import load_params
 
 
 def _clean_report(**overrides) -> FeasibilityReport:
@@ -65,14 +63,16 @@ def test_pns_over_100_blocks_ok():
 
 
 @pytest.mark.parametrize('seq_name', ['noise.seq', 'ArbEPI.seq'])
-def test_check_seq_feasibility_runs(seq_name):
-    seq_path = OUTPUT_DIR / seq_name
-    if not seq_path.exists():
-        pytest.skip(f'{seq_path} not found; run `uv run python main.py` first')
+def test_check_seq_feasibility_runs(built_seq_dir, seq_name):
+    seq_path = built_seq_dir / seq_name
 
     seq = pp.Sequence()
     seq.read(str(seq_path))
-    report = check_seq_feasibility(seq, SCANNERS['GE_UHP'])
+    # load_params().spec, not a hardcoded scanner -- built_seq_dir's
+    # sequences are built under whichever scanner params.py currently
+    # selects, and a mismatched hardware/PNS model would silently measure
+    # the wrong thing (docs/review-findings.md item 68).
+    report = check_seq_feasibility(seq, load_params().spec)
 
     assert report.max_grad_mT_m >= 0
     assert report.max_slew_T_m_s >= 0
@@ -81,14 +81,12 @@ def test_check_seq_feasibility_runs(seq_name):
     assert report.acoustics_max_in_band >= 0
 
 
-def test_check_seq_feasibility_noise_has_no_gradients():
-    seq_path = OUTPUT_DIR / 'noise.seq'
-    if not seq_path.exists():
-        pytest.skip(f'{seq_path} not found; run `uv run python main.py` first')
+def test_check_seq_feasibility_noise_has_no_gradients(built_seq_dir):
+    seq_path = built_seq_dir / 'noise.seq'
 
     seq = pp.Sequence()
     seq.read(str(seq_path))
-    report = check_seq_feasibility(seq, SCANNERS['GE_UHP'])
+    report = check_seq_feasibility(seq, load_params().spec)
 
     assert report.max_grad_mT_m == 0
     assert report.max_slew_T_m_s == 0
@@ -96,12 +94,19 @@ def test_check_seq_feasibility_noise_has_no_gradients():
 
 
 def test_arbepi_default_params_peak_pns_under_normal_mode_limit(tmp_path):
-    """Safety regression bound: a full-dims, 1-frame ArbEPI built with the
-    default params (POPE asymmetric readout ramps + tuned blip slew, see
-    params.py's slew section) must stay under GE's 80% normal-mode PNS
+    """Safety regression bound: a full-dims, full-Nframes ArbEPI build with
+    the default params (POPE asymmetric readout ramps + tuned blip slew,
+    see params.py's slew section) must stay under GE's 80% normal-mode PNS
     limit. This is the check that was impossible before the POPE readout:
     the old symmetric-derate design measured ~84% (see CLAUDE.md's PNS
-    section), and PNSwt = 0 before that disabled the check entirely."""
+    section), and PNSwt = 0 before that disabled the check entirely.
+
+    Builds every frame, not just frame 0: with `blip_slew=105` leaving only
+    ~0.2% PNS margin, a 1-frame build (frame 0) undershoots the real peak --
+    frames 3/6/10/11/14 play the largest kz blip step, which frame 0 never
+    sees (measured 78.92% at frame 0 vs. 79.84% at frame 10, the true
+    worst-frame peak; see docs/review-findings.md item 38). Costs ~10s
+    instead of ~1s, accepted for a hard safety regression bound."""
     import warnings
     from dataclasses import replace
 
@@ -113,7 +118,7 @@ def test_arbepi_default_params_peak_pns_under_normal_mode_limit(tmp_path):
     from sampling.gen_sampling_masks import gen_sampling_masks
     from sequences.ArbEPI import generate_arbepi
 
-    p = replace(load_params(output_dir=str(tmp_path)), Nframes=1, seed=0)
+    p = replace(load_params(output_dir=str(tmp_path)), seed=0)
     omegas = gen_sampling_masks(p.R, p, rng=np.random.default_rng(p.seed))
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')

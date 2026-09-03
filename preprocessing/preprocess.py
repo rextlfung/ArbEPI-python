@@ -1,18 +1,22 @@
 """Stage 1 -- raw ScanArchive data -> zero-filled k-space volume, ready for
 Stage 2 iterative reconstruction. Ports preprocess.m.
 
-No local dataset has every file this needs for one acquisition (noise, deGRE,
-cal, EPI, scan_info.mat all for the same sequence -- in particular no
-noise.h5 exists anywhere under ~/github/data at the time of this port), so
-this module has NOT been run end-to-end against real data.
-Every building block it calls (raw_io, coils, epi_gridding, oephase, smaps)
-has been independently verified (real-data smoke tests or synthetic
-round-trip tests -- see their own test files), and the scatter step that
-places gridded k-space into the zero-filled volume has a dedicated
-location-encoding test (test_preprocess_scatter_frame_places_data_at_
-correct_indices in tests/test_preprocessing_preprocess.py) that exercises
-the exact permute/reshape chain this file uses. Running this module against
-a real acquisition is the user's own end-to-end verification step.
+Validated end to end against real acquired data, not just its individual
+building blocks: preprocess.py -> run_rss.py was run on a real acquisition
+(wb_2.4mm, GE_UHP hardware) and compared against a real MATLAB/BART
+reference reconstruction (wb_2.4mm_recon_rss.mat) -- 0.19% relative L2
+error, Pearson r = 0.999997 (after fitting a single overall scale factor,
+since RSS's own coil normalization differs by convention), with metadata
+(Nvcoils, Nframes, matrix size, TR) matching exactly. This confirms the
+whole pipeline (whitening, coil compression, EPI gridding, odd/even phase
+correction, k-space scatter) end to end -- see CLAUDE.md's `preprocessing/`
+section for the full writeup. Every building block was also independently
+verified before that (raw_io, coils, epi_gridding, oephase, smaps -- see
+their own test files), and the scatter step that places gridded k-space
+into the zero-filled volume has a dedicated location-encoding test
+(test_scatter_frame_places_data_at_correct_indices in
+tests/test_preprocessing_preprocess.py) that exercises the exact
+permute/reshape chain this file uses.
 
 Every MATLAB permute/reshape in preprocess.m is translated mechanically:
 `permute(A,[p...])` -> `A.transpose(p_0based...)`, `reshape(A,dims)` ->
@@ -116,9 +120,18 @@ def compute_oephase(
     Ports preprocess.m's STEP 4 oephase computation.
     """
     oephase_data = rampsampepi2cart(ksp_cal, kxo, kxe, nx, fov_x_cm)
-    # fftshift/ifftshift with no axes argument shift *every* axis, matching
-    # MATLAB's no-dim fftshift(oephase_data)/ifftshift(...) here exactly.
-    oephase_data = np.fft.ifftshift(np.fft.ifft(np.fft.fftshift(oephase_data), n=nx, axis=0))
+    # ifftshift-in/fftshift-out on axis 0 -- the standard centered-IFFT
+    # pairing, matching oephase.py's epiphasecorrect (see its docstring)
+    # rather than the MATLAB original's literal fftshift-in/ifftshift-out
+    # spelling. Identical to the old spelling at this repo's current
+    # Nx=240 (even) -- only a real difference for an odd nx. fftshift/
+    # ifftshift with no axes argument still shift *every* axis (not just
+    # axis 0): safe here regardless of parity, since etl (axis 1) is
+    # asserted even by getoephase, the cal-shots axis (axis 2) is averaged
+    # out by np.mean below (order-invariant), and the coil axis (axis 3)
+    # is summed over in getoephase (also order-invariant) -- so a circular
+    # reorder on either of those axes has no effect on the result.
+    oephase_data = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(oephase_data), n=nx, axis=0))
     oephase_mean = np.mean(oephase_data, axis=2)  # average over cal shots (MATLAB dim 3)
     a, _ = getoephase(oephase_mean)
     return a
@@ -382,24 +395,24 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     total_shots_expected = shots_per_frame * Nframes
 
     os.makedirs(os.path.dirname(paths.recon), exist_ok=True)
-    if os.path.exists(paths.recon):
-        mf = h5py.File(paths.recon, 'a')
-        start_frame = resume_start_frame(mf, epi_reader, shots_per_frame)
-    else:
-        print(f'Pre-allocating output file: {paths.recon}')
-        mf = h5py.File(paths.recon, 'w')
-        mf.create_dataset(
-            'ksp_epi_zf',
-            shape=(Nx, Ny, Nz, Nvcoils, Nframes),
-            dtype=np.complex64,
-            chunks=(Nx, Ny, Nz, Nvcoils, 1),
-        )
-        mf.create_dataset('omegas', data=_build_omegas(schedules, Ny, Nz))
-        mf.create_dataset('echo_times', data=_build_echo_times(schedules, echo_times, Ny, Nz))
-        mf.attrs['n_frames_discard'] = NframesDiscard
-        start_frame = 0
-
+    resuming = os.path.exists(paths.recon)
+    mf = h5py.File(paths.recon, 'a' if resuming else 'w')
     try:
+        if resuming:
+            start_frame = resume_start_frame(mf, epi_reader, shots_per_frame)
+        else:
+            print(f'Pre-allocating output file: {paths.recon}')
+            mf.create_dataset(
+                'ksp_epi_zf',
+                shape=(Nx, Ny, Nz, Nvcoils, Nframes),
+                dtype=np.complex64,
+                chunks=(Nx, Ny, Nz, Nvcoils, 1),
+            )
+            mf.create_dataset('omegas', data=_build_omegas(schedules, Ny, Nz))
+            mf.create_dataset('echo_times', data=_build_echo_times(schedules, echo_times, Ny, Nz))
+            mf.attrs['n_frames_discard'] = NframesDiscard
+            start_frame = 0
+
         print(f'Processing frames {start_frame + 1}-{Nframes} ({shots_per_frame} shots/frame)...')
         for frame in range(start_frame, Nframes):
             print(f'  Frame {frame + 1} / {Nframes}')
@@ -428,6 +441,16 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     print(f'EPI processing complete. Output: {paths.recon}')
 
 
+def _iy_iz(schedules: np.ndarray, frame: int) -> tuple[np.ndarray, np.ndarray]:
+    """(ky, kz) index pair for every acquisition in one frame, flattened --
+    the exact indices _build_omegas and _build_echo_times each scatter
+    their own payload onto. Factored out (docs/review-findings.md item 58)
+    so the two can't drift out of alignment with each other."""
+    iy = schedules[frame, :, :, 0].ravel()
+    iz = schedules[frame, :, :, 1].ravel()
+    return iy, iz
+
+
 def _build_omegas(schedules: np.ndarray, Ny: int, Nz: int) -> np.ndarray:
     """Rebuild the binary sampling mask [Ny, Nz, Nframes] from the 0-based
     schedule -- omegas[iy, iz, frame] is True iff that location is
@@ -435,8 +458,7 @@ def _build_omegas(schedules: np.ndarray, Ny: int, Nz: int) -> np.ndarray:
     Nframes = schedules.shape[0]
     omegas = np.zeros((Ny, Nz, Nframes), dtype=bool)
     for frame in range(Nframes):
-        iy = schedules[frame, :, :, 0].ravel()
-        iz = schedules[frame, :, :, 1].ravel()
+        iy, iz = _iy_iz(schedules, frame)
         omegas[iy, iz, frame] = True
     return omegas
 
@@ -456,7 +478,6 @@ def _build_echo_times(
     Nframes = schedules.shape[0]
     t = np.zeros((Ny, Nz, Nframes), dtype=np.float64)
     for frame in range(Nframes):
-        iy = schedules[frame, :, :, 0].ravel()
-        iz = schedules[frame, :, :, 1].ravel()
+        iy, iz = _iy_iz(schedules, frame)
         t[iy, iz, frame] = echo_times[frame].ravel()
     return t

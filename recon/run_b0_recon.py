@@ -3,8 +3,8 @@ B0 correction (recon/operators_b0.py), replicating the existing G+L
 (multi-scale) config already validated against ../mslr-recon
 (recon/validate_against_mslr.py) for the *uncorrected* case, and saving
 results under <datdir>/recon/mslr_b0/G+L_L<L_b0>/ (recon/save_result.py) --
-one directory per L, since L is under active investigation, not settled.
-(Matches the convention already on disk from the L=6/10/16 runs.)
+one directory per L (matches the convention already on disk from the
+L=6/10/16 runs made during the sweep below).
 
 sigma1A is not reused from the uncorrected reference: the B0-corrected
 operator's spectral norm has no known closed form (mri_exp_approx's B
@@ -13,10 +13,9 @@ operators_b0.py), so it's measured here via power iteration
 (estimate_spectral_norm) before the real reconstruction runs, on the actual
 per-dataset smaps/omega/b0map/echo_times rather than assumed.
 
-L (segment count) is a fixed engineering default (6, matching mirtorch's
-own Gmri default), not swept against a real min-max error bound the way
-Fable's staged plan recommends -- see CLAUDE.md's recon/ section for that
-open item; --L lets it be overridden per run without a code change.
+L (segment count) defaults to 32 -- see operators_b0.py's module docstring
+for the real-scale sweep (recon/sweep_time_segments.py) that settled it;
+--L still lets it be overridden per run without a code change.
 
 Usage (from repo root, .venv-recon):
     .venv-recon/bin/python -m recon.run_b0_recon <datdir> <name>
@@ -28,34 +27,46 @@ e.g.
 import argparse
 import os
 
+import h5py
 import numpy as np
 import torch
 
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
 from recon.operators_b0 import build_encoding_operator_b0, estimate_spectral_norm
-from recon.reconstruct import _load_array, run_recon
+from recon.reconstruct import _load_array, _load_echo_times, _load_normalized_smaps, run_recon
 from recon.save_result import save_result
 from recon.validate_against_mslr import _read_julia_mat
 
 
-def _load_omega(fn_ksp: str) -> np.ndarray:
-    """omega (coil 0's sampled-or-not pattern) from the full ksp_epi_zf
-    load. A first attempt tried slicing out just coil 0 per chunk to avoid
-    loading all 18 coils, but that slice breaks h5py's contiguous-chunk
-    fast path (chunks span all coils within one frame -- see
-    recon/reconstruct.py's _load_array docstring) and measured ~4x *slower*
-    in wall-clock (91s vs ~23s) despite touching less final data -- so this
-    just reuses _load_array's already-optimized full chunked read and
-    discards everything but coil 0 afterward, matching run_recon()'s own
-    approach. This does mean ksp_epi_zf gets loaded twice across this
-    driver script (here, and again inside run_recon() itself) -- a real
-    but bounded, one-off cost, not worth a bigger refactor of run_recon()
-    to expose its internal load for reuse."""
+def _load_omega(fn_ksp: str, Nx: int) -> np.ndarray:
+    """(Nx,Ny,Nz,Nt) sampling mask, broadcast across the readout axis.
+
+    Mirrors recon/reconstruct.py's own _load_omega: prefers the
+    authoritative 'omegas' dataset preprocess.py writes (a few hundred KB)
+    over inferring the mask from which k-space values happen to be exactly
+    zero on a single coil -- a real acquired sample can round to exactly
+    0+0j after phase correction, silently becoming "not acquired" on
+    whichever coil is checked. Reading 'omegas' directly also avoids a
+    second full ~11 GB / ~23s read of ksp_epi_zf (run_recon() below already
+    loads it once); only the fallback path (for a recon file written before
+    'omegas' existed) pays that cost.
+    """
+    with h5py.File(fn_ksp, "r") as f:
+        has_omegas = "omegas" in f
+        if has_omegas:
+            omegas_yzt = np.asarray(f["omegas"][()])
+    if has_omegas:
+        return np.broadcast_to(omegas_yzt[None], (Nx,) + omegas_yzt.shape).astype(bool)
+
+    print(
+        f"  '{fn_ksp}' has no 'omegas' dataset (written before preprocess.py added it) -- "
+        "falling back to inferring the sampling mask from exact-zero k-space values."
+    )
     ksp0_coil0 = _load_array(fn_ksp, "ksp_epi_zf")[:, :, :, 0, :]
     return ksp0_coil0 != 0
 
 
-def main(datdir: str, name: str, L_b0: int = 6, nbins_b0: int = 128, device: str = "cuda") -> None:
+def main(datdir: str, name: str, L_b0: int = 32, nbins_b0: int = 128, device: str = "cuda") -> None:
     device_t = torch.device(device)
     recon_dir = os.path.join(datdir, "recon")
     fn_ksp = os.path.join(recon_dir, "ArbEPI_epi_zf.h5")
@@ -76,27 +87,25 @@ def main(datdir: str, name: str, L_b0: int = 6, nbins_b0: int = 128, device: str
     sp = load_seq_params(paths)
 
     print("Loading smaps/omega/B0 map/echo_times for spectral-norm estimation...")
-    smaps_raw = torch.from_numpy(_load_array(fn_smaps, "smaps").astype(np.complex64)).to(device_t)
-    smaps_rss = smaps_raw.abs().pow(2).sum(dim=-1, keepdim=True).sqrt()
-    smaps = smaps_raw / (smaps_rss + torch.finfo(torch.float32).eps)
-    smaps_chw = smaps.permute(3, 0, 1, 2).contiguous()
+    smaps, smaps_chw = _load_normalized_smaps(fn_smaps, device_t)
     Nx, Ny, Nz, _Nvc = smaps.shape
 
-    omega = torch.from_numpy(_load_omega(fn_ksp)).to(device_t)
+    omega = torch.from_numpy(_load_omega(fn_ksp, Nx)).to(device_t)
     b0map_hz = torch.from_numpy(_load_array(fn_b0map, "b0map_hz").astype(np.float32)).to(device_t)
-    echo_times_2d = torch.from_numpy(_load_array(fn_ksp, "echo_times").astype(np.float32))
-    echo_times_s = echo_times_2d.to(device_t).unsqueeze(0).expand(Nx, -1, -1, -1).contiguous()
+    echo_times_yz = _load_echo_times(fn_ksp, device_t)
 
     print(f"Estimating sigma1(A) for the B0-corrected operator (L={L_b0}, nbins={nbins_b0})...")
-    A = build_encoding_operator_b0(smaps_chw, omega, b0map_hz, echo_times_s, L=L_b0, nbins=nbins_b0)
+    A = build_encoding_operator_b0(
+        smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0
+    )
     Nt = omega.shape[-1]  # A is the full BlockDiagonal over every frame, size_in=(Nx,Ny,Nz,Nt)
     x0 = torch.randn(Nx, Ny, Nz, Nt, dtype=torch.complex64, device=device_t)
-    sigma1A = estimate_spectral_norm(A, x0, niter=30)
+    sigma1A = estimate_spectral_norm(A, x0)
     print(
         f"  sigma1A (B0-corrected) = {sigma1A:.6f}  "
         f"(uncorrected reference: {ref['sigma1A']:.6f})"
     )
-    del A, smaps_raw, smaps, smaps_chw, omega, b0map_hz, echo_times_2d, echo_times_s, x0
+    del A, smaps, smaps_chw, omega, b0map_hz, echo_times_yz, x0
     if device_t.type == "cuda":
         torch.cuda.empty_cache()
 
@@ -137,7 +146,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("datdir")
     parser.add_argument("name", help="'laminar' or 'radial' -- matches mslr/G+L/<name>_recon.mat")
-    parser.add_argument("--L", type=int, default=6, dest="L_b0")
+    parser.add_argument("--L", type=int, default=32, dest="L_b0")
     parser.add_argument("--nbins", type=int, default=128, dest="nbins_b0")
     args = parser.parse_args()
     main(args.datdir, args.name, L_b0=args.L_b0, nbins_b0=args.nbins_b0)

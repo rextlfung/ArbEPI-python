@@ -306,7 +306,16 @@ def make_readout_grads(
     # ADC event covering the flat-top portion.
     adc = pp.make_adc(Nfid, dwell=dwell)
 
-    # Delay blips to play after the ADC window closes.
+    # Delay blips to start at Tread, intended to be after the ADC window
+    # closes. In practice `Nfid = round(Tread / dwell / 4) * 4` rounds to
+    # the *nearest* multiple of 4, so when it rounds up the ADC window
+    # (Nfid * dwell) extends up to 2 samples past Tread and the blip is
+    # already ramping for those samples -- worst-case ky error is 0.17% of
+    # one k-space step at this repo's default params (see
+    # docs/review-findings.md item 63). Not fixed here (would need to floor
+    # instead of round, which costs a slightly larger flat top for the same
+    # k-space coverage); this comment now states what actually happens
+    # rather than the intent.
     gy_blip.delay = Tread
     gz_blip.delay = Tread
 

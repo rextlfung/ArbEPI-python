@@ -40,7 +40,7 @@ for a truncated anatomical/field-map volume).
 
 Note this changes the resize step's output values relative to this
 function's pre-existing behavior (previously `grid_mode=False`, i.e.
-pixel-center-aligned) -- CLAUDE.md's item 12 finding. No test elsewhere in
+pixel-center-aligned) -- docs/review-findings.md's item 12 finding. No test elsewhere in
 this repo pinned a specific interpolated value against the old convention:
 the one real end-to-end validation on real data (`run_rss.py` against a
 MATLAB/BART RSS reference, see CLAUDE.md) reconstructs via
@@ -80,6 +80,12 @@ def resize_to_epi_grid(
     """
     Nx_src, Ny_src, Nz_src = vol.shape[:3]
     Nx, Ny, Nz = n_target
+    if not np.allclose(fov_src[:2], fov[:2], rtol=1e-6, atol=1e-6):
+        raise ValueError(
+            f'resize_to_epi_grid: source x/y FOV {fov_src[:2]} does not match '
+            f'target x/y FOV {fov[:2]} -- only z is cropped/resized here, so '
+            f'x/y must already agree.'
+        )
     if fov_src[2] < fov[2]:
         raise ValueError(
             f'resize_to_epi_grid: target z-FOV ({fov[2]:.4f} m) exceeds '

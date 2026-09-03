@@ -77,7 +77,7 @@ def write_ceq(
 
         max_b1 = float(abs(ceq.loop[:, 2]).max()) if ceq.nMax else 0.0
         max_grad = float(abs(ceq.loop[:, [5, 7, 9]]).max()) if ceq.nMax else 0.0
-        max_slew = _max_realized_slew(ceq, parent_by_id)
+        max_slew = _max_realized_slew(ceq)
 
         _w(fid, 'f', 1.0)  # maxRfPower, G^2*sec -- not used
         _w(fid, 'f', max_b1)
@@ -100,7 +100,7 @@ def write_ceq(
         _w(fid, 'i', n - 1)
 
 
-def _max_realized_slew(ceq: Ceq, parent_by_id: dict) -> float:
+def _max_realized_slew(ceq: Ceq) -> float:
     """Peak realized |slew| (Hz/m/s) across every segment instance, per
     axis, scaled by that instance's actual amplitude -- see module
     docstring for why this can't just echo the hardware slew limit."""

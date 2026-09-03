@@ -7,9 +7,11 @@ the B0 field-map pipeline's intermediate volumes (finit_hz, b0map_hz, mask)
 artifact traces back to the GRE data itself or the field-map estimation,
 rather than the B0-corrected recon operator (recon/operators_b0.py).
 
-Same centered-IFFT convention as preprocessing/run_rss.py's _ift3
-(fftshift(ifftn(fftshift(.))) per axis) and b0map.jl's own image-space
-conversion (see its module docstring in CLAUDE.md).
+Imports _ift3 from preprocessing/run_rss.py rather than keeping its own
+copy (fftshift(ifftn(fftshift(.))) per axis -- see that function's own
+docstring for the magnitude-/difference-safety caveat on odd axes), the
+same convention b0map.jl's own image-space conversion uses in Julia (see
+its module docstring in CLAUDE.md).
 
 Usage (from repo root, .venv-preprocessing):
     .venv-preprocessing/bin/python -m preprocessing.gre_diagnostics <datdir> <seqname>
@@ -24,11 +26,7 @@ import numpy as np
 
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
 from preprocessing.nifti_io import save_recon_nifti
-
-
-def _ift3(d: np.ndarray) -> np.ndarray:
-    axes = (0, 1, 2)
-    return np.fft.fftshift(np.fft.ifftn(np.fft.fftshift(d, axes=axes), axes=axes), axes=axes)
+from preprocessing.run_rss import _ift3
 
 
 def main(datdir: str, seqname: str) -> None:
@@ -43,9 +41,21 @@ def main(datdir: str, seqname: str) -> None:
 
     with h5py.File(fn_gre, "r") as f:
         ksp_echoes = f["ksp_gre_echoes"][()]  # (Nx,Ny,Nz,n_echoes,Nc)
+        if "TE_degre" not in f.attrs:
+            raise ValueError(
+                f"{fn_gre} has no TE_degre attr -- this GRE cache predates the "
+                "dual-echo upgrade (n_echoes_degre=1), so there's no second "
+                "echo for this dual-echo diagnostic to compare against."
+            )
         te_degre = f.attrs["TE_degre"]
 
     n_echoes = ksp_echoes.shape[3]
+    if n_echoes != 2:
+        raise ValueError(
+            f"gre_diagnostics assumes a dual-echo deGRE acquisition, got "
+            f"n_echoes={n_echoes} from {fn_gre} -- the echo2/ratio panels "
+            "below don't generalize to other echo counts."
+        )
     print(f"ksp_gre_echoes: {ksp_echoes.shape}, TE_degre={te_degre}")
 
     img_echoes = np.stack(

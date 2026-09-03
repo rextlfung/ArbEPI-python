@@ -38,14 +38,20 @@ def generate_noise(params: Params, seqname: str = 'noise') -> pp.Sequence:
     Nreps = math.ceil(Nsamples_noise / rg.Nfid)
 
     # Delay to pad each block to EPI readout duration
-    sys_seq = copy.deepcopy(sys)
-    sys_seq.adc_dead_time = 0  # suppress warnings; no back-to-back ADC blocks
-    adc_total_dur = sys_seq.adc_dead_time + pp.calc_duration(rg.adc)
+    adc_dead_time = sys.adc_dead_time
+    adc_total_dur = adc_dead_time + pp.calc_duration(rg.adc)
     pad_duration = pp.calc_duration(rg.gro) - adc_total_dur
 
     delay_block = pp.make_delay(pad_duration) if pad_duration > 1e-9 else None
 
-    # Assemble sequence
+    # Assemble sequence. The Sequence system is the full-hardware params.sys,
+    # not the derated `sys` above -- matching ArbEPI.py/EPIcal.py (see their
+    # sys_seq comment for why: the POPE fall ramp deliberately runs above the
+    # derate). This sequence has no gradients, so the choice has no
+    # observable effect here, but keeping it consistent avoids a gratuitous
+    # divergence for readers comparing the four sequence files.
+    sys_seq = copy.deepcopy(params.sys)
+    sys_seq.adc_dead_time = 0  # suppress warnings; no back-to-back ADC blocks
     seq = pp.Sequence(system=sys_seq)
     for _ in range(Nreps):
         seq.add_block(rg.adc, pp.make_label('TRID', 'SET', 1))
@@ -65,6 +71,8 @@ def generate_noise(params: Params, seqname: str = 'noise') -> pp.Sequence:
         print(error_report)
 
     # Write Pulseq .seq file
+    seq.set_definition('FOV', params.fov)
+    seq.set_definition('Name', seqname)
     fn_seq = os.path.join(params.output_dir, f'{seqname}.seq')
     seq.write(fn_seq)
     print(f'Sequence written to: {fn_seq}')

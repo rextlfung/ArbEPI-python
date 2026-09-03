@@ -30,9 +30,15 @@ raster sample (GRE.seq: 173766 vs MATLAB's 173767 samples; ArbEPI.seq:
 25000 vs 25001), and the resulting acoustics number matches to <0.04%
 relative error (GRE.seq: 0.4024 here vs MATLAB's 0.402213; ArbEPI.seq:
 0.028146 here vs MATLAB's 0.02814424) -- see CLAUDE.md for the full
-reproduction record. Today's `deGRE.seq` measures acoustics 0.2456 (under
-the 0.3 threshold, unlike the old single-echo GRE.seq) via this same
-Python check -- not independently re-validated against a fresh MATLAB run.
+reproduction record. The window-duration half of that reproduction still
+holds exactly today (still 25000 samples); the ArbEPI magnitude does not
+-- the switch to the asymmetric POPE readout changed it 5.3x, to 0.1484
+(see docs/review-findings.md's "Current baseline" table), so
+0.028146/0.02814424 are historical only, on both counts (the GRE->deGRE
+rename *and* the POPE readout change). Today's `deGRE.seq` measures
+acoustics 0.2456 (under the 0.3 threshold, unlike the old single-echo
+GRE.seq) via this same Python check -- not independently re-validated
+against a fresh MATLAB run.
 """
 
 from dataclasses import dataclass

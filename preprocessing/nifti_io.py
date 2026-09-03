@@ -4,7 +4,9 @@ run_rss.py/run_cg_sense.py/run_recon_sigpy.py (final reconstructed images),
 preprocess.py/recon_frames.py (sensitivity maps -- the coil axis stands in
 for the frames axis here, so a NIfTI viewer's volume/time slider scrolls
 through per-coil maps), and run_b0map.py (the field map itself, b0map_hz --
-on the deGRE grid, so its voxel size comes from fov_degre, not fov). This
+on the EPI grid, same as every other NIfTI this pipeline writes, so its
+voxel size comes from fov, not fov_degre -- run_b0map.py resizes it there
+before writing). This
 is a Python-viewing convenience only -- it does not replace any of the .h5
 files the pipeline reads/writes for its own use (ksp_epi_zf, smaps, the
 GRE cache, b0map_hz/finit_hz/mask): those stay plain h5py (already generic
