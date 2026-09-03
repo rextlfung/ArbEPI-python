@@ -44,6 +44,18 @@ while L=32 is the smallest value that gets relative forward-model error
 under 1%. (Also matches this repo's own pending, not-yet-landed fix for
 that default -- see CLAUDE.md's item 82.)
 
+Reconstructs at native (resolution-matched) grid size, not zero-padded to
+the full (Nx,Ny,Nz) acquisition grid -- same reasoning and
+`native_calib_grid` helper as preprocessing/lowres_calib_recon.py (see its
+module docstring for the FOV/N resolution derivation); duplicated here
+rather than imported, to keep this .venv-recon script off that module's
+matplotlib dependency (not part of the `recon` extra). smaps and the B0
+field map are both resized down to the native grid via
+preprocessing/grid_resize.py's resize_to_epi_grid (the same FOV-preserving
+resample the rest of this pipeline already uses between grids of different
+resolution); k-space is spatially cropped in-memory after the usual
+chunked-by-frame HDF5 read.
+
 Usage (from repo root, .venv-recon):
     .venv-recon/bin/python -m recon.lowres_calib_recon_b0 <datdir> [--seqname ArbEPI] [--device cuda]
 """
@@ -58,6 +70,7 @@ from mirtorch.linear import BlockDiagonal
 from mirtorch.linear.mri import mri_exp_approx
 
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
+from preprocessing.grid_resize import resize_to_epi_grid
 from preprocessing.nifti_io import save_recon_nifti
 from recon.operators_b0 import GatheredSenseB0, _check_b_weight_row_sums
 from recon.reconstruct import _load_array
@@ -69,6 +82,25 @@ def compute_calib_mask(omegas: np.ndarray) -> np.ndarray:
     preprocessing/lowres_calib_recon.py's module-level matplotlib import
     (not part of the `recon` extra)."""
     return np.all(omegas, axis=-1)
+
+
+def native_calib_grid(calib_mask: np.ndarray, fov: tuple[float, float, float], Nx_full: int) -> dict:
+    """Same as preprocessing/lowres_calib_recon.py's -- duplicated for the
+    same reason as compute_calib_mask above."""
+    ys, zs = np.nonzero(calib_mask)
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    z0, z1 = int(zs.min()), int(zs.max()) + 1
+    Ny_eff, Nz_eff = y1 - y0, z1 - z0
+
+    fov_x, fov_y, _fov_z = fov
+    Nx_eff = round(Ny_eff * fov_x / fov_y)
+    x0 = Nx_full // 2 - Nx_eff // 2
+    x1 = x0 + Nx_eff
+
+    return dict(
+        Nx_eff=Nx_eff, Ny_eff=Ny_eff, Nz_eff=Nz_eff,
+        x_slice=slice(x0, x1), y_slice=slice(y0, y1), z_slice=slice(z0, z1),
+    )
 
 
 def _build_calib_operator_b0(
@@ -143,22 +175,25 @@ def main(
     fn_smaps = os.path.join(recon_dir, f'smaps_{seqname}_sigpy.h5')
     fn_b0map = os.path.join(recon_dir, f'{seqname}_b0map.h5')
 
+    cfg = load_config(datdir=datdir, seqnames=[seqname])
+    paths = set_seq_paths(cfg, seqname)
+    seq_params = load_seq_params(paths)
+    fov = seq_params.fov
+
     print(f'Loading smaps ({fn_smaps})...')
-    smaps_raw = torch.from_numpy(_load_array(fn_smaps, 'smaps').astype(np.complex64)).to(device_t)
+    smaps_raw = torch.from_numpy(_load_array(fn_smaps, 'smaps').astype(np.complex64))
     smaps_rss = smaps_raw.abs().pow(2).sum(dim=-1, keepdim=True).sqrt()
-    smaps = smaps_raw / (smaps_rss + torch.finfo(torch.float32).eps)
-    smaps_chw = smaps.permute(3, 0, 1, 2).contiguous()  # (Nc,Nx,Ny,Nz)
+    smaps = smaps_raw / (smaps_rss + torch.finfo(torch.float32).eps)  # (Nx,Ny,Nz,Nc), CPU
     Nx, Ny, Nz, _Nvc = smaps.shape
 
     print(f'Loading B0 field map ({fn_b0map})...')
-    b0map_hz = torch.from_numpy(_load_array(fn_b0map, 'b0map_hz').astype(np.float32)).to(device_t)
+    b0map_hz = torch.from_numpy(_load_array(fn_b0map, 'b0map_hz').astype(np.float32))
     assert tuple(b0map_hz.shape) == (Nx, Ny, Nz), (
         f'b0map_hz shape {tuple(b0map_hz.shape)} != smaps grid ({Nx},{Ny},{Nz})'
     )
 
     print(f'Loading echo times / sampling mask ({fn_ksp})...')
-    echo_times_2d = torch.from_numpy(_load_array(fn_ksp, 'echo_times').astype(np.float32))
-    echo_times_s = echo_times_2d.to(device_t).unsqueeze(0).expand(Nx, -1, -1, -1).contiguous()
+    echo_times_2d = _load_array(fn_ksp, 'echo_times').astype(np.float32)  # (Ny,Nz,Nt), numpy
     with h5py.File(fn_ksp, 'r') as f:
         omegas = f['omegas'][()]  # (Ny, Nz, Nt)
     Nt = omegas.shape[-1]
@@ -166,11 +201,39 @@ def main(
     n_calib = int(calib_mask.sum())
     print(f'Calibration region: {n_calib} / {calib_mask.size} (ky, kz) locations')
 
-    calib_mask_t = torch.from_numpy(calib_mask).to(device_t)
-    calib_omega = calib_mask_t[None, :, :, None].expand(Nx, Ny, Nz, Nt)
+    grid = native_calib_grid(calib_mask, fov, Nx)
+    xs, ys, zs = grid['x_slice'], grid['y_slice'], grid['z_slice']
+    Nx_eff, Ny_eff, Nz_eff = grid['Nx_eff'], grid['Ny_eff'], grid['Nz_eff']
+    voxel_mm = [1000 * fov[a] / n for a, n in enumerate((Nx_eff, Ny_eff, Nz_eff))]
+    print(f'  Native grid: ({Nx_eff}, {Ny_eff}, {Nz_eff})  '
+          f'(voxel size {voxel_mm[0]:.3f} x {voxel_mm[1]:.3f} x {voxel_mm[2]:.3f} mm)')
+
+    # smaps/b0map_hz are smooth, low-spatial-frequency quantities -- resize
+    # in image space (same FOV-preserving resample the rest of this
+    # pipeline uses between grids of different resolution) rather than
+    # cropping k-space, which they were never sampled on in the first place.
+    n_target = (Nx_eff, Ny_eff, Nz_eff)
+    smaps_native = torch.from_numpy(
+        resize_to_epi_grid(smaps.numpy(), fov, fov, n_target, order=3).astype(np.complex64)
+    ).to(device_t)
+    smaps_chw = smaps_native.permute(3, 0, 1, 2).contiguous()  # (Nc,Nx_eff,Ny_eff,Nz_eff)
+    b0map_hz_native = torch.from_numpy(
+        resize_to_epi_grid(b0map_hz.numpy(), fov, fov, n_target, order=3).astype(np.float32)
+    ).to(device_t)
+
+    # echo_times is a k-space-indexed array (acquisition time per sampled
+    # (ky,kz) location), not an image -- crop it the same way k-space
+    # itself is cropped below, not resized.
+    echo_times_crop = echo_times_2d[ys, zs, :]  # (Ny_eff, Nz_eff, Nt)
+    echo_times_s = torch.from_numpy(echo_times_crop).to(device_t)
+    echo_times_s = echo_times_s.unsqueeze(0).expand(Nx_eff, -1, -1, -1).contiguous()
+
+    calib_mask_crop = calib_mask[ys, zs]  # (Ny_eff, Nz_eff)
+    calib_mask_t = torch.from_numpy(calib_mask_crop).to(device_t)
+    calib_omega = calib_mask_t[None, :, :, None].expand(Nx_eff, Ny_eff, Nz_eff, Nt)
 
     print(f'Building B0-corrected operator (L={L}, nbins={nbins})...')
-    A = _build_calib_operator_b0(smaps_chw, calib_omega, b0map_hz, echo_times_s, L=L, nbins=nbins)
+    A = _build_calib_operator_b0(smaps_chw, calib_omega, b0map_hz_native, echo_times_s, L=L, nbins=nbins)
     idx_full = A.A[0].idx.cpu().numpy()
     for it in range(1, Nt):
         assert np.array_equal(A.A[it].idx.cpu().numpy(), idx_full), (
@@ -179,27 +242,26 @@ def main(
 
     print(f'Loading k-space ({fn_ksp}) and gathering calibration-region samples...')
     ksp_epi_zf = _load_array(fn_ksp, 'ksp_epi_zf').astype(np.complex64)  # [Nx,Ny,Nz,Nc,Nt]
-    ksp_calib = torch.from_numpy(gather_calib_ksp(ksp_epi_zf, idx_full)).to(device_t)  # [K,Nc,Nt]
+    ksp_epi_zf_crop = ksp_epi_zf[xs, ys, zs, :, :]  # [Nx_eff,Ny_eff,Nz_eff,Nc,Nt]
     del ksp_epi_zf
+    ksp_calib = torch.from_numpy(gather_calib_ksp(ksp_epi_zf_crop, idx_full)).to(device_t)  # [K,Nc,Nt]
 
     print('Reconstructing (adjoint only -- no iteration, no regularization)...')
-    img = A.adjoint(ksp_calib)  # (Nx, Ny, Nz, Nt) complex64
+    img = A.adjoint(ksp_calib)  # (Nx_eff, Ny_eff, Nz_eff, Nt) complex64
     img_np = img.detach().cpu().numpy()
 
     out_dir = os.path.join(datdir, 'recon', 'basic')
     os.makedirs(out_dir, exist_ok=True)
     fn_out = os.path.join(out_dir, f'{seqname}_recon_lowres_calib_b0')
 
-    cfg = load_config(datdir=datdir, seqnames=[seqname])
-    paths = set_seq_paths(cfg, seqname)
-    seq_params = load_seq_params(paths)
-
     save_recon_nifti(
-        fn_out, img_np, fov=seq_params.fov, seqname=seqname,
+        fn_out, img_np, fov=fov, seqname=seqname,
         n_calib_samples=n_calib, n_ky_kz=int(calib_mask.size), L=L, nbins=nbins,
+        native_grid=[Nx_eff, Ny_eff, Nz_eff], native_voxel_mm=voxel_mm,
         note='B0-corrected (time-segmented conjugate-phase, adjoint only, no '
              'iteration/regularization) IFFT + smaps combine of the fully-sampled '
-             'k-space center only',
+             'k-space center only, reconstructed at native (resolution-matched) grid '
+             'size, not zero-padded',
     )
     print(f'Wrote {fn_out}.nii.gz + .json')
 

@@ -22,12 +22,35 @@ inverse-FFTing, and combining coils with the existing ESPIRiT sensitivity
 maps (`recon/smaps_<seqname>_sigpy.h5`, already normalized so
 `sum_c |s_c|^2 <= 1`, see smaps.py's process_smaps) is the correct linear
 estimate directly -- `img = sum_c conj(s_c) * ifft(ksp_c)`, no
-regularization or iteration. The image is low-resolution in (ky, kz) (only
-the small calibration extent is used) but full-resolution along kx (the
-readout direction, sampled in full on every echo) -- see CLAUDE.md's
-sampling/pd_sample.py section.
+regularization or iteration.
 
-Same centered-IFFT convention as run_rss.py's/gre_diagnostics.py's _ift3.
+**Reconstructs at native resolution, not zero-padded to the full (Nx, Ny,
+Nz) acquisition grid.** Standard Cartesian MRI relation: resolution =
+FOV/N (Delta_k = 1/FOV, and N samples span a k-space extent of N*Delta_k =
+N/FOV). The calibration region's (ky, kz) bounding box -- 49 x 10 samples
+on both `20260822ball_*` datasets, out of the full 240 x 45 -- caps the
+achievable in-plane resolution at FOV_y/49 = 4.41 mm and FOV_z/10 = 4.05 mm,
+far coarser than the full acquisition's 0.9 mm. Zero-padding that region up
+to the full (Nx, Ny, Nz) grid before IFFT (an earlier version of this
+script did exactly that) is pure sinc interpolation -- it doesn't add any
+real information, and it makes neighboring voxels highly correlated by
+construction (heavily oversampled relative to the true resolution), which
+inflates variance-based diagnostics run on the result (e.g. an SVD/PCA
+decomposition's "fraction of variance in the top component" -- see
+preprocessing/lowres_calib_gain_drift_check.py). Reconstructing directly at
+the native grid size gives the same true image content without the
+redundant interpolation. `kx` (the readout direction, fully sampled on
+every echo, not calibration-limited) is *also* cropped to match, to the
+same effective sample count as `ky` -- `Nx_eff = round(Ny_eff * FOV_x /
+FOV_y)`, which on these two datasets (FOV_x == FOV_y) works out to exactly
+49, matching `Ny_eff` -- an explicit choice to keep the two in-plane axes
+at matched resolution rather than leaving `kx` at full resolution while
+`ky`/`kz` are calibration-limited.
+
+Same centered-IFFT convention as run_rss.py's/gre_diagnostics.py's _ift3,
+and the same FOV-preserving resize (`grid_resize.resize_to_epi_grid`) the
+rest of this pipeline already uses to move smaps between grids of the same
+FOV at different resolutions.
 
 Usage (from repo root, .venv-preprocessing):
     .venv-preprocessing/bin/python -m preprocessing.lowres_calib_recon <datdir> [seqname]
@@ -41,6 +64,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
+from preprocessing.grid_resize import resize_to_epi_grid
 from preprocessing.nifti_io import save_recon_nifti
 
 
@@ -72,18 +96,59 @@ def compute_calib_mask(omegas: np.ndarray) -> np.ndarray:
     return np.all(omegas, axis=-1)
 
 
-def lowres_calib_recon(
-    ksp_epi_zf: np.ndarray, calib_mask: np.ndarray, smaps: np.ndarray
-) -> np.ndarray:
-    """ksp_epi_zf: [Nx, Ny, Nz, Nvcoils, Nframes]. calib_mask: [Ny, Nz] bool.
-    smaps: [Nx, Ny, Nz, Nvcoils] complex, sum_c|s_c|^2 <= 1 normalized.
+def native_calib_grid(calib_mask: np.ndarray, fov: tuple[float, float, float], Nx_full: int) -> dict:
+    """calib_mask: [Ny, Nz] bool. fov: (fx, fy, fz) m, the full acquisition
+    FOV (unchanged by any of this -- only resolution/N changes). Nx_full:
+    the full readout matrix size (240 on these datasets).
 
-    Returns [Nx, Ny, Nz, Nframes] complex: per-frame, sensitivity-map-
-    weighted coil combination of the calibration-region-only image.
+    Returns the native (resolution-matched, not zero-padded) grid size and
+    the centered crop slices into the full (Nx, Ny, Nz) k-space array --
+    see module docstring for the FOV/N resolution relation and why kx is
+    cropped too, to Ny's effective sample count."""
+    ys, zs = np.nonzero(calib_mask)
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    z0, z1 = int(zs.min()), int(zs.max()) + 1
+    Ny_eff, Nz_eff = y1 - y0, z1 - z0
+
+    fov_x, fov_y, _fov_z = fov
+    Nx_eff = round(Ny_eff * fov_x / fov_y)
+    x0 = Nx_full // 2 - Nx_eff // 2
+    x1 = x0 + Nx_eff
+
+    return dict(
+        Nx_eff=Nx_eff, Ny_eff=Ny_eff, Nz_eff=Nz_eff,
+        x_slice=slice(x0, x1), y_slice=slice(y0, y1), z_slice=slice(z0, z1),
+    )
+
+
+def lowres_calib_recon(
+    ksp_epi_zf: np.ndarray, calib_mask: np.ndarray, smaps: np.ndarray,
+    fov: tuple[float, float, float],
+) -> tuple[np.ndarray, dict]:
+    """ksp_epi_zf: [Nx, Ny, Nz, Nvcoils, Nframes]. calib_mask: [Ny, Nz] bool.
+    smaps: [Nx, Ny, Nz, Nvcoils] complex, sum_c|s_c|^2 <= 1 normalized, on
+    the same (Nx, Ny, Nz) grid as ksp_epi_zf. fov: (fx, fy, fz) m.
+
+    Returns (img, grid): img is [Nx_eff, Ny_eff, Nz_eff, Nframes] complex --
+    per-frame, sensitivity-map-weighted coil combination of the
+    calibration-region-only image, reconstructed at native resolution (see
+    module docstring) rather than zero-padded to the full grid. grid is
+    native_calib_grid's return value.
     """
-    ksp_calib = ksp_epi_zf * calib_mask[None, :, :, None, None]
-    img_coils = _ift3(ksp_calib)  # [Nx, Ny, Nz, Nvcoils, Nframes], batched over trailing axes
-    return np.sum(np.conj(smaps)[..., None] * img_coils, axis=3)
+    Nx_full = ksp_epi_zf.shape[0]
+    grid = native_calib_grid(calib_mask, fov, Nx_full)
+    xs, ys, zs = grid['x_slice'], grid['y_slice'], grid['z_slice']
+
+    ksp_crop = ksp_epi_zf[xs, ys, zs, :, :]  # [Nx_eff, Ny_eff, Nz_eff, Nvcoils, Nframes]
+    calib_mask_crop = calib_mask[ys, zs]  # [Ny_eff, Nz_eff] -- the ellipse within its bounding box
+    ksp_crop = ksp_crop * calib_mask_crop[None, :, :, None, None]  # zero any stray non-calib sample
+
+    img_coils = _ift3(ksp_crop)  # [Nx_eff, Ny_eff, Nz_eff, Nvcoils, Nframes]
+
+    n_target = (grid['Nx_eff'], grid['Ny_eff'], grid['Nz_eff'])
+    smaps_native = resize_to_epi_grid(smaps, fov, fov, n_target, order=3)
+    img = np.sum(np.conj(smaps_native)[..., None] * img_coils, axis=3)
+    return img, grid
 
 
 def main(datdir: str, seqname: str = 'ArbEPI') -> None:
@@ -113,8 +178,13 @@ def main(datdir: str, seqname: str = 'ArbEPI') -> None:
     with h5py.File(fn_smaps, 'r') as f:
         smaps = f['smaps'][()]  # [Nx, Ny, Nz, Nvcoils]
 
-    print('Reconstructing...')
-    img = lowres_calib_recon(ksp_epi_zf, calib_mask, smaps)  # [Nx, Ny, Nz, Nframes]
+    print('Reconstructing at native (resolution-matched) grid size...')
+    img, grid = lowres_calib_recon(
+        ksp_epi_zf, calib_mask, smaps, seq_params.fov
+    )  # [Nx_eff, Ny_eff, Nz_eff, Nframes]
+    voxel_mm = [1000 * seq_params.fov[a] / img.shape[a] for a in range(3)]
+    print(f'  Native grid: {img.shape[:3]}  (voxel size {voxel_mm[0]:.3f} x '
+          f'{voxel_mm[1]:.3f} x {voxel_mm[2]:.3f} mm)')
 
     out_dir = os.path.join(datdir, 'recon', 'basic')
     os.makedirs(out_dir, exist_ok=True)
@@ -122,7 +192,9 @@ def main(datdir: str, seqname: str = 'ArbEPI') -> None:
     save_recon_nifti(
         fn_out, img, fov=seq_params.fov, seqname=seqname,
         n_calib_samples=n_calib, n_ky_kz=int(calib_mask.size),
-        note='IFFT + smaps-weighted coil combine of the fully-sampled k-space center only',
+        native_grid=list(img.shape[:3]), native_voxel_mm=voxel_mm,
+        note='IFFT + smaps-weighted coil combine of the fully-sampled k-space center only, '
+             'reconstructed at native (resolution-matched) grid size, not zero-padded',
     )
     print(f'Wrote {fn_out}.nii.gz + .json')
 
