@@ -112,6 +112,24 @@ def _load_echo_times(fn_ksp: str, device: torch.device) -> torch.Tensor:
     return torch.from_numpy(_load_array(fn_ksp, "echo_times").astype(np.float32)).to(device)
 
 
+def _load_normalized_smaps(
+    fn_smaps: str, device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Loads smaps and RSS-normalizes it. Returns (smaps, smaps_chw):
+    smaps is (Nx,Ny,Nz,Nc) complex64, each voxel's coil vector scaled to
+    unit RSS; smaps_chw is (Nc,Nx,Ny,Nz), the layout
+    build_encoding_operator{,_b0} expect. Shared by run_recon (here) and
+    run_b0_recon.py, which used to duplicate this verbatim -- a real
+    desync risk since run_b0_recon's whole purpose is measuring sigma1A
+    for the operator run_recon builds moments later (see
+    docs/review-findings.md item 94)."""
+    smaps_raw = torch.from_numpy(_load_array(fn_smaps, "smaps").astype(np.complex64)).to(device)
+    smaps_rss = smaps_raw.abs().pow(2).sum(dim=-1, keepdim=True).sqrt()
+    smaps = smaps_raw / (smaps_rss + torch.finfo(torch.float32).eps)
+    smaps_chw = smaps.permute(3, 0, 1, 2).contiguous()
+    return smaps, smaps_chw
+
+
 def _reg_weights(
     patch_sizes: list[tuple[int, int, int]], Nt: int, N_voxels: int, lambda_global: float
 ) -> list[float]:
@@ -164,9 +182,7 @@ def run_recon(
     Nscales = len(patch_sizes)
 
     print("Loading sensitivity maps...")
-    smaps_raw = torch.from_numpy(_load_array(fn_smaps, "smaps").astype(np.complex64)).to(device)
-    smaps_rss = smaps_raw.abs().pow(2).sum(dim=-1, keepdim=True).sqrt()
-    smaps = smaps_raw / (smaps_rss + torch.finfo(torch.float32).eps)
+    smaps, smaps_chw = _load_normalized_smaps(fn_smaps, device)
     print(f"  Sensitivity maps: {tuple(smaps.shape)}")
 
     print("Loading k-space...")
@@ -182,8 +198,7 @@ def run_recon(
     counts = omega.sum(dim=(0, 1, 2))
     assert torch.all(counts == counts[0]), "Frames have differing sample counts"
 
-    print("Building encoding operator...")
-    smaps_chw = smaps.permute(3, 0, 1, 2).contiguous()  # (Nc,Nx,Ny,Nz)
+    print("Building encoding operator...")  # smaps_chw already computed above
     if fn_b0map is not None:
         print(f"  Loading B0 field map from {fn_b0map} (L={L_b0}, nbins={nbins_b0})...")
         b0map_hz = torch.from_numpy(_load_array(fn_b0map, "b0map_hz").astype(np.float32)).to(device)

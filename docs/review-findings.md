@@ -650,16 +650,18 @@ below described). Original numbers kept for provenance:
   `run_rss.py`) now covers this consumer too automatically. Verified no
   circular import (`run_rss.py` doesn't import `gre_diagnostics`) and no
   new lint/test regressions.
-- [ ] **94. `recon/run_b0_recon.py` re-implements `run_recon`'s smaps
-  load + RSS normalization verbatim.** `:79-81` is a line-for-line copy
-  of `recon/reconstruct.py:154-156`. More dangerous than item 89's
-  duplication: `run_b0_recon`'s whole preamble exists to measure
-  `sigma1A` for the operator `run_recon` builds moments later, so any
-  future change to smaps normalization silently desynchronizes the
-  estimate from the reconstruction it's estimated for -- no error, just a
-  wrong step size (same bug class as item 74's omega divergence, in the
-  same function, for the same reason). Factor the load+normalize into one
-  helper both call.
+- [x] **94.** Resolved: added `recon/reconstruct.py`'s
+  `_load_normalized_smaps(fn_smaps, device) -> (smaps, smaps_chw)` helper
+  (next to `_load_omega`/`_load_echo_times`), called by both `run_recon`
+  (here) and `run_b0_recon.py` instead of each duplicating the load +
+  RSS-normalize + permute. Removed `run_recon`'s now-redundant second
+  `smaps_chw = smaps.permute(...)` computation further down (it was
+  computed twice in the same function even before this fix). Also fixed
+  an E501 regression from item 90's rename (`echo_times_s` ->
+  `echo_times_yz` pushed one line over 100 chars in
+  `run_b0_recon.py`) noticed while re-running ruff here. Verified: `uv
+  run ruff check .` back to 29 errors, `uv run pytest` unchanged at
+  126/15.
 - [x] **102.** Resolved: deleted `reconecho()` from
   `preprocessing/epi_gridding.py` (confirmed zero callers anywhere in the
   repo or its tests before removing). `_density_compensation` and

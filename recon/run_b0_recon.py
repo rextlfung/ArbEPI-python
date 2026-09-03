@@ -34,7 +34,7 @@ import torch
 
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
 from recon.operators_b0 import build_encoding_operator_b0, estimate_spectral_norm
-from recon.reconstruct import _load_array, _load_echo_times, run_recon
+from recon.reconstruct import _load_array, _load_echo_times, _load_normalized_smaps, run_recon
 from recon.save_result import save_result
 from recon.validate_against_mslr import _read_julia_mat
 
@@ -88,10 +88,7 @@ def main(datdir: str, name: str, L_b0: int = 6, nbins_b0: int = 128, device: str
     sp = load_seq_params(paths)
 
     print("Loading smaps/omega/B0 map/echo_times for spectral-norm estimation...")
-    smaps_raw = torch.from_numpy(_load_array(fn_smaps, "smaps").astype(np.complex64)).to(device_t)
-    smaps_rss = smaps_raw.abs().pow(2).sum(dim=-1, keepdim=True).sqrt()
-    smaps = smaps_raw / (smaps_rss + torch.finfo(torch.float32).eps)
-    smaps_chw = smaps.permute(3, 0, 1, 2).contiguous()
+    smaps, smaps_chw = _load_normalized_smaps(fn_smaps, device_t)
     Nx, Ny, Nz, _Nvc = smaps.shape
 
     omega = torch.from_numpy(_load_omega(fn_ksp, Nx)).to(device_t)
@@ -99,7 +96,9 @@ def main(datdir: str, name: str, L_b0: int = 6, nbins_b0: int = 128, device: str
     echo_times_yz = _load_echo_times(fn_ksp, device_t)
 
     print(f"Estimating sigma1(A) for the B0-corrected operator (L={L_b0}, nbins={nbins_b0})...")
-    A = build_encoding_operator_b0(smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0)
+    A = build_encoding_operator_b0(
+        smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0
+    )
     Nt = omega.shape[-1]  # A is the full BlockDiagonal over every frame, size_in=(Nx,Ny,Nz,Nt)
     x0 = torch.randn(Nx, Ny, Nz, Nt, dtype=torch.complex64, device=device_t)
     sigma1A = estimate_spectral_norm(A, x0)
@@ -107,7 +106,7 @@ def main(datdir: str, name: str, L_b0: int = 6, nbins_b0: int = 128, device: str
         f"  sigma1A (B0-corrected) = {sigma1A:.6f}  "
         f"(uncorrected reference: {ref['sigma1A']:.6f})"
     )
-    del A, smaps_raw, smaps, smaps_chw, omega, b0map_hz, echo_times_yz, x0
+    del A, smaps, smaps_chw, omega, b0map_hz, echo_times_yz, x0
     if device_t.type == "cuda":
         torch.cuda.empty_cache()
 
