@@ -91,7 +91,7 @@ def run_b0map(cfg: PreprocessingConfig) -> None:
         smaps_path = os.path.join(cfg.datdir, 'recon', f'smaps_{seqname}_sigpy.h5')
         try:
             load_smaps(cfg, paths, seq_params)
-        except Exception as e:  # noqa: BLE001 -- optional input, degrade gracefully
+        except Exception as e:  # optional input, degrade gracefully
             print(f'WARNING [{seqname}]: could not load/estimate sensitivity maps ({e}) -- '
                   'falling back to no smap.')
             smaps_path = ''
@@ -105,7 +105,7 @@ def run_b0map(cfg: PreprocessingConfig) -> None:
                 ],
                 check=True,
             )
-        except subprocess.CalledProcessError as e:  # noqa: BLE001 -- mirrors the other batch drivers' per-sequence try/catch
+        except subprocess.CalledProcessError as e:  # mirrors the sibling batch drivers' try/catch
             print(f"ERROR [{seqname}]: {e}\nSkipping...")
             continue
 

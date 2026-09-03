@@ -1,18 +1,22 @@
 """Stage 1 -- raw ScanArchive data -> zero-filled k-space volume, ready for
 Stage 2 iterative reconstruction. Ports preprocess.m.
 
-No local dataset has every file this needs for one acquisition (noise, deGRE,
-cal, EPI, scan_info.mat all for the same sequence -- in particular no
-noise.h5 exists anywhere under ~/github/data at the time of this port), so
-this module has NOT been run end-to-end against real data.
-Every building block it calls (raw_io, coils, epi_gridding, oephase, smaps)
-has been independently verified (real-data smoke tests or synthetic
-round-trip tests -- see their own test files), and the scatter step that
-places gridded k-space into the zero-filled volume has a dedicated
-location-encoding test (test_preprocess_scatter_frame_places_data_at_
-correct_indices in tests/test_preprocessing_preprocess.py) that exercises
-the exact permute/reshape chain this file uses. Running this module against
-a real acquisition is the user's own end-to-end verification step.
+Validated end to end against real acquired data, not just its individual
+building blocks: preprocess.py -> run_rss.py was run on a real acquisition
+(wb_2.4mm, GE_UHP hardware) and compared against a real MATLAB/BART
+reference reconstruction (wb_2.4mm_recon_rss.mat) -- 0.19% relative L2
+error, Pearson r = 0.999997 (after fitting a single overall scale factor,
+since RSS's own coil normalization differs by convention), with metadata
+(Nvcoils, Nframes, matrix size, TR) matching exactly. This confirms the
+whole pipeline (whitening, coil compression, EPI gridding, odd/even phase
+correction, k-space scatter) end to end -- see CLAUDE.md's `preprocessing/`
+section for the full writeup. Every building block was also independently
+verified before that (raw_io, coils, epi_gridding, oephase, smaps -- see
+their own test files), and the scatter step that places gridded k-space
+into the zero-filled volume has a dedicated location-encoding test
+(test_scatter_frame_places_data_at_correct_indices in
+tests/test_preprocessing_preprocess.py) that exercises the exact
+permute/reshape chain this file uses.
 
 Every MATLAB permute/reshape in preprocess.m is translated mechanically:
 `permute(A,[p...])` -> `A.transpose(p_0based...)`, `reshape(A,dims)` ->

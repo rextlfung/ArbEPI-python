@@ -43,23 +43,30 @@ def estimate_smaps(
     outputting one set of maps", so unlike BART's ecalib there's no
     emaps(...,end)-style selection among several map sets to do).
 
-    cal_size: center-crop ksp_gre's spatial dims to this matrix size (per
-        axis) before running ESPIRiT, rather than passing the full
-        acquisition grid. sigpy's EspiritCalib allocates a coil-covariance
-        array sized to its *entire* input k-space's spatial shape (not
-        just calib_width -- `AHA = zeros(image_shape + (Ncoils, Ncoils))`
-        in its own source), so passing a full 3D acquisition grid directly
-        is impractical: confirmed against real project data, a
+    cal_size: resize ksp_gre's spatial dims to this matrix size (per axis)
+        before running ESPIRiT, rather than passing the full acquisition
+        grid -- a center-*crop* only on axes where the source is larger
+        than cal_size; at this repo's real deGRE dims (Nz_degre=21 < 24)
+        sigpy's `sp.resize` zero-*pads* z instead, so the calibration
+        region there is 24 samples wide with 3 synthetic-zero rows, a
+        small real effect on the fit rather than a true no-op (see below).
+        sigpy's EspiritCalib allocates a coil-covariance array sized to
+        its *entire* input k-space's spatial shape (not just calib_width
+        -- `AHA = zeros(image_shape + (Ncoils, Ncoils))` in its own
+        source), so passing a full 3D acquisition grid directly is
+        impractical: confirmed against real project data, a
         108^3/12-coil GRE volume allocated 2.9GB for that one array alone
         and, combined with a non-vectorized per-calibration-kernel Python
         loop, thrashed 14GB+ of memory and never completed in over an hour
-        (killed). Cropping k-space reduces resolution while preserving
-        FOV -- process_smaps() already resizes the result up to the EPI
-        target grid afterward regardless of what resolution ESPIRiT itself
-        ran at, so there's no need to calibrate at full acquisition
-        resolution. Default matches calib_width (24) so EspiritCalib's own
-        internal calibration-region crop becomes a no-op and the
-        covariance/eigenmap stage runs at the same small size throughout.
+        (killed). Resizing k-space this way reduces resolution while
+        preserving FOV -- process_smaps() already resizes the result up
+        to the EPI target grid afterward regardless of what resolution
+        ESPIRiT itself ran at, so there's no need to calibrate at full
+        acquisition resolution. Default matches calib_width (24) so
+        EspiritCalib's own internal calibration-region crop becomes a
+        no-op on x/y (where the source is >= 24) and the covariance/
+        eigenmap stage runs at the same small size throughout; z is the
+        one axis where that "no-op" claim doesn't fully hold, per above.
     """
     ksp_coils_first = np.moveaxis(ksp_gre, -1, 0)
     if cal_size is not None:

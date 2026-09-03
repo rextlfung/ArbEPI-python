@@ -40,8 +40,9 @@ preprocessing = [
 # Multi-scale low-rank (MSLR) reconstruction (recon/), mirroring ../mslr-recon
 # (Julia/MIRT.jl) on PyTorch/mirtorch instead. Deliberately excluded from the
 # core and `preprocessing` dependency sets: torch is a large, often
-# GPU-index-specific install (see recon/README or top-level docs for the
-# CUDA wheel selection this machine needs), and has no reason to share a venv
+# GPU-index-specific install (see CLAUDE.md's recon/ section for the CUDA
+# wheel selection this machine needs -- no recon/README exists), and has no
+# reason to share a venv
 # with GERecon's Python-3.10/numpy<2.0-locked `preprocessing` extra -- create
 # a dedicated venv for this extra (e.g. `.venv-recon`) the same way
 # `preprocessing` gets its own `.venv-preprocessing`.

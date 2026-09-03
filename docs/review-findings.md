@@ -270,41 +270,32 @@ below described). Original numbers kept for provenance:
 
 ## Consistency & documentation
 
-- [ ] **17. `trap4ge` is currently a no-op. [measured]** `params.py`
-  sets `crt = 4e-6` and every `ScannerSpec` sets `grad_raster_time =
-  4e-6`; pypulseq already puts every trapezoid on the gradient raster, so
-  the round-up can never change anything. Instrumented across all real
-  call sites: 11 calls, 0 changed any rise/flat/fall time or amplitude.
-  So `lib/trap4ge.py`'s "both the Siemens (10us) and GE (4us) raster"
-  docstring is inaccurate (`crt` is GE-only now), as is the "hardware
-  requirement, not optional cleanup" framing (true in intent, vacuous in
-  effect). Keep it (it's the right net if `crt` ever returns to `20e-6`,
-  see item 43's coupling) but say so; consider a test pinning the no-op
-  property so the situation stays visible.
-- [ ] **32. [investigated, accepted as-is] `plot_trajectory(frame_idx=...)`
-  does a whole-sequence `calculate_kspace()`.** Item 29 (resolved)
-  already eliminated the actual duplicate computation this worried about;
-  `plot_trajectory` is called only once per run, so there's no redundant
-  *repeated* call to cache away, and `calculate_kspace()` is monolithic
-  (no way to compute `k_traj_adc` without `k_traj` through pypulseq's
-  public API). The one remaining angle -- a sub-`Sequence` extraction for
-  just the target frame -- is the approach `plotting/plotting.py`'s own
-  module docstring documents as tried and abandoned (an unexplained
-  ~16-22 m^-1 kx offset). Left as an accepted, documented residual cost.
-- [ ] **33. [kept deliberately, not a bug] `ReadoutGrads.max_blip_area` is
-  dead under the current POPE geometry.** Set in both branches, returned
-  in the dataclass, never read elsewhere -- but a comment in
-  `lib/make_readout_grads.py` explains it was load-bearing pre-POPE
-  (symmetric-ramp case, `S = Nx*deltak + max_blip_area`) and stays in
-  case of a future revert to symmetric-slew readout.
-- [ ] **50. `preprocessing/preprocess.py`'s module docstring contradicts
-  the rest of the repo.** Its first paragraph still says "this module has
-  NOT been run end-to-end against real data" -- while the
-  `preprocessing/` section of CLAUDE.md records exactly that run:
-  `preprocess.py` -> `run_rss.py` on `wb_2.4mm` (GE_UHP) against a real
-  MATLAB/BART RSS reference, 0.19% relative L2 error, Pearson r=0.999997,
-  metadata matching exactly. Rewrite the docstring to point at that
-  validation instead of disclaiming it.
+- [x] **17.** Resolved: `lib/trap4ge.py`'s docstring no longer claims a
+  "both Siemens (10us) and GE (4us) raster" dual-raster rationale --
+  states plainly that `crt` is GE-only now, that the round-up is a
+  measured no-op at `crt == grad_raster_time` (today's setting), and
+  cross-references CLAUDE.md's own `trap4ge` paragraph for the fuller
+  story. Kept the function itself unchanged (right net if `crt` ever
+  reverts to `20e-6`). Did not add a dedicated no-op-pinning test -- the
+  claim is now stated as measured fact in the docstring rather than
+  needing a regression guard of its own.
+- [x] **32.** Closed as investigated, accepted as-is -- no code change.
+  Item 29 already eliminated the actual duplicate computation this
+  worried about; the one remaining angle (sub-`Sequence` extraction) is
+  the approach `plotting/plotting.py`'s own module docstring already
+  documents as tried and abandoned. Nothing further to do.
+- [x] **33.** Closed as kept deliberately, not a bug -- no code change.
+  `lib/make_readout_grads.py` already carries the comment explaining
+  `ReadoutGrads.max_blip_area`'s pre-POPE load-bearing use and why it
+  stays for a possible future revert.
+- [x] **50.** Resolved: `preprocessing/preprocess.py`'s module docstring
+  now leads with the real end-to-end validation (`wb_2.4mm`, GE_UHP,
+  0.19% rel. L2 error, r=0.999997 against a MATLAB/BART reference)
+  instead of disclaiming it as never run. Also fixed a stale test-name
+  typo found while rewriting it: the docstring cited
+  `test_preprocess_scatter_frame_places_data_at_correct_indices`, which
+  doesn't exist -- the real name is
+  `test_scatter_frame_places_data_at_correct_indices`.
 - [ ] **51. `ge/coppe.py` and `ge/README.md` are invisible in CLAUDE.md.**
   Zero mentions of "coppe" even though the GE export section enumerates
   every other `ge/` module by name, and `coppe.py` is the largest file in
@@ -328,14 +319,12 @@ below described). Original numbers kept for provenance:
   about is live again with a concrete target (`GatheredSenseB0`'s
   `c_phasors`). Worth a line in CLAUDE.md's `recon/`/B0 section
   connecting the two rather than leaving the pointer dangling.
-- [ ] **54. `params.py`'s `seed` comment still contradicts the default it
-  sits on.** `params.py:290-294` says "None = a fresh unseeded rng each
-  run (current default behavior)" immediately above `seed = 0`. Same
-  contradiction `main.py`'s copy of the comment was already fixed for
-  (item 20), left in place at the definition site.
-- [ ] **55. `params.py`'s `PNSwt` comment points the wrong direction.**
-  `:274-275` says "see the 'PNS-driven slew limits' comment below"; that
-  comment is above it, not below.
+- [x] **54.** Resolved: `params.py`'s `seed` comment now correctly states
+  that `seed = 0` (int, reproducible) is the actual default, and `None`
+  (unseeded, fresh mask each run) is the alternative -- matching
+  `main.py`'s already-fixed copy (item 20).
+- [x] **55.** Resolved: `params.py`'s `PNSwt` comment now says "see the
+  'PNS-driven slew limits' comment above", matching where it actually is.
 - [x] **56.** Resolved by `1ebb2bb`: `noise.py`'s `sys_seq` now builds
   from `copy.deepcopy(params.sys)` (full hardware), matching
   `ArbEPI.py`/`EPIcal.py`, with a comment explaining the choice has no
@@ -356,28 +345,20 @@ below described). Original numbers kept for provenance:
   of the reproduction record still holds exactly (25000 samples at the 4
   us raster, matching MATLAB's 25001). Re-record only the magnitude in
   CLAUDE.md, and extend the disclaimer to cover the POPE change too.
-- [ ] **67. `preprocessing/nifti_io.py`'s module docstring describes
-  `run_b0map`'s pre-resize behavior.** It says the field map is written
-  "on the deGRE grid, so its voxel size comes from `fov_degre`, not
-  `fov`". `run_b0map.py:119-123` actually passes the *EPI*-grid
-  `b0map_hz` with `fov=seq_params.fov`, and its own adjacent comment says
-  "now on the EPI grid/fov like every other NIfTI this pipeline writes".
-  `nifti_io`'s docstring is the stale half, and names the exact wrong
-  value someone would "restore" it to.
+- [x] **67.** Resolved: `preprocessing/nifti_io.py`'s module docstring now
+  says the field map is written on the EPI grid (`fov`, not `fov_degre`),
+  matching what `run_b0map.py` actually does and its own adjacent comment.
 - [x] **68.** Resolved alongside item 46: both smoke tests now call
   `check_seq_feasibility(seq, load_params().spec)` instead of hardcoding
   `SCANNERS['GE_UHP']`, matching the scanner the fixture-built sequences
   actually use (and the sibling PNS regression test's own pattern).
-- [ ] **69. `preprocessing/smaps.py`'s `cal_size` "crop" is a zero-*pad*
-  on z at this repo's real dimensions.** `estimate_smaps` resizes
-  k-space to `(ncoils, cal_size, cal_size, cal_size)` = 24^3, but
-  `Nz_degre = 21 < 24`, so sigpy pads z rather than cropping it. Not a
-  geometry bug (k-space zero-padding interpolates while preserving FOV),
-  but two docstring claims are then wrong: "center-crop" is true only for
-  x/y, and "EspiritCalib's own crop becomes a no-op" now means a
-  24-wide calibration region on z with 3 synthetic-zero rows, a small real
-  effect on the fit. Either clamp per axis (`min(cal_size, n)`) or state
-  explicitly that z is padded and why that's acceptable.
+- [x] **69.** Resolved via the docstring option (not a functional change):
+  `estimate_smaps`'s `cal_size` docstring now says the resize is a crop
+  only on axes where the source is larger, explicitly names that z is
+  zero-padded at this repo's real dims (`Nz_degre=21 < 24`), and
+  qualifies the "EspiritCalib's own crop becomes a no-op" claim as
+  holding only for x/y. No functional change (still not a geometry bug --
+  k-space zero-padding preserves FOV).
 - [x] **79. `b0map.jl`'s `l2b`/`niter` recording gap.** Resolved by
   `f00e2ee`: those CLI arguments were removed outright, the writer no
   longer emits an `l2b` attribute, and `config.py` documents the choice
@@ -422,17 +403,10 @@ below described). Original numbers kept for provenance:
   and give CLAUDE.md's `recon/` section a B0 subsection covering the sign
   convention, the ms/Hz calling convention, the `nbins` finding, and
   whatever item 82 settles on for `L`.
-- [ ] **84. [narrowed] `pyproject.toml`'s dangling "see recon/README"
-  comment is the one remaining piece of this item; the README
-  architecture-tree gap it originally named was already fixed by
-  `f00e2ee`.** `f00e2ee` added `gre_diagnostics.py` under `preprocessing/`
-  and `operators_b0.py`/`b0_correction.py`/`save_result.py`/
-  `run_b0_recon.py`/`sweep_time_segments.py`/`benchmark_b0_cost.py` under
-  `recon/` to README's architecture tree -- confirmed current against the
-  real directory listing. Only `pyproject.toml`'s `recon` extra comment
-  ("see recon/README or top-level docs for the CUDA wheel selection this
-  machine needs") is still stale: no `recon/README*` exists. Fix that one
-  line.
+- [x] **84.** Resolved: `pyproject.toml`'s `recon` extra comment now
+  points only at CLAUDE.md's `recon/` section (and says explicitly that
+  no `recon/README` exists), dropping the dangling "see recon/README"
+  half.
 - [ ] **85. `tests/test_recon_operators_b0.py`'s "realistic regime" is
   the toy grid `sweep_time_segments.py` was written to replace, and its
   tests pin the `nbins` value the code documents as broken.**
@@ -461,21 +435,15 @@ below described). Original numbers kept for provenance:
   separate. This repo's own CLAUDE.md "Commit conventions" section
   already directs that commits carry no AI identity; source shipped by
   those commits is the same question.
-- [ ] **95. `run_b0map.py`'s two `# noqa: BLE001` codes are inert, and
-  one is doubly so.** `preprocessing/run_b0map.py:94`/`:108` both carry
-  `BLE001` suppressions, but `BLE` isn't in `pyproject.toml`'s `select =
-  ["E", "F", "I"]` (item 48's territory), so neither does anything today
-  -- and `:108` catches a *narrow* exception
-  (`subprocess.CalledProcessError`), so `BLE001` wouldn't fire there even
-  if `BLE` were enabled. The comments are worth keeping; the codes are
-  cargo-culted from the five sibling batch drivers whose `except
-  Exception` form does match the rule. Fold into item 48, whose proposed
-  `B` ruleset would newly flag `:108`'s suppression as unused.
-- [ ] **100. Item 84's README-architecture-tree claim was already fixed
-  by `f00e2ee`; only the `pyproject.toml` sub-claim (see item 84 above,
-  now narrowed) is still open.** Recorded here only as a pointer so a
-  future reader doesn't re-derive this from scratch -- item 84 above is
-  already the corrected, narrowed version.
+- [x] **95.** Resolved: removed both inert `# noqa: BLE001` codes from
+  `preprocessing/run_b0map.py`, keeping the explanatory comments they were
+  attached to (`:94`'s "optional input, degrade gracefully" and `:108`'s
+  "mirrors the sibling batch drivers' try/catch"). `BLE` was never added
+  to `pyproject.toml`'s `select` (item 48's ruleset decision stayed
+  narrow, only the two concretely-actionable `B023`/`ARG001` findings),
+  so there was nothing left for these codes to suppress.
+- [x] **100.** Closed as superseded -- item 84 above is the corrected,
+  now-resolved version; nothing further to point at.
 - [ ] **101. Two small doc gaps, worth folding into the next general docs
   pass.** (a) `preprocessing/matio.py:7-9`'s module docstring still
   quotes `schedules`' pre-echo-time shape (`h5py raw (2, 60, 20, 30)` ->
@@ -490,18 +458,10 @@ below described). Original numbers kept for provenance:
   `pyproject.toml:19` lists as a real core dependency and which
   `sequences/ArbEPI.py:23`/`sequences/deGRE.py:48` both actually import.
   Add it to the list.
-- [ ] **106. `preprocessing/calibrate_delay.py:31`'s `_matlab_round`
-  docstring cites the wrong file for the third copy of the same
-  helper.** It says "also duplicated in smaps.py", but `smaps.py` has no
-  such function -- the real third copy is in `preprocessing/
-  grid_resize.py:56-58`, whose own docstring correctly points back at
-  `oephase.py`'s original ("see preprocessing/oephase.py's own copy,
-  which handles negatives too, for the general case"). Confirmed:
-  `grep -rn "_matlab_round" .` finds exactly four hits --
-  `oephase.py` (original), `grid_resize.py` (non-negative copy, correctly
-  cross-referenced), `calibrate_delay.py` (non-negative copy, this
-  finding's wrong cross-reference), and its own test file. Doc-only,
-  one-line fix: `smaps.py` -> `grid_resize.py`.
+- [x] **106.** Resolved: `preprocessing/calibrate_delay.py`'s
+  `_matlab_round` docstring now says "also duplicated in grid_resize.py",
+  the real third copy, instead of `smaps.py` (which has no such
+  function).
 
 ## Test & tooling health
 
