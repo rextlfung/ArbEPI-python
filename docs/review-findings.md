@@ -137,22 +137,32 @@ created this file (2026-09-03, against `8baadb1`).
   `seq.set_definition('FOV', params.fov_degre)`. Confirmed in a fresh
   build: `output/deGRE.seq`'s `[DEFINITIONS]` now reads `FOV 0.216 0.216
   0.042`, matching the sequence's actual encoding.
-- [ ] **62. [measured] deGRE exports the *prescribed* `TE_degre` while
-  playing a slightly different pair; ΔTE is not preserved exactly.**
-  `delay_te` is computed per echo independently as `ceil((te - te_min) /
-  raster) * raster`; the two prescribed TEs differ by `1 /
-  fat_offres_freq` = 2236.90 us, not a multiple of the 4 us raster, so the
-  two ceils land on different sub-raster residues. Measured (folding in
-  items 36/37's corrections): realized TE = 3.120 / 5.356 ms vs.
-  prescribed 3.0369 / 5.2738 ms (83.1 us / 82.2 us late), realized ΔTE =
-  2.2360 ms vs. 2.23690 ms prescribed (0.90 us short, 0.040%). Two
-  consequences: (a) `ArbEPI.py:338` writes the *prescribed* `TE_degre`
-  into `scan_info.mat`, and `b0map.jl` divides the echo phase difference
-  by that ΔTE to get Hz -- so every field map carries a 0.040% scale
-  error; (b) residual fat phase after "cancellation" is 0.0025 rad, not
-  exactly zero. Both small, but the exported number should be the
-  realized one. Fix: derive `delay_te[1]` from `delay_te[0]` plus a
-  raster-multiple offset, and export the realized pair.
+- [x] **62.** Resolved: `sequences/deGRE.py` now derives `delay_te[1]`
+  from `delay_te[0]` plus `round(dTE_prescribed / raster) * raster`
+  (nearest raster multiple of the prescribed ΔTE) instead of ceiling each
+  echo's delay independently against `te_min` -- guaranteeing the
+  realized ΔTE is within half a raster step (2 us) of prescribed, vs. up
+  to a full raster step (4 us) of drift possible with two independent
+  ceils. `generate_degre` now also patches `scan_info.mat`'s `TE_degre`
+  field with the realized (not prescribed) pair after
+  `sequences/ArbEPI.py` writes it (`main.py` always runs `generate_arbepi`
+  first; the patch is a no-op skip, not an error, if `scan_info.mat`
+  doesn't exist yet, so `generate_degre` is still callable standalone) --
+  fixes the 0.040% scale error `b0map.jl`'s ΔTE-based Hz conversion was
+  carrying. CLAUDE.md's stale "deGRE doesn't touch scan_info.mat" claim
+  updated to match. Verified end to end (`main.py --ge`, full build):
+  `scan_info.mat`'s `TE_degre` reads `[3.040, 5.276]` ms (realized) after
+  `deGRE.seq` builds, not `[3.0369, 5.2738]` ms (prescribed); all four
+  sequences still build, pass timing checks, and pass GE feasibility.
+  Caveat found while verifying: at this repo's actual current
+  `te_min`/`TE_degre` values (post items 36/37's fixes), the old
+  independent-ceil method happens to land on the same nearest-raster ΔTE
+  as the new method by coincidence -- so this fix doesn't change the
+  *currently exported* numbers for the default config, only the general
+  case (confirmed by a 200k-trial sweep: ~25% of random `te_min`/`TE_degre`
+  combinations diverge, and the new method is always at least as close to
+  the prescribed ΔTE, provably within half a raster step vs. the old
+  method's up-to-a-full-raster-step worst case).
 - [x] **63.** Partially resolved by `1ebb2bb`: `lib/make_readout_grads.py`'s
   comment now states what actually happens (blips can start up to 2
   samples before the ADC window closes) instead of the opposite. The

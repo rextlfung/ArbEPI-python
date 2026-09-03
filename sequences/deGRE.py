@@ -43,6 +43,7 @@ import copy
 import math
 import os
 
+import hdf5storage
 import numpy as np
 import pypulseq as pp
 from tqdm import tqdm
@@ -161,12 +162,29 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         + Tread / 2
     )
     raster = sys.grad_raster_time
-    delay_te = np.array([math.ceil((te - te_min) / raster) * raster for te in params.TE_degre])
+    # Echo 0 anchors the pair: ceil'd so its realized TE is never earlier
+    # than prescribed, same as before. Every later echo's delay is derived
+    # from delay_te[0] plus the *rounded* (nearest raster multiple, not
+    # ceil'd independently) prescribed TE difference, so the realized
+    # ΔTE = params.TE_degre[c] - params.TE_degre[0] to within half a
+    # raster step (2 us) instead of drifting by up to a full raster step
+    # when each echo's delay is ceil'd independently against te_min (the
+    # two ceils can land on different sub-raster residues -- see
+    # docs/review-findings.md item 62). This matters because dTE feeds
+    # b0map.jl's Hz-per-radian scaling and the fat-cancellation argument in
+    # params.py's TE_degre docstring, both of which assume the *prescribed*
+    # dTE is what's actually played.
+    delay_te = np.empty(len(params.TE_degre))
+    delay_te[0] = math.ceil((params.TE_degre[0] - te_min) / raster) * raster
+    for c in range(1, len(params.TE_degre)):
+        dte_prescribed = params.TE_degre[c] - params.TE_degre[0]
+        delay_te[c] = delay_te[0] + round(dte_prescribed / raster) * raster
     if np.any(delay_te < 0):
         raise ValueError(
             f'params.TE_degre {params.TE_degre * 1e3} ms is below the minimum achievable TE '
             f'{te_min * 1e3:.3f} ms for at least one echo -- increase TE_degre.'
         )
+    te_realized = te_min + delay_te  # the pair actually played -- exported below, not the prescribed one
     tr_min = (
         max(pp.calc_duration(rf), pp.calc_duration(gz_ss))
         + pp.calc_duration(gz_ssr)
@@ -237,5 +255,25 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     seq.set_definition('FOV', params.fov_degre)
     seq.set_definition('Name', seqname)
     seq.write(os.path.join(params.output_dir, f'{seqname}.seq'))
+
+    # Patch scan_info.mat's TE_degre with the realized pair (te_realized),
+    # not the prescribed params.TE_degre sequences/ArbEPI.py wrote --
+    # b0map.jl divides the echo phase difference by this value to get Hz,
+    # so exporting the prescribed pair carries the ΔTE rounding error this
+    # function otherwise fixes (see docs/review-findings.md item 62).
+    # hdf5storage.savemat's default truncate_existing=False updates just
+    # this one key in place, leaving everything ArbEPI.py wrote untouched.
+    # main.py always runs generate_arbepi (which creates scan_info.mat)
+    # before generate_degre, but this function can also be called
+    # standalone -- skip the patch (not an error) if the file isn't there
+    # yet, since generate_degre() itself still needs nothing from it.
+    fn_scan_info = os.path.join(params.output_dir, 'scan_info.mat')
+    if os.path.exists(fn_scan_info):
+        hdf5storage.savemat(fn_scan_info, {'TE_degre': te_realized}, fmt='7.3')
+    else:
+        print(
+            f"  '{fn_scan_info}' not found -- run generate_arbepi first if you need "
+            "scan_info.mat's TE_degre updated to the realized (not prescribed) pair."
+        )
 
     return seq

@@ -1713,7 +1713,12 @@ params.py (load_params())  ──►  gen_sampling_masks(R, params)  ──►  
 
 `sequences/deGRE.generate_degre()` (deGRE: dual-echo GRE, written as
 `deGRE.seq` -- coil sensitivity maps + B0 field map, see that module's
-docstring) is independent — it doesn't touch `scan_info.mat`.
+docstring) doesn't *need* `scan_info.mat` to run (it can be called
+standalone), but does patch its `TE_degre` field with the realized
+(not prescribed) echo-time pair when the file already exists, since
+`main.py`'s call order always runs `generate_arbepi` first -- see
+`docs/review-findings.md` item 62 for why the realized pair, not
+`params.TE_degre`, is what needs to reach `b0map.jl`'s ΔTE scaling.
 
 ### Index convention — read this before touching lib/mask2epi.py or the sequence files
 
