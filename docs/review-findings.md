@@ -382,6 +382,70 @@ created this file (2026-09-03, against `8baadb1`).
   catastrophic-and-silent failure mode are real. Fix: derive the mask
   from `recon_frames`'s already-available `omegas` dataset, or at minimum
   switch to an RSS-across-coils check matching `recon_sigpy.py`.
+- [ ] **103. [measured] `sampling/ticaipi_sample.py`'s "exact coverage
+  over R frames" guarantee is false whenever the balanced `(Ry, Rz)`
+  factorization doesn't evenly divide `(Ny, Nz)` -- silently, with no
+  error and no test coverage of the failure case.** The module docstring
+  states as an unqualified guarantee: "the union over R consecutive
+  frames covers k-space exactly once." The implementation gets there by
+  taking the fixed-offset base pattern (`caipi_sample(N, R, 0)`) and
+  applying two *global* `np.roll`s (`y_shift` on axis 0, `kz_offset` on
+  axis 1) as `frame_idx` advances -- which only tiles k-space exactly once
+  when `Ny % Ry == 0` and `Nz % Rz == 0`; a global roll only permutes
+  residue classes correctly when the spacing evenly divides the grid.
+  Measured directly (summing all R per-frame boolean masks and checking
+  the union equals exactly 1 everywhere), reproduced independently:
+  `(Ny,Nz,R)=(240,45,4)` -> `Ry,Rz=2,2`, max overlap 2, **not** fully
+  covered; `(240,45,6)` -> `Ry,Rz=3,2`, max overlap 2, **not** fully
+  covered; `(240,45,9)`, this repo's actual production `R`, -> `Ry,Rz=3,3`,
+  which happens to divide evenly, fully covered. A ~1100-combination
+  sweep (in the original review) found the failure condition holds
+  exactly wherever the divisibility check fails (485/1100, 44%, fail) --
+  not a rounding artifact, a structural mismatch between `caipi_sample`'s
+  per-column-group internal offsetting and `ticaipi_sample`'s post-hoc
+  global roll on top of it. `tests/test_ticaipi_sample.py`'s
+  `test_ticaipi_full_coverage_over_R_frames` is parametrized only over
+  `([12,8],4)`, `([24,16],6)`, `([90,60],6)` -- all three happen to land on
+  evenly-dividing `Ry,Rz` pairs, so the suite never exercises the failure
+  case. Latent in this repo's own shipped config only because
+  `params.py` fixes `sampling_method='pd'` (not `'ticaipi'`) and the
+  production `R=9`/`Ny,Nz=240,45` happens to divide evenly -- but
+  `'ticaipi'` is a fully supported, documented `sampling_method` option,
+  and any user who switches to it with a different `R` (6, 7, 8, 10 are
+  all natural choices) silently gets some k-space locations
+  double-sampled and others never acquired, with no assertion or warning.
+  Fix: either raise when `Ny % Ry != 0 or Nz % Rz != 0` and document the
+  divisibility requirement, or pass the per-frame offset through to
+  `caipi_sample`'s own `shift_offset` parameter per-column-group instead
+  of a post-hoc global roll (which is what would make the guarantee hold
+  generally).
+- [ ] **104. `ge/blocks.py:93`'s `_compare_gradients` never checks
+  `.delay` for non-trapezoid ('grad'-type) gradients, unlike its own trap
+  branch two lines above.** The trap branch (`:85-92`) compares
+  `rise_time`/`flat_time`/`fall_time`/`delay`; the non-trap branch is just
+  `return g1.shape_id == g2.shape_id`, with no delay check at all.
+  `seq2ceq.py`'s `compare_blocks`/`ParentBlock` registration
+  (`:96-125`) uses this to decide whether a block instance is "the same
+  parent" as an already-registered one; the first matching instance's
+  `.delay` becomes the representative, and `writeceq.py`'s `_write_grad`
+  serializes only that one delay into the `.pge` for every dynamic
+  instance sharing that parent. The only 'grad'-type (arbitrary/extended
+  trapezoid) gradient this repo produces is the POPE composite readout
+  `gro` (`lib/make_readout_grads.py:301`, via `pp.add_gradients`), so two
+  instances sharing a `shape_id` but played at genuinely different
+  in-block delays would silently dedup to one parent and corrupt the
+  exported timing for the rest. Verified dormant, not live: grouped every
+  'grad'-type event in all four shipped sequences by `(axis, shape_id)`
+  -- 3 distinct shapes each in `ArbEPI.seq`/`EPIcal.seq`, 0 with more than
+  one distinct `.delay` (`deGRE.seq`/`noise.seq` have no 'grad'-type
+  events at all). No dedicated test exists for `ge/blocks.py`'s
+  comparison logic (`grep -rl "compare_blocks\|_compare_gradients"
+  tests/` -> nothing); it's only reached incidentally by
+  `test_seq2ceq.py`'s whole-sequence smoke test, which never hits this
+  path today. Same disposition as items 43/71/98 (latent, not live) --
+  but a real asymmetry in the dedup logic that a future timing tweak to
+  the composite readout could trip silently. Fix: add a `g1.delay ==
+  g2.delay` check to the non-trap branch too.
 
 ## Consistency & documentation
 
@@ -621,6 +685,18 @@ created this file (2026-09-03, against `8baadb1`).
   `pyproject.toml:19` lists as a real core dependency and which
   `sequences/ArbEPI.py:23`/`sequences/deGRE.py:48` both actually import.
   Add it to the list.
+- [ ] **106. `preprocessing/calibrate_delay.py:31`'s `_matlab_round`
+  docstring cites the wrong file for the third copy of the same
+  helper.** It says "also duplicated in smaps.py", but `smaps.py` has no
+  such function -- the real third copy is in `preprocessing/
+  grid_resize.py:56-58`, whose own docstring correctly points back at
+  `oephase.py`'s original ("see preprocessing/oephase.py's own copy,
+  which handles negatives too, for the general case"). Confirmed:
+  `grep -rn "_matlab_round" .` finds exactly four hits --
+  `oephase.py` (original), `grid_resize.py` (non-negative copy, correctly
+  cross-referenced), `calibrate_delay.py` (non-negative copy, this
+  finding's wrong cross-reference), and its own test file. Doc-only,
+  one-line fix: `smaps.py` -> `grid_resize.py`.
 
 ## Test & tooling health
 
@@ -827,3 +903,30 @@ created this file (2026-09-03, against `8baadb1`).
   items 33/73 (those are struct fields/parameters, not a whole unused
   function). Either delete it, or wire `rampsamp2cart`'s inner loop to
   call it (needs batching to be useful as-is).
+- [ ] **105. [measured] `recon_frames.py`'s `use_parfor=True` path
+  re-pickles/re-transmits the full `smaps` array once per frame, not once
+  total.** `preprocessing/recon_frames.py:73-75` binds `smaps` into
+  `functools.partial(_recon_one_frame, recon_fn=recon_fn, smaps=smaps)`
+  and passes the resulting `worker` to `executor.map(worker,
+  frame_data)`. `ProcessPoolExecutor.map` pickles each dispatched task
+  (callable + bound args) independently onto its internal call queue --
+  binding a large array via `partial` does not send it once; it gets
+  re-serialized per task. Verified with a minimal reproduction
+  (a module-level class wrapping an array, instrumented `__reduce__`
+  call-counting, run through `ProcessPoolExecutor.map` exactly as this
+  code does): confirmed one pickle of the bound array per dispatched
+  task, not one for the pool's lifetime. At this repo's own documented
+  production scale (`Nx,Ny,Nz,Nvcoils=240,240,45,18`, `Nframes=30`),
+  `smaps` is `240*240*45*18*8` bytes ~= 356 MiB (complex64); with
+  `use_parfor=True` that's re-pickled and piped to a worker process on
+  every one of the 30 frames -- roughly 10.4 GiB of redundant IPC
+  serialization for data that never changes across frames, on a module
+  whose surrounding design (the frame-by-frame HDF5 streaming a few
+  lines above, explicitly commented against exceeding physical RAM) is
+  otherwise careful about exactly this kind of cost. No test coverage of
+  the `use_parfor=True` path at all (`grep -rn "use_parfor" tests/` ->
+  nothing) -- it's an opt-in feature (`cfg.use_parfor`, default `False`),
+  so nothing in this repo's own pipeline is affected until someone
+  enables it. Fix: pass `smaps` via `ProcessPoolExecutor(initializer=...,
+  initargs=(smaps,))` (set once per worker process) or a shared-memory
+  array, rather than binding it into the per-task callable.
