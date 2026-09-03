@@ -29,18 +29,23 @@ own Gmri default), not swept against a real error bound the way Fable's
 staged plan recommends -- see CLAUDE.md's recon/ section for that open item.
 """
 
-import math
+import warnings
 
 import torch
 from mirtorch.linear import BlockDiagonal
-from mirtorch.linear.linearmaps import LinearMap
 from mirtorch.linear.mri import mri_exp_approx
 
+from recon.operators import GatheredSense
 from recon.solvers import poweriter
 
 
-class GatheredSenseB0(LinearMap):
+class GatheredSenseB0(GatheredSense):
     """GatheredSense (recon/operators.py) plus time-segmented B0 correction.
+    Subclasses GatheredSense and delegates to its _apply/_apply_adjoint
+    for the per-segment FFT/gather and scatter/IFFT/coil-combine (the
+    exact same math, once per segment, with c_phasors[l] pre-multiplied
+    into x on the way in) rather than a second copy of that code -- see
+    docs/review-findings.md item 89.
 
     smaps: (Nc,*N) complex64. samp: (*N,) bool -- K True entries.
     pos: (K,) int64 -- for each sampled location, its row index into
@@ -76,21 +81,13 @@ class GatheredSenseB0(LinearMap):
         self, smaps: torch.Tensor, samp: torch.Tensor,
         pos: torch.Tensor, b_by_echo: torch.Tensor, c_phasors: torch.Tensor,
     ):
-        N = tuple(smaps.shape[1:])
-        Nc = smaps.shape[0]
-        idx = torch.nonzero(samp.reshape(-1), as_tuple=False).squeeze(-1)
-        assert pos.shape[0] == idx.numel(), (
-            f"pos has {pos.shape[0]} entries, expected {idx.numel()} sampled locations"
+        super().__init__(smaps, samp)  # sets smaps/idx/N/Nc/dims, LinearMap size (K,Nc)
+        assert pos.shape[0] == self.idx.numel(), (
+            f"pos has {pos.shape[0]} entries, expected {self.idx.numel()} sampled locations"
         )
-        assert c_phasors.shape == (b_by_echo.shape[1],) + N, (
-            f"c_phasors shape {tuple(c_phasors.shape)} != (L,*N) = {(b_by_echo.shape[1],) + N}"
+        assert c_phasors.shape == (b_by_echo.shape[1],) + self.N, (
+            f"c_phasors shape {tuple(c_phasors.shape)} != (L,*N) = {(b_by_echo.shape[1],) + self.N}"
         )
-        super().__init__(N, (idx.numel(), Nc))
-        self.smaps = smaps
-        self.idx = idx
-        self.N = N
-        self.Nc = Nc
-        self.dims = tuple(range(1, len(N) + 1))
         self.L = b_by_echo.shape[1]
         self.pos = pos
         self.b_by_echo = b_by_echo
@@ -99,29 +96,17 @@ class GatheredSenseB0(LinearMap):
     def _apply(self, x: torch.Tensor) -> torch.Tensor:
         y = torch.zeros(self.size_out, dtype=self.smaps.dtype, device=x.device)
         for il in range(self.L):
-            xc = (x * self.c_phasors[il]) * self.smaps  # (Nc,*N)
-            kc = torch.fft.fftshift(
-                torch.fft.fftn(torch.fft.ifftshift(xc, dim=self.dims), dim=self.dims, norm="ortho"),
-                dim=self.dims,
-            )
-            kc_flat = kc.reshape(self.Nc, -1).T  # (prod(N),Nc), spatial C-order flatten
+            kc_gathered = super()._apply(x * self.c_phasors[il])  # (K,Nc)
             b_il = self.b_by_echo[self.pos, il : il + 1]  # (K,1), gathered lazily
-            y = y + b_il * kc_flat[self.idx, :]
+            y = y + b_il * kc_gathered
         return y
 
     def _apply_adjoint(self, y: torch.Tensor) -> torch.Tensor:
         x = torch.zeros(self.N, dtype=self.smaps.dtype, device=y.device)
         for il in range(self.L):
             b_il = self.b_by_echo[self.pos, il : il + 1].conj()  # (K,1)
-            yw = y * b_il  # (K,Nc)
-            kc_full = torch.zeros(math.prod(self.N), self.Nc, dtype=y.dtype, device=y.device)
-            kc_full[self.idx, :] = yw
-            kc_full = kc_full.T.reshape(self.Nc, *self.N)
-            kc_shifted = torch.fft.ifftshift(kc_full, dim=self.dims)
-            xc = torch.fft.fftshift(
-                torch.fft.ifftn(kc_shifted, dim=self.dims, norm="ortho"), dim=self.dims
-            )
-            x = x + self.c_phasors[il].conj() * (xc * self.smaps.conj()).sum(dim=0)
+            xc = super()._apply_adjoint(y * b_il)  # (Nc,*N)-summed scatter/IFFT/coil-combine
+            x = x + self.c_phasors[il].conj() * xc
         return x
 
 
@@ -142,8 +127,6 @@ def _check_b_weight_row_sums(b: torch.Tensor, frame_idx: int | str, tol: float =
     row_sums = b.sum(dim=1).abs()
     lo, hi = row_sums.min().item(), row_sums.max().item()
     if lo < 1 - tol or hi > 1 + tol:
-        import warnings
-
         warnings.warn(
             f"build_encoding_operator_b0: frame {frame_idx}'s b_weights row sums "
             f"range [{lo:.4f}, {hi:.4f}] (want close to 1.0) -- the segmentation fit "

@@ -205,7 +205,8 @@ below described). Original numbers kept for provenance:
   other call sites (`tests/test_recon_operators_b0.py` x2,
   `recon/sweep_time_segments.py`) to pass `pos=torch.arange(K)` alongside
   their existing `(K,L)` tensor, an identity gather that reproduces the
-  old behavior exactly.
+  old behavior exactly. Later confirmed with the real `torch`/`mirtorch`
+  extras: all 32 `tests/test_recon_*.py` cases pass.
 - [x] **76.** Resolved by `1ebb2bb`: `operators_b0.py`'s
   `estimate_spectral_norm` now delegates to `recon/solvers.py`'s
   `poweriter(A.apply, A.adjoint, x0, niter=niter, tol=tol)` (defaults
@@ -613,21 +614,21 @@ below described). Original numbers kept for provenance:
   already makes it near-free) -- unlike item 89's `poweriter`, where the
   duplication was a second *implementation*, not just an unused
   parameter.
-- [ ] **89. `GatheredSenseB0` is `GatheredSense` copied verbatim plus two
-  factors, and `estimate_spectral_norm` is `poweriter` written a second
-  time.** `operators_b0.py:83-107`'s `_apply`/`_apply_adjoint` reproduce
-  `operators.py:49-66` line for line -- same gather, same scatter, same
-  `fftshift(fftn(ifftshift(.)))` convention `operators.py`'s docstring
-  justifies at length -- with `c_phasors[il]`/`b_weights[:,il]` inserted.
-  `GatheredSenseB0`'s own docstring states the L=1 reduction and a test
-  proves it numerically, so the collapse is already justified: make
-  `GatheredSense` the L=1 case, or subclass/delegate.
-  **[partially resolved by `1ebb2bb`, item 76]** `estimate_spectral_norm`
-  no longer duplicates `poweriter` -- it now calls
-  `recon/solvers.py`'s `poweriter` directly. The remaining, still-open
-  half is the `GatheredSenseB0`/`GatheredSense` `_apply`/`_apply_adjoint`
-  duplication. Minor, same file: `:127`'s function-body `import warnings`
-  is the only one in the repo not at module level.
+- [x] **89.** Fully resolved (the `estimate_spectral_norm`/`poweriter`
+  half was already fixed by `1ebb2bb`, item 76). `GatheredSenseB0` now
+  `class GatheredSenseB0(GatheredSense)`, delegating to
+  `GatheredSense._apply`/`_apply_adjoint` (via `super()._apply(x *
+  self.c_phasors[il])` / `super()._apply_adjoint(y * b_il)`) for the
+  per-segment FFT/gather and scatter/IFFT/coil-combine, instead of a
+  second copy of that code with `c_phasors[il]`/`b_by_echo` inserted --
+  `__init__` also delegates (`super().__init__(smaps, samp)`) rather than
+  duplicating the `idx`/`N`/`Nc`/`dims`/`LinearMap.__init__` setup. Also
+  moved the function-body `import warnings` to module level (item 89's
+  minor note). Verified with the real `torch`/`mirtorch` extras (`uv sync
+  --extra test --extra recon`): all 32 `tests/test_recon_*.py` cases pass,
+  including `test_build_encoding_operator_b0_matches_manual_per_frame_
+  construction` (the exact check that the delegated math matches the
+  original inline math) and `test_adjoint_is_self_consistent`.
 - [x] **90.** Resolved: `build_encoding_operator_b0` now takes
   `echo_times_yz` at its native `(Ny,Nz,Nt)` shape and looks up each
   sampled location via `echo_times_flat[idx % (Ny*Nz), it]` (torch's
@@ -641,8 +642,11 @@ below described). Original numbers kept for provenance:
   (Ny*Nz)`-based lookup vs. the old dense-broadcast-then-index result,
   exact match on synthetic data) and updated
   `tests/test_recon_operators_b0.py`'s fixture/assertions to match the
-  new signature; couldn't run the torch-gated test suite itself in this
-  environment (no `.venv-recon` available here).
+  new signature. Later confirmed with the real `torch`/`mirtorch` extras
+  (`uv sync --extra test --extra recon`, installed successfully in this
+  environment after all): `test_build_encoding_operator_b0_matches_
+  manual_per_frame_construction` passes, along with all 32
+  `tests/test_recon_*.py` cases.
 - [x] **91.** Resolved (the Python half -- `preprocessing/julia/b0map.jl`'s
   Julia copy is a separate language, not mergeable): `gre_diagnostics.py`
   now does `from preprocessing.run_rss import _ift3` instead of keeping a
