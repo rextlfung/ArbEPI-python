@@ -166,9 +166,19 @@ def gather_calib_ksp(ksp_epi_zf: np.ndarray, idx_full: np.ndarray) -> np.ndarray
     return out
 
 
-def main(
+def run_b0_corrected_calib_recon(
     datdir: str, seqname: str = 'ArbEPI', L: int = 32, nbins: int = 128, device: str = 'cuda',
-) -> None:
+) -> dict:
+    """Core computation shared by main() (writes the nifti) and any other
+    consumer of the B0-corrected calibration-region reconstruction (e.g.
+    lowres_calib_freq_drift_check.py, which needs the same complex image
+    plus each frame's mean calibration echo time, not just the saved
+    magnitude-only nifti). Returns a dict: img_np [Nx_eff,Ny_eff,Nz_eff,Nt]
+    complex64, mean_te_ms [Nt] (mean calibration-region echo time per frame,
+    matching preprocessing/lowres_calib_t2star_check.py's
+    calib_mean_echo_time_ms but computed from the same already-loaded
+    echo_times_2d/calib_mask rather than a second file read), fov, grid
+    (native_calib_grid's return value), voxel_mm, n_calib."""
     device_t = torch.device(device if (device != 'cuda' or torch.cuda.is_available()) else 'cpu')
     recon_dir = os.path.join(datdir, 'recon')
     fn_ksp = os.path.join(recon_dir, f'{seqname}_epi_zf.h5')
@@ -200,6 +210,7 @@ def main(
     calib_mask = compute_calib_mask(omegas)  # (Ny, Nz)
     n_calib = int(calib_mask.sum())
     print(f'Calibration region: {n_calib} / {calib_mask.size} (ky, kz) locations')
+    mean_te_ms = echo_times_2d[calib_mask, :].mean(axis=0) * 1000  # (Nt,) ms
 
     grid = native_calib_grid(calib_mask, fov, Nx)
     xs, ys, zs = grid['x_slice'], grid['y_slice'], grid['z_slice']
@@ -249,6 +260,20 @@ def main(
     print('Reconstructing (adjoint only -- no iteration, no regularization)...')
     img = A.adjoint(ksp_calib)  # (Nx_eff, Ny_eff, Nz_eff, Nt) complex64
     img_np = img.detach().cpu().numpy()
+
+    return dict(
+        img_np=img_np, mean_te_ms=mean_te_ms, fov=fov, grid=grid, voxel_mm=voxel_mm,
+        n_calib=n_calib, calib_mask=calib_mask, L=L, nbins=nbins,
+    )
+
+
+def main(
+    datdir: str, seqname: str = 'ArbEPI', L: int = 32, nbins: int = 128, device: str = 'cuda',
+) -> None:
+    result = run_b0_corrected_calib_recon(datdir, seqname, L, nbins, device)
+    img_np, fov = result['img_np'], result['fov']
+    grid, voxel_mm, n_calib, calib_mask = result['grid'], result['voxel_mm'], result['n_calib'], result['calib_mask']
+    Nx_eff, Ny_eff, Nz_eff = grid['Nx_eff'], grid['Ny_eff'], grid['Nz_eff']
 
     out_dir = os.path.join(datdir, 'recon', 'basic')
     os.makedirs(out_dir, exist_ok=True)
