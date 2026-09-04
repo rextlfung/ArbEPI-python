@@ -30,26 +30,28 @@ log. Every migrated item was re-verified against the tree at `8baadb1`
 --stat` shows only CLAUDE.md itself changed since the last source commit
 (`f00e2ee`), so every still-open item's cited code is exactly as
 described below. Items 103+ are new findings from the review pass that
-created this file (2026-09-03, against `8baadb1`).
+created this file (2026-09-03, against `8baadb1`). Items 107-118 are new
+findings from a later pass (2026-09-04, against `119a6e9`) that also
+re-verified every item above still marked `[x]`: all 106 were confirmed
+still resolved against the current tree (no source file changed between
+`8baadb1` and `119a6e9` except CLAUDE.md's own doc cleanup and one
+docs-plus-11-line-comment addition, `119a6e9`), so nothing needed
+reopening.
 
-## Current baseline (2026-09-03, against `8baadb1`)
+## Current baseline (2026-09-04, against `119a6e9`)
 
-Historical snapshot at the time this file was created -- **superseded by
-items 46/86's fixes below**: `uv run ruff check .` is now 29 errors, all
-`E501` (item 86 cleared the `F401`/`F841`); `uv run pytest` is now 126
-passed/15 skipped *regardless* of whether `output/` is present (item 46's
-`built_seq_dir` fixture removed the environment-dependence the two rows
-below described). Original numbers kept for provenance:
-
-- `uv run ruff check .` (after `uv sync --extra test --extra lint`): **31
-  errors** -- 29 `E501` + 1 `F401` + 1 `F841` (see item 86 for the
-  breakdown by file).
-- `uv run pytest` (plain main venv, no `output/` present): **120 passed,
-  20 skipped**.
-- `uv run pytest` (same venv, with `output/*.seq`/`*.pge` present from a
-  `main.py --ge` build): **125 passed, 15 skipped**. Not independently
-  re-measured with the `preprocessing` extras added; see item 70's table
-  for that combination as last recorded (149/154 passed).
+- `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
+  errors**, all `E501` -- unchanged from the previous pass.
+- `uv run pytest` (plain main venv): **126 passed, 15 skipped**, both with
+  and without `output/*.seq`/`*.pge` present (item 46's `built_seq_dir`
+  fixture keeps this environment-independent) -- unchanged from the
+  previous pass. Not independently re-measured with the `preprocessing`/
+  `recon` extras added this pass (see item 70's table for the
+  `preprocessing`-extras combination as last recorded, 149/154 passed);
+  this pass's `preprocessing`-extras run (55 passed, 5 skipped, scoped to
+  `tests/test_preprocessing_*.py` only) and `recon`-extras run (34 passed,
+  scoped to `tests/test_recon_*.py`) both match their own last-recorded
+  counts.
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, GE_MR750, `PNSwt = [0.8, 1.0, 0.7]`, seed 0) --
   all four sequences `.ok`:
@@ -58,11 +60,17 @@ below described). Original numbers kept for provenance:
   |---|---|---|---|---|
   | `ArbEPI.seq` | 79.8% | 0.1484 | 50.00 mT/m | 119.0 T/m/s |
   | `EPIcal.seq` | 78.1% | 0.1484 | 50.00 mT/m | 119.0 T/m/s |
-  | `deGRE.seq` | 77.4% | 0.2456 | 49.76 mT/m | 174.3 T/m/s |
+  | `deGRE.seq` | 77.4% | 0.2556 | 49.76 mT/m | 174.3 T/m/s |
   | `noise.seq` | 0.0% | 0.0000 | 0.00 mT/m | 0.0 T/m/s |
 
-  All four numbers match the previously-recorded baseline exactly --
-  confirms the source tree really hasn't changed since the last pass.
+  Three of four numbers match the previously-recorded baseline exactly.
+  **`deGRE.seq`'s acoustics number does not**: this pass measured
+  **0.2556** (reproduced twice, deterministic), not the previously-recorded
+  0.2456 -- confirmed as a stale/typo'd number in the old table rather than
+  a real regression, since item 57's own re-verification text elsewhere in
+  this file already recorded 0.2556 for the same build after landing that
+  item's fix, and CLAUDE.md's GE-export section independently quotes the
+  same stale 0.2456 figure (see item 111 below).
 
 ## Correctness
 
@@ -267,6 +275,120 @@ below described). Original numbers kept for provenance:
   trap branch. Verified: full test suite still passes, including
   `test_seq2ceq.py`'s whole-sequence smoke tests over `ArbEPI.seq`/
   `EPIcal.seq` (the only sequences with 'grad'-type events).
+- [ ] **107. `ge/seq2ceq.py`'s consistency-check and gradient-heating loops
+  silently skip the sequence's final segment instance whenever it's a
+  complete (non-truncated) fit.** [measured] Two of the four
+  `nBlocksInSegment`-bounded block-walking loops added by item 98
+  (`seq2ceq.py:154` and `:175`, both `if n + seg.nBlocksInSegment >
+  ceq.nMax: break`) use a different, off-by-one formula from the other
+  two (`:83` and `:131`, both the correct `if n + seg.nBlocksInSegment - 1
+  > ceq.nMax: break`). For a segment instance starting at row `n` with
+  `nb` blocks, the last block it touches is row `n + nb - 1`; the instance
+  is complete iff `n + nb - 1 <= ceq.nMax`. The `:154`/`:175` formula
+  breaks one raster too early -- it treats a perfect, complete instance
+  ending exactly at `ceq.nMax` as if it were truncated, and never
+  processes it. Confirmed with a synthetic 4-TR, one-segment repro (8
+  blocks total, no trailing rows, gradient amplitude increasing each TR so
+  the true worst instance is the last one): the buggy gradient-heating
+  loop reports `Emax_n = 5` when the true worst instance starts at row 7.
+  Also confirmed against the real committed `output/ArbEPI.seq` (41400
+  blocks, one segment, `nb=69`, 600 perfectly-tiled instances, no
+  truncation anywhere): the buggy loop visits only 599 of the 600
+  instances (never reaching row 41332, the true last instance's start).
+  In that particular build the true global max (row 4900) isn't the last
+  instance, so today's exported `Emax_n` happens to still be correct by
+  coincidence -- but `seg.Emax_n` is written directly into the `.pge`
+  binary (`ge/writeceq.py:242`, a field GE's scanner-side gradient-heating
+  logic reads), so this under-reports the true worst-case instance
+  whenever a sequence's last TR genuinely has peak gradient/blip energy.
+  The consistency-check omission (`:154`) is lower-stakes (only emits a
+  `warnings.warn`) but means a real segment-definition bug occurring
+  specifically in the sequence's last TR goes completely undetected --
+  and `tests/test_seq2ceq.py::test_seq2ceq_self_consistency` only asserts
+  *no* warnings fire, which trivially passes whether or not the last
+  instance was even checked. Item 98's own description ("Added the
+  missing `nBlocksInSegment` bounds guard... the same... bounds guard the
+  consistency-check loop already had") is itself slightly inaccurate: only
+  the gradient-heating loop got the literal (buggy) formula the
+  consistency-check loop already had; the variable-delay and loop-table
+  loops in the same commit got the different, correct `-1` formula --
+  nobody noticed the consistency-check loop's own formula was off by one,
+  or that copying it verbatim reproduced the defect in the gradient-
+  heating loop. Not covered by CLAUDE.md's disclosed `Emax_n` deviation
+  (that's about the stale *column* indices 11:13, not about skipping an
+  entire *instance*). Fix direction: change both breaks to `if n +
+  seg.nBlocksInSegment - 1 > ceq.nMax:`, matching the other two loops, and
+  re-run `ge/validate_against_matlab.py` against a fresh MATLAB reference
+  to confirm the `-1` formula matches `seq2ceq.m`'s own (no MATLAB
+  reference available in this environment to check directly).
+- [ ] **108. `preprocessing/calibrate_delay.py`'s inline oephase
+  computation is a third, unfixed copy of the FFT-shift-convention bug
+  item 44 was supposed to have fixed everywhere.** [measured]
+  `calibrate_delay.py:93` reads
+  `np.fft.ifftshift(np.fft.ifft(np.fft.fftshift(oephase_data), n=Nx,
+  axis=0))` -- `fftshift`-in / `ifftshift`-out. Item 44 explicitly fixed
+  this exact spelling in both `preprocess.py`'s `compute_oephase`
+  (`:134`, now `fftshift(ifft(ifftshift(.)))`, the textbook-correct
+  pairing) and `oephase.py`'s `epiphasecorrect`, citing "`compute_oephase`'s
+  old mixed fftshift-in/ifftshift-out" as the bug -- but
+  `calibrate_delay.py` hand-duplicates the same odd/even-phase-estimation
+  math inline instead of calling `compute_oephase` (it already imports
+  `apply_delay`/`load_kxoe` from `preprocess.py`, so importing
+  `compute_oephase` too would be a direct drop-in), and its copy still
+  carries the pre-fix spelling. Item 44's own writeup states this
+  discrepancy is numerically inert only for even `nx` (this repo's real
+  `Nx=240`) and a real difference for odd `nx` -- so this is currently
+  silent but latent, and directly contradicts item 44's "both functions
+  now use the same convention" resolution, since there were really three
+  copies of this computation, not two, and only two got fixed. No test
+  exercises `calibrate_delay()` end-to-end
+  (`tests/test_preprocessing_calibrate_delay.py` only covers
+  `select_best_delay`/`_matlab_round`), so nothing caught the miss. Fix:
+  replace `calibrate_delay.py:92-94` with a call to
+  `preprocess.compute_oephase(ksp_cal, kxo, kxe, Nx, fov[0]*100)`, which
+  also removes the duplication (see item 117 for the same "should call the
+  shared helper instead of duplicating" pattern elsewhere in
+  `preprocess.py`).
+- [ ] **109. `recon/benchmark_b0_cost.py` crashes on its own stated usage
+  -- stale `Nx`-expanded `echo_times` shape left behind by item 90.**
+  [measured] `_build_inputs()` (`benchmark_b0_cost.py:84`) builds
+  `echo_times_s = t_yz_s.reshape(1, Ny, Nz,
+  1).expand(Nx, Ny, Nz, Nt).contiguous()` -- a dense `(Nx,Ny,Nz,Nt)`
+  tensor -- and passes it into `build_encoding_operator_b0(smaps, omega,
+  b0map_hz, echo_times_s, L=L, nbins=NBINS)` at `:126`. But item 90
+  changed `build_encoding_operator_b0` to expect the compact `(Ny,Nz,Nt)`
+  shape with no `Nx` broadcast (its body does `echo_times_flat =
+  echo_times_yz.reshape(n_yz, Nt)` where `n_yz = Ny*Nz`, only valid for
+  exactly `Ny*Nz*Nt` elements). `reconstruct.py`/`run_b0_recon.py` were
+  both updated to the new contract via the shared `_load_echo_times`
+  helper item 90 added, but this one-off script's own tensor construction
+  was missed. Reproduced directly: running `python -m
+  recon.benchmark_b0_cost` (the script's own documented usage) raises
+  `RuntimeError: shape '[18, 2]' is invalid for input of size 144` at the
+  very first swept `L` value. Fix: build `echo_times_s` at `(Ny, Nz, Nt)`
+  (drop the `Nx` expand), matching `reconstruct.py`'s/`run_b0_recon.py`'s
+  convention.
+- [ ] **110. `preprocessing/preprocess.py`'s `n_frames_discard` is
+  computed and written but has no reader anywhere in the repo.** [verify]
+  `preprocess.py:274` computes `NframesDiscard =
+  round(seq_params.discard_duration / seq_params.volume_tr)` and `:413`
+  writes it as `mf.attrs['n_frames_discard']`; a repo-wide grep for
+  `n_frames_discard` finds only this write site -- no reader in
+  `recon_frames.py`, `run_rss.py`, `run_cg_sense.py`,
+  `run_recon_sigpy.py`, or anywhere in `recon/`. `params.py` computes
+  `Nframes = round((duration + discard_duration) / volume_tr)`, i.e.
+  `Nframes` (and hence the sampling `schedules`/`omegas` and the
+  `ksp_epi_zf` volume `preprocess()` writes) already includes any
+  discard/steady-state frames as ordinary frames `0..N-1`, and every
+  Stage-2 driver reconstructs `range(nframes)` from frame 0 with no skip
+  logic. So if `discard_duration` is ever set > 0 (a real, documented
+  field, just defaulting to 0 today, so this is inert in the shipped
+  config), the non-steady-state frames would land in every reconstructed
+  time series unfiltered -- `n_frames_discard` looks like it was meant to
+  let a consumer trim them, but nothing does. Either wire a Stage-2
+  consumer to skip the first `n_frames_discard` frames, or document
+  explicitly that this attr is metadata-only for a human/future consumer
+  to act on by hand.
 
 ## Consistency & documentation
 
@@ -450,6 +572,80 @@ below described). Original numbers kept for provenance:
   `_matlab_round` docstring now says "also duplicated in grid_resize.py",
   the real third copy, instead of `smaps.py` (which has no such
   function).
+- [ ] **111. `deGRE.seq`'s acoustics number is stale in both CLAUDE.md and
+  this file's own "Current baseline" table -- real is 0.2556, not
+  0.2456.** [measured] This pass's fresh `main.py --ge` build (reproduced
+  twice, deterministic under the fixed `seed=0`) measures `deGRE.seq`
+  acoustics as **0.2556**, not the 0.2456 the previous "Current baseline"
+  table (and CLAUDE.md's matching "today's `deGRE.seq` measures acoustics
+  0.2456" claim in its GE-export section) both cited. This isn't a
+  regression: item 57's own re-verification text elsewhere in this file
+  already recorded "0.1484/0.1484/0.2556/0.0000" for exactly this
+  four-sequence build after landing that item's vectorization fix -- so
+  0.2556 has been the real number since at least item 57's commit, and
+  0.2456 was a stale/typo'd figure that the "Current baseline" table
+  (created afterward) and CLAUDE.md both independently carried forward
+  without cross-checking against item 57's own text. This file's baseline
+  table above is now corrected to 0.2556; CLAUDE.md's copy is out of this
+  run's scope to edit (only `docs/review-findings.md` may be modified this
+  pass) but should be updated to match the next time CLAUDE.md itself is
+  touched.
+- [ ] **112. `recon/sweep_time_segments.py` still describes `L=6` as "the
+  current production default" and cites a test name item 85 renamed.**
+  [measured] The module docstring (`:9-11`) says "...L=6 (the current
+  production default, params.py-adjacent choice in
+  operators_b0.py/run_b0_recon.py)..." and the sweep table's own printed
+  marker (`:148`, `marker = "  <- current default" if L == 6 else ""`)
+  labels the `L==6` row as current -- but item 82 changed the default to
+  **`L=32`** in all four places (`operators_b0.py`'s
+  `build_encoding_operator_b0`, `reconstruct.py`'s `run_recon`,
+  `run_b0_recon.py`'s `main`/`--L`), confirmed still the case by reading
+  the current code, and `operators_b0.py`'s own module docstring was
+  updated accordingly by that item. Separately, the same file's docstring
+  (`:6-7`) still points at
+  `tests/test_recon_operators_b0.py::test_more_segments_reduces_error_in_the_realistic_regime`,
+  which item 85 renamed to
+  `test_more_segments_reduces_error_in_a_toy_grid` (confirmed: no test of
+  the old name exists anywhere in the repo). Both drifts look like this
+  script was simply missed when items 82 and 85 updated every other
+  doc/code reference -- worth one pass over `sweep_time_segments.py` to
+  bring its docstring and printed marker in line with both.
+- [ ] **113. Dangling `docs/review-findings.md` item-number
+  cross-references in source comments: item 28 (and, previously flagged
+  but still unresolved, item 12) don't exist in this file.**
+  [measured] `lib/make_prephasers.py:10`'s module docstring says "a real,
+  if not previously live, consistency bug in this port -- see
+  `docs/review-findings.md` item 28" -- but this file's item numbers run
+  8, 13, 15, 17, 32, 33, 36-106 (now extending to 117); 28 is simply
+  absent. The fix itself is real and correct (confirmed `make_prephasers`
+  does share one duration across all three axes, matching the comment's
+  description), so this is a broken citation, not a live bug. Root cause,
+  traced through git history: when the review backlog was split out of
+  CLAUDE.md (`c49712d`), only still-open items were migrated into this
+  file -- items already closed beforehand in CLAUDE.md's own history
+  (28 among them, and also 12) were dropped rather than carried forward as
+  resolved, contradicting both CLAUDE.md's "Numbering... never reused"
+  claim and this file's own header ("a closed-as-not-a-bug item stays
+  listed... so the reference stays resolvable"). The same gap affects
+  `preprocessing/grid_resize.py`'s and
+  `tests/test_preprocessing_grid_resize.py`'s "item 12" citations, and
+  this file's own internal "item 20" cross-reference (in item 54's entry
+  above) -- none of items 12/20/28 can be looked up here. Fix direction:
+  either restore stub entries for the dropped-but-cited numbers (`[x]
+  12.`, `[x] 20.`, `[x] 28.`, each with a one-line "closed pre-migration,
+  see git history at <commit>" note) so every source-code citation
+  resolves, or replace the four source-code citations with a description
+  of the fix in prose instead of a dangling item number.
+- [ ] **114. `README.md`'s `--plot` file list is missing `PNS_one_tr.png`.**
+  [measured] `README.md:48` (Getting Started step 3) says `--plot` writes
+  "diagnostic plots (`mask.png`, `psf.png`, `trajectory.png`,
+  `one_tr.png`)" -- four files. But `plotting/plot_last_run.py:27-58`
+  (which `main.py --plot` calls) writes a fifth: `PNS_one_tr.png`, from
+  `plot_pns_one_tr` (added alongside the PNS-driven slew-limit work
+  documented in CLAUDE.md's "PNS finding history"). Confirmed by grepping
+  the whole README: `PNS_one_tr.png` is never mentioned anywhere in it,
+  even though it's part of every `--plot` run's actual output and part of
+  `plot_last_run`'s own printed confirmation message.
 
 ## Test & tooling health
 
@@ -507,6 +703,37 @@ below described). Original numbers kept for provenance:
   with only the small per-frame `pos` index arrays (item 75's fix, 69 MB
   total) being genuinely L-independent -- not "static, L-independent"
   overall.
+- [ ] **115. `plotting/` has zero test coverage -- including no regression
+  guard for item 96's real, previously-shipped PSF bug.** [measured] A
+  repo-wide grep confirms no file under `tests/` references `plot_psf`,
+  `plot_trajectory`, `plot_sampling_mask`, `plot_one_tr`,
+  `plot_pns_one_tr`, or imports `plotting.plotting` at all. This matters
+  concretely because item 96 documents a real, previously-shipped
+  correctness bug in `plot_psf` (wrong FFT-shift convention, fixed by
+  switching to `fftshift(ifft2(ifftshift(omega)))`,
+  `plotting/plotting.py:197`) that was verified only by a one-off manual
+  measurement ("PSF magnitude now peaks at exactly `(Ny//2, Nz//2)`"), not
+  captured as a regression test -- nothing in the suite would catch that
+  bug coming back (e.g. a future edit that "simplifies" the shift calls
+  back to a single `fftshift`). A cheap, high-value addition: a
+  `tests/test_plotting.py` asserting `plot_psf`'s PSF peaks at the DC
+  location for a synthetic all-ones mask, plus basic smoke tests (a
+  figure is produced, right title/`frame_idx` handling) for the other
+  plotting functions.
+- [ ] **116. `tests/test_ticaipi_sample.py` has no regression test for the
+  `ValueError` guard item 103 added.** [measured]
+  `sampling/ticaipi_sample.py:39-46` raises `ValueError` when `Ny % Ry !=
+  0 or Nz % Rz != 0` -- a real, previously-fixed correctness bug (silent
+  double-sampling/missing k-space locations, per item 103's own measured
+  ~44%-of-swept-grid failure rate). Confirmed the raise still fires
+  correctly today (e.g. `ticaipi_sample([240,45], 4, 0)` raises with a
+  clear message). But `tests/test_ticaipi_sample.py` contains only two
+  tests (`test_ticaipi_full_coverage_over_R_frames`,
+  `test_ticaipi_cycles_with_period_R`), both using evenly-dividing `(N,
+  R)` configs -- neither exercises the raise path. A one-line
+  `pytest.raises(ValueError)` test (using item 103's own cited repro,
+  `ticaipi_sample([240, 45], 4, 0)`) would close this gap and guard
+  against the check being silently weakened or removed later.
 
 ## Conciseness & performance
 
@@ -655,3 +882,36 @@ below described). Original numbers kept for provenance:
   multiprocessing, not just imports): results match a plain serial
   computation exactly across 5 dispatched frames. Serial
   (`use_parfor=False`) path unchanged.
+- [ ] **117. `preprocessing/preprocess.py`'s STEP 3 duplicates
+  `smaps.py`'s `load_smaps()` caching logic instead of calling it, and the
+  duplicate is already narrower and drifting.** [verify] `preprocess()`'s
+  STEP 3 (`preprocess.py:323-353`) hand-rolls the same "check cached
+  `Nvcoils` attr, load-or-estimate-and-cache" pattern
+  `smaps.load_smaps()` (used by `recon_frames.py:76`) already implements
+  -- but narrower: it never computes/writes `smaps_degre`/`emap_degre`
+  (the deGRE-grid maps `run_b0map.py` needs), leaving that to
+  `load_smaps()`'s documented backfill path the first time
+  `recon_frames.py` or `run_b0map.py` runs later. Not a correctness bug
+  today (the backfill path is real and tested), but it's duplicated
+  cache-validity logic in two places that can already drift: item 41's
+  fix made `smaps.py:170-173` compare `int(f.attrs['Nvcoils'])` against a
+  freshly-read `ksp_gre.shape[-1]`, while `preprocess.py:330` still
+  compares `f.attrs.get('Nvcoils') == Nvcoils` -- similar but not the same
+  check, with no test pinning them to identical behavior. Since
+  `paths.recon`'s GRE cache (read by `load_smaps`) is the very file STEP 2
+  just wrote moments earlier, `preprocess.py` could call `load_smaps(cfg,
+  paths, seq_params)` directly instead -- which would also produce a
+  complete cache (with `smaps_degre`/`emap_degre`) on the very first run
+  rather than deferring that to a later backfill.
+- [ ] **118. `sampling/pd_sample.py`'s `dtype` parameter
+  (`'logical'`/`'double'`/`'complex'`) is dead in production and
+  untested.** [measured] `pd_sample`'s `dtype` branch (`:295-300`) is only
+  ever called with the default `'logical'` throughout the codebase
+  (`gen_sampling_masks.py` never passes `dtype=`), and
+  `tests/test_pd_sample.py` never exercises the `'double'`/`'complex'`
+  paths either. Low severity -- this is MATLAB-parity surface carried over
+  from the port, not a wrong result -- flagged only because it's untested
+  code that could silently break without anyone noticing were it ever
+  used. Either add a couple of parametrized `dtype=` cases to
+  `test_pd_sample.py`, or drop the untested branches if nothing is
+  expected to ever pass a non-default `dtype`.
