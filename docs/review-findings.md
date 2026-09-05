@@ -36,25 +36,25 @@ re-verified every item above still marked `[x]`: all 106 were confirmed
 still resolved against the current tree (no source file changed between
 `8baadb1` and `119a6e9` except CLAUDE.md's own doc cleanup and one
 docs-plus-11-line-comment addition, `119a6e9`), so nothing needed
-reopening.
+reopening. Items 119-124 are new findings from a later pass (2026-09-05,
+against `0d6d821`) that also re-verified every item 107-118 against the
+current tree: no source file changed between `119a6e9` and `0d6d821`
+except this doc itself, so all twelve were confirmed still open exactly
+as described (none needed closing).
 
-## Current baseline (2026-09-04, against `119a6e9`)
+## Current baseline (2026-09-05, against `0d6d821`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
   errors**, all `E501` -- unchanged from the previous pass.
-- `uv run pytest` (plain main venv): **126 passed, 15 skipped**, both with
-  and without `output/*.seq`/`*.pge` present (item 46's `built_seq_dir`
-  fixture keeps this environment-independent) -- unchanged from the
-  previous pass. Not independently re-measured with the `preprocessing`/
-  `recon` extras added this pass (see item 70's table for the
-  `preprocessing`-extras combination as last recorded, 149/154 passed);
-  this pass's `preprocessing`-extras run (55 passed, 5 skipped, scoped to
-  `tests/test_preprocessing_*.py` only) and `recon`-extras run (34 passed,
-  scoped to `tests/test_recon_*.py`) both match their own last-recorded
-  counts.
+- `uv run pytest` (plain main venv): **126 passed, 15 skipped**, re-run
+  after `rm -rf output` -- unchanged from the previous pass. Not
+  re-measured this pass with the `preprocessing`/`recon` extras (see the
+  previous baseline entries in git history for those counts, both of
+  which were themselves unchanged from their own prior runs).
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, GE_MR750, `PNSwt = [0.8, 1.0, 0.7]`, seed 0) --
-  all four sequences `.ok`:
+  all four sequences `.ok`, re-measured fresh this pass (`rm -rf output`
+  first) and **unchanged from the previous baseline in every figure**:
 
   | sequence | peak PNS | acoustics | max grad | max slew |
   |---|---|---|---|---|
@@ -63,14 +63,11 @@ reopening.
   | `deGRE.seq` | 77.4% | 0.2556 | 49.76 mT/m | 174.3 T/m/s |
   | `noise.seq` | 0.0% | 0.0000 | 0.00 mT/m | 0.0 T/m/s |
 
-  Three of four numbers match the previously-recorded baseline exactly.
-  **`deGRE.seq`'s acoustics number does not**: this pass measured
-  **0.2556** (reproduced twice, deterministic), not the previously-recorded
-  0.2456 -- confirmed as a stale/typo'd number in the old table rather than
-  a real regression, since item 57's own re-verification text elsewhere in
-  this file already recorded 0.2556 for the same build after landing that
-  item's fix, and CLAUDE.md's GE-export section independently quotes the
-  same stale 0.2456 figure (see item 111 below).
+  `deGRE.seq`'s acoustics is **0.2556** (matching this file's own
+  already-corrected table, not the stale 0.2456 still quoted in
+  `ge/check.py`'s module docstring -- see item 123 below, a third,
+  previously-unflagged occurrence of the same stale figure item 111
+  already tracked in CLAUDE.md and this file's own table).
 
 ## Correctness
 
@@ -389,6 +386,139 @@ reopening.
   consumer to skip the first `n_frames_discard` frames, or document
   explicitly that this attr is metadata-only for a human/future consumer
   to act on by hand.
+- [ ] **119. `lib/mask2epi.py`'s `mask2epi_radial` crashes with `ETL=1`
+  (`.max()` on a zero-size array), while `mask2epi_laminar` handles the
+  same input fine.** [measured] The pass-3 uncrossing-cleanup step's
+  "achieved worst-case step" computation (`mask2epi.py:1126-1128`) is:
+  ```python
+  shot_max = _pairwise_weighted_dist(shot_coords, deltak)[
+      np.arange(ETL - 1), np.arange(1, ETL)
+  ].max()
+  ```
+  For `ETL == 1`, both `np.arange(ETL - 1)` and `np.arange(1, ETL)` are
+  empty, so the fancy-indexed selection is a zero-size array and `.max()`
+  raises `ValueError: zero-size array to reduction operation maximum which
+  has no identity`. Reproduced directly: `mask2epi_radial(mask, ETL=1,
+  Nshots=4)` on an 8x8 mask with 4 sample points raises this exact error;
+  `mask2epi_laminar` on the identical input succeeds and returns a correct
+  schedule, confirming `ETL=1` is a legitimately-supported input in
+  general -- the module's own docstring calls the two functions
+  "interchangeable," and `max_blip_steps` in this same file explicitly
+  special-cases `ETL == 1` for precisely this failure mode ("ETL == 1 has
+  no consecutive samples within a shot to diff... handled explicitly here
+  rather than at each of this function's three call sites"). Every other
+  helper in this file that could face a single-point tour already guards
+  this case (`_sum_optimized_order`/`_bottleneck_2opt_order`: `if m <= 2:
+  return ...`; `_mst_bottleneck`: `if m <= 1: return 0.0`;
+  `_euclidean_uncross_refine`: `if m <= 2: return order`) -- only this one
+  inline computation lacks an equivalent guard. `ETL=2`/`ETL=3` both work
+  correctly through `mask2epi_radial`, so the failure is specific to
+  `ETL=1`. Inert in the shipped default config (`ETL=60`), but a real crash
+  for any caller who scans `ETL` down toward 1 -- exactly the kind of sweep
+  CLAUDE.md itself recommends for checking `calc_te_tr_delays` feasibility
+  ("don't hand-derive feasibility... or scan across candidate `ETL`
+  values"). `tests/test_mask2epi.py` has no `ETL=1` case for
+  `mask2epi_radial` (only implicitly for `mask2epi_laminar`). Fix: guard
+  the `.max()` the same way `max_blip_steps` does, e.g. `shot_max = 0.0 if
+  ETL <= 1 else _pairwise_weighted_dist(...)[...].max()`, and add a
+  parametrized `ETL=1` case to `tests/test_mask2epi.py` covering
+  `mask2epi_radial`.
+- [ ] **120. `preprocessing/epi_gridding.py`'s `rampsamp2cart` is a fourth,
+  untracked copy of the FFT-shift-pairing bug items 44/64/91/108 already
+  cover elsewhere -- and this copy can cause a real image-domain shift, not
+  just an inert phase artifact.** [measured] `rampsamp2cart:53` computes
+  ```python
+  dc = np.fft.fftshift(np.fft.fft(np.fft.fftshift(ximg, axes=0), axis=0), axes=0)
+  ```
+  -- `fftshift`-in / `fftshift`-out, the same non-canonical pairing item 44
+  fixed everywhere it had already been found (`preprocess.py`'s
+  `compute_oephase`, `oephase.py`'s `epiphasecorrect`, both now
+  `ifftshift`-in / `fftshift`-out, e.g. `oephase.py:123,130`) and that item
+  108 (still open) flags as un-fixed in `calibrate_delay.py:93`.
+  `epi_gridding.py` itself is not cited anywhere in this file (grep only
+  finds items 59 and 102, about unrelated things in the same module), so
+  this is a genuinely new instance, not a re-report. `fftshift`/`ifftshift`
+  only disagree for odd-length axes; `ximg`'s axis 0 has length `nx`
+  (this repo's real `Nx=240`, even), so this is currently a no-op
+  difference -- inert today, the same "silent but latent" framing item 108
+  uses. No test would catch it either way: `tests/
+  test_preprocessing_epi_gridding.py` only uses even `nx` (64, 48, 48), and
+  its own oracle (`test_rampsamp2cart_recovers_object_location_and_shape`)
+  independently reproduces the same non-canonical pairing to invert `dc`
+  back to image space, so it self-consistently can't detect the mismatch
+  even in principle. **Why this instance is worse than the already-tracked
+  ones**: items 44/64/91/108's mismatched shift acts on *k-space* data
+  right before the terminal inverse transform to image space, so by the
+  Fourier shift theorem it only bakes in a linear *phase* ramp in the
+  image -- invisible to every real consumer (magnitude, or a phase
+  *difference*). Here the shift acts the other way: it circularly rotates
+  `ximg` (image-space, from `nufft_adjoint`) before the *forward* FFT that
+  produces `dc` (k-space) -- for odd `nx` this bakes a linear phase ramp
+  into k-space along kx, which the terminal inverse FFT in Stage 2
+  (`_ift3`/`_ifftc` etc.) turns into a genuine one-voxel *circular shift of
+  the reconstructed image* along the readout axis, visible in magnitude,
+  plus direct corruption of `compute_oephase`/`epiphasecorrect`'s
+  phase-based ghost-correction fit (which consumes `rampsampepi2cart`'s
+  complex output, not just its magnitude). Fix: change
+  `epi_gridding.py:53` to `np.fft.fftshift(np.fft.fft(np.fft.ifftshift(ximg,
+  axes=0), axis=0), axes=0)`, matching `oephase.py`'s canonical pairing,
+  and parametrize `tests/test_preprocessing_epi_gridding.py` over an odd
+  `nx` the way item 44's fix parametrized
+  `test_epiphasecorrect_removes_odd_even_mismatch` over `[64, 63]`.
+- [ ] **121. `plotting/plotting.py`'s `plot_pns_one_tr` loses gradient
+  history before the window start, contradicting its own docstring's claim
+  of exact parity with `check_seq_feasibility`'s PNS number for any
+  `shot_index > 0`.** [verify] `plot_pns_one_tr(seq, params, shot_index)`
+  (`plotting.py:270-326`) calls `sample_gradients_tesla_per_m(seq,
+  time_range=(t0, t0 + params.TR))` for `t0 = shot_index * params.TR`, then
+  feeds that window straight into `ge/pns.py`'s `pns()`. `pns()` computes
+  its result via `fftconvolve(s[ch], f)` on `s = np.diff(g, axis=1)/dt`,
+  which implicitly treats everything before the start of the passed-in
+  array as zero gradient. `check_seq_feasibility` (`ge/check.py:231`) calls
+  `sample_gradients_tesla_per_m(seq)` with no `time_range`, i.e. the whole
+  sequence from t=0, so its convolution correctly carries forward the tail
+  of every prior TR's slew activity into the next. For `shot_index > 0`,
+  `plot_pns_one_tr`'s windowed call has no memory of the previous shot's
+  trailing gradients (readout ramp-down, blips, spoilers), so it reads
+  artificially low for roughly `20 * chronaxie` (~6.68 ms for GE_MR750's
+  `chronaxie=334e-6`) into a TR that's only ~100 ms long
+  (`volume_tr=2s / Nshots=20`) -- directly contradicting the docstring's
+  "this is a decomposition of the same peak number [`check_seq_feasibility`]
+  reports, not an independent estimate." Currently masked: both call sites
+  in this repo always pass `shot_index=0` (`plot_last_run.py`'s
+  `frame_idx * params.Nshots` with default `frame_idx=0`;
+  `compare_readout_pns.py`'s call with no override), so today's numbers are
+  unaffected, since there's genuinely no prior history to miss at t0=0. But
+  `plot_last_run`'s `frame_idx` is a documented, user-facing parameter
+  meant to select any frame -- calling it with `frame_idx > 0` (a
+  legitimate, supported use) would silently understate PNS near the
+  window's start despite the docstring's parity claim. Fix direction:
+  either sample gradients from t=0 through the window end and pass the
+  full history into `pns()` (windowing only the plotted/reported region
+  afterward), or make the docstring explicit that `shot_index > 0` is an
+  approximation that omits inter-shot PNS memory.
+- [ ] **122. `ge/seq2ceq.py`'s two loops item 107 flags also use a
+  stricter outer `while` bound than the two already-correct loops, a
+  distinct root cause item 107's own proposed fix doesn't address.**
+  [verify, not live today] The two already-correct block-walking loops use
+  `while n <= ceq.nMax:` (`seq2ceq.py:81,126`); the two loops item 107
+  flags for a missing `-1` in their inner break condition use `while n <
+  ceq.nMax:` instead (`:150,171`). For a segment with `nBlocksInSegment ==
+  1` whose final instance starts exactly at row `n == ceq.nMax` (a
+  complete, non-truncated single-block instance), `n <= ceq.nMax` enters
+  the loop body correctly but `n < ceq.nMax` is `False` and the body never
+  runs -- so even after applying item 107's fix verbatim (which only
+  touches the inner `if n + seg.nBlocksInSegment [- 1] > ceq.nMax: break`
+  condition), the consistency-check and gradient-heating loops would still
+  skip that final instance whenever its segment happens to have exactly
+  one block. Not reachable in this repo's actual sequences today (every
+  real segment spans many blocks -- e.g. `ArbEPI.seq`'s documented `nb=69`
+  -- since TRID is set once per shot, not once per block), so this is in
+  the same "not live today" category as item 45. Flagging it as a separate
+  item because it's a distinct root cause from item 107's break-formula
+  bug, and item 107's own stated fix direction would leave it unfixed --
+  worth changing both outer bounds to `<=` in the same pass as item 107's
+  fix.
 
 ## Consistency & documentation
 
@@ -646,6 +776,48 @@ reopening.
   the whole README: `PNS_one_tr.png` is never mentioned anywhere in it,
   even though it's part of every `--plot` run's actual output and part of
   `plot_last_run`'s own printed confirmation message.
+- [ ] **123. `ge/check.py`'s module docstring quotes the same stale
+  `deGRE.seq` acoustics figure (0.2456) that item 111 already found and
+  corrected in CLAUDE.md and this file's own baseline table -- a third,
+  previously-unflagged occurrence.** [measured] `ge/check.py`'s module
+  docstring (around line 39) says "today's `deGRE.seq` measures acoustics
+  0.2456 (under the 0.3 threshold...)". Item 111 already established the
+  real, reproducible number is **0.2556** (this file's own "Current
+  baseline" table now reflects that), and that 0.2456 was a stale/typo'd
+  figure independently carried by CLAUDE.md's GE-export section -- but
+  item 111's text never mentions `ge/check.py`, and this docstring is a
+  third, distinct occurrence of the same wrong number, this time inside
+  the source tree rather than in docs. Fix: update `ge/check.py`'s
+  docstring to 0.2556, or better, point at this file's "Current baseline"
+  table the way the surrounding paragraph already does for the `ArbEPI`
+  number, so it can't drift out of sync again.
+- [ ] **124. `recon/reconstruct.py`'s `run_recon` docstring still claims
+  `echo_times` gets "broadcast across Nx here," directly contradicting the
+  actual post-item-90 implementation in the same file.** [measured]
+  `run_recon`'s docstring (`reconstruct.py:169-171`) says the `echo_times`
+  dataset is "`(Ny,Nz,Nt)`, broadcast across Nx here since kx doesn't
+  affect echo time." But `run_recon` actually gets `echo_times` via
+  `_load_echo_times(fn_ksp, device)` (same file, ~line 106), whose own
+  docstring says the opposite: it exists precisely so neither call site
+  duplicates "the broadcast-to-`(Nx,Ny,Nz,Nt)` pattern
+  `build_encoding_operator_b0` no longer needs" -- and its body just
+  returns the native `(Ny,Nz,Nt)` array with no broadcast. That array is
+  passed straight into `build_encoding_operator_b0`, whose own docstring
+  (`operators_b0.py:159-166`) is explicit that `echo_times_yz` is read
+  directly at `(Ny,Nz,Nt)` "rather than broadcast to a dense
+  `(Nx,Ny,Nz,Nt)` tensor first ... see docs/review-findings.md item 90" --
+  item 90 is exactly the fix that *removed* the Nx broadcast this stale
+  sentence in `run_recon`'s own docstring still describes as current
+  behavior. So there are three descriptions of the same data in one
+  codebase, two consistent (`_load_echo_times`, `build_encoding_operator_b0`)
+  and one stale (`run_recon`, in the very same file as the first) -- a
+  maintainer reading only `run_recon`'s docstring would believe a dense
+  `(Nx,Ny,Nz,Nt)` echo-time tensor is materialized inside it, which is
+  exactly the memory blowup item 90 fixed and no longer happens. Items 90's
+  and 83's (CLAUDE.md) writeups both mention updating docstrings that
+  referenced the old broadcast, but neither touched this specific sentence.
+  Fix: reword `reconstruct.py:169-171` to match `_load_echo_times`'s/
+  `build_encoding_operator_b0`'s accurate phrasing.
 
 ## Test & tooling health
 
