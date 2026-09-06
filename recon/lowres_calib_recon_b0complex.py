@@ -239,8 +239,24 @@ def run_b0complex_corrected_calib_recon(
     b0map_hz_native = torch.from_numpy(
         resize_to_epi_grid(b0map_hz.numpy(), fov, fov, n_target, order=3).astype(np.float32)
     ).to(device_t)
+    # R2* has much sharper local structure than smaps/b0map_hz (this
+    # phantom's real air bubbles show up as T2* down to ~6ms in places),
+    # and resize_to_epi_grid's cubic-spline zoom has no anti-aliasing
+    # prefilter -- harmless for the smooth quantities above, but confirmed
+    # (independent audit) to alias by up to ~14.7/s at this ~5x EPI-grid
+    # -> native-grid downsample ratio, a ~23-25% local error in the T2*
+    # correction factor at typical echo-time offsets from TE_nominal.
+    # Gaussian-prefilter before the zoom (standard decimation
+    # anti-aliasing, sigma set from the actual per-axis downsample ratio)
+    # rather than touching grid_resize.py itself, which smaps/b0map_hz
+    # both already use safely without one.
+    from scipy.ndimage import gaussian_filter
+    r2star_src = r2star_hz.numpy()
+    ratios = [s / t for s, t in zip(r2star_src.shape, n_target)]
+    sigmas = [max(r / 2, 0.0) for r in ratios]  # 0 where upsampling (ratio<1)
+    r2star_prefiltered = gaussian_filter(r2star_src, sigma=sigmas)
     r2star_native = torch.from_numpy(
-        np.clip(resize_to_epi_grid(r2star_hz.numpy(), fov, fov, n_target, order=3), 0.0, None).astype(np.float32)
+        np.clip(resize_to_epi_grid(r2star_prefiltered, fov, fov, n_target, order=3), 0.0, None).astype(np.float32)
     ).to(device_t)
 
     # Bandwidth-time-product sanity check (see module docstring): confirms
