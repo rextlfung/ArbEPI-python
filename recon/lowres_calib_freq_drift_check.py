@@ -64,6 +64,50 @@ def phase_offset_per_frame(img: np.ndarray, mask: np.ndarray, ref: int) -> np.nd
     return out
 
 
+def spatial_freq_drift_map(
+    img: np.ndarray, mask: np.ndarray, dte: np.ndarray, ref: int, block: tuple[int, int, int] = (7, 7, 5),
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Coarse-block version of phase_offset_per_frame's regression: splits
+    the native grid into block-sized sub-ROIs (small enough to be spatially
+    resolved, large enough for tolerable SNR at this pipeline's real
+    calibration-region scale) and fits the same dphi ~ slope*dte regression
+    independently per block. Returns (delta_f_map, r2_map, n_valid_map),
+    each [nx_blocks, ny_blocks, nz_blocks] -- NaN where a block has too few
+    masked voxels to fit. A spatially UNIFORM delta_f_map (flat, low
+    variance across valid blocks) is what a true global center-frequency
+    drift predicts; a spatially STRUCTURED map (a smooth trend across
+    blocks, not just block-to-block noise) is the signature gradient/shim
+    heating's *spatial* field-pattern evolution would leave instead."""
+    Nx, Ny, Nz, Nt = img.shape
+    bx, by, bz = block
+    nxb, nyb, nzb = Nx // bx, Ny // by, Nz // bz
+    delta_f_map = np.full((nxb, nyb, nzb), np.nan)
+    r2_map = np.full((nxb, nyb, nzb), np.nan)
+    n_valid_map = np.zeros((nxb, nyb, nzb), dtype=int)
+    min_voxels = max(3, (bx * by * bz) // 4)
+
+    for ix in range(nxb):
+        for iy in range(nyb):
+            for iz in range(nzb):
+                sl = (slice(ix * bx, (ix + 1) * bx), slice(iy * by, (iy + 1) * by), slice(iz * bz, (iz + 1) * bz))
+                block_mask = mask[sl]
+                n_valid_map[ix, iy, iz] = int(block_mask.sum())
+                if block_mask.sum() < min_voxels:
+                    continue
+                block_img = img[sl]  # (bx,by,bz,Nt)
+                ref_conj = np.conj(block_img[..., ref])
+                dphi = np.array([
+                    np.angle((ref_conj * block_img[..., t])[block_mask].sum()) for t in range(Nt)
+                ])
+                slope, intercept = np.polyfit(dte, dphi, 1)
+                fit = slope * dte + intercept
+                ss_res = np.sum((dphi - fit) ** 2)
+                ss_tot = np.sum((dphi - dphi.mean()) ** 2)
+                delta_f_map[ix, iy, iz] = slope / (2 * np.pi) * 1000
+                r2_map[ix, iy, iz] = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+    return delta_f_map, r2_map, n_valid_map
+
+
 def main(
     datdir: str, seqname: str = 'ArbEPI', L: int = 32, nbins: int = 128,
     device: str = 'cuda', skip_frames: int = 1,
@@ -110,12 +154,45 @@ def main(
     print('  (fMRI-QA literature: gradient/shim-heating center-frequency drift is typically '
           '~1-7 Hz over a scan at 3T -- compare Δf above against that range)')
 
+    # Spatially-resolved version: is the implied drift uniform (global
+    # center-frequency effect) or spatially structured (gradient/shim
+    # heating perturbing the field's own spatial pattern)?
+    Nx, Ny, Nz = img.shape[:3]
+    block = (max(1, Nx // 7), max(1, Ny // 7), max(1, Nz // 2))
+    delta_f_map, r2_map, n_valid_map = spatial_freq_drift_map(img, mask, dte, ref, block)
+    valid = ~np.isnan(delta_f_map)
+    df_valid = delta_f_map[valid]
+    if df_valid.size >= 3:
+        # Coordinates of valid blocks, in units of block index (proportional
+        # to physical position) -- fit a plane/gradient across the blocks
+        # and report how much of the block-to-block variance it explains.
+        ix, iy, iz = np.nonzero(valid)
+        design = np.stack([ix, iy, iz, np.ones_like(ix)], axis=1).astype(float)
+        coeffs, *_ = np.linalg.lstsq(design, df_valid, rcond=None)
+        pred = design @ coeffs
+        ss_res = np.sum((df_valid - pred) ** 2)
+        ss_tot = np.sum((df_valid - df_valid.mean()) ** 2)
+        spatial_trend_r2 = 1 - ss_res / ss_tot if ss_tot > 0 else float('nan')
+        print(f'  spatial map: {df_valid.size} valid blocks (of {delta_f_map.size}), '
+              f'block size {block} voxels')
+        print(f'    per-block implied Δf: mean={df_valid.mean():.3f} Hz, std={df_valid.std(ddof=1):.3f} Hz, '
+              f'range=[{df_valid.min():.3f}, {df_valid.max():.3f}] Hz')
+        print(f'    linear spatial-gradient fit across blocks explains {100 * spatial_trend_r2:.1f}% '
+              'of the block-to-block variance in implied Δf')
+        print('    (near 0% = block-to-block noise, consistent with a uniform global drift; '
+              'high % = a smooth spatial trend, consistent with gradient/shim heating '
+              'perturbing the field\'s own spatial pattern rather than just its mean)')
+    else:
+        spatial_trend_r2 = float('nan')
+        print('  spatial map: too few valid blocks to fit a spatial trend')
+
     out_dir = os.path.join(datdir, 'recon', 'basic')
     os.makedirs(out_dir, exist_ok=True)
     fn_npz = os.path.join(out_dir, f'lowres_calib_freq_drift_check_skip{skip_frames}.npz')
     np.savez(
         fn_npz, dphi=dphi, dte_ms=dte, dphi_fit=dphi_fit, slope_rad_per_ms=slope,
         delta_f_hz=delta_f_hz, r=r, mean_te_ms=mean_te_ms,
+        delta_f_map=delta_f_map, r2_map=r2_map, n_valid_map=n_valid_map, spatial_trend_r2=spatial_trend_r2,
     )
     print(f'  Wrote {fn_npz}')
 
