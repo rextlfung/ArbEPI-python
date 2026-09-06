@@ -40,9 +40,13 @@ reopening. Items 119-124 are new findings from a later pass (2026-09-05,
 against `0d6d821`) that also re-verified every item 107-118 against the
 current tree: no source file changed between `119a6e9` and `0d6d821`
 except this doc itself, so all twelve were confirmed still open exactly
-as described (none needed closing).
+as described (none needed closing). Items 125-130 are new findings from
+a later pass (2026-09-06, against `bbd8266`) that also re-verified every
+item 107-124 against the current tree: no source file changed between
+`0d6d821` and `bbd8266` except this doc itself, so all eighteen were
+confirmed still open exactly as described (none needed closing).
 
-## Current baseline (2026-09-05, against `0d6d821`)
+## Current baseline (2026-09-06, against `bbd8266`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
   errors**, all `E501` -- unchanged from the previous pass.
@@ -519,6 +523,116 @@ as described (none needed closing).
   bug, and item 107's own stated fix direction would leave it unfixed --
   worth changing both outer bounds to `<=` in the same pass as item 107's
   fix.
+- [ ] **125. `sequences/deGRE.py` excites with the EPI sequence's flip angle
+  and RF duration instead of the deGRE-specific values `params.py` computes
+  for exactly this purpose and that are never read anywhere.** [measured]
+  `deGRE.py:72-74` calls
+  ```python
+  rf, gz_ss, gz_ssr = pp.make_sinc_pulse(
+      params.fa / 180 * math.pi,
+      duration=params.rf_dur,
+      ...
+  ```
+  -- `params.fa` and `params.rf_dur` are the *EPI* sequence's Ernst angle
+  (derived from the EPI `TR`, `params.py:215`) and RF duration
+  (`params.py:216`, `2e-3`). But `params.py:97-98` declares
+  `alpha_degre`/`rf_dur_degre` on `Params`, computed at `:264,266`
+  (`alpha_degre = 180/pi * acos(exp(-TR_degre/T1))`, `rf_dur_degre =
+  0.4e-3`) and threaded into the `Params(...)` constructor at `:347-348`
+  -- named and structured exactly in parallel with `fa`/`rf_dur`, clearly
+  intended as deGRE's own Ernst angle/RF duration for its much shorter
+  `TR_degre` (8 ms vs. the EPI sequence's ~100 ms per-shot TR). A
+  repo-wide grep confirms `alpha_degre`/`rf_dur_degre` have zero read
+  sites anywhere outside `params.py` itself. Measured directly against
+  this repo's shipped defaults (`load_params()`): `params.fa` = 22.19°,
+  `params.rf_dur` = 2.0 ms, vs. the unused `alpha_degre` = 6.35°,
+  `rf_dur_degre` = 0.4 ms -- a >3x difference in both flip angle and RF
+  duration. Using 22° instead of the Ernst-optimal 6.35° for an 8 ms TR
+  causes substantial extra saturation and lower steady-state SNR in the
+  actual `deGRE.seq` build that feeds coil-sensitivity-map estimation and
+  B0 field mapping; using a 2 ms RF pulse instead of 0.4 ms also eats far
+  more of the already-tight `TR_degre` budget than necessary. Not a
+  recent regression: traced through git history to the original
+  single-echo `sequences/gre.py` (`a3df8fc^:sequences/gre.py:52-53`,
+  before the dual-echo deGRE upgrade), which already used
+  `params.fa`/`params.rf_dur` with an unused `alpha_gre`/`rf_dur_gre`
+  sitting in `params.py` at the time -- the deGRE rename (`a3df8fc`)
+  carried the same dead fields/bug forward unchanged, just renaming the
+  suffix. No test references `alpha_degre`/`rf_dur_degre`, so nothing
+  catches this. Fix: change `deGRE.py:73-74` to use `params.alpha_degre`
+  and `params.rf_dur_degre`, then re-verify `te_min`/`tr_min`/`TR_degre`
+  still clear (the much shorter 0.4 ms RF should shrink the timing
+  budget, not break it) and re-check
+  `test_degre_excitation_is_centered`/the PNS and timing regression tests
+  after the change.
+- [ ] **126. `ge/writeceq.py`'s sliding-window gradient/RF heating-check
+  block count undercounts by exactly one segment instance's block count
+  whenever a segment's block count evenly divides
+  `NMAXBLOCKSFORGRADHEATCHECK` (40000).** [measured] The header field
+  computation (`ge/writeceq.py:93-100`):
+  ```python
+  n = 1
+  while n < min(ceq.nMax, NMAXBLOCKSFORGRADHEATCHECK):
+      seg = segment_by_id[int(ceq.loop[n - 1, 0])]
+      n += seg.nBlocksInSegment
+      if n > NMAXBLOCKSFORGRADHEATCHECK:
+          n -= seg.nBlocksInSegment
+          break
+  _w(fid, 'i', n - 1)
+  ```
+  rolls back and discards the *entire* last segment instance whenever that
+  instance ends exactly at the cap (`n` becomes `CAP + 1`, which is `>
+  CAP`, even though the instance itself is complete, not truncated) --
+  the same "off-by-one at an exact boundary" class of bug as items
+  107/122 in the sibling `ge/seq2ceq.py`. Reproduced directly with a
+  synthetic single-segment case (`nb=40`, `nMax=40200`, matching the
+  code above verbatim): the written value comes out **39960** instead of
+  the correct **40000** -- an exact undercount of one instance's `nb=40`
+  blocks. This isn't specific to `nb=40`: any `nb` dividing 40000 evenly
+  (40, 50, 80, 100, 125, 160, 200, 250, ...) reproduces the same-size
+  undercount. Inert for this repo's shipped sequences today (checked all
+  four `output/*.seq` files via `seq2ceq()`: `ArbEPI.seq` has `nb=69`,
+  `40000 % 69 = 31 != 0`; `EPIcal.seq`/`deGRE.seq`/`noise.seq` all have
+  `nMax` well under 40000) -- but this field is written directly into the
+  `.pge` binary (`_w(fid, 'i', n - 1)`, immediately below the code
+  quoted above), a value GE's scanner-side gradient/RF-heating logic
+  reads, so a future sequence whose per-segment block count happens to
+  divide 40000 evenly would silently get a wrong (short) heating-check
+  window. No test exercises this field at all -- `tests/` has zero
+  references to `NMAXBLOCKSFORGRADHEATCHECK` or a synthetic `nMax > 40000`
+  case. Fix: compare against the instance's *last row* rather than the
+  next instance's start row, e.g. `if n - 1 > NMAXBLOCKSFORGRADHEATCHECK:
+  n -= seg.nBlocksInSegment; break` (mirroring the correct `n +
+  nBlocksInSegment - 1 > ceq.nMax` form items 107/122 already identify in
+  `ge/seq2ceq.py`), and add a regression test with a synthetic `Ceq`
+  whose segment size divides 40000 exactly.
+- [ ] **127. `plotting/compare_readout_pns.py`'s `te_realized` formula
+  silently assumes even `ETL`, diverging from `calc_te_tr_delays.py`'s own
+  nominal-TE definition for odd `ETL`.** [verify -- derived, not measured
+  against a live odd-`ETL` run] `_build`'s realized-TE computation
+  (`compare_readout_pns.py:64-65`):
+  ```python
+  et = hdf5storage.loadmat(...)['schedules'][0, 0, :, 2]
+  te_realized = 0.5 * (et[p.ETL // 2 - 1] + et[p.ETL // 2])
+  ```
+  `lib/calc_te_tr_delays.py:35` defines the nominal echo as continuous
+  echo-train index `ETL/2 - 0.5`. For even `ETL` (this repo's shipped
+  default, 60) that's exactly `29.5` -- the midpoint between echo 29 and
+  30 -- so averaging `et[29]`/`et[30]` correctly reproduces the value at
+  `29.5`. For odd `ETL` (e.g. 61), `ETL/2 - 0.5 = 30.0` is an *exact*
+  echo index, not a midpoint -- the true nominal TE is `et[30]` alone --
+  but the script's formula uses Python's `//` regardless of parity,
+  computing `et[29]`/`et[30]` (via `61//2 - 1 = 29`, `61//2 = 30`) and
+  averaging two echoes that are one full echo-spacing `D` apart, landing
+  at `et[30] - D/2`: off by half an echo spacing (order 0.5-1 ms, not a
+  rounding-level error). Currently inert only because `params.py:193`
+  sets `ETL = 60` (even); this one-off analysis script (like
+  `recon/benchmark_b0_cost.py`/`sweep_time_segments.py`, items 109/112)
+  has no test coverage, so nothing would catch it if reused at an odd
+  `ETL`. Fix: parity-aware indexing mirroring
+  `calc_te_tr_delays.py`'s own formula (single-echo lookup for odd `ETL`,
+  two-echo average only for even `ETL`) instead of hardcoding the
+  even-only averaging case.
 
 ## Consistency & documentation
 
@@ -818,6 +932,43 @@ as described (none needed closing).
   referenced the old broadcast, but neither touched this specific sentence.
   Fix: reword `reconstruct.py:169-171` to match `_load_echo_times`'s/
   `build_encoding_operator_b0`'s accurate phrasing.
+- [ ] **128. `preprocessing/recon_frames.py`'s module docstring claims a
+  smaps-cache legacy-format branch is unreachable, but that branch is the
+  normal path on every first pipeline run and is already exercised by this
+  repo's own tests.** [measured] The docstring (`recon_frames.py:14-17`)
+  says: "The smaps-cache legacy-format fallback (`recon_frames.m`'s 'cache
+  file has smaps_raw/emaps but no smaps yet' branch) isn't ported either --
+  `preprocess.py`, this port's only writer, always writes the full format,
+  so that branch can never be reached here." Both halves are false today:
+  (a) `recon_frames.py` itself (same file, `:76`) calls
+  `preprocessing.smaps.load_smaps()`, which is *also* a writer -- it
+  creates the cache from scratch when none is valid
+  (`smaps.py:207-215`) -- so `preprocess.py` is not "this port's only
+  writer"; this docstring predates `load_smaps` being factored out of
+  `recon_frames.py` into `smaps.py` (per `smaps.py`'s own docstring). (b)
+  `preprocess.py`'s STEP 3 cache write (`preprocess.py:343-344`) writes
+  only `smaps_raw`/`emap` (plus `smaps`, written just above) -- three
+  keys, never `smaps_degre`/`emap_degre` -- which `smaps.py:179`'s
+  `has_degre = 'smaps_degre' in f and 'emap_degre' in f` check treats as
+  part of the "full" format. Since `preprocess.py`'s STEP 3 always runs
+  before `recon_frames.py` in the documented pipeline order, the cache
+  `recon_frames.py`/`load_smaps` finds on essentially every first run is
+  exactly this 3-key "legacy" shape -- the branch this docstring calls
+  unreachable is the routine case, handled by `smaps.py:184-192`'s own
+  backfill block (which the `smaps.py` docstring correctly documents as
+  real). Confirmed live, not hypothetical:
+  `tests/test_preprocessing_recon_frames.py`'s `_make_fixture`
+  (`:25-44`) writes a cache with exactly these 3 keys and no `fn_gre`,
+  so `test_recon_frames_uses_cached_smaps_and_reconstructs_all_frames`/
+  `test_recon_frames_caps_at_cfg_nframes` already exercise the backfill
+  path on every run, without either the fixture or the assertions calling
+  that out. Distinct from item 117 (which flags `preprocess.py`'s STEP 3
+  as a *duplicate* of `load_smaps`'s caching logic, not this docstring's
+  incorrect claim about which branches are reachable). Fix: reword
+  `recon_frames.py:14-17` to describe the real, current relationship (two
+  writers, an intentionally-backfilled older cache format), or resolve it
+  by fixing item 117 (making `preprocess.py` call `load_smaps` directly),
+  which would make the claim true again.
 
 ## Test & tooling health
 
@@ -906,6 +1057,34 @@ as described (none needed closing).
   `pytest.raises(ValueError)` test (using item 103's own cited repro,
   `ticaipi_sample([240, 45], 4, 0)`) would close this gap and guard
   against the check being silently weakened or removed later.
+- [ ] **129. `recon/save_result.py` has zero test coverage anywhere in the
+  repo, including no regression guard for the exact GPU-tensor-ordering
+  bug its own docstring says previously destroyed a completed
+  reconstruction.** [measured] A repo-wide grep for `save_result` under
+  `tests/` finds nothing; `recon/save_result.py` is never imported by any
+  test file. Its own module docstring and inline comment
+  (`save_result.py:1-10,23-27`) explain a fix baked into the current code:
+  `result.X_recon.detach().cpu().numpy()` and the raw-complex `.h5` write
+  must both happen *before* handing data to
+  `preprocessing/nifti_io.save_recon_nifti` -- "getting that boundary
+  wrong once already lost a completed real reconstruction." This is
+  distinct from item 115 (plotting/'s coverage gap) and from
+  `save_recon_nifti` itself (which *is* tested, in
+  `tests/test_preprocessing_nifti_io.py`) -- what's untested is
+  `save_result()`'s own orchestration: the CPU/GPU boundary, the `.h5`
+  dataset/attrs construction (`X`, `X_recon`, `omega`, `dc_costs`,
+  `reg_costs`, `restarts`, `rel_changes`, plus four scalar attrs), and the
+  `**result.meta, **extra_attrs` merge into the JSON sidecar (a future
+  field added to both `ReconResult.meta` and a caller's `extra_attrs`
+  would silently collide as a duplicate-kwarg `TypeError`, also
+  untested). Nothing in the suite would catch a future edit that
+  reintroduces the CUDA-tensor-into-`save_recon_nifti` ordering bug, or
+  reorders the writes, or breaks the meta/extra_attrs merge. Fix: add
+  `tests/test_recon_save_result.py` with a small synthetic `ReconResult`
+  (gated via `pytest.importorskip("torch")` like the rest of `recon/`'s
+  tests, using a CUDA tensor when available and CPU otherwise) asserting
+  the `.h5`/`.json`/`.nii.gz` triplet is written correctly and that a CUDA
+  `ReconResult.X_recon` doesn't crash the nifti write.
 
 ## Conciseness & performance
 
@@ -1087,3 +1266,31 @@ as described (none needed closing).
   used. Either add a couple of parametrized `dtype=` cases to
   `test_pd_sample.py`, or drop the untested branches if nothing is
   expected to ever pass a non-default `dtype`.
+- [ ] **130. The Stage-2 batch-driver skeleton is duplicated near-verbatim
+  across five files.** [measured] `preprocessing/run_preprocessing.py`,
+  `run_rss.py`, `run_cg_sense.py`, `run_recon_sigpy.py`, and
+  `run_b0map.py` all share the identical outer skeleton: `print(f'Batch:
+  {len(cfg.seqnames)} sequence(s) in {cfg.datdir}')`, then `for i,
+  seqname in enumerate(cfg.seqnames, start=1): print(f'\n[{i}/{len(cfg.
+  seqnames)}] {seqname}')`, a per-sequence `try/except Exception as e:
+  print(f"ERROR [{seqname}]: {e}\nSkipping...")` (each carrying the same
+  `# noqa: BLE001` comment citing "mirrors the sibling batch drivers'
+  try/catch"), and a trailing `print('\nBatch complete.')`. In the three
+  Stage-2 recon drivers (`run_rss.py:39-57`, `run_cg_sense.py:18-46`,
+  `run_recon_sigpy.py:15-49`) the duplication runs deeper: each also
+  repeats `paths = set_seq_paths(...)`, `seq_params =
+  load_seq_params(paths)`, an `out_dir = os.path.join(cfg.datdir, 'recon',
+  'basic'); os.makedirs(out_dir, exist_ok=True)`, a call into
+  `recon_frames(cfg, paths, seq_params, recon_fn)`, and a
+  `save_recon_nifti(fn_recon, img, ..., seqname=seqname,
+  runtime_s=runtime_s, **sp)` call -- differing only in the `recon_fn`
+  construction and the extra kwargs passed to `save_recon_nifti`.
+  Confirmed by direct side-by-side comparison of `run_rss.py`/
+  `run_cg_sense.py` -- the shared structure is real, unambiguous
+  duplication (not superficial similarity), and the drivers' own comments
+  already acknowledge they're siblings of one another. Fix direction: a
+  shared helper (e.g. a `_run_batch(cfg, make_recon_fn, fn_recon_name,
+  extra_attrs)` in a small shared module, or a decorator/context-manager
+  wrapping the per-sequence try/except+prints) could factor out the outer
+  skeleton across all five drivers and the inner recon-specific portion
+  across the three Stage-2 drivers.
