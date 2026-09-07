@@ -44,17 +44,27 @@ as described (none needed closing). Items 125-130 are new findings from
 a later pass (2026-09-06, against `bbd8266`) that also re-verified every
 item 107-124 against the current tree: no source file changed between
 `0d6d821` and `bbd8266` except this doc itself, so all eighteen were
-confirmed still open exactly as described (none needed closing).
+confirmed still open exactly as described (none needed closing). Items
+131-135 are new findings from a later pass (2026-09-07, against
+`639345e`) that also re-verified every item 107-130 against the current
+tree: no source file changed between `bbd8266` and `639345e` except this
+doc itself, so all twenty-four were confirmed still open exactly as
+described (none needed closing).
 
-## Current baseline (2026-09-06, against `bbd8266`)
+## Current baseline (2026-09-07, against `639345e`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
   errors**, all `E501` -- unchanged from the previous pass.
 - `uv run pytest` (plain main venv): **126 passed, 15 skipped**, re-run
-  after `rm -rf output` -- unchanged from the previous pass. Not
-  re-measured this pass with the `preprocessing`/`recon` extras (see the
-  previous baseline entries in git history for those counts, both of
-  which were themselves unchanged from their own prior runs).
+  after `rm -rf output` -- unchanged from the previous pass. With
+  `--extra preprocessing` also synced: **155 passed, 11 skipped**
+  (re-measured fresh this pass, `rm -rf output` first) -- the extra 29
+  passes/4 fewer skips are the GERecon/Julia-independent `preprocessing/`
+  tests that `pytest.importorskip`-skip for missing `sigpy`/`nibabel` in
+  the plain env, now able to run; still gated (11 skipped) on the real
+  `GERecon` SDK and a `julia` executable, neither available in this
+  environment. `recon` extras (`torch`/`mirtorch`) not re-measured this
+  pass (see the previous baseline entries in git history for that count).
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, GE_MR750, `PNSwt = [0.8, 1.0, 0.7]`, seed 0) --
   all four sequences `.ok`, re-measured fresh this pass (`rm -rf output`
@@ -633,6 +643,64 @@ confirmed still open exactly as described (none needed closing).
   `calc_te_tr_delays.py`'s own formula (single-echo lookup for odd `ETL`,
   two-echo average only for even `ETL`) instead of hardcoding the
   even-only averaging case.
+- [ ] **131. `recon/reconstruct.py`'s `_reg_weights` computes each scale's
+  regularization weight from the *declared* patch size, but
+  `recon/lowrank.py`'s `img2patches`/`patchSVST` (the functions that
+  actually consume `patch_sizes[k]`) silently clip each axis to the image
+  dimension first -- so a "whole-volume" scale declared at or above the
+  image size gets the wrong weight.** [measured] `_reg_weights`
+  (`reconstruct.py:133-145`) computes `p_k = math.prod(ps)` directly from
+  the caller-supplied `patch_sizes[k]`, with no clamping against the
+  actual `(Nx,Ny,Nz)`. But `img2patches`/`patchSVST`
+  (`lowrank.py:21-44`, called one line below/above with that same
+  `patch_sizes[k]` value at `reconstruct.py:239,257,266`) both clip every
+  axis via `psx, psy, psz = (min(p, n) for p, n in zip(patch_size,
+  (Nx,Ny,Nz)))` before ever extracting a patch -- clipping exists
+  specifically so a scale can be declared "as large as possible" without
+  hardcoding the exact grid dims, a natural way to spell a whole-volume
+  scale. Reproduced directly: for a `(12,12,8)` volume, `Nt=5`, declaring
+  a whole-volume scale as `(16,16,16)` gives `_reg_weights` `p_k=4096`
+  (`lambda_k~=66.8`) while `patchSVST` actually operates on the clipped
+  `p_k=1152` patch (correct weight `~=37.4`) -- a ~1.8x miscalibration of
+  that scale's regularization strength, silently, with no assertion
+  anywhere that `patch_sizes[k] <= (Nx,Ny,Nz)`. This directly undermines
+  the module's own docstring claim ("lambda_k set by the Ong & Lustig
+  (2016) closed-form formula ... no tuning needed beyond
+  lambda_global") -- the whole point of that closed-form weight is that
+  it matches the *actual* patch geometry. Currently inert in this repo's
+  own driver scripts (`run_b0_recon.py`/`validate_against_mslr.py` both
+  read `patch_sizes` from a reference file whose "global" scale already
+  matches the image dims exactly, confirmed by checking the validated
+  configs cited in CLAUDE.md's MSLR table), and no test in
+  `tests/test_recon_lowrank.py`/`tests/test_recon_reconstruct.py` passes
+  an oversized `patch_sizes` entry -- but any future caller relying on
+  the clipping behavior `img2patches`/`patchSVST` were clearly built to
+  support (e.g. specifying a round-number "big" patch instead of the
+  exact grid dims) gets a silently wrong regularization weight, not an
+  error. Fix: clip each axis the same way inside `_reg_weights` (or have
+  it call a shared helper with `img2patches`/`patchSVST`) before computing
+  `p_k`, and add a test with `patch_sizes` exceeding the image on at
+  least one axis, asserting `_reg_weights`'s implied `p_k` matches what
+  `patchSVST` actually used.
+- [ ] **132. `preprocessing/recon_frames.py`'s per-frame failure message
+  never says which frame failed.** [measured] `_recon_one_frame`
+  (`recon_frames.py:33-38`) catches any exception from `recon_fn` and
+  prints `f'recon_frames: reconstruction failed on a frame -- skipping.
+  {e}'` -- both call sites (the serial list comprehension and
+  `_recon_one_frame_worker`, `recon_frames.py:94,96`) dispatch over
+  `frame_data = (f['ksp_epi_zf'][...,frame] for frame in
+  range(nframes))` but never thread `frame` into `_recon_one_frame`
+  itself, so the printed message carries no frame index. With the
+  default `Nframes` up to 30, two or more failing frames print
+  indistinguishable lines, and the only way to identify which frame(s)
+  actually failed is to notice which slices of the returned `img` array
+  are all-zero after the fact (the existing "all output frames are zero"
+  check at `:104-107` only catches the all-frames-failed case, not a
+  partial failure). Low severity -- doesn't change any computed output,
+  only debuggability when `recon_fn` raises on a subset of frames -- but
+  cheap to fix: thread `frame` through `_recon_one_frame`'s signature and
+  into both call sites' generator/worker so the printed message names the
+  failing frame index.
 
 ## Consistency & documentation
 
@@ -969,6 +1037,30 @@ confirmed still open exactly as described (none needed closing).
   writers, an intentionally-backfilled older cache format), or resolve it
   by fixing item 117 (making `preprocess.py` call `load_smaps` directly),
   which would make the claim true again.
+- [ ] **133. The `<seqname>_gre.h5`/`smaps_<seqname>_sigpy.h5` cache paths
+  are hand-built with the identical f-string independently in 3-4
+  separate files instead of being `SeqPaths` fields.** [measured]
+  `<datdir>/recon/<seqname>_gre.h5`'s path is independently constructed
+  via `os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')` (or
+  the equivalent with a bare `seqname`) in `preprocess.py:310`,
+  `smaps.py:157`, `run_b0map.py:69`, and `gre_diagnostics.py:34`;
+  `<datdir>/recon/smaps_<seqname>_sigpy.h5`'s path independently in
+  `preprocess.py:324`, `smaps.py:155`, and `run_b0map.py:91`. `SeqPaths`
+  (`preprocessing/config.py`) already centralizes every *other*
+  per-sequence path (`scan_info`, `cal`, `noise`, `epi`, `recon`) for
+  exactly this reason, but conspicuously omits these two. Currently
+  harmless -- confirmed all 7 call sites use the identical format string
+  -- so this is a latent-drift risk, not a live bug: distinct from item
+  130 (the batch-driver *skeleton* duplication) and item 117 (duplicated
+  cache-*validity* logic, not path construction). A future rename of
+  either cache file's naming convention would require remembering to
+  update every one of these independent call sites; a missed one would
+  silently break the pipeline (e.g. `smaps.py` looking for a GRE cache at
+  a path `preprocess.py` no longer writes to) with no error until a
+  downstream stage fails to find its input. Fix: add `gre_cache`/
+  `smaps_cache` fields to `SeqPaths` (computed once in `set_seq_paths`,
+  the same place the other five paths are built) and update all 7 call
+  sites to read them instead of re-deriving the filename.
 
 ## Test & tooling health
 
@@ -1085,6 +1177,74 @@ confirmed still open exactly as described (none needed closing).
   tests, using a CUDA tensor when available and CPU otherwise) asserting
   the `.h5`/`.json`/`.nii.gz` triplet is written correctly and that a CUDA
   `ReconResult.X_recon` doesn't crash the nifti write.
+- [ ] **134. `ge/writeceq.py`'s `write_ceq` (the .pge binary writer) and
+  `ge/read_pge.py`'s `read_pge` (its read-back counterpart) have zero
+  pytest coverage anywhere in the repo -- including no regression guard
+  for item 126's confirmed-live bug, which lives inside `write_ceq`
+  itself.** [measured] A repo-wide grep (`grep -rln "write_ceq\|writeceq"
+  tests/ ge/`) finds `write_ceq` referenced only in `ge/ceq.py` (the
+  dataclass it consumes), `ge/ge_export.py` (its one production caller),
+  `ge/read_pge.py`/`ge/validate_against_matlab.py` (round-trip
+  read-back/MATLAB-comparison tooling) -- never in any file under
+  `tests/`. Confirmed by reading `tests/test_ge_check.py` (the only test
+  file that imports from `ge.*`) and `tests/test_seq2ceq.py` (the only
+  other one) in full: neither imports `ge.writeceq`, `ge.read_pge`, or
+  `ge.ge_export`, and `tests/conftest.py`'s `built_seq_dir` fixture (used
+  by both) only calls `generate_arbepi`/`generate_noise`, never
+  `export_to_ge`/`write_ceq`. The only things that have ever exercised
+  `write_ceq` end to end are `main.py --ge` (a full manual CLI run, not
+  part of the pytest suite) and `ge/validate_against_matlab.py` (needs a
+  local MATLAB install and a fresh MATLAB-generated reference `.pge`,
+  neither available in this environment or CI). This matters concretely,
+  not just as a coverage-percentage gap: item 126 (still open) documents
+  a real, confirmed-reproducible off-by-one bug inside `write_ceq` itself
+  (the `NMAXBLOCKSFORGRADHEATCHECK` sliding-window block count, silently
+  wrong for any segment whose block count divides 40000 evenly) that no
+  test would catch today or after a fix -- the exact same "no regression
+  guard for a known bug" pattern already flagged for `plotting/` (item
+  115) and `recon/save_result.py` (item 129, directly above). Fix: add
+  `tests/test_ge_writeceq.py` with a synthetic small `Ceq` (a handful of
+  parent blocks/segments/loop rows, no need for a real `.seq` file) that
+  round-trips through `write_ceq` -> `read_pge` and asserts the read-back
+  fields match the input `Ceq` -- this would also directly regression-test
+  item 126's fix once applied (construct a synthetic `Ceq` whose segment
+  block count divides `NMAXBLOCKSFORGRADHEATCHECK` evenly, matching that
+  item's own repro).
+- [ ] **135. `recon/reconstruct.py`'s entire `fn_b0map` branch in
+  `run_recon` -- including the item-93 `sigma1A` auto-measurement and its
+  `ValueError` guard -- has zero test coverage.** [measured]
+  `tests/test_recon_reconstruct.py` is the only test file exercising
+  `run_recon`, and every one of its calls passes `sigma1A` explicitly
+  (`sigma1A=1.0`) with no `fn_b0map` argument at all (confirmed by
+  reading the file in full, and by `grep -rn
+  "_load_echo_times\|_load_normalized_smaps\|fn_b0map" tests/` finding no
+  hits outside `recon/reconstruct.py`/`recon/run_b0_recon.py`
+  themselves). So none of the following -- all inside
+  `reconstruct.py:202-227` -- are exercised by any test: the
+  `b0map_hz.shape == (Nx,Ny,Nz)` assert, the `run_recon`-side call into
+  `build_encoding_operator_b0` (as opposed to
+  `tests/test_recon_operators_b0.py`'s standalone direct calls to that
+  function), the `ValueError` raised when both `sigma1A` and `fn_b0map`
+  are `None` (item 93's fix), and the auto-`sigma1A`-via-power-iteration
+  branch taken when `fn_b0map` is set and `sigma1A` is `None` (also item
+  93). The only thing that has ever run this branch end to end is the
+  one-off production driver `run_b0_recon.py` against real, uncommitted
+  acquisition data -- never in the test suite. Distinct from item 129
+  (`save_result.py`, no test file at all) and item 115 (`plotting/`, no
+  test file at all) in that here the *surrounding* function (`run_recon`'s
+  plain, non-B0 path) is well covered
+  (`test_run_recon_smoke`/`test_run_recon_recovers_signal_without_regularization`)
+  -- it's specifically the B0-correction branch item 93 added real
+  failure-mode/auto-estimate logic to that has no equivalent coverage, so
+  a future refactor of that branch (the shape assert, the `ValueError`
+  condition/message, or the auto-estimate call) could silently break any
+  of the four behaviors above with nothing to catch it. Fix: add a test
+  building a small synthetic `fn_ksp`/`fn_smaps`/`fn_b0map` fixture (the
+  existing `test_run_recon_smoke` fixture extended with a synthetic
+  `b0map_hz` dataset) and asserting `run_recon(..., fn_b0map=...,
+  sigma1A=None)` both raises the documented `ValueError` when `fn_b0map`
+  is also `None` and successfully auto-measures `sigma1A` and completes
+  when `fn_b0map` is set.
 
 ## Conciseness & performance
 
