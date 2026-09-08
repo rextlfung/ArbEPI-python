@@ -14,7 +14,7 @@ import pytest
 
 from lib.readout_from_params import make_readout_grads_from_params
 from params import load_params
-from sampling.gen_sampling_masks import gen_sampling_masks
+from sampling.gen_sampling_masks import resolve_omegas
 from sequences.ArbEPI import _compute_schedules, generate_arbepi
 from sequences.deGRE import generate_degre
 from sequences.EPIcal import generate_epical
@@ -39,7 +39,7 @@ def _small_params(tmp_path):
 
 def test_arbepi_trajectory_matches_schedule(tmp_path):
     p = _small_params(tmp_path)
-    omegas = gen_sampling_masks(p.R, p)
+    omegas = resolve_omegas(p)
     schedules, _ = _compute_schedules(
         omegas, p.ETL, p.Nshots, p.epi_trajectory, deltak=(1 / p.fov[1], 1 / p.fov[2]),
     )  # 0-based, pre-savemat
@@ -74,7 +74,7 @@ def test_arbepi_schedule_echo_times(tmp_path):
     import hdf5storage
 
     p = _small_params(tmp_path)
-    omegas = gen_sampling_masks(p.R, p)
+    omegas = resolve_omegas(p)
     generate_arbepi(omegas, p, seqname='xcheck')
 
     schedules = hdf5storage.loadmat(str(tmp_path / 'scan_info.mat'))['schedules']
@@ -111,7 +111,7 @@ def test_arbepi_kxoe_matches_epical(tmp_path):
     import hdf5storage
 
     p = _small_params(tmp_path)
-    omegas = gen_sampling_masks(p.R, p)
+    omegas = resolve_omegas(p)
     generate_arbepi(omegas, p, seqname='xcheck')
     epical_seq = generate_epical(p, seqname='xcheck_cal')
 
@@ -146,7 +146,7 @@ def test_noise_nfid_matches_arbepi(tmp_path):
     import hdf5storage
 
     p = _small_params(tmp_path)
-    omegas = gen_sampling_masks(p.R, p)
+    omegas = resolve_omegas(p)
     generate_arbepi(omegas, p, seqname='xcheck')
 
     schedules = hdf5storage.loadmat(str(tmp_path / 'scan_info.mat'))['schedules']
@@ -165,7 +165,7 @@ def test_arbepi_kx_coverage_and_nyquist(tmp_path):
     and no two consecutive kx samples may be farther apart than deltak
     (Nyquist), including on the asymmetric POPE ramps."""
     p = _small_params(tmp_path)
-    omegas = gen_sampling_masks(p.R, p)
+    omegas = resolve_omegas(p)
     seq = generate_arbepi(omegas, p, seqname='xcheck')
 
     schedules, _ = _compute_schedules(
@@ -205,7 +205,7 @@ def test_arbepi_schedule_echo_times_match_measured_kx_zero_crossings(tmp_path):
     import hdf5storage
 
     p = _small_params(tmp_path)
-    omegas = gen_sampling_masks(p.R, p)
+    omegas = resolve_omegas(p)
     seq = generate_arbepi(omegas, p, seqname='xcheck')
 
     scan_info = hdf5storage.loadmat(str(tmp_path / 'scan_info.mat'))
@@ -261,7 +261,7 @@ def test_readout_ramps_are_asymmetric():
 def test_epical_trajectory_is_centered(tmp_path):
     """EPIcal zeroes all ky/kz encoding — every echo should read back k~0."""
     p = _small_params(tmp_path)
-    omegas = gen_sampling_masks(p.R, p)
+    omegas = resolve_omegas(p)
     generate_arbepi(omegas, p, seqname='xcheck')  # writes scan_info.mat that EPIcal loads
 
     seq = generate_epical(p, seqname='xcheck_cal')

@@ -10,10 +10,8 @@ generate_noise load scan_info.mat that it produces.
 import argparse
 import os
 
-import numpy as np
-
 from params import load_params
-from sampling.gen_sampling_masks import gen_sampling_masks
+from sampling.gen_sampling_masks import resolve_omegas
 from sequences.ArbEPI import generate_arbepi
 from sequences.deGRE import generate_degre
 from sequences.EPIcal import generate_epical
@@ -23,12 +21,15 @@ from sequences.noise import generate_noise
 def main(export_ge: bool = False, plot: bool = False):
     params = load_params()
 
-    # 1. Generate sampling masks and main EPI sequence. params.seed
-    # defaults to 0 (reproducible mask -- every PNS/timing number quoted
-    # in CLAUDE.md/README is seed-dependent); pass None instead
-    # (np.random.default_rng(None) is unseeded, same as gen_sampling_masks'
-    # own fallback) for a fresh mask each run.
-    omegas = gen_sampling_masks(params.R, params, rng=np.random.default_rng(params.seed))
+    # 1. Sampling masks and main EPI sequence. resolve_omegas returns
+    # params.custom_omegas when params.custom_mask_path points at a
+    # collaborator-provided mask (see README's "Using custom ky-kz-t
+    # sampling masks" section); otherwise it falls back to this repo's own
+    # gen_sampling_masks, using params.R/sampling_method and params.seed
+    # (0 by default -- reproducible mask, every PNS/timing number quoted in
+    # CLAUDE.md/README is seed-dependent; None gives a fresh, unseeded mask
+    # each run).
+    omegas = resolve_omegas(params)
     generate_arbepi(omegas, params)
 
     # 2. Calibration sequence (ghost correction + receiver gain)

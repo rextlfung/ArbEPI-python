@@ -20,11 +20,12 @@ Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](../pypulseq
    | `volume_tr` | Time to acquire one full 3D volume, s | `2 s` |
    | `duration` | Total scan duration across all frames, s | `60 s` |
    | `T1` | Tissue T1, s (sets the Ernst-angle flip angle) | `1.3 s` |
-   | `R` | Acceleration factor on the `(ky, kz)` sampling pattern | `9` |
    | `ETL` | Echo train length (echoes per shot) | `60` |
-   | `sampling_method` | ky-kz(-t) sampling pattern: `'pd'`, `'caipi'`, `'ticaipi'`, or `'rand'` | `'pd'` |
-   | `seed` | Sampling-mask RNG seed: an int for a reproducible mask, or `None` for a fresh one each run | `0` |
-   | `epi_trajectory` | Echo-train ordering within each shot: `'laminar'` or `'radial'` (see [Demo](#demo) below) | `'radial'` |
+   | `custom_mask_path` | Path to your own `(ky, kz[, t])` sampling mask `.mat` file, or `None` to use `sampling_method` below (see [Using custom ky-kz-t sampling masks](#using-custom-ky-kz-t-sampling-masks)) | `None` |
+   | `R` | Acceleration factor on the `(ky, kz)` sampling pattern (ignored if `custom_mask_path` is set) | `9` |
+   | `sampling_method` | ky-kz(-t) sampling pattern: `'pd'`, `'caipi'`, `'ticaipi'`, or `'rand'` (ignored if `custom_mask_path` is set) | `'pd'` |
+   | `seed` | Sampling-mask RNG seed: an int for a reproducible mask, or `None` for a fresh one each run (ignored if `custom_mask_path` is set) | `0` |
+   | `epi_trajectory` | Echo-train ordering within each shot: `'laminar'` or `'radial'` (see [Demo](#demo) below) — always required, even with a custom mask | `'radial'` |
    | `Ncoils` | Number of receive coil channels (for the noise prescan) | `32` |
 
    Everything below that section in `load_params()` is pre-tuned for this sequence's hardware/PNS/timing constraints (see `CLAUDE.md`) and typically doesn't need to change.
@@ -35,14 +36,17 @@ Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](../pypulseq
    Or step by step:
    ```python
    from params import load_params
-   from sampling.gen_sampling_masks import gen_sampling_masks
+   from sampling.gen_sampling_masks import resolve_omegas
    from sequences.ArbEPI import generate_arbepi
    from sequences.EPIcal import generate_epical
    from sequences.deGRE import generate_degre
    from sequences.noise import generate_noise
 
    params = load_params()
-   omegas = gen_sampling_masks(params.R, params)
+   # resolve_omegas returns params.custom_omegas when params.custom_mask_path
+   # points at your own mask (see "Using custom ky-kz-t sampling masks" below),
+   # else falls back to gen_sampling_masks.
+   omegas = resolve_omegas(params)
    generate_arbepi(omegas, params)   # writes output/ArbEPI.seq, output/scan_info.mat
    generate_epical(params)           # writes output/EPIcal.seq
    generate_degre(params)            # writes output/deGRE.seq (dual-echo, for coil sensitivity maps + B0 field map)
@@ -55,6 +59,26 @@ Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](../pypulseq
    ```
 
 There is no automated end-to-end pytest suite against MATLAB for `.seq` generation itself (no MATLAB install was available during that initial port — see `tests/` for unit tests on algorithm invariants instead, including an independent check that reads k-space back out of the assembled sequence and confirms it matches the sampling schedule). `sampling_method='caipi'` is deterministic (no RNG) and is the easiest configuration to sanity-check by hand. (The separate GE `.pge` export path below *was* validated against real MATLAB output, once a MATLAB install became available — see the GE export section and `CLAUDE.md`.)
+
+## Using custom ky-kz-t sampling masks
+
+If you already have your own `(ky, kz)` or `(ky, kz, t)` sampling pattern — designed by hand, by a collaborator's own pipeline, or by a compressed-sensing/non-Cartesian sample-selection method this repo doesn't itself implement — you can feed it straight into the pipeline instead of one of the built-in `sampling_method`s (`'pd'`, `'caipi'`, `'ticaipi'`, `'rand'`). This bypasses `gen_sampling_masks` entirely and replaces the need to specify `R`, `sampling_method`, and `seed`.
+
+1. Save your mask as a plain v5 `.mat` file (e.g. MATLAB's `save(..., '-v5')`, or `scipy.io.savemat` from Python) holding a 0/1 array under one variable, either:
+   - `(Ny, Nz)` — a single static pattern, reused for every frame, or
+   - `(Ny, Nz, Nframes)` — an already time-resolved mask, one pattern per frame/timepoint.
+
+   `Ny`/`Nz` must match `params.py`'s `N[1]`/`N[2]`. If you provide the 3D form, its `Nframes` must match what `duration`/`volume_tr`/`discard_duration` compute (`round((duration + discard_duration) / volume_tr)`) — adjust one side or the other so they agree.
+2. In `params.py`'s `load_params()`, point `custom_mask_path` at that file (and `custom_mask_key` if your variable isn't named `'samp'`):
+   ```python
+   custom_mask_path = 'my_custom_mask.mat'
+   custom_mask_key = 'samp'
+   ```
+   `epi_trajectory` (`'laminar'` or `'radial'`) is still required either way: `mask2epi_{laminar,radial}` still partitions whatever mask you provide into `Nshots` EPI trajectories of length `ETL`, regardless of where the mask came from.
+3. Run `main.py` exactly as usual (`uv run python main.py`, optionally with `--plot`/`--ge`). `load_params()` loads and validates the mask up front — every frame must sample the same number of `(ky, kz)` locations, and that count must divide evenly by `ETL`, since `Nshots = samples_per_frame / ETL` (see `lib/mask2epi.py`'s `Nshots * ETL == n_samples` assertion) — and derives `Nshots` and an effective `R` (`Ny*Nz / samples_per_frame`, for display/`scan_info.mat` bookkeeping only, no longer a design input) from it. An invalid mask raises a `ValueError` explaining exactly what to fix before any sequence generation starts.
+4. **Re-verify PNS and the achieved TE — a custom mask changes the numbers this repo's own defaults were tuned against.** The default `blip_slew`/`ro_slew_rise`/`ro_slew_fall` in `params.py` sit close to GE's 80% normal-mode PNS limit (as little as ~0.2% margin — see `CLAUDE.md`'s "PNS finding history"), tuned against this repo's own Poisson-disc masks; a custom mask can produce very different consecutive-sample ky/kz steps (`lib/mask2epi.py`'s `max_blip_steps`), which directly changes blip amplitude and the resulting PNS. Run `uv run python main.py --ge` (or just `check_ge_feasibility`, see [GE export](#ge-export-pge) below) and, if PNS comes back over 80%, lower `blip_slew` (`params.py` itself documents dropping it back to `100` as the safe fallback). Separately, `lib/calc_te_tr_delays.py` only *warns*, never raises, if your mask's ky/kz steps make the prescribed `TE` unreachable — it silently falls back to a shorter, achievable TE instead — so check its printed output (or `scan_info.mat`'s `schedules[..., 2]`) after your first build with a new mask.
+
+Under the hood this is `sampling/external_mask.py`'s `load_external_mask`/`resolve_custom_omegas`, called from `params.py`'s `load_params()` to build the full `(Ny, Nz, Nframes)` array (`params.custom_omegas`) and derive `Nshots`/`R` from it — see that field's comment in `params.py` for the details.
 
 ## Scope
 

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 import pypulseq as pp
 
+from sampling.external_mask import resolve_custom_omegas
 from scanners import SCANNERS, ScannerSpec
 
 
@@ -56,12 +57,27 @@ class Params:
     ETL: int
     Nshots: int
 
-    # Sampling mask parameters
-    sampling_method: str
+    # Sampling mask parameters. Both are ignored (set to None by load_params)
+    # when custom_mask_path below is set -- see that field's comment.
+    sampling_method: str | None
     seed: int | None  # passed to gen_sampling_masks' rng; None = unseeded (fresh mask each run)
 
+    # Custom ky-kz(-t) sampling mask, loaded via sampling/external_mask.py's
+    # load_external_mask when custom_mask_path is not None -- see
+    # README.md's "Using custom ky-kz-t sampling masks" section. Replaces
+    # gen_sampling_masks (and the R/sampling_method/seed fields above)
+    # entirely: R/Nshots are instead derived from the mask's own sample
+    # count. custom_omegas holds the already-loaded, already-broadcast
+    # (Ny, Nz, Nframes) mask (None on the built-in gen_sampling_masks path);
+    # main.py uses it directly in place of calling gen_sampling_masks.
+    custom_mask_path: str | None
+    custom_omegas: np.ndarray | None
+
     # Sampling trajectory
-    epi_trajectory: str  # 'laminar' (mask2epi_laminar) or 'radial' (mask2epi_radial)
+    epi_trajectory: str  # 'laminar' (mask2epi_laminar) or 'radial' (mask2epi_radial) -- always
+    # required, even with a custom mask: mask2epi still partitions any
+    # (ky, kz) mask into Nshots EPI trajectories of length ETL, regardless
+    # of where the mask came from.
 
     # Decay / timing
     TE: float  # s
@@ -182,19 +198,52 @@ def load_params(output_dir: str = 'output') -> Params:
     # Tissue T1, s -- used below to compute the Ernst-angle flip angle.
     T1 = 1.3
 
-    # Acceleration factor applied to the (ky, kz) sampling pattern, and the
-    # echo train length (number of echoes acquired per shot).
-    R = 9
-    ETL = 60
-    Nshots = math.ceil(Ny * Nz / R / ETL)
+    # Frames to discard at the start of the scan (steady-state warm-up), s,
+    # and the resulting number of acquired frames. Hoisted up from the
+    # "ADVANCED / DERIVED PARAMETERS" section below -- unlike Nshots,
+    # Nframes depends only on duration/volume_tr/discard_duration, not on
+    # R/ETL/the sampling mask -- so a custom mask's own time-frame count
+    # (below) can be validated against it immediately.
+    discard_duration = 0
+    Nframes = round((duration + discard_duration) / volume_tr)
 
-    # ky-kz(-t) sampling pattern: 'pd' (Poisson-disc, recommended), 'caipi',
-    # 'ticaipi', or 'rand'. See sampling/gen_sampling_masks.py.
-    sampling_method = 'pd'
-    # Sampling-mask RNG seed: an int for a reproducible mask across runs
-    # (every PNS/timing number quoted in CLAUDE.md/README uses seed=0), or
-    # None for a fresh, unseeded mask every run.
-    seed = 0
+    # Echo train length (number of echoes acquired per shot).
+    ETL = 60
+
+    # Custom ky-kz(-t) sampling mask (optional): path to a collaborator-
+    # provided .mat file holding an externally-designed 0/1 sampling mask
+    # (2D (Ny, Nz), reused every frame, or 3D (Ny, Nz, Nframes),
+    # time-resolved), loaded via sampling/external_mask.py's
+    # load_external_mask -- see README.md's "Using custom ky-kz-t sampling
+    # masks" section. When set, this replaces gen_sampling_masks (and the
+    # R/sampling_method/seed fields below) entirely: R and Nshots are
+    # instead derived from the mask's own per-frame sample count (R purely
+    # for display/scan_info.mat bookkeeping at that point -- no longer a
+    # design input), and sampling_method/seed go unused. Leave None to use
+    # the built-in sampling_method/seed/R path instead.
+    custom_mask_path = None  # e.g. 'my_custom_mask.mat'
+    custom_mask_key = 'samp'  # variable name inside that .mat file
+
+    if custom_mask_path is not None:
+        custom_omegas, Nshots, R = resolve_custom_omegas(
+            custom_mask_path, Ny, Nz, Nframes, ETL, key=custom_mask_key
+        )
+        sampling_method = None
+        seed = None
+    else:
+        custom_omegas = None
+
+        # Acceleration factor applied to the (ky, kz) sampling pattern.
+        R = 9
+        Nshots = math.ceil(Ny * Nz / R / ETL)
+
+        # ky-kz(-t) sampling pattern: 'pd' (Poisson-disc, recommended), 'caipi',
+        # 'ticaipi', or 'rand'. See sampling/gen_sampling_masks.py.
+        sampling_method = 'pd'
+        # Sampling-mask RNG seed: an int for a reproducible mask across runs
+        # (every PNS/timing number quoted in CLAUDE.md/README uses seed=0), or
+        # None for a fresh, unseeded mask every run.
+        seed = 0
 
     # Echo-train ordering within each shot: 'radial' (every shot sweeps
     # through k-space center as one spoke) or 'laminar' (ky non-decreasing
@@ -273,9 +322,6 @@ def load_params(output_dir: str = 'output') -> Params:
     # PNSwt = np.array([0.0, 0.0, 0.0])  # phantom
 
     TR = volume_tr / Nshots
-
-    discard_duration = 0
-    Nframes = round((duration + discard_duration) / volume_tr)
 
     Ndummyshots = round(discard_duration / TR)
 
@@ -398,5 +444,7 @@ def load_params(output_dir: str = 'output') -> Params:
         pd_decay=pd_decay,
         rand_gaussian_sigma=rand_gaussian_sigma,
         seed=seed,
+        custom_mask_path=custom_mask_path,
+        custom_omegas=custom_omegas,
         epi_trajectory=epi_trajectory,
     )

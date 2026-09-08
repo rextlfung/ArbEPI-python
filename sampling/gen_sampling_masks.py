@@ -76,3 +76,23 @@ def gen_sampling_masks(
             )
 
     return omegas
+
+
+def resolve_omegas(
+    params: Params,
+    seed_per_frame: bool = False,
+    rng: Optional[np.random.Generator] = None,
+) -> np.ndarray:
+    """Returns params.custom_omegas when a custom sampling mask was
+    configured (params.py's custom_mask_path), else generates one via
+    gen_sampling_masks using params.R/sampling_method/seed -- the single
+    place every call site (main.py, tests, plotting/compare_readout_pns.py)
+    should get omegas from. Calling gen_sampling_masks directly instead
+    would break on a custom-mask params (sampling_method is None on that
+    path -- see params.py's custom_mask_path field comment).
+    """
+    if params.custom_omegas is not None:
+        return params.custom_omegas
+    if rng is None:
+        rng = np.random.default_rng(params.seed)
+    return gen_sampling_masks(params.R, params, seed_per_frame=seed_per_frame, rng=rng)

@@ -557,16 +557,41 @@ no longer called them, for the same reason.
   Michigan fMRI lab-internal (server names are lab-specific); not part of
   `main.py --ge`'s own export path, and not needed to generate or validate
   `.pge` files. See `ge/README.md` for usage and SSH key setup.
-- **`sampling/external_mask.py`**'s `load_external_mask` is a deliberate
-  manual escape hatch, not a fifth `params.sampling_method` --
-  `gen_sampling_masks` has no `'external'` branch for it. Loads a
+- **`sampling/external_mask.py`**'s `load_external_mask` loads a
   precomputed 2D `(ky, kz)` or 3D `(ky, kz, t)` mask from an outside
   collaborator's own v5 `.mat` file (`scipy.io.loadmat`, not
   `hdf5storage.loadmat` -- v5, not this repo's own v7.3 convention) for a
-  sample-selection method this repo doesn't itself implement. Using it
-  means calling `sequences.ArbEPI.generate_arbepi(omegas, params)`
-  directly with the loaded array in place of `gen_sampling_masks`'s
-  output, bypassing `main.py`'s documented entry point by hand.
+  sample-selection method this repo doesn't itself implement -- not a
+  fifth `params.sampling_method`; `gen_sampling_masks` has no `'external'`
+  branch for it. The same module's `resolve_custom_omegas` (load + validate
+  + broadcast, independently unit-tested in `tests/test_custom_mask.py`
+  without building a full sequence) is wired into the top-level flow via
+  `params.py`'s `custom_mask_path`/`custom_mask_key`/`custom_omegas`
+  fields: when `custom_mask_path` is set, `load_params()` calls
+  `resolve_custom_omegas` itself (broadcasting a static 2D mask across
+  `Nframes`, or requiring a 3D mask's own frame count to match `Nframes`,
+  computed from `duration`/`volume_tr`/`discard_duration` -- hoisted
+  earlier in `load_params()` than in the non-custom path specifically so
+  this comparison can happen before `Nshots`), validates every frame
+  carries the same sample count divisible by `ETL` (mask2epi's `Nshots *
+  ETL == n_samples` invariant, see below), and derives `Nshots`/an
+  effective `R` from that count -- so `R`/`sampling_method`/`seed` go
+  unused on this path (`sampling_method`/`seed` are set to `None`;
+  `epi_trajectory` is still required regardless -- mask2epi still
+  partitions whatever mask is given). Critically, this all happens
+  *inside* `load_params()`, before `TR = volume_tr / Nshots`/`fa`/
+  `Ndummyshots` are computed from `Nshots` -- overriding `Nshots` after
+  the fact (e.g. via `dataclasses.replace` on an already-built `Params`)
+  would leave those downstream-derived fields stale. `sampling/
+  gen_sampling_masks.py`'s `resolve_omegas(params)` is the single helper
+  every call site (`main.py`, tests, `plotting/compare_readout_pns.py`)
+  should use to get `omegas` from a `Params`: it returns `params.
+  custom_omegas` directly when set, else falls back to `gen_sampling_masks`
+  -- calling `gen_sampling_masks` directly on a custom-mask `Params` would
+  raise (`sampling_method` is `None` there). See README.md's "Using custom
+  ky-kz-t sampling masks" section for the user-facing walkthrough,
+  including the PNS/TE re-verification step a custom mask's different
+  ky/kz step sizes can require.
 
 ### `preprocessing/` -- raw scanner data -> zero-filled k-space, ported from `../epi-preprocessing`
 
