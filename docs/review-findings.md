@@ -910,6 +910,50 @@ bug.
   outlier, not the rule. Fix: route `load_seq_params` through
   `matio.read_mat`/`read_mat_array` like every other `scan_info.mat`
   reader in this repo.
+- [ ] **146. `lib/make_readout_grads.py`'s POPE readout can hard-crash
+  (`AssertionError`) on a legitimate small-readout-FOV/sparse-mask
+  combination, with no fallback and no actionable guidance toward the fix.**
+  [measured] `make_readout_grads.py:245-260` sizes the flat-top readout
+  amplitude from Nyquist-critical sampling alone --
+  `A = min(deltak[0] / dwell, sys.max_grad)`, i.e. purely a function of
+  `dwell` and readout FOV (`deltak[0] = 1/fov[0]`) -- with no awareness of
+  how much k-space area the phase-encode blip turnaround (`M =
+  max(a1, a_d)`, driven by the largest consecutive-sample ky/kz step in the
+  schedule) is about to consume from the same lobe. When `A` is too large
+  relative to the target x-resolution (`S = Nx*deltak[0] = 1/res[0]`) and
+  `M`, the required flat-top duration goes negative and line 258's
+  `assert flat >= 0` fires: `'Readout lobe would be triangular (ramps alone
+  exceed the required area) -- unsupported; would need A =
+  sqrt(2*S/(1/slew_rise + 1/slew_fall)).'` -- a hard crash mid-build, not a
+  warn-and-fall-back like `calc_te_tr_delays` (item 144) uses for its own
+  unachievable-parameter case.
+
+  Reproduced against a real collaborator-supplied custom sampling mask
+  (109x91, 70 samples, R~142 -- see the "Using custom ky-kz-t sampling
+  masks" README section / PR #3): `Nx=91`, `res=[2,2,2]mm`
+  (`fov_x=182mm`), `ETL=70`, `Nshots=1` gives `max_ky_step=19`,
+  `max_kz_step=17` from `mask2epi_radial`'s ordering -- large jumps,
+  since a 70-point mask this sparse forced into one 70-echo train has few
+  short hops available -- and at the repo's default `dwell=2e-6` this
+  assertion fires immediately; `dwell=4e-6` (or, equivalently, oversampling
+  the readout FOV to `Nx~160+` at the same `res_x=2mm`, i.e. `fov_x` up to
+  ~320mm+, leaving `dwell` untouched) both clear it, confirming `A`'s
+  `1/(fov_x * dwell)` dependence is exactly the lever (doubling either
+  factor halves `A` and produces the same `Nfid`/`Tread`, ~0.45ms, either
+  way). This is a real, reproducible failure mode independent of the
+  custom-mask machinery itself (PR #3's `custom_mask_path` loading/
+  validation all worked correctly here; the crash is purely downstream in
+  gradient design) -- any sufficiently sparse/scattered mask at a
+  small-enough readout FOV would trigger it, custom or built-in
+  `sampling_method`. Not investigated further / not fixed here per
+  explicit instruction to treat as a separate follow-up. Fix direction:
+  at minimum, name both remedies (`dwell`, readout-FOV oversampling) in the
+  assertion message so a user hitting this isn't left to reverse-engineer
+  the `A`/`S`/`M` algebra themselves; a fuller fix would have
+  `make_readout_grads` fall back to solving for a smaller `A` (per the
+  message's own `sqrt(2*S/(1/slew_rise + 1/slew_fall))` formula) rather
+  than requiring the caller to hand-tune `dwell`/`Nx` until it happens to
+  fit.
 
 ## Consistency & documentation
 
