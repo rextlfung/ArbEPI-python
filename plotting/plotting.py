@@ -96,7 +96,7 @@ def plot_sampling_mask(
     ax.plot(ky_grid.ravel(), kz_grid.ravel(), '.', color=(0.7, 0.7, 0.7), markersize=3)
     ax.plot(ky_samp, kz_samp, 'r.', markersize=4)
     ax.set_aspect('equal')
-    ax.set_title(f'2D sampling mask, frame {frame_idx + 1}. R = {round(R)}')
+    ax.set_title(f'2D sampling mask, frame {frame_idx + 1}. R = {R:.3g}')
     ax.set_xlabel('k_y (m$^{-1}$)')
     ax.set_ylabel('k_z (m$^{-1}$)')
     ax.set_xlim(-Ny * deltak_y / 2, Ny * deltak_y / 2)
@@ -126,7 +126,7 @@ def plot_trajectory(
     if frame_idx is None:
         ax.plot(k_traj[1, :], k_traj[2, :], 'b-', linewidth=1.0)
         ax.plot(k_traj_adc[1, :], k_traj_adc[2, :], 'r.', markersize=4)
-        title = f'3D-EPI trajectory. R = {round(R)}'
+        title = f'3D-EPI trajectory. R = {R:.3g}'
     else:
         n_total_samples = k_traj_adc.shape[1]
         n_shot_samples = params.ETL * (n_total_samples // (params.Nframes * params.Nshots * params.ETL))
@@ -168,7 +168,7 @@ def plot_trajectory(
                 fontsize=6, color='k', ha='center', va='center', zorder=6,
                 path_effects=[matplotlib.patheffects.withStroke(linewidth=1.5, foreground='w')],
             )
-        title = f'3D-EPI trajectory, frame {frame_idx + 1}. R = {round(R)}'
+        title = f'3D-EPI trajectory, frame {frame_idx + 1}. R = {R:.3g}'
 
     ax.axhline(0, color='k', linewidth=1, zorder=0)
     ax.axvline(0, color='k', linewidth=1, zorder=0)

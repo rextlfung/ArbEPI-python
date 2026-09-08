@@ -1,11 +1,10 @@
 import warnings
 from dataclasses import replace
 
-import numpy as np
 import pytest
 
 from params import load_params
-from sampling.gen_sampling_masks import gen_sampling_masks
+from sampling.gen_sampling_masks import resolve_omegas
 from sequences.ArbEPI import generate_arbepi
 from sequences.noise import generate_noise
 
@@ -20,7 +19,7 @@ def built_seq_dir(tmp_path_factory):
     means those tests always actually run."""
     out_dir = tmp_path_factory.mktemp('built_seqs')
     p = replace(load_params(output_dir=str(out_dir)), Nframes=1, seed=0)
-    omegas = gen_sampling_masks(p.R, p, rng=np.random.default_rng(p.seed))
+    omegas = resolve_omegas(p)
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         generate_arbepi(omegas, p, seqname='ArbEPI')

@@ -48,3 +48,63 @@ def load_external_mask(path: str, Ny: int, Nz: int, key: str = 'samp') -> np.nda
             f'({Ny}, {Nz}) or ({Ny}, {Nz}, Nt)'
         )
     return mask
+
+
+def resolve_custom_omegas(
+    path: str, Ny: int, Nz: int, Nframes: int, ETL: int, key: str = 'samp',
+) -> tuple[np.ndarray, int, float]:
+    """Load and validate a custom sampling mask for params.py's
+    `custom_mask_path` option -- see README.md's "Using custom ky-kz-t
+    sampling masks" section for the user-facing walkthrough, and
+    params.py's `custom_mask_path` field comment for how this fits into
+    load_params().
+
+    A static 2D (Ny, Nz) mask is broadcast across every one of `Nframes`
+    frames; a time-resolved 3D (Ny, Nz, Nt) mask must have Nt == Nframes
+    (Nframes here is already computed by the caller from
+    duration/volume_tr/discard_duration, which this function doesn't know
+    how to adjust on its own).
+
+    Every frame must carry the same total sample count -- mask2epi_
+    {laminar,radial} partition every frame with one shared Nshots, asserted
+    as `Nshots * ETL == n_samples` in lib/mask2epi.py -- and that count must
+    divide evenly by ETL.
+
+    Returns
+    -------
+    omegas : (Ny, Nz, Nframes) boolean sampling mask.
+    Nshots : samples_per_frame // ETL.
+    R : effective acceleration factor (Ny*Nz / samples_per_frame) --
+        informational only (scan_info.mat/plot-title bookkeeping), not a
+        design input the way it is on the gen_sampling_masks path.
+    """
+    mask = load_external_mask(path, Ny, Nz, key=key)
+    if mask.ndim == 2:
+        omegas = np.repeat(mask[:, :, None], Nframes, axis=2)
+    elif mask.shape[2] != Nframes:
+        raise ValueError(
+            f'{path!r} has {mask.shape[2]} time frames, but '
+            f'duration/volume_tr/discard_duration compute Nframes={Nframes}; '
+            'adjust one to match the other (e.g. set duration = '
+            f'{mask.shape[2]} * volume_tr - discard_duration).'
+        )
+    else:
+        omegas = mask
+
+    frame_counts = omegas.sum(axis=(0, 1))
+    n_samples = int(frame_counts[0])
+    if not np.all(frame_counts == n_samples):
+        raise ValueError(
+            f'{path!r}: every frame must sample the same number of (ky, kz) '
+            'locations (mask2epi partitions every frame with one shared '
+            f'Nshots); got per-frame counts {sorted(set(frame_counts.tolist()))}'
+        )
+    if n_samples % ETL != 0:
+        raise ValueError(
+            f'{path!r}: {n_samples} samples/frame is not divisible by '
+            f'ETL={ETL}; adjust the mask or ETL so that Nshots = '
+            'samples/ETL is an integer (see lib/mask2epi.py).'
+        )
+    Nshots = n_samples // ETL
+    R = Ny * Nz / n_samples
+    return omegas, Nshots, R
