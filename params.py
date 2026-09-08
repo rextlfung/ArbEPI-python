@@ -77,11 +77,6 @@ class Params:
     # Noise prescan
     Ncoils: int
 
-    # PNS is a physiological safety limit, not a hardware one -- kept
-    # separate from ScannerSpec since it's phantom-vs-human scan context,
-    # not a scanner constant.
-    PNSwt: np.ndarray
-
     # Output
     output_dir: str
 
@@ -114,6 +109,11 @@ class Params:
     # shorten the blip window (and with it every readout lobe) but raise
     # the y/z contribution at the turnaround hotspot.
     blip_slew: float
+
+    # PNS is a physiological safety limit, not a hardware one -- kept
+    # separate from ScannerSpec since it's phantom-vs-human scan context,
+    # not a scanner constant.
+    PNSwt: np.ndarray
 
     fa: float  # degrees, Ernst angle
     rf_dur: float  # s
@@ -161,33 +161,15 @@ def load_params(output_dir: str = 'output') -> Params:
     scanner = 'GE_MR750'
 
     # Spatial parameters: voxel resolution [x, y, z] (m) and acquisition
-    # matrix size [Nx, Ny, Nz] -- fov = N * res. x/y are the in-plane
-    # (readout/phase-encode) axes, z is the slice-select/partition axis.
+    # matrix size [Nx, Ny, Nz]. x/y are the in-plane (readout/phase-encode)
+    # axes, z is the slice-select/partition axis.
     res = np.array([0.9, 0.9, 0.9]) * 1e-3
     N = np.array([240, 240, 45])
-
-    # Acceleration factor applied to the (ky, kz) sampling pattern, and the
-    # echo train length (number of echoes acquired per shot). Together
-    # these set Nshots = ceil(Ny*Nz/R/ETL) below.
-    R = 9
-    ETL = 60
-
-    # ky-kz(-t) sampling pattern: 'pd' (Poisson-disc, recommended), 'caipi',
-    # 'ticaipi', or 'rand'. See sampling/gen_sampling_masks.py.
-    sampling_method = 'pd'
-    # Sampling-mask RNG seed: an int for a reproducible mask across runs
-    # (every PNS/timing number quoted in CLAUDE.md/README uses seed=0), or
-    # None for a fresh, unseeded mask every run.
-    seed = 0
-
-    # Echo-train ordering within each shot: 'radial' (recommended -- every
-    # shot sweeps through k-space center as one spoke) or 'laminar' (ky
-    # non-decreasing rows, ported from the original MATLAB repo). See
-    # lib/mask2epi.py's module docstring for the tradeoffs.
-    epi_trajectory = 'radial'
+    fov = N * res
+    Nx, Ny, Nz = int(N[0]), int(N[1]), int(N[2])
 
     # Nominal echo time, s. NOTE: this sits close to the minimum achievable
-    # TE for the default ETL/R/scanner/slews above (see CLAUDE.md's "PNS
+    # TE for the default ETL/R/scanner/slews below (see CLAUDE.md's "PNS
     # finding history") -- raising ETL, lowering R, or changing resolution
     # can make this value unreachable. calc_te_tr_delays only *warns* and
     # silently falls back to zero padding delay if so, so check its output
@@ -200,15 +182,29 @@ def load_params(output_dir: str = 'output') -> Params:
     # Tissue T1, s -- used below to compute the Ernst-angle flip angle.
     T1 = 1.3
 
+    # Acceleration factor applied to the (ky, kz) sampling pattern, and the
+    # echo train length (number of echoes acquired per shot).
+    R = 9
+    ETL = 60
+    Nshots = math.ceil(Ny * Nz / R / ETL)
+
+    # ky-kz(-t) sampling pattern: 'pd' (Poisson-disc, recommended), 'caipi',
+    # 'ticaipi', or 'rand'. See sampling/gen_sampling_masks.py.
+    sampling_method = 'pd'
+    # Sampling-mask RNG seed: an int for a reproducible mask across runs
+    # (every PNS/timing number quoted in CLAUDE.md/README uses seed=0), or
+    # None for a fresh, unseeded mask every run.
+    seed = 0
+
+    # Echo-train ordering within each shot: 'radial' (every shot sweeps
+    # through k-space center as one spoke) or 'laminar' (ky non-decreasing
+    # rows, ported from the original MATLAB repo). It's still unclear which
+    # gives better image quality -- see lib/mask2epi.py's module docstring
+    # for the tradeoffs.
+    epi_trajectory = 'radial'
+
     # Number of receive coil channels (used for the noise prescan).
     Ncoils = 32
-
-    # PNS channel weights: the IEC 60601-2-33:2022-recommended
-    # [0.8, 1.0, 0.7] for human scanning, or [0, 0, 0] to disable the PNS
-    # check entirely for phantom scanning. See CLAUDE.md's "PNS finding
-    # history" before changing this away from the human default.
-    PNSwt = np.array([0.8, 1.0, 0.7])  # human
-    # PNSwt = np.array([0.0, 0.0, 0.0])  # phantom
 
     # =================================================================
     # ADVANCED / DERIVED PARAMETERS
@@ -269,10 +265,12 @@ def load_params(output_dir: str = 'output') -> Params:
     ro_slew_fall = 120.0  # ramp-down; not PNS-limited per se, but see above
     blip_slew = 105.0  # ride-the-line choice, ~0.2% PNS margin -- see above
 
-    fov = N * res
-    Nx, Ny, Nz = int(N[0]), int(N[1]), int(N[2])
-
-    Nshots = math.ceil(Ny * Nz / R / ETL)
+    # PNS channel weights: the IEC 60601-2-33:2022-recommended
+    # [0.8, 1.0, 0.7] for human scanning, or [0, 0, 0] to disable the PNS
+    # check entirely for phantom scanning. See CLAUDE.md's "PNS finding
+    # history" before changing this away from the human default.
+    PNSwt = np.array([0.8, 1.0, 0.7])  # human
+    # PNSwt = np.array([0.0, 0.0, 0.0])  # phantom
 
     TR = volume_tr / Nshots
 
