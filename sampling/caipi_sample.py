@@ -3,20 +3,47 @@
 Generates a regular CAIPI-shifted 2D sampling mask.
 """
 
+import math
 from typing import Sequence
 
 import numpy as np
 
 
 def balanced_factors(N: Sequence[int], R: int) -> tuple[int, int]:
-    """Most balanced factorization Ry * Rz = R; larger factor goes to the
-    larger of N = (Ny, Nz)."""
+    """Integer factorization Ry * Rz = R, chosen to best match the
+    FOV-weighted ratio Ry/Rz = Ny/Nz, not the most-square split.
+
+    For an axis with FOV and local reduction factor R_axis, the achieved
+    k-space sample spacing is R_axis/FOV, so the resulting image-domain
+    aliasing period is FOV/R_axis. Splitting R evenly (Ry ~= Rz, the
+    previous behavior here) gives *unequal* aliasing periods whenever
+    FOV_y != FOV_z -- worse (tighter, more severe) on whichever axis has
+    the smaller FOV. Equalizing the periods instead
+    (FOV_y/Ry = FOV_z/Rz) requires Ry/Rz = FOV_y/FOV_z = Ny/Nz (equal
+    resolution assumed), which is also exactly what `sampling/pd_sample.py`'s
+    aspect-matched exclusion ellipse already does continuously -- this
+    picks the closest achievable *integer* factor pair to that same ratio,
+    since CAIPI's regular decimation can't do fractional Ry/Rz. At this
+    repo's real (Ny, Nz, R) = (240, 45, 9), that's (Ry, Rz) = (9, 1), not
+    the (3, 3) a most-square split would give -- worst-case aliasing
+    period improves from 40.5/3 = 13.5mm to 40.5/1 = 40.5mm on the
+    small-FOV axis, at the cost of 216/9 = 24mm (still better than
+    the equal-period ideal ~31mm, but far better than the 13.5mm floor
+    the naive split leaves on the axis that can least afford it)."""
     Ny, Nz = N[0], N[1]
-    Rsmall = int(np.floor(np.sqrt(R)))
-    while R % Rsmall != 0:
-        Rsmall -= 1
-    Rlarge = R // Rsmall
-    return (Rlarge, Rsmall) if Ny >= Nz else (Rsmall, Rlarge)
+    target_log_ratio = math.log(Ny / Nz)
+
+    best = (1, R)
+    best_score = math.inf
+    for Ry in range(1, R + 1):
+        if R % Ry != 0:
+            continue
+        Rz = R // Ry
+        score = abs(math.log(Ry / Rz) - target_log_ratio)
+        if score < best_score:
+            best_score = score
+            best = (Ry, Rz)
+    return best
 
 
 def caipi_sample(N: Sequence[int], R: int, shift_offset: int = 0) -> np.ndarray:
