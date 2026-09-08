@@ -9,7 +9,25 @@ Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](../pypulseq
    uv sync --extra test
    ```
    (see [Requirements](#requirements) below for the dependency list).
-2. Edit `params.py`'s `load_params()` to configure the experiment. The "USER CONFIGURATION" section near the top of that function holds the basics: scan geometry (`res`, `N`), acceleration (`R`, `ETL`), sampling pattern (`sampling_method`: `'caipi'`, `'ticaipi'`, `'pd'`, or `'rand'`), echo-train ordering (`epi_trajectory`: `'laminar'` or `'radial'`, see [Demo](#demo) below), `seed` (an int for a reproducible sampling mask across runs, or `None` for a fresh one each time), `TE`/`volume_tr`/`duration`/`T1`, coil count, and PNS weighting. Everything below that section in `load_params()` is pre-tuned for this sequence's hardware/PNS/timing constraints (see `CLAUDE.md`) and typically doesn't need to change.
+2. Edit `params.py`'s `load_params()` to configure the experiment. The "USER CONFIGURATION" section near the top of that function holds the basics:
+
+   | Parameter | Meaning | Default |
+   |---|---|---|
+   | `scanner` | Scanner hardware profile: `'GE_MR750'` or `'GE_UHP'` (see `scanners.py`) | `'GE_MR750'` |
+   | `res` | Voxel resolution `[x, y, z]`, m | `[0.9, 0.9, 0.9] mm` |
+   | `N` | Acquisition matrix size `[Nx, Ny, Nz]` (`fov = N * res`) | `[240, 240, 45]` |
+   | `TE` | Nominal echo time, s | `34.9 ms` |
+   | `volume_tr` | Time to acquire one full 3D volume, s | `2 s` |
+   | `duration` | Total scan duration across all frames, s | `60 s` |
+   | `T1` | Tissue T1, s (sets the Ernst-angle flip angle) | `1.3 s` |
+   | `R` | Acceleration factor on the `(ky, kz)` sampling pattern | `9` |
+   | `ETL` | Echo train length (echoes per shot) | `60` |
+   | `sampling_method` | ky-kz(-t) sampling pattern: `'pd'`, `'caipi'`, `'ticaipi'`, or `'rand'` | `'pd'` |
+   | `seed` | Sampling-mask RNG seed: an int for a reproducible mask, or `None` for a fresh one each run | `0` |
+   | `epi_trajectory` | Echo-train ordering within each shot: `'laminar'` or `'radial'` (see [Demo](#demo) below) | `'radial'` |
+   | `Ncoils` | Number of receive coil channels (for the noise prescan) | `32` |
+
+   Everything below that section in `load_params()` is pre-tuned for this sequence's hardware/PNS/timing constraints (see `CLAUDE.md`) and typically doesn't need to change.
 3. Run `main.py` to generate all four sequences:
    ```
    uv run python main.py
