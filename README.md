@@ -2,29 +2,15 @@
 
 Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](../pypulseq) as the Pulseq layer. Generates fast, vendor-agnostic 3D-EPI sequences from arbitrary 2D `(ky, kz)` sampling masks in the phase-encode-partition plane.
 
-## Scope
-
-This port covers Pulseq `.seq` sequence generation only. A few things from the original MATLAB repo are handled differently — see below.
-
-- **GE `.pge` export**: `ge/` is a pure-Python port of the PulCeq/pge2 toolchain (`seq2ceq`, `writeceq`, and the `pge2.pns`/`check_grad_acoustics` feasibility checks), and is the operative path for `ge/ge_export.py`/`main.py --ge` — no MATLAB round trip, no sibling `../pulseq`/`../toppe`/`../PulCeq`/`../ArbEPI` checkouts required. Validated field-by-field and, for two of the four default sequences, byte-for-byte against real MATLAB output, including end to end through `main.py --ge` itself (see `ge/`'s module docstrings and `CLAUDE.md`). See [GE export](#ge-export-pge) below.
-- **Fat-sat RF pulse**: the MATLAB original designs this via GE's `toppe.utils.rf.makeslr` (min-phase SLR), which has no Python equivalent. This port uses pypulseq's built-in `make_gauss_pulse` instead — a simpler design with a less sharp spectral profile.
-- **Plotting** (`plotting/plotting.py`) covers the sampling mask, k-space trajectory, point-spread-function, and single-TR pulse-diagram plots. The interactive scroll/slider mask viewer from the MATLAB repo is not ported. The single-TR plot (`plot_one_tr`) isn't a custom pulse-diagram renderer — it's a thin wrapper around pypulseq's own `Sequence.plot()`. Mask/PSF/trajectory plots take an optional `frame_idx` to select one frame out of a multi-frame run; see `plotting/plotting.py`'s module docstring for why the per-frame trajectory plot draws through exact-sliced ADC samples rather than the fine continuous line pypulseq's `calculate_kspace()` returns for the whole sequence. `plotting/plot_last_run.py` drives all of this against the most recent `output/` run (`python main.py --plot`, or standalone via `python -m plotting.plot_last_run`).
-- **Poisson-disc sampling** (`sampling/pd_sample.py`) is a local reimplementation, not a dependency on [SigPy](https://github.com/mikgroup/sigpy) (whose `sigpy.mri.poisson` both `../ArbEPI/lib/pd_sample.m` and this module's algorithm are based on). SigPy was tried directly and rejected: its own `poisson()` has an unbounded `while slope_min < slope_max` binary-search loop with no iteration cap, which hangs forever on small/coarse grids where no achievable density slope lands within `tol` of the target acceleration (reproduced independently of any code in this repo — confirmed via `sigpy.mri.poisson` alone). Separately, both `../ArbEPI/lib/pd_sample.m` and this module's own first version had a *different* bug (not reseeding the point-placement RNG identically on every binary-search iteration, unlike real SigPy), which made the search non-convergent and slow rather than truly infinite. A third bug (a missing `nx*ny` active-list cap that real SigPy has) let the point-placement active list grow unboundedly in the same radius-floor/dense-center regime. `pd_sample.py`'s docstring has the full writeup of all three; the local implementation fixes all of them and adds a bounded outer-search iteration cap (`max_search_iters`) that SigPy itself lacks. The point-placement core is still JIT-compiled with [numba](https://numba.pydata.org/) -- a narrow, single-function dependency (unlike depending on the `sigpy` package wholesale) -- since even with all three fixes it's an inherently sequential loop that can run hundreds of thousands of iterations for worst-case seeds, and pure Python can't get there without JIT (measured ~1-12s/frame in pure Python vs. ~0.02-0.2s/frame JIT-compiled, at production scale).
-
-## Requirements
-
-Managed with [uv](https://docs.astral.sh/uv/):
-
-```
-uv sync --extra test
-```
-
-Depends on `pypulseq` (from PyPI), numpy, scipy, matplotlib, hdf5storage, numba, and tqdm (see `pyproject.toml`; versions pinned in `uv.lock`).
-
 ## Getting started
 
-1. Edit `params.py` (`load_params()`) to configure the experiment — scan geometry, timing, sampling method (`sampling_method`: `'caipi'`, `'ticaipi'`, `'pd'`, or `'rand'`), echo-train ordering (`epi_trajectory`: `'laminar'` or `'radial'`, see [Demo](#demo) below), and `seed` (an int for a reproducible sampling mask across runs, or `None` for a fresh one each time).
-2. Run `main.py` to generate all four sequences:
+1. Install dependencies, managed with [uv](https://docs.astral.sh/uv/):
+   ```
+   uv sync --extra test
+   ```
+   (see [Requirements](#requirements) below for the dependency list).
+2. Edit `params.py`'s `load_params()` to configure the experiment. The "USER CONFIGURATION" section near the top of that function holds the basics: scan geometry (`res`, `N`), acceleration (`R`, `ETL`), sampling pattern (`sampling_method`: `'caipi'`, `'ticaipi'`, `'pd'`, or `'rand'`), echo-train ordering (`epi_trajectory`: `'laminar'` or `'radial'`, see [Demo](#demo) below), `seed` (an int for a reproducible sampling mask across runs, or `None` for a fresh one each time), `TE`/`volume_tr`/`duration`/`T1`, coil count, and PNS weighting. Everything below that section in `load_params()` is pre-tuned for this sequence's hardware/PNS/timing constraints (see `CLAUDE.md`) and typically doesn't need to change.
+3. Run `main.py` to generate all four sequences:
    ```
    uv run python main.py
    ```
@@ -45,12 +31,31 @@ Depends on `pypulseq` (from PyPI), numpy, scipy, matplotlib, hdf5storage, numba,
    generate_noise(params)            # writes output/noise.seq
    ```
    `generate_epical` and `generate_noise` must run after `generate_arbepi` — they load `output/scan_info.mat`. All outputs go to `params.output_dir` (default `output/`, gitignored).
-3. Add `--plot` to also write diagnostic plots (`mask.png`, `psf.png`, `trajectory.png`, `one_tr.png`) via `plotting/plot_last_run.py`, and/or `--ge` to also export each sequence to GE `.pge` (see [GE export](#ge-export-pge) below):
+4. Add `--plot` to also write diagnostic plots (`mask.png`, `psf.png`, `trajectory.png`, `one_tr.png`) via `plotting/plot_last_run.py`, and/or `--ge` to also export each sequence to GE `.pge` (see [GE export](#ge-export-pge) below):
    ```
    uv run python main.py --plot --ge
    ```
 
 There is no automated end-to-end pytest suite against MATLAB for `.seq` generation itself (no MATLAB install was available during that initial port — see `tests/` for unit tests on algorithm invariants instead, including an independent check that reads k-space back out of the assembled sequence and confirms it matches the sampling schedule). `sampling_method='caipi'` is deterministic (no RNG) and is the easiest configuration to sanity-check by hand. (The separate GE `.pge` export path below *was* validated against real MATLAB output, once a MATLAB install became available — see the GE export section and `CLAUDE.md`.)
+
+## Scope
+
+This port covers Pulseq `.seq` sequence generation only. A few things from the original MATLAB repo are handled differently — see below.
+
+- **GE `.pge` export**: `ge/` is a pure-Python port of the PulCeq/pge2 toolchain (`seq2ceq`, `writeceq`, and the `pge2.pns`/`check_grad_acoustics` feasibility checks), and is the operative path for `ge/ge_export.py`/`main.py --ge` — no MATLAB round trip, no sibling `../pulseq`/`../toppe`/`../PulCeq`/`../ArbEPI` checkouts required. Validated field-by-field and, for two of the four default sequences, byte-for-byte against real MATLAB output, including end to end through `main.py --ge` itself (see `ge/`'s module docstrings and `CLAUDE.md`). See [GE export](#ge-export-pge) below.
+- **Fat-sat RF pulse**: the MATLAB original designs this via GE's `toppe.utils.rf.makeslr` (min-phase SLR), which has no Python equivalent. This port uses pypulseq's built-in `make_gauss_pulse` instead — a simpler design with a less sharp spectral profile.
+- **Plotting** (`plotting/plotting.py`) covers the sampling mask, k-space trajectory, point-spread-function, and single-TR pulse-diagram plots. The interactive scroll/slider mask viewer from the MATLAB repo is not ported. The single-TR plot (`plot_one_tr`) isn't a custom pulse-diagram renderer — it's a thin wrapper around pypulseq's own `Sequence.plot()`. Mask/PSF/trajectory plots take an optional `frame_idx` to select one frame out of a multi-frame run; see `plotting/plotting.py`'s module docstring for why the per-frame trajectory plot draws through exact-sliced ADC samples rather than the fine continuous line pypulseq's `calculate_kspace()` returns for the whole sequence. `plotting/plot_last_run.py` drives all of this against the most recent `output/` run (`python main.py --plot`, or standalone via `python -m plotting.plot_last_run`).
+- **Poisson-disc sampling** (`sampling/pd_sample.py`) is a local reimplementation, not a dependency on [SigPy](https://github.com/mikgroup/sigpy) (whose `sigpy.mri.poisson` both `../ArbEPI/lib/pd_sample.m` and this module's algorithm are based on). SigPy was tried directly and rejected: its own `poisson()` has an unbounded `while slope_min < slope_max` binary-search loop with no iteration cap, which hangs forever on small/coarse grids where no achievable density slope lands within `tol` of the target acceleration (reproduced independently of any code in this repo — confirmed via `sigpy.mri.poisson` alone). Separately, both `../ArbEPI/lib/pd_sample.m` and this module's own first version had a *different* bug (not reseeding the point-placement RNG identically on every binary-search iteration, unlike real SigPy), which made the search non-convergent and slow rather than truly infinite. A third bug (a missing `nx*ny` active-list cap that real SigPy has) let the point-placement active list grow unboundedly in the same radius-floor/dense-center regime. `pd_sample.py`'s docstring has the full writeup of all three; the local implementation fixes all of them and adds a bounded outer-search iteration cap (`max_search_iters`) that SigPy itself lacks. The point-placement core is still JIT-compiled with [numba](https://numba.pydata.org/) -- a narrow, single-function dependency (unlike depending on the `sigpy` package wholesale) -- since even with all three fixes it's an inherently sequential loop that can run hundreds of thousands of iterations for worst-case seeds, and pure Python can't get there without JIT (measured ~1-12s/frame in pure Python vs. ~0.02-0.2s/frame JIT-compiled, at production scale).
+
+## Requirements
+
+Managed with [uv](https://docs.astral.sh/uv/):
+
+```
+uv sync --extra test
+```
+
+Depends on `pypulseq` (from PyPI), numpy, scipy, matplotlib, hdf5storage, numba, and tqdm (see `pyproject.toml`; versions pinned in `uv.lock`).
 
 ## Demo
 

@@ -4,6 +4,11 @@ params.m is a MATLAB script that injects variables into the caller's
 workspace; there is no Python equivalent of that pattern. Instead,
 ``load_params()`` returns a single ``Params`` dataclass instance that is
 passed explicitly to every function that needs it.
+
+To configure a scan, edit the "USER CONFIGURATION" section near the top of
+``load_params()`` below. Everything under "ADVANCED / DERIVED PARAMETERS"
+is pre-tuned for this sequence's hardware/PNS/timing constraints (see
+CLAUDE.md) and typically doesn't need to change.
 """
 
 import math
@@ -25,6 +30,67 @@ class FatsatParams:
 
 @dataclass
 class Params:
+    # =====================================================================
+    # Fields set directly from load_params()'s USER CONFIGURATION section
+    # (some, like fov/Nx/Ny/Nz/Nshots/TR, are simple derived values kept
+    # next to the user-set field they come from).
+    # =====================================================================
+
+    # The selected ScannerSpec itself (see scanners.py) -- ge/ge_export.py's
+    # pure-Python feasibility check/export reads max_grad/max_slew/b1_max/
+    # chronaxie/rheobase/alpha/ge_coil/pislquant straight from this, so
+    # they can't drift out of sync with `sys` below (both come from the
+    # same ScannerSpec instance).
+    spec: ScannerSpec
+
+    # EPI spatial parameters
+    res: np.ndarray  # m, [x, y, z]
+    N: np.ndarray  # acquisition tensor size [Nx, Ny, Nz]
+    fov: np.ndarray  # m
+    Nx: int
+    Ny: int
+    Nz: int
+
+    # Acceleration
+    R: float
+    ETL: int
+    Nshots: int
+
+    # Sampling mask parameters
+    sampling_method: str
+    seed: int | None  # passed to gen_sampling_masks' rng; None = unseeded (fresh mask each run)
+
+    # Sampling trajectory
+    epi_trajectory: str  # 'laminar' (mask2epi_laminar) or 'radial' (mask2epi_radial)
+
+    # Decay / timing
+    TE: float  # s
+    volume_tr: float  # s
+    TR: float  # s
+    T1: float  # s
+
+    duration: float  # s
+    discard_duration: float  # s
+    Nframes: int
+    Ndummyshots: int
+
+    # Noise prescan
+    Ncoils: int
+
+    # PNS is a physiological safety limit, not a hardware one -- kept
+    # separate from ScannerSpec since it's phantom-vs-human scan context,
+    # not a scanner constant.
+    PNSwt: np.ndarray
+
+    # Output
+    output_dir: str
+
+    # =====================================================================
+    # Advanced / derived fields -- see load_params()'s ADVANCED / DERIVED
+    # PARAMETERS section. Pre-tuned for this sequence's hardware/PNS/timing
+    # constraints; usually don't need to change.
+    # =====================================================================
+
     sys: pp.Opts
     crt: float  # common raster time (s)
     dwell: float  # s, ADC sample time
@@ -48,30 +114,6 @@ class Params:
     # shorten the blip window (and with it every readout lobe) but raise
     # the y/z contribution at the turnaround hotspot.
     blip_slew: float
-
-    # EPI spatial parameters
-    res: np.ndarray  # m, [x, y, z]
-    N: np.ndarray  # acquisition tensor size [Nx, Ny, Nz]
-    fov: np.ndarray  # m
-    Nx: int
-    Ny: int
-    Nz: int
-
-    # Acceleration
-    R: float
-    ETL: int
-    Nshots: int
-
-    # Decay / timing
-    TE: float  # s
-    volume_tr: float  # s
-    TR: float  # s
-    T1: float  # s
-
-    duration: float  # s
-    discard_duration: float  # s
-    Nframes: int
-    Ndummyshots: int
 
     fa: float  # degrees, Ernst angle
     rf_dur: float  # s
@@ -99,36 +141,82 @@ class Params:
     n_cycles_spoil_degre: int
     Tpre: float
 
-    # Noise prescan
-    Ncoils: int
-
-    # Output
-    output_dir: str
-
-    # The selected ScannerSpec itself (see scanners.py) -- ge/ge_export.py's
-    # pure-Python feasibility check/export reads max_grad/max_slew/b1_max/
-    # chronaxie/rheobase/alpha/ge_coil/pislquant straight from this, so
-    # they can't drift out of sync with `sys` above (both come from the
-    # same ScannerSpec instance).
-    spec: ScannerSpec
-    # PNS is a physiological safety limit, not a hardware one -- kept
-    # separate from ScannerSpec since it's phantom-vs-human scan context,
-    # not a scanner constant.
-    PNSwt: np.ndarray
-
-    # Sampling mask parameters
-    sampling_method: str
     pd_calib_frac: float
     pd_crop_corner: bool
     pd_decay: float
     rand_gaussian_sigma: np.ndarray | None
-    seed: int | None  # passed to gen_sampling_masks' rng; None = unseeded (fresh mask each run)
 
-    # Sampling trajectory
-    epi_trajectory: str  # 'laminar' (mask2epi_laminar) or 'radial' (mask2epi_radial)
 
 def load_params(output_dir: str = 'output') -> Params:
-    scanner = 'GE_MR750' # 'GE_UHP' or 'GE_MR750'. See scanners.py
+    # =================================================================
+    # USER CONFIGURATION
+    #
+    # Edit the values in this section to set up a scan. Everything under
+    # "ADVANCED / DERIVED PARAMETERS" below is pre-tuned for this
+    # sequence's hardware/PNS/timing constraints (see CLAUDE.md) and
+    # typically doesn't need to change.
+    # =================================================================
+
+    # Scanner hardware profile: 'GE_MR750' or 'GE_UHP'. See scanners.py.
+    scanner = 'GE_MR750'
+
+    # Spatial parameters: voxel resolution [x, y, z] (m) and acquisition
+    # matrix size [Nx, Ny, Nz] -- fov = N * res. x/y are the in-plane
+    # (readout/phase-encode) axes, z is the slice-select/partition axis.
+    res = np.array([0.9, 0.9, 0.9]) * 1e-3
+    N = np.array([240, 240, 45])
+
+    # Acceleration factor applied to the (ky, kz) sampling pattern, and the
+    # echo train length (number of echoes acquired per shot). Together
+    # these set Nshots = ceil(Ny*Nz/R/ETL) below.
+    R = 9
+    ETL = 60
+
+    # ky-kz(-t) sampling pattern: 'pd' (Poisson-disc, recommended), 'caipi',
+    # 'ticaipi', or 'rand'. See sampling/gen_sampling_masks.py.
+    sampling_method = 'pd'
+    # Sampling-mask RNG seed: an int for a reproducible mask across runs
+    # (every PNS/timing number quoted in CLAUDE.md/README uses seed=0), or
+    # None for a fresh, unseeded mask every run.
+    seed = 0
+
+    # Echo-train ordering within each shot: 'radial' (recommended -- every
+    # shot sweeps through k-space center as one spoke) or 'laminar' (ky
+    # non-decreasing rows, ported from the original MATLAB repo). See
+    # lib/mask2epi.py's module docstring for the tradeoffs.
+    epi_trajectory = 'radial'
+
+    # Nominal echo time, s. NOTE: this sits close to the minimum achievable
+    # TE for the default ETL/R/scanner/slews above (see CLAUDE.md's "PNS
+    # finding history") -- raising ETL, lowering R, or changing resolution
+    # can make this value unreachable. calc_te_tr_delays only *warns* and
+    # silently falls back to zero padding delay if so, so check its output
+    # after changing any of the above.
+    TE = 34.9e-3
+    # Time to acquire one full 3D volume (all shots), s.
+    volume_tr = 2
+    # Total scan duration across all frames/timepoints, s.
+    duration = 60
+    # Tissue T1, s -- used below to compute the Ernst-angle flip angle.
+    T1 = 1.3
+
+    # Number of receive coil channels (used for the noise prescan).
+    Ncoils = 32
+
+    # PNS channel weights: the IEC 60601-2-33:2022-recommended
+    # [0.8, 1.0, 0.7] for human scanning, or [0, 0, 0] to disable the PNS
+    # check entirely for phantom scanning. See CLAUDE.md's "PNS finding
+    # history" before changing this away from the human default.
+    PNSwt = np.array([0.8, 1.0, 0.7])  # human
+    # PNSwt = np.array([0.0, 0.0, 0.0])  # phantom
+
+    # =================================================================
+    # ADVANCED / DERIVED PARAMETERS
+    #
+    # Pre-tuned for this sequence's hardware/PNS/timing constraints (see
+    # CLAUDE.md). Usually don't need to change these.
+    # =================================================================
+
     spec = SCANNERS[scanner]
 
     sys = pp.Opts(
@@ -181,32 +269,13 @@ def load_params(output_dir: str = 'output') -> Params:
     ro_slew_fall = 120.0  # ramp-down; not PNS-limited per se, but see above
     blip_slew = 105.0  # ride-the-line choice, ~0.2% PNS margin -- see above
 
-    # Spatial parameters. 0.9mm isotropic resolution; x/y FOV held at the
-    # previous 216mm, z (slice-select) FOV reduced to 40.5mm.
-    res = np.array([0.9, 0.9, 0.9]) * 1e-3
-    N = np.array([240, 240, 45])
     fov = N * res
     Nx, Ny, Nz = int(N[0]), int(N[1]), int(N[2])
 
-    # Acceleration parameters
-    R = 9
-    ETL = 60
     Nshots = math.ceil(Ny * Nz / R / ETL)
 
-    # Decay parameters
-    # Min achievable TE is ~34.86 ms at this ETL/R and the POPE slews above
-    # (with the seed=0 mask's blip steps; a different mask shifts it by a
-    # few hundred us at most, so this thin pad may need raising).
-    # calc_te_tr_delays warns (and falls back to min_te) if a future mask
-    # makes it unachievable. BOLD-contrast optimality of this TE still
-    # needs checking -- the target of 30 ms is unreachable under the 80%
-    # PNS limit (see the slew-sweep comment above).
-    TE = 34.9e-3
-    volume_tr = 2
     TR = volume_tr / Nshots
-    T1 = 1.3
 
-    duration = 60
     discard_duration = 0
     Nframes = round((duration + discard_duration) / volume_tr)
 
@@ -267,19 +336,6 @@ def load_params(output_dir: str = 'output') -> Params:
     n_cycles_spoil_degre = 2
     Tpre = 1.0e-3
 
-    Ncoils = 32
-
-    # IEC 60601-2-33:2022-recommended PNS channel weights -- see CLAUDE.md's
-    # "PNS finding history" for why this was zero (disabling the PNS check
-    # entirely) for most of this port's lifetime, and how the current
-    # slew/blip tuning (see the "PNS-driven slew limits" comment above)
-    # brought the full ArbEPI build back under the 80% normal-mode line
-    # with this weighting.
-    PNSwt = np.array([0.8, 1.0, 0.7]) # human
-    # PNSwt = np.array([0.0, 0.0, 0.0]) # phantom
-
-    # Sampling mask
-    sampling_method = 'pd'
     # Fully-sampled central calibration region: a centered ellipse,
     # aspect-matched to (Ny, Nz), sized to hold 30% of the R-dependent
     # sample budget (floor(Ny*Nz/R) -- see sampling/pd_sample.py).
@@ -287,20 +343,6 @@ def load_params(output_dir: str = 'output') -> Params:
     pd_crop_corner = True
     pd_decay = 1.4
     rand_gaussian_sigma = None
-    # Default (0) is an int for a reproducible mask -- every PNS/timing
-    # number quoted in CLAUDE.md/README is seed-dependent, so this is what
-    # main.py's own default build actually uses. Pass None instead for a
-    # fresh unseeded rng each run -- main.py passes this straight to
-    # gen_sampling_masks(..., rng=np.random.default_rng(seed)), and
-    # np.random.default_rng(None) is unseeded, matching that fallback.
-    seed = 0
-
-    # Sampling trajectory: which mask2epi_* variant orders each shot's echo
-    # train. 'laminar' = mask2epi_laminar (ky non-decreasing rows, ported
-    # from MATLAB). 'radial' = mask2epi_radial (each shot sweeps through
-    # k-space center as one spoke, this repo's own addition) -- see
-    # lib/mask2epi.py's module docstring for the tradeoffs between them.
-    epi_trajectory = 'radial'
 
     return Params(
         sys=sys,
