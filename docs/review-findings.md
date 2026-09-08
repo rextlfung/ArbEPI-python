@@ -49,9 +49,23 @@ confirmed still open exactly as described (none needed closing). Items
 `639345e`) that also re-verified every item 107-130 against the current
 tree: no source file changed between `bbd8266` and `639345e` except this
 doc itself, so all twenty-four were confirmed still open exactly as
-described (none needed closing).
+described (none needed closing). Items 136-145 are new findings from a
+later pass (2026-09-08, against `3930358`) that also re-verified every
+item 107-135 against the current tree: `git diff 639345e HEAD --stat`
+shows only this doc itself changed between `639345e` and `3930358`
+(items 131-135 were added in that span, doc-only), so all thirty-five
+were confirmed still open exactly as described (none needed closing).
+This pass split the review across six parallel subagents (`ge/`;
+`lib/`+`sequences/`+`params.py`/`scanners.py`/`main.py`;
+`sampling/`+`plotting/`; `preprocessing/`; `recon/`; a dedicated
+docs-vs-code consistency sweep), each briefed on the open items in its
+scope to avoid duplication; every new finding below was independently
+re-verified against the live tree (not just trusted from the subagent's
+report) before being recorded here, including a from-scratch
+reproduction of item 136's sampling bug and item 137's trigger-detection
+bug.
 
-## Current baseline (2026-09-07, against `639345e`)
+## Current baseline (2026-09-08, against `3930358`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
   errors**, all `E501` -- unchanged from the previous pass.
@@ -61,10 +75,19 @@ described (none needed closing).
   (re-measured fresh this pass, `rm -rf output` first) -- the extra 29
   passes/4 fewer skips are the GERecon/Julia-independent `preprocessing/`
   tests that `pytest.importorskip`-skip for missing `sigpy`/`nibabel` in
-  the plain env, now able to run; still gated (11 skipped) on the real
-  `GERecon` SDK and a `julia` executable, neither available in this
-  environment. `recon` extras (`torch`/`mirtorch`) not re-measured this
-  pass (see the previous baseline entries in git history for that count).
+  the plain env, now able to run. **Corrected this pass (item 143): the
+  11 remaining skips are not "gated on GERecon and julia" as previous
+  baselines here stated** -- reading every skip reason directly
+  (`uv run pytest -q -rs`) shows **6** are `could not import 'torch'`
+  (all six `tests/test_recon_*.py` files, i.e. the `recon` extra) and
+  **5** are `julia executable not found on PATH` (all in
+  `tests/test_preprocessing_run_b0map.py`); **zero** are GERecon-gated --
+  no test file exercises `raw_io.py` at all, so GERecon is never run,
+  skipped or otherwise, not merely "unavailable in this environment."
+  `recon` extras were installed and measured fresh this pass (a from-scratch
+  `uv sync --extra recon` succeeds: `torch==2.13.0+cu130` CPU-only,
+  `mirtorch==0.3.1`) -- **`tests/test_recon_*.py`: 34 passed** with those
+  extras active, 0 failed.
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, GE_MR750, `PNSwt = [0.8, 1.0, 0.7]`, seed 0) --
   all four sequences `.ok`, re-measured fresh this pass (`rm -rf output`
@@ -701,6 +724,192 @@ described (none needed closing).
   cheap to fix: thread `frame` through `_recon_one_frame`'s signature and
   into both call sites' generator/worker so the printed message names the
   failing frame index.
+- [ ] **136. `sampling/pd_sample.py`'s `crop_corner=True` contract is
+  silently violated -- both routinely (~2% of samples, every frame) and
+  severely (~17% of samples, on an occasional frame, live in this repo's
+  own shipped default config).** [measured] Two distinct, compounding
+  mechanisms:
+
+  (a) The exact-count enforcement step (`pd_sample.py:287-293`) fills any
+  shortfall between the binary-search mask and `target_samples` from
+  `np.flatnonzero(~mask)` -- every currently-unsampled pixel in the full
+  rectangular `(ny, nx)` grid, with **no** `rho <= 1` filter -- even
+  though `crop_corner=True`'s earlier step (`:261-262`,
+  `mask = mask * (rho <= 1)`) is supposed to confine every sample to the
+  centered inscribed ellipse. Confirmed live, not hypothetical: with
+  `calib_frac=0` (isolating this from mechanism (b) entirely), 5
+  independently seeded runs at this repo's real production scale
+  (`Ny=240, Nz=45, R=9, decay=1.4`) each still land 20-28 of 1200 samples
+  (~2%) outside the ellipse -- every single run, since the binary
+  search's own `accel_search = accel * 0.95` deliberately biases toward
+  undershooting the target count ("to ensure enough points to prune
+  later" -- but pruning only handles *overshoot*; undershoot falls
+  straight into this unfiltered fill path).
+
+  (b) `_poisson_disc_core_jit`'s growth process starts from exactly one
+  randomly-placed active point (`:106-107`, uniform over the whole grid,
+  no check against `calib_mask`), and `mask = calib_mask.copy()` (`:93`)
+  pre-fills the entire calibration disc as already-sampled before growth
+  begins. If that single seed point lands inside the calibration disc,
+  every nearby candidate collides with an already-marked pixel at the
+  pinned floor radius (`radius_x`/`radius_y` == 1 there, since
+  `r = max(rho - rho_calib, 0)` is identically 0 inside the calib disc
+  regardless of `slope`, `:239`,`:254-255`) -- all `max_attempts` (30)
+  placement attempts fail, the sole active point is removed, and the
+  growth loop terminates immediately with the mask still equal to
+  nothing but the calibration disc, for every slope tried across the
+  entire 50-iteration binary search (deterministic given the seed).
+  Mechanism (a)'s fill step then has to supply nearly the *entire*
+  remaining budget uniformly from the whole rectangle for that frame,
+  bypassing both the density falloff and the crop-corner ellipse
+  wholesale.
+
+  Reproduced end to end against the actual shipped pipeline, unmodified
+  `load_params()` defaults, `main.py`'s exact call
+  (`gen_sampling_masks(p.R, p, rng=np.random.default_rng(p.seed))`,
+  `seed=0`): of 30 frames, **frame 3 has 204 of its 1200 samples (17%)
+  outside the crop-corner ellipse**, vs. 9-18 (`<1.5%`) for every other
+  frame -- an order-of-magnitude outlier, deterministic and reproduced
+  identically across repeated runs. This is live in the shipped default
+  configuration today, not a theoretical corner case.
+
+  Consequence: `crop_corner`'s documented contract ("whether to crop
+  sampling corners (elliptical mask)", `:203`) is silently violated on
+  essentially every frame at the ~2% level and severely on an occasional
+  frame. These out-of-ellipse samples flow directly into
+  `lib/mask2epi.py`'s per-frame schedule construction with nothing
+  downstream to detect or reject them (`Nshots*ETL` only checks the total
+  count, not spatial extent), and CLAUDE.md's own `blip_slew=105` PNS
+  margin note ("~0.2% margin to the 80% limit... re-verify after any
+  seed/mask/R/ETL/resolution change") means an outlier frame with
+  unusually far-flung corner samples plausibly costs more PNS margin than
+  budgeted -- not independently re-measured here (would need a full
+  ArbEPI build + PNS check specifically on the affected frame), but
+  flagged as a real risk given how thin that margin already is. No test
+  in `tests/test_pd_sample.py` exercises `calib_frac > 0` together with a
+  crop-corner check (`test_pd_sample_calibration_region_fully_sampled`
+  only asserts the calib region itself is fully sampled;
+  `test_pd_sample_density_falls_off_from_center` uses `calib_frac=0.0`),
+  so nothing catches either mechanism. Fix direction: (a) restrict the
+  exact-count fill step's candidate pool to
+  `np.flatnonzero(~mask & (rho <= 1))` when `crop_corner=True` (with
+  explicit handling if that pool is insufficient); (b) prevent the
+  seed-stall by rejecting an initial active point that lands inside
+  `calib_mask` and redrawing (or seeding several scattered initial
+  points). Both are independently necessary -- (a) fixes the ~2%
+  baseline leak, (b) fixes the severe per-frame amplification. Add a
+  regression test with `calib_frac > 0`, `crop_corner=True`, asserting
+  zero samples outside `rho <= 1` across a range of seeds including one
+  that reproduces the stall (e.g. this repo's own `seed=0` at production
+  scale).
+- [ ] **137. `ge/blocks.py`'s `get_block_type` reads a nonexistent `.trig`
+  attribute instead of pypulseq's real `.trigger` dict, so physio-trigger
+  blocks are never detected.** [measured] `ge/blocks.py:38-39`:
+  ```python
+  trig = getattr(block, 'trig', None)
+  has_trigger = trig is not None and trig.channel == 'physio1'
+  ```
+  pypulseq 1.5.0.post1's `Sequence.get_block()` never sets any `.trig`
+  attribute on the returned block namespace -- trigger extensions are
+  attached under `.trigger`, a *dict* (`{0: trigger_obj, ...}`, to allow
+  more than one trigger per block), not a single object with its own
+  `.channel` field directly on the block. Reproduced directly:
+  `seq.add_block(pp.make_trigger(channel='physio1', duration=100e-6))`,
+  then `hasattr(seq.get_block(1), 'trig')` is `False` while
+  `hasattr(..., 'trigger')` is `True`
+  (`{0: namespace(type='trigger', channel='physio1', ...)}`), so
+  `get_block_type(...).has_trigger` comes back `False` for a block that
+  genuinely carries a `physio1` trigger event. Confirmed through the full
+  pipeline too: a synthetic 2-block sequence with one trigger block
+  produces `seq2ceq(seq).loop[:, 13]` (the `physioTrigger` loop column,
+  per `ge/ceq.py`'s `LOOP_COLUMNS`) as `[0., 0.]` for both instances.
+  `has_trigger` is the *only* signal `get_dynamics`
+  (`ge/blocks.py:108-183`) uses to populate the loop table's
+  per-block-instance `physioTrigger` column -- the dynamic trigger-gating
+  mechanism, distinct from `writeceq.py`'s separately-and-deliberately-
+  always-0 per-parent-block trigger field (which carries an explicit
+  comment disclosing it as an intentional MATLAB-quirk match; this one
+  has no such disclosure and is a plain wrong-attribute-name bug).
+  Currently 100% inert -- a repo-wide grep confirms no sequence-generation
+  code (`sequences/`, `lib/`, `params.py`) anywhere calls
+  `pp.make_trigger`/adds a trigger block today -- but it would silently
+  break any future cardiac/respiratory-gated sequence added to this repo:
+  the exported `.pge`'s loop table would never flag a single block as
+  needing a physio trigger, regardless of how many trigger blocks the
+  source `.seq` actually contains. No test exercises this
+  (`tests/test_seq2ceq.py`/`tests/test_ge_check.py` have zero
+  `trig`/`physio` references). Fix: read `block.trigger` (a dict,
+  possibly absent) instead of `block.trig`, e.g.
+  `trig_dict = getattr(block, 'trigger', None) or {}; has_trigger = any(t.channel == 'physio1' for t in trig_dict.values())`,
+  and add a regression test exercising a synthetic trigger block through
+  `get_block_type`/`get_dynamics`/`seq2ceq` -- the same untested-bug
+  pattern item 134 already flags for `write_ceq`/`read_pge`, one level up
+  the pipeline.
+- [ ] **138. `sequences/ArbEPI.py`'s (and identically `EPIcal.py`'s)
+  post-readout spoiler scaling has a quantifiable off-by-one against this
+  repo's 0-based indexing convention, already flagged in an inline
+  comment but untracked in this backlog.** [measured, low severity]
+  `sequences/ArbEPI.py:237-243`:
+  ```python
+  seq.add_block(
+      gx_spoil,
+      pp.scale_grad(gy_spoil, -((y_locs[-1] + 1 - Ny / 2) * rg.deltak[1]) / gy_spoil.area),
+      pp.scale_grad(gz_spoil, (gz_spoil.area - (z_locs[-1] + 1 - Nz / 2) * rg.deltak[2]) / gz_spoil.area),
+  )
+  ```
+  The `+ 1` doesn't match the 0-based `y_locs`/`z_locs` convention used
+  everywhere else in this file (e.g. the prephaser scale a few lines
+  earlier: `(y_locs[0] - Ny/2) / (-Ny/2)`, no `+1`) -- CLAUDE.md's "Index
+  convention" section documents 0-based as the deliberate, repo-wide
+  internal convention. The code already carries an inline comment
+  disclosing the uncertainty ("ported literally from ArbEPI.m's 1-based
+  formula... unclear whether the missing '-1' ... is intentional...
+  likely inconsequential"), but the magnitude was never quantified and
+  it isn't tracked here. Measured against the real seed-0 default-params
+  schedule: the y-axis ends the TR at ky = -deltak[1] (-4.6296 m^-1)
+  instead of exactly 0 ("rewind to center" per the comment), and the
+  z-axis spoiler delivers `gz_spoil.area - deltak[2]` instead of the full
+  intended area -- a shortfall of deltak[2] = 24.691 against a total
+  `gz_spoil.area` of 2222.2, i.e. ~1.1% less z-spoiling than intended
+  (~0.1% of the y k-space extent for the y residual). Severity is
+  genuinely low (well under the spoiler's own dephasing margin, and
+  spoilers tolerate slack by design) -- this item exists to give the
+  already-flagged uncertainty a numbered, quantified entry rather than
+  leaving it as an untracked in-code question mark. Fix direction: drop
+  the `+ 1` to match the 0-based convention (or confirm via a fresh
+  MATLAB comparison that the `+1` is intentional and update the comment
+  instead), then re-verify against
+  `tests/test_trajectory_matches_schedule.py`'s existing k-space coverage
+  checks.
+- [ ] **139. `preprocessing/config.py`'s `load_seq_params` reads
+  `scan_info.mat` via a bare `h5py.File`, not `matio.read_mat`,
+  contradicting `matio.py`'s own unconditional stated rule.** [verify,
+  not live today] `config.py:170-193` opens `paths.scan_info` directly
+  and reads every field with plain `f[name][()]`
+  (`.item()`/`.ravel()`), never calling
+  `preprocessing.matio.read_mat`/`read_mat_array`. `matio.py`'s module
+  docstring is explicit: "Use these for every hdf5storage-written `.mat`
+  this pipeline reads (`scan_info.mat`) -- never `scipy.io`... never a
+  bare `h5py` read without the transpose." Every field `load_seq_params`
+  reads today is a scalar or a short 1D vector (`Nx`, `TR`, `TE_degre`,
+  etc.), and `matio.py`'s own docstring confirms the missing transpose is
+  a values no-op for those shapes (only a singleton axis moves) -- so
+  this isn't a live correctness bug today, and
+  `test_load_seq_params_round_trips_a_scan_info_fixture` (which writes
+  its fixture pre-transposed exactly like real hdf5storage output)
+  passes. But it's a direct deviation from the stated convention and a
+  latent trap: if a future field added to the `scan_info.mat` snapshot
+  (or to `SeqParams`) is 2D+ (a matrix, not a scalar/vector), reading it
+  through this bare-`h5py` path instead of `matio.read_mat_array` would
+  silently return it axis-reversed -- exactly the class of bug
+  `matio.py` exists to prevent, and the same class items 44/64/91/108/120
+  already document elsewhere in this codebase for the sibling
+  FFT-shift-convention mistake. `preprocess.py`'s own
+  `load_kxoe`/`load_schedules` (reading the same file) already go through
+  `matio.read_mat`/`read_mat_array` correctly, so `config.py` is the
+  outlier, not the rule. Fix: route `load_seq_params` through
+  `matio.read_mat`/`read_mat_array` like every other `scan_info.mat`
+  reader in this repo.
 
 ## Consistency & documentation
 
@@ -1061,6 +1270,90 @@ described (none needed closing).
   `smaps_cache` fields to `SeqPaths` (computed once in `set_seq_paths`,
   the same place the other five paths are built) and update all 7 call
   sites to read them instead of re-deriving the filename.
+- [ ] **140. `preprocessing/nifti_io.py`'s module docstring caller list is
+  stale on two counts: it names a module that no longer calls
+  `save_recon_nifti`, and omits one that does and contradicts its
+  "always the EPI grid" claim.** [measured] `nifti_io.py:2-9` names
+  callers as "run_rss.py/run_cg_sense.py/run_recon_sigpy.py ...
+  preprocess.py/recon_frames.py (sensitivity maps ...), and
+  run_b0map.py (the field map itself ... on the EPI grid, same as every
+  other NIfTI this pipeline writes ...)". A repo-wide grep of
+  `save_recon_nifti(` calls shows: (a) `recon_frames.py` never calls
+  `save_recon_nifti` -- that responsibility moved to `smaps.py`
+  (`smaps.py:195,226`) per `smaps.py`'s own docstring ("was
+  `recon_frames.py`'s private `_load_smaps` -- moved here"), so the
+  docstring names the wrong module; (b) `gre_diagnostics.py:70` also
+  calls `save_recon_nifti` and isn't mentioned at all -- and it passes
+  `fov=sp.fov_degre` (`gre_diagnostics.py:71`, the deGRE grid), directly
+  contradicting the same sentence's blanket claim that every NIfTI this
+  pipeline writes is "on the EPI grid". Severity is low (documentation
+  only) -- this is the same docstring item 67 already touched for a
+  different sentence in the same file. Fix: replace "recon_frames.py"
+  with "smaps.py" in the caller list and add `gre_diagnostics.py`
+  (deGRE-grid GRE-echo images), noting it as the one caller not on the
+  EPI grid.
+- [ ] **141. Addendum to item 117: `preprocess.py`'s STEP 3 never writes
+  `smaps_degre`/`emap_degre`, so `smaps.py`'s "legacy cache" backfill
+  branch fires on every fresh full-pipeline run, not just an occasional
+  older cache.** [measured] Item 117 (still open) already flags that
+  `preprocess.py`'s STEP 3 hand-rolls a narrower copy of `smaps.py`'s
+  `load_smaps()` caching logic instead of calling it directly. A
+  concrete, previously-undocumented consequence of that narrowness:
+  STEP 3's fresh-estimation branch (`preprocess.py:335-346`) writes only
+  `smaps_raw`/`emap`/`smaps` + `Nvcoils` -- it never computes or writes
+  `smaps_degre`/`emap_degre`. `smaps.py`'s canonical `load_smaps`
+  (`smaps.py:208-222`) always computes and writes both alongside a fresh
+  estimate, and its own docstring (`:151-153`) describes the
+  no-`smaps_degre` case as "an older cache written before these existed"
+  that gets "backfilled in place" -- language implying an occasional,
+  legacy case. Reproduced directly: writing a cache with exactly STEP 3's
+  4-key shape (no `smaps_degre`/`emap_degre`) and then calling
+  `smaps.load_smaps()` on it prints "Backfilling deGRE-grid smaps/emap
+  into ..." and recomputes them via a second
+  `process_smaps`/`resize_to_epi_grid` pass -- every time, for every
+  fresh full-pipeline run today, not a rare legacy-cache case. Severity:
+  low (the backfill recomputes correctly, so this is wasted duplicate
+  work plus a misleadingly-scoped docstring, not a wrong result), but it
+  sharpens item 117's own framing ("left to `load_smaps()`'s documented
+  backfill path the first time `recon_frames.py` or `run_b0map.py` runs
+  later") -- the backfill isn't an occasional fallback, it's the normal
+  path on every fresh run. Fix: resolved together with item 117 --
+  calling `smaps.load_smaps()` directly from STEP 3 instead of
+  duplicating its cache-writing logic fixes both the Nvcoils-check drift
+  item 117 already flags and this omission at once.
+- [ ] **142. `lib/make_spoilers.py` doesn't share one duration across its
+  x/y/z trapezoids, unlike the structurally-identical
+  `lib/make_prephasers.py` (already fixed for exactly this reason -- see
+  the dangling-but-real item 28, item 113).** [measured, low severity,
+  not live today] `lib/make_spoilers.py:23-43` builds
+  `gx_spoil`/`gy_spoil`/`gz_spoil` independently, each via its own
+  `pp.make_trapezoid(ch, ..., area=...)` call with no shared `duration=`
+  kwarg -- the exact pattern `make_prephasers.py`'s docstring documents
+  as "a real, if not previously live, consistency bug in this port"
+  (item 28; the fix itself -- building every axis's trapezoid at one
+  shared `duration = max(pp.calc_duration(g) for g in natural)` -- is
+  real and present at `make_prephasers.py:31-32`). `gx_spoil`/
+  `gy_spoil`/`gz_spoil` are played together in the same block in both
+  `ArbEPI.py` and `EPIcal.py` (the post-readout spoiler block item 138
+  above also touches), exactly the situation the prephaser fix targets:
+  since a pypulseq block's duration is set by its longest gradient event
+  regardless, an axis with its own shorter independently-computed
+  duration just idles for the rest of the block once its own trapezoid
+  finishes, with no benefit, and its gradient shape (steeper ramps for a
+  smaller-area/shorter-duration trapezoid) can differ unnecessarily
+  between axes and across FOV/resolution changes. Currently not live: at
+  this repo's default isotropic (0.9mm) resolution, `deltak[i] * N_i`
+  cancels to the same value on every axis, so all three spoilers already
+  come out to identical durations (measured: 2.588 ms each) -- the same
+  "inert at today's isotropic default, live under anisotropic
+  resolution" situation `make_prephasers.py`'s own anisotropic-FOV
+  regression test exists to guard. Reproduced the divergence
+  synthetically by varying only `fov` to be anisotropic: z-axis spoiler
+  duration drops to 1.544 ms while x/y stay at 2.588 ms. No test exists
+  for `make_spoilers.py` at all (`make_prephasers.py` has the
+  anisotropic-FOV regression test; there's no `test_make_spoilers.py`).
+  Fix: apply the same shared-`duration` construction `make_prephasers.py`
+  uses, and add an analogous anisotropic-FOV regression test.
 
 ## Test & tooling health
 
@@ -1245,6 +1538,62 @@ described (none needed closing).
   sigma1A=None)` both raises the documented `ValueError` when `fn_b0map`
   is also `None` and successfully auto-measures `sigma1A` and completes
   when `fn_b0map` is set.
+- [ ] **143. This file's own "Current baseline" skip-count breakdown was
+  misattributed -- corrected in place this pass, logged here so a
+  cached/historical copy doesn't mislead a future reader.** [measured]
+  Previous "Current baseline" sections here stated the pytest suite's 11
+  skips (`--extra preprocessing` synced) are "gated on the real `GERecon`
+  SDK and a `julia` executable, neither available in this environment,"
+  with `recon` extras (`torch`/`mirtorch`) called out as "not
+  re-measured" separately -- implying the 11 are GERecon+julia-only.
+  Running `uv run pytest -q -rs` (the same sync) and reading every skip
+  reason directly shows this was wrong on both counts: of the 11 skips,
+  **6** are `could not import 'torch'` (all six `tests/test_recon_*.py`
+  files -- i.e. the `recon` extra, already inside the "11" being
+  described) and **5** are `julia executable not found on PATH` (all in
+  `tests/test_preprocessing_run_b0map.py`). **Zero** are GERecon-gated --
+  a repo-wide grep confirms there is no test file for `raw_io.py` and no
+  `pytest.importorskip("GERecon")` anywhere under `tests/`, so GERecon is
+  never exercised by the suite at all, skipped or otherwise, not merely
+  "unavailable in this environment." This pass also installed the
+  `recon` extras fresh (`uv sync --extra recon` succeeds cleanly:
+  `torch==2.13.0+cu130` CPU-only, `mirtorch==0.3.1`) and confirmed all 34
+  `tests/test_recon_*.py` cases pass with them active -- see the
+  "Current baseline" section above for the corrected figures. Logged as
+  a numbered item, matching item 111's precedent (a stale baseline
+  figure gets both a table correction and a backlog entry), since a
+  reader citing the old sentence from git history would draw the wrong
+  conclusion about what `uv sync --extra recon` additionally covers.
+- [ ] **144. `lib/calc_te_tr_delays.py`'s documented warn-not-raise
+  fallback -- a load-bearing design decision CLAUDE.md calls out
+  explicitly -- has zero test coverage anywhere in the suite.**
+  [measured] CLAUDE.md states: "`calc_te_tr_delays.py` only warns, never
+  raises, if the prescribed `TE`/`TR` are unachievable -- it silently
+  falls back to zero padding delay, so the sequence still builds with
+  the *wrong* TE/TR baked in." `lib/calc_te_tr_delays.py:51-57` and
+  `:70-76` are the two `warnings.warn(...)` + zero-delay-fallback sites
+  this describes, confirmed still exactly matching that description by
+  direct manual exercise (`TE=1ms` against default params correctly
+  warns "Minimum achievable TE (32.104 ms) exceeds prescribed TE (1.000
+  ms)." and falls back to `te_delay=0.0`). But a repo-wide grep for
+  `pytest.warns` across the entire `tests/` directory returns zero
+  matches -- no test anywhere in this suite ever asserts on a
+  `warnings.warn` call, and there is no dedicated
+  `tests/test_calc_te_tr_delays.py` at all; every existing
+  sequence-generation test uses default or otherwise-achievable timing,
+  so neither the TE nor the TR warn-and-fallback branch is ever
+  exercised. This matters concretely: CLAUDE.md's very next paragraph
+  tells a reader not to "hand-derive feasibility... call
+  `calc_te_tr_delays` directly (or scan across candidate `ETL` values)
+  to check" -- i.e. this warn-not-raise behavior is meant to be relied
+  on directly by callers sweeping parameters, exactly the kind of
+  documented-but-unguarded behavior items 115/116/129/134/135 already
+  flag elsewhere in this codebase. A future refactor could silently flip
+  this to raise, or break the zero-delay fallback, with nothing in the
+  suite to catch it. Fix: add `tests/test_calc_te_tr_delays.py` with
+  `pytest.warns(UserWarning, match=...)` cases for both the TE- and
+  TR-unachievable branches, asserting the returned `te_delay`/`tr_delay`
+  is `0.0` in each case.
 
 ## Conciseness & performance
 
@@ -1454,3 +1803,36 @@ described (none needed closing).
   wrapping the per-sequence try/except+prints) could factor out the outer
   skeleton across all five drivers and the inner recon-specific portion
   across the three Stage-2 drivers.
+- [ ] **145. `recon/`'s `_complex_randn` test helper is duplicated
+  verbatim in two test files despite an established cross-file-reuse
+  precedent right next to it.** [measured, low severity]
+  `tests/test_recon_operators.py:15-19`,
+  `tests/test_recon_b0_correction.py:30-34`,
+  `recon/sweep_time_segments.py:49-53`, and
+  `recon/benchmark_b0_cost.py:48-52` each independently define the
+  identical 4-line function:
+  ```python
+  def _complex_randn(*shape, seed):
+      g = torch.Generator(device=DEVICE).manual_seed(seed)
+      real = torch.randn(*shape, generator=g, device=DEVICE)
+      imag = torch.randn(*shape, generator=g, device=DEVICE)
+      return (real + 1j * imag).to(torch.complex64)
+  ```
+  Meanwhile `tests/test_recon_operators_b0.py:19` already does
+  `from tests.test_recon_b0_correction import DEVICE, _complex_randn,
+  _setup` -- i.e. this file set has already established cross-file
+  import (not redefinition) as its own convention for this exact helper,
+  making the other three copies an inconsistency with that established
+  pattern, not merely incidental similarity. The two `recon/` script
+  copies (`sweep_time_segments.py`, `benchmark_b0_cost.py`) each carry an
+  explicit, defensible comment for why they don't import from `tests/`
+  (staying a standalone analysis script with no test-suite dependency) --
+  those two are fine as-is and shouldn't change. The two `tests/`-side
+  copies have no such stated reason. Verified all four bodies are
+  byte-identical (no behavioral risk either way) and that the full
+  `tests/test_recon_*.py` suite (34 cases) passes with the real
+  `torch`/`mirtorch` extras installed. Fix: have
+  `tests/test_recon_operators.py` import `_complex_randn`/`DEVICE` from
+  `tests/test_recon_b0_correction.py`, the same way
+  `test_recon_operators_b0.py` already does, eliminating the one
+  unjustified duplicate.
