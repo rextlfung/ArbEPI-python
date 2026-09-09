@@ -21,23 +21,20 @@ per map (computed jointly), since the point of comparing laminar vs.
 radial is that their echo-time spans differ, not to let per-panel
 autoscaling hide that.
 
-The k-space-center cell is marked explicitly on both maps -- but its
-(y, z) index is *detected*, not assumed to be (Ny//2, Nz//2): measured
-directly on this repo's real data, the true center sits at (116, 22),
-four cells off Ny//2=120 in y (Nz//2=22 happens to match). mask2epi_radial
-pins the true-center sample to echo index (ETL-1)//2 on every single
-shot (see this repo's CLAUDE.md mask2epi_radial paragraph), so that one
-cell's std(TE) across frames is exactly 0 in the radial dataset --
-measured 7e-15 (float noise) at (116, 22), while (120, 22) measures
-1.89 ms, i.e. not the pinned cell at all. This script locates the center
-as the calibration-mask cell with the smallest std(TE) across whichever
-datasets are passed in (radial's exact pinning wins that search whenever
-a radial dataset is included) and reuses that same absolute grid index
-to mark every dataset's panel, since the underlying (ky, kz) grid is
-shared between mask2epi variants -- only the shot-order-to-location
-assignment differs. If no dataset shows a near-zero-std cell (e.g.
-laminar-only), it prints a warning and falls back to (Ny//2, Nz//2)
-rather than silently mismarking the plot.
+Axes are physical k-space units (m^-1), not array indices -- same
+deltak = 1/fov, k = (index - N/2) * deltak convention
+plotting/plotting.py already uses for the sampling-mask/trajectory
+plots, so this stays consistent with the rest of the repo rather than
+introducing a second axis convention.
+
+No k-space-center marker: an earlier version of this script tried to
+mark it by finding the calibration cell with std(TE) == 0, reasoning
+that mask2epi_radial pins "the" k-space-center sample to echo index
+(ETL-1)//2 on every shot. That reasoning doesn't hold in general --
+which exact discrete (ky,kz) sample lands there varies shot to shot and
+frame to frame (per user correction), so treating one fixed cell as
+"the center" and annotating it as such would be misleading rather than
+informative.
 
 Usage (from repo root, .venv-preprocessing):
     .venv-preprocessing/bin/python -m preprocessing.lowres_calib_te_distribution_check <datdir> [datdir2 ...]
@@ -89,10 +86,22 @@ def crop_to_bbox(arr2d: np.ndarray, calib_mask: np.ndarray) -> tuple[np.ndarray,
     return arr2d[y0:y1, z0:z1], (y0, y1, z0, z1)
 
 
+def bbox_extent_m(bbox: tuple[int, int, int, int], Ny: int, Nz: int,
+                   deltak_y: float, deltak_z: float) -> tuple[float, float, float, float]:
+    """imshow extent (left, right, bottom, top) in m^-1 for a [y0:y1, z0:z1]
+    crop of a full (Ny, Nz) grid, using the same k = (index - N/2) * deltak
+    convention as plotting/plotting.py."""
+    y0, y1, z0, z1 = bbox
+    ky_left = (y0 - Ny / 2) * deltak_y
+    ky_right = (y1 - Ny / 2) * deltak_y
+    kz_bottom = (z0 - Nz / 2) * deltak_z
+    kz_top = (z1 - Nz / 2) * deltak_z
+    return ky_left, ky_right, kz_bottom, kz_top
+
+
 def main(datdirs: list[str], seqname: str = 'ArbEPI') -> None:
     results = {}
     te_nominal_ms = None
-    center_candidates = []  # (std_value, (y, z), Ny, Nz) across all datasets' full grids
 
     for datdir in datdirs:
         label = os.path.basename(os.path.normpath(datdir))
@@ -102,10 +111,8 @@ def main(datdirs: list[str], seqname: str = 'ArbEPI') -> None:
 
         mean_ms, std_ms, calib_mask = te_mean_std_maps(paths.recon)
         Ny, Nz = calib_mask.shape
-
-        flat_idx = np.nanargmin(std_ms)
-        loc = tuple(int(v) for v in np.unravel_index(flat_idx, std_ms.shape))
-        center_candidates.append((float(std_ms[loc]), loc, Ny, Nz))
+        deltak_y = 1 / seq_params.fov[1]
+        deltak_z = 1 / seq_params.fov[2]
 
         te_nom = nominal_te_s(paths.scan_info, seq_params.ETL) * 1000
         if te_nominal_ms is None:
@@ -118,45 +125,19 @@ def main(datdirs: list[str], seqname: str = 'ArbEPI') -> None:
 
         mean_crop, bbox = crop_to_bbox(mean_ms, calib_mask)
         std_crop, _ = crop_to_bbox(std_ms, calib_mask)
+        extent = bbox_extent_m(bbox, Ny, Nz, deltak_y, deltak_z)
 
         n_calib = int(calib_mask.sum())
         bbox_size = (bbox[1] - bbox[0]) * (bbox[3] - bbox[2])
         print(f'\n=== {label} ===')
         print(f'  calibration region: {n_calib} / {bbox_size} cells in bounding box '
               f'({bbox[1] - bbox[0]} x {bbox[3] - bbox[2]}), {100 * n_calib / bbox_size:.1f}% fill')
+        print(f'  deltak_y = {deltak_y:.3f} m^-1, deltak_z = {deltak_z:.3f} m^-1')
         print(f'  TE_nominal = {te_nom:.3f} ms (echo index {(seq_params.ETL - 1) // 2} of {seq_params.ETL})')
         print(f'  mean TE across mask: [{np.nanmin(mean_crop):.3f}, {np.nanmax(mean_crop):.3f}] ms')
         print(f'  std TE across mask:  [{np.nanmin(std_crop):.4f}, {np.nanmax(std_crop):.4f}] ms')
-        print(f'  this dataset\'s own min-std cell: (y={loc[0]}, z={loc[1]}), std={std_ms[loc]:.4e} ms, '
-              f'mean={mean_ms[loc]:.4f} ms')
 
-        results[label] = dict(mean=mean_crop, std=std_crop, bbox=bbox, Ny=Ny, Nz=Nz)
-
-    # Detect the true k-space-center cell: whichever dataset shows the
-    # smallest std(TE) wins (radial's exact per-shot pinning drives this to
-    # ~0 when present; see module docstring). Reused as one shared absolute
-    # grid index across every dataset's panel, since the (ky,kz) grid itself
-    # is shared -- only the shot-order assignment differs by variant.
-    best_std, best_loc, best_Ny, best_Nz = min(center_candidates, key=lambda c: c[0])
-    zero_thresh_ms = 1e-3
-    if best_std < zero_thresh_ms:
-        center = best_loc
-        print(f'\nDetected true k-space center at (y={center[0]}, z={center[1]}) '
-              f'(std={best_std:.2e} ms, below the {zero_thresh_ms} ms pinning threshold).')
-    else:
-        center = (best_Ny // 2, best_Nz // 2)
-        print(f'\nWARNING: no dataset showed a near-zero-std cell (smallest was {best_std:.4f} ms) -- '
-              f'falling back to the geometric-center guess (y={center[0]}, z={center[1]}), which may be wrong.')
-
-    for label, r in results.items():
-        y0, y1, z0, z1 = r['bbox']
-        center_crop = (center[0] - y0, center[1] - z0)
-        if 0 <= center_crop[0] < r['mean'].shape[0] and 0 <= center_crop[1] < r['mean'].shape[1]:
-            print(f'  [{label}] k-space center (y={center[0]}, z={center[1]}): '
-                  f'mean={r["mean"][center_crop]:.4f} ms, std={r["std"][center_crop]:.4f} ms')
-        else:
-            print(f'  [{label}] WARNING: k-space center falls outside this dataset\'s calibration bounding box')
-        r['center'] = center_crop
+        results[label] = dict(mean=mean_crop, std=std_crop, extent=extent)
 
     # Shared color scales across datasets -- see module docstring for why.
     max_dev = max(np.nanmax(np.abs(r['mean'] - te_nominal_ms)) for r in results.values())
@@ -181,13 +162,11 @@ def main(datdirs: list[str], seqname: str = 'ArbEPI') -> None:
     fig, axes = plt.subplots(1, len(labels), figsize=(6.5 * len(labels), 5.2), squeeze=False)
     for ax, label in zip(axes[0], labels):
         r = results[label]
-        im = ax.imshow(r['mean'].T, origin='lower', cmap=cmap_mean, vmin=mean_vmin, vmax=mean_vmax)
-        ax.plot(*r['center'], marker='+', color='black', markersize=14, markeredgewidth=2,
-                label='k-space center')
+        im = ax.imshow(r['mean'].T, origin='lower', cmap=cmap_mean, vmin=mean_vmin, vmax=mean_vmax,
+                        extent=r['extent'], aspect='auto')
         ax.set_title(f'{label}\nmean TE (ms)')
-        ax.set_xlabel('ky index (cropped)')
-        ax.set_ylabel('kz index (cropped)')
-        ax.legend(loc='upper right', fontsize=8)
+        ax.set_xlabel('ky (m$^{-1}$)')
+        ax.set_ylabel('kz (m$^{-1}$)')
         plt.colorbar(im, ax=ax, fraction=0.046, label='mean TE (ms)')
     fig.suptitle(f'Mean echo time per (ky,kz) sample, across {len(labels)} dataset(s)\'s frames -- '
                  f'TE_nominal = {te_nominal_ms:.3f} ms')
@@ -198,13 +177,11 @@ def main(datdirs: list[str], seqname: str = 'ArbEPI') -> None:
     fig, axes = plt.subplots(1, len(labels), figsize=(6.5 * len(labels), 5.2), squeeze=False)
     for ax, label in zip(axes[0], labels):
         r = results[label]
-        im = ax.imshow(r['std'].T, origin='lower', cmap=cmap_std, vmin=0, vmax=std_vmax)
-        ax.plot(*r['center'], marker='+', color='red', markersize=14, markeredgewidth=2,
-                label='k-space center')
+        im = ax.imshow(r['std'].T, origin='lower', cmap=cmap_std, vmin=0, vmax=std_vmax,
+                        extent=r['extent'], aspect='auto')
         ax.set_title(f'{label}\nstd(TE) across frames (ms)')
-        ax.set_xlabel('ky index (cropped)')
-        ax.set_ylabel('kz index (cropped)')
-        ax.legend(loc='upper right', fontsize=8)
+        ax.set_xlabel('ky (m$^{-1}$)')
+        ax.set_ylabel('kz (m$^{-1}$)')
         plt.colorbar(im, ax=ax, fraction=0.046, label='std TE (ms)')
     fig.suptitle('Standard deviation of echo time per (ky,kz) sample, across frames')
     plt.tight_layout()
