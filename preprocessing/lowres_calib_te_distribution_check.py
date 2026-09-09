@@ -13,19 +13,26 @@ frame's shot order assigns that location to a different point in the
 echo train), which is the root mechanism behind the T2*/off-resonance
 temporal-instability findings elsewhere in this investigation.
 
-Two maps per dataset: the per-location mean TE (diverging colormap
-centered on TE_nominal -- the reference the complex-field B0+T2*
-correction targets, see recon/lowres_calib_recon_b0complex.py) and the
-per-location std TE across frames. Both datasets share one color scale
-per map (computed jointly), since the point of comparing laminar vs.
-radial is that their echo-time spans differ, not to let per-panel
-autoscaling hide that.
+Two maps per dataset: the per-location deviation of mean TE from
+TE_nominal -- the reference the complex-field B0+T2* correction targets,
+see recon/lowres_calib_recon_b0complex.py -- and the per-location std TE
+across frames. Both datasets share one color scale per map (computed
+jointly), since the point of comparing laminar vs. radial is that their
+echo-time spans differ, not to let per-panel autoscaling hide that.
 
-Axes are physical k-space units (m^-1), not array indices -- same
+The deviation map uses a custom dark-centered diverging colormap (black
+at zero deviation, saturating to blue for negative / red for positive)
+rather than a conventional bright-centered one (e.g. RdBu_r) -- zero
+deviation is the uninteresting case here (that (ky,kz) sample's echo
+train position is, on average, exactly where the correction assumes),
+so it should recede visually while any real drift stands out.
+
+Axes are physical k-space units (cycles/mm), not array indices -- same
 deltak = 1/fov, k = (index - N/2) * deltak convention
 plotting/plotting.py already uses for the sampling-mask/trajectory
-plots, so this stays consistent with the rest of the repo rather than
-introducing a second axis convention.
+plots (converted from its native m^-1 to cycles/mm here), so this stays
+consistent with the rest of the repo rather than introducing a second
+axis convention.
 
 No k-space-center marker: an earlier version of this script tried to
 mark it by finding the calibration cell with std(TE) == 0, reasoning
@@ -45,6 +52,7 @@ import copy
 import os
 
 import h5py
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -86,11 +94,12 @@ def crop_to_bbox(arr2d: np.ndarray, calib_mask: np.ndarray) -> tuple[np.ndarray,
     return arr2d[y0:y1, z0:z1], (y0, y1, z0, z1)
 
 
-def bbox_extent_m(bbox: tuple[int, int, int, int], Ny: int, Nz: int,
-                   deltak_y: float, deltak_z: float) -> tuple[float, float, float, float]:
-    """imshow extent (left, right, bottom, top) in m^-1 for a [y0:y1, z0:z1]
-    crop of a full (Ny, Nz) grid, using the same k = (index - N/2) * deltak
-    convention as plotting/plotting.py."""
+def bbox_extent(bbox: tuple[int, int, int, int], Ny: int, Nz: int,
+                 deltak_y: float, deltak_z: float) -> tuple[float, float, float, float]:
+    """imshow extent (left, right, bottom, top), in whatever units
+    deltak_y/deltak_z are given in, for a [y0:y1, z0:z1] crop of a full
+    (Ny, Nz) grid -- same k = (index - N/2) * deltak convention as
+    plotting/plotting.py."""
     y0, y1, z0, z1 = bbox
     ky_left = (y0 - Ny / 2) * deltak_y
     ky_right = (y1 - Ny / 2) * deltak_y
@@ -111,8 +120,9 @@ def main(datdirs: list[str], seqname: str = 'ArbEPI') -> None:
 
         mean_ms, std_ms, calib_mask = te_mean_std_maps(paths.recon)
         Ny, Nz = calib_mask.shape
-        deltak_y = 1 / seq_params.fov[1]
-        deltak_z = 1 / seq_params.fov[2]
+        # cycles/mm: deltak = 1/fov (fov in m) is already cycles/m, /1000 -> cycles/mm
+        deltak_y = 1 / seq_params.fov[1] / 1000
+        deltak_z = 1 / seq_params.fov[2] / 1000
 
         te_nom = nominal_te_s(paths.scan_info, seq_params.ETL) * 1000
         if te_nominal_ms is None:
@@ -125,26 +135,30 @@ def main(datdirs: list[str], seqname: str = 'ArbEPI') -> None:
 
         mean_crop, bbox = crop_to_bbox(mean_ms, calib_mask)
         std_crop, _ = crop_to_bbox(std_ms, calib_mask)
-        extent = bbox_extent_m(bbox, Ny, Nz, deltak_y, deltak_z)
+        dev_crop = mean_crop - te_nom
+        extent = bbox_extent(bbox, Ny, Nz, deltak_y, deltak_z)
 
         n_calib = int(calib_mask.sum())
         bbox_size = (bbox[1] - bbox[0]) * (bbox[3] - bbox[2])
         print(f'\n=== {label} ===')
         print(f'  calibration region: {n_calib} / {bbox_size} cells in bounding box '
               f'({bbox[1] - bbox[0]} x {bbox[3] - bbox[2]}), {100 * n_calib / bbox_size:.1f}% fill')
-        print(f'  deltak_y = {deltak_y:.3f} m^-1, deltak_z = {deltak_z:.3f} m^-1')
+        print(f'  deltak_y = {deltak_y:.4f} cycles/mm, deltak_z = {deltak_z:.4f} cycles/mm')
         print(f'  TE_nominal = {te_nom:.3f} ms (echo index {(seq_params.ETL - 1) // 2} of {seq_params.ETL})')
         print(f'  mean TE across mask: [{np.nanmin(mean_crop):.3f}, {np.nanmax(mean_crop):.3f}] ms')
+        print(f'  deviation from TE_nominal: [{np.nanmin(dev_crop):.3f}, {np.nanmax(dev_crop):.3f}] ms')
         print(f'  std TE across mask:  [{np.nanmin(std_crop):.4f}, {np.nanmax(std_crop):.4f}] ms')
 
-        results[label] = dict(mean=mean_crop, std=std_crop, extent=extent)
+        results[label] = dict(dev=dev_crop, std=std_crop, extent=extent)
 
     # Shared color scales across datasets -- see module docstring for why.
-    max_dev = max(np.nanmax(np.abs(r['mean'] - te_nominal_ms)) for r in results.values())
-    mean_vmin, mean_vmax = te_nominal_ms - max_dev, te_nominal_ms + max_dev
+    max_dev = max(np.nanmax(np.abs(r['dev'])) for r in results.values())
     std_vmax = max(np.nanmax(r['std']) for r in results.values())
 
-    cmap_mean = copy.copy(plt.get_cmap('RdBu_r'))
+    # Dark-centered diverging colormap: black at 0 deviation, saturating to
+    # blue (negative) / red (positive) -- see module docstring for why this
+    # is the opposite of a conventional bright-centered diverging map.
+    cmap_mean = mcolors.LinearSegmentedColormap.from_list('dev_dark', ['blue', 'black', 'red'])
     cmap_mean.set_bad('lightgray')
     cmap_std = copy.copy(plt.get_cmap('viridis'))
     cmap_std.set_bad('lightgray')
@@ -162,14 +176,14 @@ def main(datdirs: list[str], seqname: str = 'ArbEPI') -> None:
     fig, axes = plt.subplots(1, len(labels), figsize=(6.5 * len(labels), 5.2), squeeze=False)
     for ax, label in zip(axes[0], labels):
         r = results[label]
-        im = ax.imshow(r['mean'].T, origin='lower', cmap=cmap_mean, vmin=mean_vmin, vmax=mean_vmax,
+        im = ax.imshow(r['dev'].T, origin='lower', cmap=cmap_mean, vmin=-max_dev, vmax=max_dev,
                         extent=r['extent'], aspect='auto')
-        ax.set_title(f'{label}\nmean TE (ms)')
-        ax.set_xlabel('ky (m$^{-1}$)')
-        ax.set_ylabel('kz (m$^{-1}$)')
-        plt.colorbar(im, ax=ax, fraction=0.046, label='mean TE (ms)')
-    fig.suptitle(f'Mean echo time per (ky,kz) sample, across {len(labels)} dataset(s)\'s frames -- '
-                 f'TE_nominal = {te_nominal_ms:.3f} ms')
+        ax.set_title(f'{label}\nmean TE - TE_nominal (ms)')
+        ax.set_xlabel('ky (cycles/mm)')
+        ax.set_ylabel('kz (cycles/mm)')
+        plt.colorbar(im, ax=ax, fraction=0.046, label='mean TE - TE_nominal (ms)')
+    fig.suptitle(f'Deviation of mean echo time from TE_nominal per (ky,kz) sample, '
+                 f'across {len(labels)} dataset(s)\'s frames -- TE_nominal = {te_nominal_ms:.3f} ms')
     plt.tight_layout()
     _save(fig, 'lowres_calib_te_mean_map.png')
     plt.close(fig)
@@ -180,8 +194,8 @@ def main(datdirs: list[str], seqname: str = 'ArbEPI') -> None:
         im = ax.imshow(r['std'].T, origin='lower', cmap=cmap_std, vmin=0, vmax=std_vmax,
                         extent=r['extent'], aspect='auto')
         ax.set_title(f'{label}\nstd(TE) across frames (ms)')
-        ax.set_xlabel('ky (m$^{-1}$)')
-        ax.set_ylabel('kz (m$^{-1}$)')
+        ax.set_xlabel('ky (cycles/mm)')
+        ax.set_ylabel('kz (cycles/mm)')
         plt.colorbar(im, ax=ax, fraction=0.046, label='std TE (ms)')
     fig.suptitle('Standard deviation of echo time per (ky,kz) sample, across frames')
     plt.tight_layout()
