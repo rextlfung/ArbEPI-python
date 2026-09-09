@@ -63,31 +63,49 @@ scope to avoid duplication; every new finding below was independently
 re-verified against the live tree (not just trusted from the subagent's
 report) before being recorded here, including a from-scratch
 reproduction of item 136's sampling bug and item 137's trigger-detection
-bug.
+bug. Items 147-159 are new findings from a later pass (2026-09-09,
+against `eab904b`) that also re-verified every item 107-146 against the
+current tree: `git diff 3930358 HEAD --stat` shows `CLAUDE.md`,
+`README.md`, `main.py`, `params.py`, `plotting/plotting.py`,
+`sampling/caipi_sample.py`, `sampling/external_mask.py`,
+`sampling/gen_sampling_masks.py`, and several test files changed in that
+span (a "Simplify user-facing config" reorg of `params.py`/README, a
+generalization of the top-level sampling-mask flow to accept
+collaborator-provided masks, and a rewrite of `caipi_sample.py`'s
+`balanced_factors`), alongside this doc itself (items 136-146 were added
+there) -- none of those changed files are cited by any item 107-146's own
+file:line citations, so all forty were confirmed still open exactly as
+described (none needed closing). This pass split the review across four
+parallel subagents (`sampling/`+`plotting/`;
+`params.py`/`main.py`/`scanners.py`+README/CLAUDE.md consistency;
+`ge/`+`lib/`+`sequences/`; `preprocessing/`+`recon/`), each briefed on
+the open items already tracked in its scope plus an explicit note to
+scrutinize the recently-changed, least-reviewed code first; every new
+finding below was independently re-verified against the live tree (not
+just trusted from the subagent's report) before being recorded here,
+including a from-scratch reproduction of item 147's `caipi_sample`
+regression and item 150's `noise.py` timing shortfall.
 
-## Current baseline (2026-09-08, against `3930358`)
+## Current baseline (2026-09-09, against `eab904b`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
   errors**, all `E501` -- unchanged from the previous pass.
-- `uv run pytest` (plain main venv): **126 passed, 15 skipped**, re-run
-  after `rm -rf output` -- unchanged from the previous pass. With
-  `--extra preprocessing` also synced: **155 passed, 11 skipped**
-  (re-measured fresh this pass, `rm -rf output` first) -- the extra 29
-  passes/4 fewer skips are the GERecon/Julia-independent `preprocessing/`
-  tests that `pytest.importorskip`-skip for missing `sigpy`/`nibabel` in
-  the plain env, now able to run. **Corrected this pass (item 143): the
-  11 remaining skips are not "gated on GERecon and julia" as previous
-  baselines here stated** -- reading every skip reason directly
-  (`uv run pytest -q -rs`) shows **6** are `could not import 'torch'`
-  (all six `tests/test_recon_*.py` files, i.e. the `recon` extra) and
-  **5** are `julia executable not found on PATH` (all in
-  `tests/test_preprocessing_run_b0map.py`); **zero** are GERecon-gated --
-  no test file exercises `raw_io.py` at all, so GERecon is never run,
-  skipped or otherwise, not merely "unavailable in this environment."
-  `recon` extras were installed and measured fresh this pass (a from-scratch
-  `uv sync --extra recon` succeeds: `torch==2.13.0+cu130` CPU-only,
-  `mirtorch==0.3.1`) -- **`tests/test_recon_*.py`: 34 passed** with those
-  extras active, 0 failed.
+- `uv run pytest` (plain main venv): **135 passed, 15 skipped**, re-run
+  after `rm -rf output` -- the +9 passes vs. the previous pass's 126 are
+  new tests added in the intervening commits (`tests/test_custom_mask.py`,
+  new `tests/test_caipi_sample.py` cases, and
+  `tests/test_preprocessing_epi_gridding.py`'s new real-POPE-trajectory
+  case), not a change in skip composition. With `--extra preprocessing`
+  also synced: **165 passed, 11 skipped** (re-measured fresh this pass,
+  `rm -rf output` first; same +10 delta from the previous pass's 155, same
+  cause). Skip breakdown (`uv run pytest -q -rs`, matching item 143's
+  corrected framing) unchanged in composition: **6** `could not import
+  'torch'` (all six `tests/test_recon_*.py` files, the `recon` extra) and
+  **5** `julia executable not found on PATH` (all in
+  `tests/test_preprocessing_run_b0map.py`); **zero** GERecon-gated. `recon`
+  extras re-synced fresh this pass (`uv sync --extra recon` succeeds:
+  `torch==2.13.0+cu130` CPU-only, `mirtorch==0.3.1`) -- **`tests/test_recon_*.py`:
+  34 passed**, 0 failed, unchanged from the previous pass.
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, GE_MR750, `PNSwt = [0.8, 1.0, 0.7]`, seed 0) --
   all four sequences `.ok`, re-measured fresh this pass (`rm -rf output`
@@ -954,6 +972,223 @@ bug.
   message's own `sqrt(2*S/(1/slew_rise + 1/slew_fall))` formula) rather
   than requiring the caller to hand-tune `dwell`/`Nx` until it happens to
   fit.
+- [ ] **147. `sampling/caipi_sample.py`'s `balanced_factors` rewrite
+  (commit `eab904b`, this repo's own most recent commit) breaks the
+  exact-sample-count invariant at the repo's own canonical dimensions --
+  a live regression, not a pre-existing edge case, that crashes both
+  `mask2epi` (for `sampling_method='caipi'`) and `ticaipi_sample`'s own
+  divisibility guard (for `'ticaipi'`).** [measured] The rewrite picks
+  `(Ry, Rz)` by closest FOV-weighted log-ratio to `Ny/Nz`, with no
+  preference for a pair that evenly divides `(Ny, Nz)` (the property the
+  old squarest-split algorithm happened to guarantee whenever any
+  divisor-pair existed). For this repo's own shipped default dimensions --
+  `(Ny, Nz, R) = (240, 45, 9)`, the *exact* example the rewrite's own new
+  docstring cites as its headline justification -- this now returns
+  `(Ry, Rz) = (9, 1)` instead of the old `(3, 3)`. Reproduced directly:
+  ```python
+  balanced_factors([240, 45], 9)   # -> (9, 1), was (3, 3)
+  caipi_sample([240, 45], 9).sum()  # -> 1215.0
+  ```
+  `params.py` computes `Nshots = ceil(Ny*Nz/R/ETL) = 20` independently of
+  the actual mask (`params.py:238`) and passes it straight into
+  `mask2epi_{laminar,radial}`, which assert `n_samples == Nshots * ETL`
+  (`lib/mask2epi.py:783`/`1047`). `20*60 = 1200 != 1215`, so
+  `sampling_method = 'caipi'` at the shipped default resolution/`R` now
+  crashes `generate_arbepi` with an `AssertionError`. Separately,
+  `ticaipi_sample`'s own divisibility guard (`sampling/ticaipi_sample.py:39-46`,
+  added by item 103 specifically to catch silent double-sampling) now
+  trips on the same dimensions -- reproduced directly:
+  ```
+  ticaipi_sample([240, 45], 9, 0)
+  # ValueError: ticaipi_sample: (Ny, Nz)=(240, 45) is not evenly divided
+  # by the balanced factorization (Ry, Rz)=(9, 1) of R=9 ...
+  ```
+  Under the old `(3, 3)` split both calls worked (`240 % 3 == 0`,
+  `45 % 3 == 0`). The shipped default `sampling_method` is `'pd'`, so this
+  doesn't fire in the out-of-the-box config -- but `'caipi'`/`'ticaipi'`
+  are fully supported, README-documented options
+  (`sampling_method` table row), and the exact dimensions the rewritten
+  docstring's own worked example uses are the ones that now break both of
+  them. `tests/test_caipi_sample.py::test_caipi_sample_exact_count`
+  computes its expected count from `balanced_factors`'s own returned
+  `(Ry, Rz)` rather than from an independent target, so it's tautologically
+  true regardless of whether the count matches what real callers
+  (`params.Nshots*ETL`) need -- it cannot catch this class of bug, and no
+  test in `test_caipi_sample.py`/`test_ticaipi_sample.py` exercises the
+  repo's real `(240, 45, 9)` dimensions at all. Fix direction: either (a)
+  have `balanced_factors` prefer, among ties/near-ties in FOV-ratio score,
+  a factor pair that evenly divides `(Ny, Nz)`; (b) recompute `Nshots` from
+  the actual generated mask's sample count for `caipi`/`ticaipi` rather
+  than trusting the nominal `ceil(Ny*Nz/R/ETL)`; or (c) at minimum add a
+  regression test at the shipped `(240, 45, 9)` config asserting
+  `caipi_sample(...).sum() == Nshots*ETL` (using the real
+  `params.py` formula for `Nshots`) and that `ticaipi_sample` doesn't
+  raise there.
+- [ ] **148. `plotting/compare_readout_pns.py` bypasses `resolve_omegas`,
+  contradicting the documented contract of the exact helper that names it
+  as a required caller -- crashes on any `custom_mask_path` config.**
+  [measured] `sampling/gen_sampling_masks.py`'s `resolve_omegas` docstring
+  states plainly: "the single helper every call site (`main.py`, tests,
+  `plotting/compare_readout_pns.py`) should use to get `omegas` from a
+  `Params` ... calling `gen_sampling_masks` directly on a custom-mask
+  `Params` would raise." CLAUDE.md repeats the same claim. But
+  `plotting/compare_readout_pns.py:150` actually calls
+  `gen_sampling_masks(p0.R, p0, rng=np.random.default_rng(p0.seed))`
+  directly, not `resolve_omegas` -- confirmed by reading the file's own
+  imports (`from sampling.gen_sampling_masks import gen_sampling_masks`,
+  not `resolve_omegas`). Reproduced: with a `Params` in the state
+  `custom_mask_path` leaves it in (`sampling_method=None`),
+  `gen_sampling_masks(p.R, p, rng=...)` raises `ValueError: Unknown
+  sampling_method None. Choose 'caipi', 'ticaipi', 'pd', or 'rand'.`
+  exactly as `resolve_omegas`'s docstring warns. Every other call site
+  (`main.py`, `tests/conftest.py`, `tests/test_trajectory_matches_schedule.py`,
+  `tests/test_ge_check.py`) correctly uses `resolve_omegas`;
+  `compare_readout_pns.py` is the sole exception, and the one file
+  explicitly named as an intended user of it. Not live with the shipped
+  `params.py` (which leaves `custom_mask_path = None`), but immediately
+  live the moment a user sets `custom_mask_path` (a documented, supported
+  feature, see README's "Using custom ky-kz-t sampling masks" section) and
+  runs `python -m plotting.compare_readout_pns`. Fix: change line 150 to
+  import and call `resolve_omegas(p0, rng=np.random.default_rng(p0.seed))`
+  instead. Worth re-checking at the same time whether `resolve_omegas`
+  ignoring a caller-supplied `rng` when `params.custom_omegas is not None`
+  interacts with this script's `assert p0.seed is not None` a few lines
+  above (line 136) -- `seed` is `None` by design on the custom-mask path.
+- [ ] **149. `plotting/plotting.py`'s `plot_one_tr` marks the TE line at a
+  discrete echo index that's off by half an echo spacing from
+  `lib/calc_te_tr_delays.py`'s own nominal-TE definition, for the shipped
+  (even) `ETL` -- the live, mirror-image case of the still-inert item
+  127.** [measured] `plot_one_tr` (`plotting.py:257-258`) computes
+  ```python
+  te_echo = (params.ETL - 1) // 2
+  t_te_ms = t_adc[te_echo * n_fid + n_fid // 2] * 1e3
+  ```
+  citing CLAUDE.md/`mask2epi.py` for why this is "the nominal-TE echo."
+  But `calc_te_tr_delays.py` itself defines the nominal echo as the
+  *continuous* echo-train index `ETL/2 - 0.5` (`lib/calc_te_tr_delays.py:35-48`,
+  confirmed by reading the `min_te` formula directly) -- for the shipped
+  default `ETL = 60` (even), that's `29.5`, the midpoint between echo 29
+  and 30, not a whole-echo index. `(ETL - 1) // 2 = 29` is a full echo
+  short of `29.5`. Item 127 (already tracked, still open) independently
+  confirms this exact arithmetic while analyzing the mirror case in
+  `compare_readout_pns.py`: it notes `te_realized = 0.5*(et[29]+et[30])`
+  is *correct* there specifically because `ETL=60` is even (averaging
+  lands exactly on `29.5`), and flags that formula as wrong only for odd
+  `ETL` (currently inert, since the shipped default is even). This item's
+  `plot_one_tr` bug is the mirror image: correct only for odd `ETL`, and
+  *wrong right now* for the shipped even `ETL=60` default -- the dashed
+  "TE" line drawn in every `output/one_tr.png` (any `plot_one_tr` call)
+  sits roughly half an echo spacing before the actual nominal-TE point
+  used elsewhere in the codebase. At CLAUDE.md's own cited echo-spacing
+  figures (POPE ~=1076 us), that's ~540 us against a ~34.9 ms TE (~1.5%)
+  -- purely a diagnostic-plot inaccuracy, not a bug in the generated
+  sequence's real TE, but this repo has treated timing errors an order of
+  magnitude smaller (0.6-0.7 ms, the `echo_offset`/`calc_rf_center` fixes
+  in items 36/37/62) as worth a dedicated fix. Fix direction: make the
+  marker parity-aware like item 127's own suggested fix -- for even `ETL`,
+  average `t_adc` at echo indices `ETL//2 - 1` and `ETL//2`; for odd
+  `ETL`, use the single exact index `ETL//2`. Worth fixing alongside item
+  127 (possibly via one shared parity-aware nominal-echo-time helper),
+  since the two files currently embody two different, individually
+  half-wrong conventions for the same quantity.
+- [ ] **150. `sequences/noise.py`'s `pad_duration` computation
+  double-subtracts `adc_dead_time`, making every noise-prescan repetition
+  play exactly `sys.adc_dead_time` (20 us) shorter than the EPI readout
+  duration it's meant to match.** [measured] `lib/make_readout_grads.py`
+  builds the shared readout ADC via `pp.make_adc(Nfid, dwell=dwell)` with
+  no `system=` argument, so pypulseq falls back to `Opts.default`, whose
+  class-level `adc_dead_time` is `0` (never overridden anywhere in this
+  repo -- confirmed via grep for `set_as_default`). So `rg.adc.dead_time`
+  is always baked in as exactly `0`, regardless of
+  `params.spec.adc_dead_time` (20 us for both scanners). `pp.calc_duration()`
+  for an ADC event uses the event's own `.dead_time`, not
+  `system.adc_dead_time`, so `calc_duration(rg.adc)` never includes that
+  20 us. `ArbEPI.py`/`EPIcal.py` are unaffected -- they also force
+  `sys_seq.adc_dead_time = 0` on the assembled sequence for the
+  intentional back-to-back-ADC EPI train, matching `rg.adc.dead_time`'s
+  own `0`. `noise.py`, however, independently re-derives the *real*
+  scanner dead time and adds it back on top (`sequences/noise.py:41-43`):
+  ```python
+  adc_dead_time = sys.adc_dead_time                        # 20e-6 (real)
+  adc_total_dur = adc_dead_time + pp.calc_duration(rg.adc)  # rg.adc already has dead_time=0
+  pad_duration = pp.calc_duration(rg.gro) - adc_total_dur
+  ```
+  Since `rg.adc`'s actual played duration never included that 20 us, this
+  over-subtracts it, making `pad_duration` -- and hence the actual
+  `[ADC block + delay block]` pair -- 20 us shorter than intended.
+  Reproduced numerically at this repo's default params (`GE_MR750`):
+  `calc_duration(rg.gro) = 0.000996 s`, `calc_duration(rg.adc) = 0.000848 s`
+  (`rg.adc.dead_time == 0`), computed `pad_duration = 0.000128 s`, so the
+  actual per-repetition duration is `0.000976 s` against an intended
+  `0.000996 s` -- a shortfall of exactly `2.0e-5 s == sys.adc_dead_time`.
+  `noise.seq` is still well-formed (`check_timing()` passes; not a
+  hardware-limit or PNS violation, so the "Current baseline" table is
+  unaffected), but every noise-prescan repetition plays 20 us shorter than
+  the EPI readout block it's documented to duty-cycle-match (`"Delay to
+  pad each block to EPI readout duration"`, `noise.py`'s own comment) --
+  live in the default `main.py` pipeline (`generate_noise` always runs).
+  Fix direction: this is a `noise.py`-side bug, not a
+  `make_readout_grads.py` one -- `rg.adc.dead_time == 0` is the correct,
+  intentional value there (matching the back-to-back-ADC design; passing
+  `system=` into `make_adc` would trigger pypulseq's auto-delay bump and
+  shift the carefully-centered kx=0 sampling window for ArbEPI/EPIcal, so
+  don't "fix" it that way). Drop the extra `+ adc_dead_time` term in
+  `noise.py`: `pad_duration = pp.calc_duration(rg.gro) - pp.calc_duration(rg.adc)`
+  directly, since the constructed ADC never actually consumes that dead
+  time.
+- [ ] **151. `preprocessing/run_b0map.py`'s per-sequence `try/except`
+  covers only the `b0map.jl` subprocess call, not the post-processing that
+  follows it -- unlike every sibling batch driver, which wraps the whole
+  per-sequence body. A post-processing failure for one sequence aborts
+  field-map estimation for every remaining sequence in the batch.**
+  [measured] In `run_b0map()` (`preprocessing/run_b0map.py:99-155`), the
+  `try/except subprocess.CalledProcessError` block (explicitly commented
+  "mirrors the sibling batch drivers' try/catch") wraps only the
+  `subprocess.run(...)` call. Everything after it runs with no
+  surrounding `try`: reading `b0map_hz`/`mask` back, both
+  `resize_to_epi_grid` calls (which can raise `ValueError` on an x/y FOV
+  mismatch or an out-of-range z-crop -- exactly the failure modes that
+  function exists to guard against), the `h5py.File(output_path, 'a')`
+  rename/create-dataset block, and `save_recon_nifti`. Contrast with the
+  three sibling Stage-2 drivers in the same module family (`run_rss.py`,
+  `run_cg_sense.py`, `run_recon_sigpy.py`), each of which wraps its
+  *entire* per-sequence body (analogous resize/reconstruct/save work
+  included) in one `try/except Exception`, printing `ERROR [{seqname}]:
+  ...\nSkipping...` and continuing to the next sequence -- confirmed by
+  reading all three. So if the post-processing step throws for one
+  sequence in a multi-sequence `cfg.seqnames` batch (e.g. a stale/
+  mismatched `fov_degre` vs. `fov`, or any HDF5/NIfTI-write failure), the
+  exception propagates out of `run_b0map()` entirely, aborting field-map
+  estimation for every *remaining* sequence in the batch -- not just the
+  one that failed -- directly contradicting the file's own inline claim to
+  mirror the sibling drivers' resilience pattern. Fix direction: widen the
+  `try/except` to cover the whole per-sequence body (lines ~99-155), or
+  factor the post-processing into its own function and wrap that call too,
+  matching the `ERROR [{seqname}]: ...\nSkipping...` / `continue`
+  convention used everywhere else in this file and its siblings.
+- [ ] **159. `ge/read_pge.py`'s array-reading helper collapses any
+  length-1 result to a bare scalar instead of a length-1 sequence, for
+  reads that don't already special-case it.** [verify, not live today]
+  `_r`'s `return values[0] if len(values) == 1 else values`
+  (`ge/read_pge.py:15`) means any `_r(fid, f'{n}f')` call with `n == 1`
+  returns a scalar rather than an array. `_read_segment` already guards
+  against exactly this ambiguity for `block_ids`
+  (`ge/read_pge.py` ~lines 133-135: `if n_blocks == 1: block_ids =
+  (block_ids,)`), but the analogous array reads for RF/gradient
+  `magnitude`/`phase`/`time`/`tt` (`_read_arbitrary`, `_read_grad`'s
+  corner-points branch) have no equivalent guard -- a single-sample RF or
+  gradient waveform would come back as a bare float where callers
+  (`ge/validate_against_matlab.py`) likely expect an indexable sequence.
+  `ge/read_pge.py` is explicitly validation-only tooling (not on the
+  `.pge` write path, per CLAUDE.md's GE-export section), so this has no
+  effect on any exported `.pge` file; it would only misbehave if a future
+  test/validation run exercised a genuinely 1-sample arbitrary waveform,
+  which none of this repo's four shipped sequences do today (same
+  "not live today" category as items 45/122). Fix direction: apply the
+  same `if len(values) == 1: values = (values,)`-style guard used for
+  `block_ids` to the other array-valued reads inside `_read_arbitrary`/
+  `_read_grad`, or make `_r` never collapse a genuinely multi-element read
+  regardless of size-1 results.
 
 ## Consistency & documentation
 
@@ -1398,6 +1633,93 @@ bug.
   anisotropic-FOV regression test; there's no `test_make_spoilers.py`).
   Fix: apply the same shared-`duration` construction `make_prephasers.py`
   uses, and add an analogous anisotropic-FOV regression test.
+- [ ] **152. `preprocessing/gre_diagnostics.py`'s module docstring names
+  the wrong dataset keys, and the script has an undocumented, unchecked
+  hard dependency on `run_b0map.py`'s post-processing having already run
+  (not just `b0map.jl` itself).** [measured] The module docstring
+  (`gre_diagnostics.py:5-6`) says it dumps the "B0 field-map pipeline's
+  intermediate volumes (`finit_hz`, `b0map_hz`, `mask`)". The actual code
+  (`gre_diagnostics.py:78-80`) reads `finit_hz`, `b0map_hz_degre`, and
+  `mask_degre` -- not `b0map_hz`/`mask`. Those `_degre`-suffixed keys only
+  exist in `<seqname>_b0map.h5` after `run_b0map.py`'s own post-processing
+  block renames them there (`run_b0map.py:142-146`:
+  `f.move('b0map_hz', 'b0map_hz_degre')`, `f.move('mask', 'mask_degre')`).
+  `b0map.jl` itself (invoked either via `run_b0map.py` or directly, per its
+  own usage docstring) only ever writes the plain `b0map_hz`/`mask`/
+  `finit_hz` keys -- confirmed by reading `b0map.jl`'s own write calls. So
+  `gre_diagnostics.py` silently assumes the file was produced by the full
+  `run_b0map.py` driver, not merely by running `b0map.jl` directly as its
+  own module docstring advertises as valid usage. If a user runs `julia
+  b0map.jl <gre_h5> <output_h5>` directly (or item 151's newly-flagged
+  unguarded post-processing window in `run_b0map.py` is interrupted after
+  the julia call but before the rename), `gre_diagnostics.py` fails with a
+  bare, unexplained `KeyError` instead of a clear message naming the
+  missing prerequisite step. Low severity (documentation + missing
+  actionable error, same pattern as items 67/78/140 in this file elsewhere
+  in `preprocessing/`), but a real trap for anyone following the module's
+  own advertised standalone-`b0map.jl` usage. Fix: correct the docstring to
+  name the actual keys read (`b0map_hz_degre`/`mask_degre`, deGRE grid),
+  state the dependency on `run_b0map.py` having completed (not just
+  `b0map.jl`), and/or add an explicit check with an informative error
+  message (mirroring the existing `TE_degre`-missing check at
+  `gre_diagnostics.py:44-49`, item 78's fix).
+- [ ] **153. CLAUDE.md's "Data flow" diagram still shows the top-level
+  sampling-mask call as `gen_sampling_masks(R, params)`, stale since
+  `main.py` switched to `resolve_omegas(params)`.** [measured] CLAUDE.md's
+  ASCII data-flow diagram (line ~70) reads: `params.py (load_params())
+  ──► gen_sampling_masks(R, params) ──► omegas (Ny×Nz×Nframes bool)`. But
+  since the "Generalize top-level sampling-mask flow to accept
+  collaborator-provided masks" change (commit `fd08460`, already reflected
+  correctly elsewhere in CLAUDE.md's own "sampling/external_mask.py"
+  paragraph, ~line 586), `main.py:32` actually calls `resolve_omegas(params)`
+  (`sampling/gen_sampling_masks.py:81-98`), which returns
+  `params.custom_omegas` directly on the custom-mask path and only falls
+  back to `gen_sampling_masks(params.R, params, ...)` otherwise --
+  confirmed by reading `main.py`'s current imports/call
+  (`from sampling.gen_sampling_masks import resolve_omegas`,
+  `omegas = resolve_omegas(params)`). The diagram documents exactly the
+  call the refactor replaced at the top-level call site, and gives no hint
+  the custom-mask branch exists at all -- a reader following only the
+  diagram (the doc's own first architectural summary, read before the
+  prose paragraph that already got updated) would miss the custom-mask
+  path entirely. Fix: relabel the diagram's first arrow
+  `resolve_omegas(params)` (optionally noting the internal branch to
+  `gen_sampling_masks`/`params.custom_omegas`), matching the accurate prose
+  CLAUDE.md's own later paragraph already has.
+- [ ] **156. README.md's "USER CONFIGURATION" table omits
+  `discard_duration`, a real basic scan parameter living in the exact
+  code section the table claims to cover.** [verify] The table
+  (README.md:14-29), introduced by the recent "Simplify user-facing
+  config" refactor specifically so "a collaborator who only wants to set
+  basic scan parameters" can find every relevant knob in one place, lists
+  `scanner`/`res`/`N`/`TE`/`volume_tr`/`duration`/`T1`/`ETL`/
+  `custom_mask_path`/`R`/`sampling_method`/`seed`/`epi_trajectory`/`Ncoils`
+  -- but not `discard_duration`. Confirmed `discard_duration` (`params.py:207`,
+  default `0`, "Frames to discard at the start of the scan (steady-state
+  warm-up)") sits inside `load_params()`'s "USER CONFIGURATION" section
+  (`params.py:167` onward), the same section every other tabled parameter
+  comes from, not the "ADVANCED / DERIVED PARAMETERS" section the table
+  explicitly says can be skipped. README does mention
+  `discard_duration` once elsewhere (the custom-mask `Nframes`-matching
+  formula, README.md:71), but never as a settable parameter in its own
+  right. Low severity since it defaults to `0` (inert unless a user wants
+  steady-state discard, a real and directly-supported use case). Fix:
+  add a `discard_duration` row to the table.
+- [ ] **157. CLAUDE.md's `sampling/external_mask.py` paragraph lists
+  `custom_mask_key` alongside `custom_mask_path`/`custom_omegas` as
+  "params.py's fields," but `custom_mask_key` is never stored on the
+  `Params` dataclass.** [verify, minor] CLAUDE.md (~line 569) groups
+  `custom_mask_path`/`custom_mask_key`/`custom_omegas` together as fields
+  `load_params()` reads to drive `resolve_custom_omegas`. But
+  `custom_mask_key` (`params.py:225`) is only a local variable inside
+  `load_params()` -- confirmed absent from the `Params` dataclass body
+  (`params.py:73-74`, which declares `custom_mask_path`/`custom_omegas` but
+  no `custom_mask_key`) and from the `Params(...)` constructor call
+  (`params.py:447-448`). Purely a documentation wording nit (the value is
+  consumed immediately inside `load_params()` and has no need to persist
+  on the dataclass, so this isn't a functional gap) -- fix by rewording the
+  sentence to distinguish the two real dataclass fields from the
+  local-only `custom_mask_key`.
 
 ## Test & tooling health
 
@@ -1880,3 +2202,56 @@ bug.
   `tests/test_recon_b0_correction.py`, the same way
   `test_recon_operators_b0.py` already does, eliminating the one
   unjustified duplicate.
+- [ ] **154. `scanners.py`'s `psd_rf_wait`/`psd_grd_wait` `ScannerSpec`
+  fields are populated per-scanner (one explicitly flagged unverified) but
+  have zero readers anywhere in the repo.** [measured]
+  `ScannerSpec.psd_rf_wait`/`psd_grd_wait` (`scanners.py:39-40`) are set for
+  both `GE_MR750` (`:69-70`, comment: "confirmed MR750-specific") and
+  `GE_UHP` (`:96-97`, comment: "UNVERIFIED placeholder ... confirm against
+  the scanner's GRSubsystemHWO.xml"). A repo-wide grep for both identifiers
+  finds them only inside `scanners.py` itself -- not read by `params.py`'s
+  `pp.Opts` construction (which uses `rf_dead_time`/`rf_ringdown_time`/
+  `adc_dead_time` etc., not these two), nor anywhere in `ge/`. So real
+  effort went into tracking (and, for `GE_UHP`, flagging as unverified) a
+  per-scanner value that nothing in this codebase currently consumes. Low
+  severity, no incorrect behavior -- purely dead configuration data. Fix
+  direction: either wire these into whatever RF/gradient timing
+  calculation was originally intended to use them, or drop the fields and
+  their per-scanner values/comments if there's no near-term consumer.
+- [ ] **155. Several `Params` dataclass fields are read only inside
+  `load_params()` itself to derive other fields, with zero consumers
+  downstream (and no export to `scan_info.mat` either) -- genuinely dead
+  once construction finishes, not just rarely used.** [measured] Confirmed
+  via a repo-wide grep for `params.<name>` / `p.<name>` / `self.<name>`
+  outside `params.py`'s own body for each: `N` (`params.py:49`, assigned
+  `:183`) -- only feeds the `fov`/`Nx`/`Ny`/`Nz` computation, which *are*
+  used pervasively and already carry the same information; `N_degre`
+  (`:148`, assigned `:356`) -- same relationship to `Nx_degre`/`Ny_degre`/
+  `Nz_degre`/`fov_degre`; `res_degre` (`:146`, assigned `:339`) -- only
+  feeds the `N_degre`/`fov_degre` computation; `T1` (`:86`, assigned
+  `:199`) -- only feeds `fa`/`alpha_degre`; `duration` (`:88`, assigned
+  `:197`) -- only feeds `Nframes`. None of these five are exported to
+  `scan_info.mat` either (`sequences/ArbEPI.py`'s scan-scalar snapshot key
+  list has `fov`/`Nx`/`Ny`/`Nz`/etc. but no `N`, `T1`, `duration`,
+  `res_degre`, or `N_degre`). Distinct from the already-tracked item 125
+  (which is about `alpha_degre`/`rf_dur_degre` being *wrongly bypassed* by
+  a real consumer, `deGRE.py`) -- these five have no intended consumer at
+  all, dead by design rather than by omission. Low severity (no incorrect
+  behavior). Fix direction: either drop `N`/`N_degre`/`res_degre`/`T1`/
+  `duration` from the `Params` dataclass (keep them as local variables
+  inside `load_params()`, matching how `Nshots`/`R` are already handled on
+  the custom-mask branch), or leave them and note in a comment that
+  they're kept for provenance/display only if a future consumer is
+  anticipated.
+- [ ] **158. `ge/blocks.py`'s `BlockType.has_trid` is computed but never
+  read by any caller.** [verify, low severity] `get_block_type`
+  (`ge/blocks.py:34-36,41`) computes `has_trid` (whether a block carries a
+  `TRID` label) and returns it as part of the `BlockType` namedtuple/
+  dataclass it constructs, but a repo-wide grep for `.has_trid` finds zero
+  read sites -- `ge/seq2ceq.py` does its own independent TRID scan
+  (`ge/seq2ceq.py:42-47`) rather than consuming this field. Pure dead-code/
+  conciseness issue, not a correctness bug (the independent scan in
+  `seq2ceq.py` is itself correct). Fix direction: either have
+  `seq2ceq.py`'s pass-1 loop use `get_block_type(...).has_trid` instead of
+  duplicating the scan, or drop the unused field from `BlockType` if no
+  simplification is intended.
