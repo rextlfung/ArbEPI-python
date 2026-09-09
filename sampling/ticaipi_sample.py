@@ -36,6 +36,10 @@ def ticaipi_sample(N: Sequence[int], R: int, frame_idx: int) -> np.ndarray:
     # this failing on ~44% of a swept (N, R) grid). This repo's own shipped
     # config never hits it (sampling_method='pd', not 'ticaipi'), but
     # 'ticaipi' is a fully supported, documented option.
+    # Expected-unreachable as of docs/review-findings.md item 147's fix:
+    # balanced_factors itself now only ever returns a dividing pair (or
+    # raises first). Kept as cheap defense-in-depth against a future
+    # regression in that guarantee.
     if Ny % Ry != 0 or Nz % Rz != 0:
         raise ValueError(
             f'ticaipi_sample: (Ny, Nz)=({Ny}, {Nz}) is not evenly divided by '
