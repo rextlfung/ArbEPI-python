@@ -39,7 +39,7 @@ def seq2ceq(seq: pp.Sequence, verbose: bool = False) -> Ceq:
         b = seq.get_block(n)
         if b.adc is not None:
             ceq.nReadouts += 1
-        if b.label is not None:
+        if get_block_type(b).has_trid:
             for lbl in b.label.values():
                 if lbl.label == 'TRID':
                     trids[n] = int(lbl.value)

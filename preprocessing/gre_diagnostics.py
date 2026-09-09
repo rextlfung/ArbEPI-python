@@ -2,10 +2,15 @@
 whitened+coil-compressed GRE cache (<seqname>_gre.h5's ksp_gre_echoes,
 written by preprocess.py's STEP 2 -- see CLAUDE.md's preprocessing/ section)
 into a viewable NIfTI, and dump PNG snapshots of both echo magnitudes plus
-the B0 field-map pipeline's intermediate volumes (finit_hz, b0map_hz, mask)
--- for visually checking whether a persistent noisy/speckled reconstruction
+the B0 field-map pipeline's intermediate volumes (finit_hz,
+b0map_hz_degre, mask_degre -- the deGRE-grid arrays run_b0map.py's post-
+processing renames to that suffix, not the raw b0map_hz/mask keys
+b0map.jl itself writes; see run_b0map.py's module docstring) -- for
+visually checking whether a persistent noisy/speckled reconstruction
 artifact traces back to the GRE data itself or the field-map estimation,
-rather than the B0-corrected recon operator (recon/operators_b0.py).
+rather than the B0-corrected recon operator (recon/operators_b0.py). This
+means the input `<seqname>_b0map.h5` must have been produced by
+run_b0map.py's full driver, not merely by running b0map.jl directly.
 
 Imports _ift3 from preprocessing/run_rss.py rather than keeping its own
 copy (fftshift(ifftn(fftshift(.))) per axis -- see that function's own
@@ -75,6 +80,13 @@ def main(datdir: str, seqname: str) -> None:
     print(f"Wrote {fn_out}.nii.gz + .json")
 
     with h5py.File(fn_b0map, "r") as f:
+        if "b0map_hz_degre" not in f:
+            raise ValueError(
+                f"{fn_b0map} has no 'b0map_hz_degre' key -- this file must be "
+                "produced by run_b0map.py's full driver (which renames "
+                "b0map.jl's raw 'b0map_hz'/'mask' keys to 'b0map_hz_degre'/"
+                "'mask_degre'), not by running b0map.jl directly."
+            )
         finit_hz = f["finit_hz"][()]
         b0map_hz_degre = f["b0map_hz_degre"][()]
         mask_degre = f["mask_degre"][()]

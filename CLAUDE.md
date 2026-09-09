@@ -67,7 +67,7 @@ encode the intended k-space locations.
 ### Data flow
 
 ```
-params.py (load_params())  ──►  gen_sampling_masks(R, params)  ──►  omegas (Ny×Nz×Nframes bool)
+params.py (load_params())  ──►  resolve_omegas(params)  ──►  omegas (Ny×Nz×Nframes bool)
                                                                         │
                                                                         ▼
                                                           sequences/ArbEPI.generate_arbepi(omegas, params)
@@ -566,8 +566,10 @@ no longer called them, for the same reason.
   branch for it. The same module's `resolve_custom_omegas` (load + validate
   + broadcast, independently unit-tested in `tests/test_custom_mask.py`
   without building a full sequence) is wired into the top-level flow via
-  `params.py`'s `custom_mask_path`/`custom_mask_key`/`custom_omegas`
-  fields: when `custom_mask_path` is set, `load_params()` calls
+  `params.py`'s `custom_mask_path`/`custom_omegas` dataclass fields (plus a
+  `custom_mask_key` local variable inside `load_params()` that selects the
+  `.mat` variable name, not itself stored on `Params`): when
+  `custom_mask_path` is set, `load_params()` calls
   `resolve_custom_omegas` itself (broadcasting a static 2D mask across
   `Nframes`, or requiring a 3D mask's own frame count to match `Nframes`,
   computed from `duration`/`volume_tr`/`discard_duration` -- hoisted

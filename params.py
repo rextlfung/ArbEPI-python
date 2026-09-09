@@ -46,7 +46,6 @@ class Params:
 
     # EPI spatial parameters
     res: np.ndarray  # m, [x, y, z]
-    N: np.ndarray  # acquisition tensor size [Nx, Ny, Nz]
     fov: np.ndarray  # m
     Nx: int
     Ny: int
@@ -83,9 +82,7 @@ class Params:
     TE: float  # s
     volume_tr: float  # s
     TR: float  # s
-    T1: float  # s
 
-    duration: float  # s
     discard_duration: float  # s
     Nframes: int
     Ndummyshots: int
@@ -143,9 +140,7 @@ class Params:
     fatsat: FatsatParams
 
     # deGRE (dual-echo GRE) parameters
-    res_degre: np.ndarray
     fov_degre: np.ndarray
-    N_degre: np.ndarray
     Nx_degre: int
     Ny_degre: int
     Nz_degre: int
@@ -397,7 +392,6 @@ def load_params(output_dir: str = 'output') -> Params:
         ro_slew_fall=ro_slew_fall,
         blip_slew=blip_slew,
         res=res,
-        N=N,
         fov=fov,
         Nx=Nx,
         Ny=Ny,
@@ -408,8 +402,6 @@ def load_params(output_dir: str = 'output') -> Params:
         TE=TE,
         volume_tr=volume_tr,
         TR=TR,
-        T1=T1,
-        duration=duration,
         discard_duration=discard_duration,
         Nframes=Nframes,
         Ndummyshots=Ndummyshots,
@@ -421,9 +413,7 @@ def load_params(output_dir: str = 'output') -> Params:
         fat_chem_shift=fat_chem_shift,
         fat_offres_freq=fat_offres_freq,
         fatsat=fatsat,
-        res_degre=res_degre,
         fov_degre=fov_degre,
-        N_degre=N_degre,
         Nx_degre=Nx_degre,
         Ny_degre=Ny_degre,
         Nz_degre=Nz_degre,

@@ -37,10 +37,12 @@ def generate_noise(params: Params, seqname: str = 'noise') -> pp.Sequence:
     Nsamples_noise = 20 * params.Ncoils**2
     Nreps = math.ceil(Nsamples_noise / rg.Nfid)
 
-    # Delay to pad each block to EPI readout duration
-    adc_dead_time = sys.adc_dead_time
-    adc_total_dur = adc_dead_time + pp.calc_duration(rg.adc)
-    pad_duration = pp.calc_duration(rg.gro) - adc_total_dur
+    # Delay to pad each block to EPI readout duration. rg.adc is built with
+    # dead_time=0 (see lib/make_readout_grads.py), so its played duration
+    # never includes sys.adc_dead_time -- don't subtract that separately
+    # here, or pad_duration comes out sys.adc_dead_time short (see
+    # docs/review-findings.md item 150).
+    pad_duration = pp.calc_duration(rg.gro) - pp.calc_duration(rg.adc)
 
     delay_block = pp.make_delay(pad_duration) if pad_duration > 1e-9 else None
 

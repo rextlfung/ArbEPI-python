@@ -10,6 +10,7 @@ closes that gap for both the encoded (ArbEPI) and zeroed (EPIcal) cases.
 from dataclasses import replace
 
 import numpy as np
+import pypulseq as pp
 import pytest
 
 from lib.readout_from_params import make_readout_grads_from_params
@@ -156,6 +157,31 @@ def test_noise_nfid_matches_arbepi(tmp_path):
 
     noise_seq = generate_noise(p, seqname='xcheck_noise')
     assert noise_seq.get_block(1).adc.num_samples == rg.Nfid
+
+
+def test_noise_repetition_duration_matches_epi_readout(tmp_path):
+    """Regression test for docs/review-findings.md item 150: noise.py's
+    pad_duration computation used to double-subtract sys.adc_dead_time
+    (once via rg.adc's own -- always zero -- dead_time, once again
+    explicitly), making each [ADC block + delay block] repetition exactly
+    sys.adc_dead_time shorter than the EPI readout (rg.gro) duration it's
+    meant to duty-cycle-match. Confirms the real built noise.seq's first
+    repetition sums to exactly rg.gro's duration."""
+    import hdf5storage
+
+    p = _small_params(tmp_path)
+    omegas = resolve_omegas(p)
+    generate_arbepi(omegas, p, seqname='xcheck')
+
+    schedules = hdf5storage.loadmat(str(tmp_path / 'scan_info.mat'))['schedules']
+    max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
+    max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
+    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, p)
+
+    noise_seq = generate_noise(p, seqname='xcheck_noise')
+    adc_dur = pp.calc_duration(noise_seq.get_block(1))
+    delay_dur = pp.calc_duration(noise_seq.get_block(2))
+    assert adc_dur + delay_dur == pytest.approx(pp.calc_duration(rg.gro))
 
 
 def test_arbepi_kx_coverage_and_nyquist(tmp_path):

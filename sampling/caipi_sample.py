@@ -10,8 +10,9 @@ import numpy as np
 
 
 def balanced_factors(N: Sequence[int], R: int) -> tuple[int, int]:
-    """Integer factorization Ry * Rz = R, chosen to best match the
-    FOV-weighted ratio Ry/Rz = Ny/Nz, not the most-square split.
+    """Integer factorization Ry * Rz = R, chosen among the pairs that evenly
+    divide (Ny, Nz) to best match the FOV-weighted ratio Ry/Rz = Ny/Nz, not
+    the most-square split.
 
     For an axis with FOV and local reduction factor R_axis, the achieved
     k-space sample spacing is R_axis/FOV, so the resulting image-domain
@@ -23,27 +24,41 @@ def balanced_factors(N: Sequence[int], R: int) -> tuple[int, int]:
     resolution assumed), which is also exactly what `sampling/pd_sample.py`'s
     aspect-matched exclusion ellipse already does continuously -- this
     picks the closest achievable *integer* factor pair to that same ratio,
-    since CAIPI's regular decimation can't do fractional Ry/Rz. At this
-    repo's real (Ny, Nz, R) = (240, 45, 9), that's (Ry, Rz) = (9, 1), not
-    the (3, 3) a most-square split would give -- worst-case aliasing
-    period improves from 40.5/3 = 13.5mm to 40.5/1 = 40.5mm on the
-    small-FOV axis, at the cost of 216/9 = 24mm (still better than
-    the equal-period ideal ~31mm, but far better than the 13.5mm floor
-    the naive split leaves on the axis that can least afford it)."""
+    since CAIPI's regular decimation can't do fractional Ry/Rz.
+
+    The search is restricted to (Ry, Rz) pairs that evenly divide (Ny, Nz):
+    `caipi_sample`'s actual sample count is ceil(Ny/Ry)*ceil(Nz/Rz), which
+    only equals the assumed Ny*Nz/R -- the invariant callers like
+    `lib/mask2epi.py` and `ticaipi_sample`'s own coverage guarantee both
+    depend on -- when Ry | Ny and Rz | Nz exactly. Picking a
+    better-FOV-matched pair that *doesn't* divide evenly (an earlier version
+    of this function did) silently breaks that invariant instead of merely
+    giving a suboptimal split. At (Ny, Nz, R) = (240, 60, 4) (this repo's
+    default `res`), the dividing candidates are (1,4)/(2,2)/(4,1); the
+    FOV-weighted pick among them is (4, 1) (exact ratio match, score 0),
+    not the most-square (2, 2) -- worst-case aliasing period improves from
+    54/2 = 27mm (unequal: 216/2 = 108mm on the other axis) to 54/1 = 54mm
+    on both axes exactly, hitting the equal-period ideal precisely. Raises
+    if no factor pair of R evenly divides (Ny, Nz) at all -- this can
+    happen (e.g. balanced_factors([64, 64], 9): none of (1,9)/(3,3)/(9,1)
+    divide 64) -- callers needing regular CAIPI decimation have no valid
+    split to fall back to in that case."""
     Ny, Nz = N[0], N[1]
     target_log_ratio = math.log(Ny / Nz)
 
-    best = (1, R)
-    best_score = math.inf
-    for Ry in range(1, R + 1):
-        if R % Ry != 0:
-            continue
-        Rz = R // Ry
-        score = abs(math.log(Ry / Rz) - target_log_ratio)
-        if score < best_score:
-            best_score = score
-            best = (Ry, Rz)
-    return best
+    dividing = [
+        (Ry, R // Ry)
+        for Ry in range(1, R + 1)
+        if R % Ry == 0 and Ny % Ry == 0 and Nz % (R // Ry) == 0
+    ]
+    if not dividing:
+        raise ValueError(
+            f'balanced_factors: no factor pair (Ry, Rz) of R={R} evenly '
+            f'divides (Ny, Nz)=({Ny}, {Nz}) -- regular CAIPI decimation '
+            'requires an exact divisor pair. Choose a different R, '
+            'resolution, or sampling_method.'
+        )
+    return min(dividing, key=lambda rr: abs(math.log(rr[0] / rr[1]) - target_log_ratio))
 
 
 def caipi_sample(N: Sequence[int], R: int, shift_offset: int = 0) -> np.ndarray:

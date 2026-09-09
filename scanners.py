@@ -36,8 +36,6 @@ class ScannerSpec:
     max_grad: float  # mT/m
     max_slew: float  # T/m/s
     b1_max: float  # Gauss
-    psd_rf_wait: float  # s, RF-gradient delay
-    psd_grd_wait: float  # s, ADC-gradient delay
     pislquant: int  # ADC events at scan start for receive gain calibration
     ge_coil: str  # coil code for pge2.opts / check_grad_acoustics / ge/acoustics.py
     chronaxie: float  # s, PNS SAFE-model nerve impulse response time constant
@@ -59,15 +57,12 @@ class ScannerSpec:
 SCANNERS: dict[str, ScannerSpec] = {
     # Values from ../PulCeq/matlab/+pge2/opts.m's 'xrm' table row and
     # ../ArbEPI/params.m (the original MATLAB repo's only target scanner).
-    # psd_rf_wait/psd_grd_wait/b1_max/pislquant confirmed MR750-specific
-    # in ../ArbEPI/CLAUDE.md.
+    # b1_max/pislquant confirmed MR750-specific in ../ArbEPI/CLAUDE.md.
     'GE_MR750': ScannerSpec(
         name='GE Discovery MR750 (XRM gradient coil)',
         max_grad=50,
         max_slew=200,
         b1_max=0.25,
-        psd_rf_wait=150e-6,
-        psd_grd_wait=120e-6,
         pislquant=10,
         ge_coil='xrm',
         chronaxie=334e-6,
@@ -84,17 +79,14 @@ SCANNERS: dict[str, ScannerSpec] = {
     ),
     # max_grad/max_slew/chronaxie/rheobase/alpha from
     # ../PulCeq/matlab/+pge2/opts.m's 'hrmbuhp' table row.
-    # psd_rf_wait/psd_grd_wait/b1_max/pislquant are UNVERIFIED placeholders
-    # copied from GE_MR750 -- confirm against the scanner's
-    # GRSubsystemHWO.xml or Scandbdt.cfg (see opts.m's header comment) and
-    # correct here.
+    # b1_max/pislquant are UNVERIFIED placeholders copied from GE_MR750 --
+    # confirm against the scanner's GRSubsystemHWO.xml or Scandbdt.cfg (see
+    # opts.m's header comment) and correct here.
     'GE_UHP': ScannerSpec(
         name='GE Ultra-High Performance (HRMB gradient coil)',
         max_grad=100,
         max_slew=200,
         b1_max=0.25,
-        psd_rf_wait=150e-6,
-        psd_grd_wait=120e-6,
         pislquant=10,
         ge_coil='hrmbuhp',
         chronaxie=359e-6,

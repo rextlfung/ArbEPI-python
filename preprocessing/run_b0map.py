@@ -96,6 +96,12 @@ def run_b0map(cfg: PreprocessingConfig) -> None:
                   'falling back to no smap.')
             smaps_path = ''
 
+        # Whole per-sequence body wrapped in one try/except, matching the
+        # sibling Stage-2 drivers (run_rss.py/run_cg_sense.py/
+        # run_recon_sigpy.py): a failure -- in the julia subprocess itself
+        # or in the post-processing below (resize/h5-write/NIfTI-export) --
+        # must not abort field-map estimation for the *remaining* sequences
+        # in a multi-sequence batch (docs/review-findings.md item 151).
         try:
             subprocess.run(
                 [
@@ -105,54 +111,55 @@ def run_b0map(cfg: PreprocessingConfig) -> None:
                 ],
                 check=True,
             )
-        except subprocess.CalledProcessError as e:  # mirrors the sibling batch drivers' try/catch
+
+            with h5py.File(output_path, 'r') as f:
+                b0map_hz_degre = f['b0map_hz'][()]
+                mask_degre = f['mask'][()].astype(bool)
+
+            # b0map.jl (above) estimates on the deGRE grid -- that's where
+            # the dual-echo images/phase data actually live -- but a
+            # B0-corrected EPI reconstruction needs the field map on the
+            # *EPI* grid. Zero outside the fitted mask before resizing
+            # (mirrors process_smaps' own mask-before-crop/resize step in
+            # smaps.py) so cubic-spline interpolation doesn't blend in
+            # MRIFieldmaps' embed() fill value for unfit background voxels
+            # near the mask boundary; the mask itself is resized with
+            # order=0 (nearest) so no fractional/invented mask values
+            # appear. See grid_resize.py for the shared crop+resize routine
+            # (same one process_smaps uses for coil maps).
+            n_target = (seq_params.Nx, seq_params.Ny, seq_params.Nz)
+            b0map_hz = resize_to_epi_grid(
+                b0map_hz_degre * mask_degre, seq_params.fov_degre, seq_params.fov,
+                n_target, order=3,
+            ).astype(np.float32)
+            mask = resize_to_epi_grid(
+                mask_degre, seq_params.fov_degre, seq_params.fov, n_target, order=0,
+            ).astype(bool)
+
+            # Keep the native deGRE-grid arrays too (diagnostic/QC use, e.g.
+            # comparing against the GRE magnitude image, which lives on that
+            # grid) under an explicit '_degre' suffix; 'b0map_hz'/'mask'
+            # become the EPI-grid versions -- the primary consumable,
+            # matching smaps_<seqname>_sigpy.h5's 'smaps_raw' (small grid)
+            # vs. 'smaps' (EPI grid) convention. finit_hz stays deGRE-grid
+            # only -- it's a pure NCG-initialization diagnostic, never
+            # consumed downstream.
+            with h5py.File(output_path, 'a') as f:
+                f.move('b0map_hz', 'b0map_hz_degre')
+                f.move('mask', 'mask_degre')
+                f.create_dataset('b0map_hz', data=b0map_hz)
+                f.create_dataset('mask', data=mask)
+
+            # NIfTI export for viewing in FSLeyes/etc., now on the EPI
+            # grid/fov like every other NIfTI this pipeline writes (see
+            # nifti_io module docstring).
+            save_recon_nifti(
+                output_path[: -len('.h5')], b0map_hz,
+                fov=seq_params.fov, seqname=seqname,
+                mask_threshold=cfg.b0map_mask_thresh,
+            )
+        except Exception as e:  # noqa: BLE001 -- mirrors run_rss.m's per-sequence try/catch
             print(f"ERROR [{seqname}]: {e}\nSkipping...")
-            continue
-
-        with h5py.File(output_path, 'r') as f:
-            b0map_hz_degre = f['b0map_hz'][()]
-            mask_degre = f['mask'][()].astype(bool)
-
-        # b0map.jl (above) estimates on the deGRE grid -- that's where the
-        # dual-echo images/phase data actually live -- but a B0-corrected
-        # EPI reconstruction needs the field map on the *EPI* grid. Zero
-        # outside the fitted mask before resizing (mirrors process_smaps'
-        # own mask-before-crop/resize step in smaps.py) so cubic-spline
-        # interpolation doesn't blend in MRIFieldmaps' embed() fill value
-        # for unfit background voxels near the mask boundary; the mask
-        # itself is resized with order=0 (nearest) so no fractional/
-        # invented mask values appear. See grid_resize.py for the shared
-        # crop+resize routine (same one process_smaps uses for coil maps).
-        n_target = (seq_params.Nx, seq_params.Ny, seq_params.Nz)
-        b0map_hz = resize_to_epi_grid(
-            b0map_hz_degre * mask_degre, seq_params.fov_degre, seq_params.fov,
-            n_target, order=3,
-        ).astype(np.float32)
-        mask = resize_to_epi_grid(
-            mask_degre, seq_params.fov_degre, seq_params.fov, n_target, order=0,
-        ).astype(bool)
-
-        # Keep the native deGRE-grid arrays too (diagnostic/QC use, e.g.
-        # comparing against the GRE magnitude image, which lives on that
-        # grid) under an explicit '_degre' suffix; 'b0map_hz'/'mask' become
-        # the EPI-grid versions -- the primary consumable, matching
-        # smaps_<seqname>_sigpy.h5's 'smaps_raw' (small grid) vs. 'smaps'
-        # (EPI grid) convention. finit_hz stays deGRE-grid only -- it's a
-        # pure NCG-initialization diagnostic, never consumed downstream.
-        with h5py.File(output_path, 'a') as f:
-            f.move('b0map_hz', 'b0map_hz_degre')
-            f.move('mask', 'mask_degre')
-            f.create_dataset('b0map_hz', data=b0map_hz)
-            f.create_dataset('mask', data=mask)
-
-        # NIfTI export for viewing in FSLeyes/etc., now on the EPI grid/fov
-        # like every other NIfTI this pipeline writes (see nifti_io module
-        # docstring).
-        save_recon_nifti(
-            output_path[: -len('.h5')], b0map_hz,
-            fov=seq_params.fov, seqname=seqname,
-            mask_threshold=cfg.b0map_mask_thresh,
-        )
     print('\nBatch complete.')
 
 

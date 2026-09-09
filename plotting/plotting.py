@@ -227,6 +227,21 @@ def plot_psf(omega: np.ndarray, params: Params, frame_idx: int = 0) -> matplotli
     return fig
 
 
+def nominal_te_value(per_echo_values, ETL: int):
+    """Interpolates a length-ETL array of per-echo values at the continuous
+    nominal-TE echo index ETL/2 - 0.5 -- lib/calc_te_tr_delays.py's own
+    min_te definition of the nominal TE echo. Exact index ETL//2 for odd
+    ETL; average of ETL//2-1 and ETL//2 for even ETL (the shipped default,
+    ETL=60). Shared by plot_one_tr below and
+    plotting/compare_readout_pns.py's te_realized, which used to embody two
+    different, individually half-wrong (correct only for one parity)
+    conventions for this same quantity -- see docs/review-findings.md
+    items 127/149."""
+    if ETL % 2 == 0:
+        return 0.5 * (per_echo_values[ETL // 2 - 1] + per_echo_values[ETL // 2])
+    return per_echo_values[ETL // 2]
+
+
 def plot_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> matplotlib.figure.Figure:
     """Single-TR snippet of an assembled sequence via pypulseq's own
     `Sequence.plot()`. Every shot loop iteration in generate_arbepi()
@@ -241,12 +256,13 @@ def plot_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> matplo
     pypulseq's own plotting code.
 
     Marks TE with a vertical dashed line across every row, at the ADC
-    sample time of this shot's k-space-center echo (index (ETL - 1) // 2 --
-    see mask2epi.py's module docstring / CLAUDE.md for why that echo index
-    is the nominal-TE echo). Read directly off the built sequence's ADC
-    timestamps rather than re-deriving calc_te_tr_delays.py's min_te
-    formula, so the line stays correct even if TE padding was skipped
-    (prescribed TE below the achievable minimum)."""
+    sample time of the continuous nominal-TE echo index ETL/2 - 0.5 --
+    lib/calc_te_tr_delays.py's own min_te definition (see
+    `nominal_te_value` above; parity-aware, not a single fixed echo index).
+    Read directly off the built sequence's ADC timestamps rather than
+    re-deriving calc_te_tr_delays.py's min_te formula, so the line stays
+    correct even if TE padding was skipped (prescribed TE below the
+    achievable minimum)."""
     t0 = shot_index * params.TR
     splot = seq.plot(time_range=(t0, t0 + params.TR), stacked=True, plot_now=False, time_disp='ms')
     fig = splot.fig1
@@ -254,8 +270,8 @@ def plot_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> matplo
 
     t_adc, _ = seq.adc_times(time_range=(t0, t0 + params.TR))
     n_fid = len(t_adc) // params.ETL
-    te_echo = (params.ETL - 1) // 2
-    t_te_ms = t_adc[te_echo * n_fid + n_fid // 2] * 1e3
+    echo_centers = t_adc[n_fid // 2 :: n_fid]
+    t_te_ms = nominal_te_value(echo_centers, params.ETL) * 1e3
     for ax in splot.ax1:
         ax.axvline(t_te_ms, color='k', linestyle='--', linewidth=1, zorder=10)
     splot.ax1[0].text(
