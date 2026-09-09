@@ -15,6 +15,16 @@ def _r(fid: BinaryIO, fmt: str):
     return values[0] if len(values) == 1 else values
 
 
+def _read_floats(fid: BinaryIO, n: int) -> tuple:
+    """Reads n little-endian floats, always as a length-n tuple even when
+    n == 1 -- unlike _r above, which collapses any length-1 result to a
+    bare scalar (fine for genuinely scalar fields, wrong for a caller that
+    expects an indexable array of samples). Used for the arbitrary-
+    waveform/corner-point reads below, none of which are on the .pge write
+    path (validation-only tooling; see module docstring)."""
+    return struct.unpack(f'<{n}f', fid.read(4 * n))
+
+
 def read_pge(fn: str) -> dict:
     with open(fn, 'rb') as fid:
         sentinel = _r(fid, 'h')
@@ -97,12 +107,12 @@ def _read_grad(fid: BinaryIO):
     n_samples = _r(fid, 'i')
     raster = _r(fid, 'f')
     if flag == 2:
-        magnitude = _r(fid, f'{n_samples}f')
+        magnitude = _read_floats(fid, n_samples)
         return dict(type='raster', delay=delay, n_samples=n_samples,
                     raster=raster, magnitude=magnitude)
     else:  # flag == 3, corner points
-        tt = _r(fid, f'{n_samples}f')
-        magnitude = _r(fid, f'{n_samples}f')
+        tt = _read_floats(fid, n_samples)
+        magnitude = _read_floats(fid, n_samples)
         return dict(type='corner', delay=delay, n_samples=n_samples,
                     tt=tt, magnitude=magnitude)
 
@@ -144,9 +154,9 @@ def _read_arbitrary(fid: BinaryIO, complexflag: bool, regular_raster: bool):
     raster = _r(fid, 'f')
     time = None
     if not regular_raster:
-        time = _r(fid, f'{n_samples}f')
-    magnitude = _r(fid, f'{n_samples}f')
+        time = _read_floats(fid, n_samples)
+    magnitude = _read_floats(fid, n_samples)
     phase = None
     if complexflag:
-        phase = _r(fid, f'{n_samples}f')
+        phase = _read_floats(fid, n_samples)
     return n_samples, raster, time, magnitude, phase
