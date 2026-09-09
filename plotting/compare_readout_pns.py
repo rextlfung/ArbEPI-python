@@ -38,8 +38,8 @@ from ge.pns import pns
 from lib.mask2epi import max_blip_steps
 from lib.readout_from_params import make_readout_grads_from_params
 from params import load_params
-from plotting.plotting import plot_pns_one_tr
-from sampling.gen_sampling_masks import gen_sampling_masks
+from plotting.plotting import nominal_te_value, plot_pns_one_tr
+from sampling.gen_sampling_masks import resolve_omegas
 from sequences.ArbEPI import _compute_schedules, generate_arbepi
 
 
@@ -60,9 +60,12 @@ def _build(name, p, omegas):
 
     # Realized TE = the nominal echo's saved acquisition time (equals the
     # prescription when achievable, this variant's own min TE otherwise).
+    # nominal_te_value is parity-aware (lib/calc_te_tr_delays.py's true
+    # continuous nominal-TE index is ETL/2 - 0.5, not a fixed whole-echo
+    # formula) -- see docs/review-findings.md items 127/149.
     import hdf5storage
     et = hdf5storage.loadmat(os.path.join(outdir, 'scan_info.mat'))['schedules'][0, 0, :, 2]
-    te_realized = 0.5 * (et[p.ETL // 2 - 1] + et[p.ETL // 2])
+    te_realized = nominal_te_value(et, p.ETL)
 
     return dict(name=name, params=p, seq=seq, rg=rg, report=report,
                 te_realized=te_realized, te_warned=te_warned)
@@ -133,7 +136,9 @@ def main():
     args = parser.parse_args()
 
     p0 = load_params()
-    assert p0.seed is not None, 'set params.seed so both variants share one mask'
+    assert p0.seed is not None or p0.custom_omegas is not None, (
+        'set params.seed (or params.custom_mask_path) so both variants share one mask'
+    )
     compare_dir = os.path.join(p0.output_dir, 'compare_pope')
     os.makedirs(compare_dir, exist_ok=True)
     p0 = replace(p0, output_dir=compare_dir)
@@ -147,7 +152,7 @@ def main():
         p0 = replace(p0, TE=args.te)
 
     print('generating sampling masks (shared by both variants)...')
-    omegas = gen_sampling_masks(p0.R, p0, rng=np.random.default_rng(p0.seed))
+    omegas = resolve_omegas(p0, rng=np.random.default_rng(p0.seed))
 
     p_sym = replace(p0, ro_slew_rise=p0.slew_derate, ro_slew_fall=p0.slew_derate,
                     blip_slew=p0.slew_derate)
