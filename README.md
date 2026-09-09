@@ -20,6 +20,7 @@ Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](../pypulseq
    | `volume_tr` | Time to acquire one full 3D volume, s | `2 s` |
    | `duration` | Total scan duration across all frames, s | `60 s` |
    | `T1` | Tissue T1, s (sets the Ernst-angle flip angle) | `1.3 s` |
+   | `discard_duration` | Frames to discard at the start of the scan (steady-state warm-up), s | `0` |
    | `ETL` | Echo train length (echoes per shot) | `60` |
    | `custom_mask_path` | Path to your own `(ky, kz[, t])` sampling mask `.mat` file, or `None` to use `sampling_method` below (see [Using custom ky-kz-t sampling masks](#using-custom-ky-kz-t-sampling-masks)) | `None` |
    | `R` | Acceleration factor on the `(ky, kz)` sampling pattern (ignored if `custom_mask_path` is set) | `9` |
