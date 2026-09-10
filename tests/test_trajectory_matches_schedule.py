@@ -221,6 +221,62 @@ def test_arbepi_kx_coverage_and_nyquist(tmp_path):
     np.testing.assert_allclose(kx_even, -kx_odd, atol=1e-6)
 
 
+def test_arbepi_kx_oversamples_when_nyquist_rate_exceeds_max_grad(tmp_path):
+    """lib/make_readout_grads.py's `A = min(deltak[0]/dwell, sys.max_grad)`
+    keeps dwell fixed regardless of the target resolution/FOV: it only
+    throttles the readout flat-top amplitude down to the resolution-driven
+    exact-Nyquist rate (deltak[0]/dwell) when that's achievable in
+    hardware, and clamps to sys.max_grad -- oversampling kx, since dwell
+    doesn't change -- as a fallback when it isn't (explicit user decision:
+    the exact-Nyquist throttle stays for configs where it's achievable,
+    rather than always running at hardware max). At this repo's params
+    (GE_MR750, default Nx/fov), the fallback IS the live branch:
+    deltak[0]/dwell needs more amplitude than max_grad allows. This is a
+    regression test for that specific branch: test_arbepi_kx_coverage_and_
+    nyquist only asserts an upper bound on kx spacing (<= deltak), which
+    would also hold at exact Nyquist -- it wouldn't catch a change that
+    silently stopped oversampling. This test also confirms
+    preprocessing's rampsamp2cart-based regridding is exercised against
+    this oversampled trajectory already, via
+    test_rampsampepi2cart_recovers_object_under_real_pope_readout_trajectory
+    in tests/test_preprocessing_epi_gridding.py, which builds a sequence
+    with these same params and successfully regrids the resulting
+    (oversampled, Nfid > what exact-Nyquist would need) kxo/kxe back onto
+    the Nx-sized target grid."""
+    p = _small_params(tmp_path)
+    omegas = resolve_omegas(p)
+    seq = generate_arbepi(omegas, p, seqname='xcheck')
+
+    schedules, _ = _compute_schedules(
+        omegas, p.ETL, p.Nshots, p.epi_trajectory, deltak=(1 / p.fov[1], 1 / p.fov[2]),
+    )
+    max_ky_step = np.max(np.abs(np.diff(schedules[..., 0], axis=2)))
+    max_kz_step = np.max(np.abs(np.diff(schedules[..., 1], axis=2)))
+    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, p)
+
+    deltak_x = rg.deltak[0]
+    nyquist_rate = deltak_x / p.dwell
+    assert nyquist_rate > p.sys.max_grad, (
+        'test params no longer hit the hardware-clamped branch -- pick params '
+        'where deltak[0]/dwell exceeds max_grad to keep this test meaningful'
+    )
+
+    realized_amplitude = np.max(np.abs(rg.gro.waveform))
+    assert realized_amplitude == pytest.approx(p.sys.max_grad, rel=1e-6), (
+        'readout flat top should be clamped to hardware max_grad, not throttled '
+        'down to the resolution-driven exact-Nyquist rate'
+    )
+
+    k_traj_adc, *_ = seq.calculate_kspace()
+    kx = k_traj_adc[0, : rg.Nfid]
+    typical_step = np.median(np.abs(np.diff(kx)))
+    assert typical_step < deltak_x * 0.999, (
+        f'expected kx oversampled (median step {typical_step:.4f} denser than '
+        f'Nyquist step {deltak_x:.4f}); dwell should stay fixed regardless of '
+        'resolution/FOV while the readout is hardware-clamped'
+    )
+
+
 def test_arbepi_schedule_echo_times_match_measured_kx_zero_crossings(tmp_path):
     """Ground-truth check of schedules[..., 2] (per-echo acquisition time,
     used by a future B0-correction consumer): the saved echo times must
