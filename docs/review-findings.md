@@ -84,24 +84,59 @@ scrutinize the recently-changed, least-reviewed code first; every new
 finding below was independently re-verified against the live tree (not
 just trusted from the subagent's report) before being recorded here,
 including a from-scratch reproduction of item 147's `caipi_sample`
-regression and item 150's `noise.py` timing shortfall.
+regression and item 150's `noise.py` timing shortfall. Items 160-165 are
+new findings from a later pass (2026-09-10, against `dac8252`) that also
+re-verified every item 107-145 against the current tree: `git diff
+eab904b HEAD --stat` shows `ge/read_pge.py`, `ge/seq2ceq.py`, `params.py`,
+`plotting/compare_readout_pns.py`, `plotting/plotting.py`,
+`preprocessing/gre_diagnostics.py`, `preprocessing/run_b0map.py`,
+`sampling/caipi_sample.py`, `sampling/ticaipi_sample.py`, `scanners.py`,
+`sequences/noise.py`, and several test files changed in that span (items
+127/147-159's fixes), alongside this doc itself -- of the still-open
+107-145 items, all were confirmed still open with unchanged substance
+except: item 116 (closed, superseded -- item 147's `balanced_factors`
+restriction made `ticaipi_sample`'s own divisibility guard unreachable via
+the public API, so the regression test it asked for can no longer
+exercise that code path; the equivalent invariant is already covered by
+item 147's own `test_balanced_factors_raises_when_no_factor_pair_divides`),
+item 143 (closed -- its own baseline-correction action was already
+complete when logged, and this pass confirmed no other file, including
+CLAUDE.md, carries the misattributed claim it warned a future reader
+about), item 121 (still open, citation updated -- `plot_pns_one_tr` now
+spans `plotting.py:286-342` after `plot_one_tr`'s item 127/149 fix added
+lines above it), item 130 (still open, citation updated --
+`run_b0map.py`'s per-sequence try/except now spans lines 105-162 after
+item 151's fix widened it), and item 133 (still open, citation updated --
+`gre_diagnostics.py`'s `fn_gre` path line moved from `:34` to `:39` after
+item 152's docstring expansion). This pass split the review across four
+parallel subagents with the same scope split as the previous pass
+(`sampling/`+`plotting/`; `ge/`+`lib/`+`sequences/`+`params.py`/`main.py`/
+`scanners.py`+docs; `preprocessing/`; `recon/`), each re-verifying its
+assigned open items against the live tree (not just re-reading this file)
+before reporting, and independently hunting for new findings in its
+scope; six survived independent re-verification and are recorded below,
+the rest (several test-coverage-gap candidates that overlapped existing
+items, and one low-confidence/unmeasured hypothesis about
+`run_b0_recon.py` rebuilding its encoding operator twice) were judged
+either duplicates or not solid enough to record.
 
-## Current baseline (2026-09-09, against `eab904b`)
+## Current baseline (2026-09-10, against `dac8252`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
   errors**, all `E501` -- unchanged from the previous pass.
-- `uv run pytest` (plain main venv): **135 passed, 15 skipped**, re-run
-  after `rm -rf output` -- the +9 passes vs. the previous pass's 126 are
-  new tests added in the intervening commits (`tests/test_custom_mask.py`,
-  new `tests/test_caipi_sample.py` cases, and
-  `tests/test_preprocessing_epi_gridding.py`'s new real-POPE-trajectory
-  case), not a change in skip composition. With `--extra preprocessing`
-  also synced: **165 passed, 11 skipped** (re-measured fresh this pass,
-  `rm -rf output` first; same +10 delta from the previous pass's 155, same
-  cause). Skip breakdown (`uv run pytest -q -rs`, matching item 143's
-  corrected framing) unchanged in composition: **6** `could not import
-  'torch'` (all six `tests/test_recon_*.py` files, the `recon` extra) and
-  **5** `julia executable not found on PATH` (all in
+- `uv run pytest` (plain main venv): **141 passed, 15 skipped**, re-run
+  after `rm -rf output` -- the +6 passes vs. the previous pass's 135 are
+  new tests added by the intervening items-127/147-159 fixes
+  (`test_balanced_factors_raises_when_no_factor_pair_divides` and the
+  shipped-default-config cases in `tests/test_caipi_sample.py`/
+  `tests/test_ticaipi_sample.py`, `test_noise_repetition_duration_matches_epi_readout`,
+  and `tests/test_plotting.py`'s two new `nominal_te_value` cases), not a
+  change in skip composition. With `--extra preprocessing` also synced:
+  **171 passed, 11 skipped** (re-measured fresh this pass, `rm -rf output`
+  first; same +6 delta from the previous pass's 165, same cause). Skip
+  breakdown (`uv run pytest -q -rs`) unchanged in composition: **6** `could
+  not import 'torch'` (all six `tests/test_recon_*.py` files, the `recon`
+  extra) and **5** `julia executable not found on PATH` (all in
   `tests/test_preprocessing_run_b0map.py`); **zero** GERecon-gated. `recon`
   extras re-synced fresh this pass (`uv sync --extra recon` succeeds:
   `torch==2.13.0+cu130` CPU-only, `mirtorch==0.3.1`) -- **`tests/test_recon_*.py`:
@@ -524,7 +559,9 @@ regression and item 150's `noise.py` timing shortfall.
   history before the window start, contradicting its own docstring's claim
   of exact parity with `check_seq_feasibility`'s PNS number for any
   `shot_index > 0`.** [verify] `plot_pns_one_tr(seq, params, shot_index)`
-  (`plotting.py:270-326`) calls `sample_gradients_tesla_per_m(seq,
+  (`plotting.py:286-342` -- shifted down from `:270-326` by items 127/149's
+  `nominal_te_value`/`plot_one_tr` additions above it in the same file;
+  this function itself is untouched) calls `sample_gradients_tesla_per_m(seq,
   time_range=(t0, t0 + params.TR))` for `t0 = shot_index * params.TR`, then
   feeds that window straight into `ge/pns.py`'s `pns()`. `pns()` computes
   its result via `fftconvolve(s[ch], f)` on `s = np.diff(g, axis=1)/dt`,
@@ -1342,7 +1379,9 @@ regression and item 150's `noise.py` timing shortfall.
   `<datdir>/recon/<seqname>_gre.h5`'s path is independently constructed
   via `os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')` (or
   the equivalent with a bare `seqname`) in `preprocess.py:310`,
-  `smaps.py:157`, `run_b0map.py:69`, and `gre_diagnostics.py:34`;
+  `smaps.py:157`, `run_b0map.py:69`, and `gre_diagnostics.py:39`
+  (shifted down from `:34` by item 152's docstring/guard-clause additions;
+  the duplicated path itself is untouched);
   `<datdir>/recon/smaps_<seqname>_sigpy.h5`'s path independently in
   `preprocess.py:324`, `smaps.py:155`, and `run_b0map.py:91`. `SeqPaths`
   (`preprocessing/config.py`) already centralizes every *other*
@@ -1460,6 +1499,26 @@ regression and item 150's `noise.py` timing shortfall.
   (`custom_mask_path`/`custom_omegas`) from the `load_params()`-local
   `custom_mask_key` variable, instead of listing all three as dataclass
   fields.
+- [ ] **160. `sampling/caipi_sample.py`'s `balanced_factors` docstring (and
+  `tests/test_caipi_sample.py`'s matching comment) mislabels a hypothetical
+  example as "this repo's default."** [measured, low severity] Both
+  `sampling/caipi_sample.py:36-37` and `tests/test_caipi_sample.py:35` say
+  "At (Ny, Nz, R) = (240, 60, 4) (this repo's default `res`)...". The
+  repo's actual shipped default is `(Ny, Nz, R) = (240, 45, 9)`
+  (`params.py`: `N = [240, 240, 45]`, `R = 9`) -- `(240, 60, 4)` appears
+  nowhere else in the codebase; it's a synthetic example chosen, per item
+  147's own resolution note, specifically because it "does survive the
+  restriction and still demonstrates non-square reweighting" (unlike the
+  real `(240, 45, 9)`, which collapses to the less-illustrative `(3, 3)`).
+  The parenthetical "(this repo's default `res`)" is presumably meant to
+  say only the voxel resolution constant (0.9mm, which does inform the
+  FOV-weighting math the example demonstrates) matches the shipped
+  default, but as written it reads as claiming the whole `(Ny, Nz, R)`
+  tuple is the shipped default, which is false and could mislead a future
+  reader into thinking `Nz=45`/`R=9` isn't the real config. Fix: reword to
+  something unambiguous, e.g. "(at this repo's default 0.9mm `res`, with a
+  hypothetical Nz/R chosen to survive the restriction)", in both
+  `caipi_sample.py` and the test file's matching comment.
 
 ## Test & tooling health
 
@@ -1534,20 +1593,26 @@ regression and item 150's `noise.py` timing shortfall.
   location for a synthetic all-ones mask, plus basic smoke tests (a
   figure is produced, right title/`frame_idx` handling) for the other
   plotting functions.
-- [ ] **116. `tests/test_ticaipi_sample.py` has no regression test for the
-  `ValueError` guard item 103 added.** [measured]
-  `sampling/ticaipi_sample.py:39-46` raises `ValueError` when `Ny % Ry !=
-  0 or Nz % Rz != 0` -- a real, previously-fixed correctness bug (silent
-  double-sampling/missing k-space locations, per item 103's own measured
-  ~44%-of-swept-grid failure rate). Confirmed the raise still fires
-  correctly today (e.g. `ticaipi_sample([240,45], 4, 0)` raises with a
-  clear message). But `tests/test_ticaipi_sample.py` contains only two
-  tests (`test_ticaipi_full_coverage_over_R_frames`,
-  `test_ticaipi_cycles_with_period_R`), both using evenly-dividing `(N,
-  R)` configs -- neither exercises the raise path. A one-line
-  `pytest.raises(ValueError)` test (using item 103's own cited repro,
-  `ticaipi_sample([240, 45], 4, 0)`) would close this gap and guard
-  against the check being silently weakened or removed later.
+- [x] **116.** Closed as superseded, no code change needed here. This item
+  asked for a `pytest.raises(ValueError)` regression test exercising
+  `sampling/ticaipi_sample.py:39-46`'s divisibility guard via its own
+  cited repro, `ticaipi_sample([240, 45], 4, 0)`. Item 147's later fix to
+  `balanced_factors` (restricting it to only ever return a `(Ry, Rz)` pair
+  that evenly divides `(Ny, Nz)`, or raise first) removed the only path by
+  which `ticaipi_sample` could reach its own guard with a non-dividing
+  pair: `ticaipi_sample([240, 45], 4, 0)` no longer raises at all
+  (`balanced_factors([240, 45], 4) == (4, 1)`, which now divides evenly),
+  so the guard is provably unreachable through the public API today (the
+  code already carries a comment acknowledging this, added alongside item
+  147's fix: "kept as cheap defense-in-depth against a future regression
+  in that guarantee"). The equivalent invariant this item cared about --
+  that a non-dividing split gets rejected somewhere, not silently
+  double-sampled -- is already covered by item 147's own
+  `test_balanced_factors_raises_when_no_factor_pair_divides`. A test
+  targeting `ticaipi_sample`'s own guard directly would need to
+  monkeypatch `balanced_factors` to force a non-dividing pair through,
+  which tests the guard's existence but not anything a real caller can
+  trigger -- not worth the complexity for defense-in-depth code.
 - [ ] **129. `recon/save_result.py` has zero test coverage anywhere in the
   repo, including no regression guard for the exact GPU-tensor-ordering
   bug its own docstring says previously destroyed a completed
@@ -1644,9 +1709,19 @@ regression and item 150's `noise.py` timing shortfall.
   sigma1A=None)` both raises the documented `ValueError` when `fn_b0map`
   is also `None` and successfully auto-measures `sigma1A` and completes
   when `fn_b0map` is set.
-- [ ] **143. This file's own "Current baseline" skip-count breakdown was
-  misattributed -- corrected in place this pass, logged here so a
-  cached/historical copy doesn't mislead a future reader.** [measured]
+- [x] **143.** Closed 2026-09-10: this item's own stated purpose was
+  logging a correction already made in the same pass, as a guard against a
+  stale cached copy of the old (wrong) claim misleading a future reader --
+  not an outstanding code or doc fix. Re-checked this pass: no other file
+  in the repo, including CLAUDE.md, ever made the "11 skips are
+  GERecon+julia-gated" claim this item corrected (grepped for
+  `GERecon`/`skip` across CLAUDE.md -- no matching claim found), so there
+  is no stale copy left anywhere for a reader to be misled by. The
+  "Current baseline" section above continues to carry the corrected skip
+  breakdown every pass. Original text, for the historical record: This
+  item's own "Current baseline" skip-count breakdown was misattributed --
+  corrected in place [the originating pass], logged here so a
+  cached/historical copy doesn't mislead a future reader. [measured]
   Previous "Current baseline" sections here stated the pytest suite's 11
   skips (`--extra preprocessing` synced) are "gated on the real `GERecon`
   SDK and a `julia` executable, neither available in this environment,"
@@ -1700,6 +1775,89 @@ regression and item 150's `noise.py` timing shortfall.
   `pytest.warns(UserWarning, match=...)` cases for both the TE- and
   TR-unachievable branches, asserting the returned `te_delay`/`tr_delay`
   is `0.0` in each case.
+- [ ] **161. `preprocessing/run_b0map.py`'s item-151 fix (widening the
+  per-sequence try/except to wrap the whole batch-driver body, not just
+  the julia subprocess call) has no regression test, despite the pattern
+  now being testable without either Julia or GERecon.** [measured] All 5
+  tests in `tests/test_preprocessing_run_b0map.py` carry a module-level
+  `pytestmark = pytest.mark.skipif(shutil.which('julia') is None, ...)`,
+  and none exercises a *post*-subprocess failure (e.g. `resize_to_epi_grid`
+  or the `.h5`/NIfTI write raising) to confirm the batch driver catches it
+  and continues to the next sequence, rather than crashing the whole batch
+  -- exactly the behavior item 151 changed (previously only
+  `subprocess.CalledProcessError` was caught around the julia call itself;
+  now the entire per-sequence body is, `run_b0map.py:105-162`). Verified
+  directly with a Julia-independent reproduction (mocking
+  `shutil.which`/`subprocess.run`/`resize_to_epi_grid`/`load_smaps`, no
+  real Julia or GERecon needed): `run_b0map()` prints `ERROR [seq1]:
+  boom\nSkipping...` when `resize_to_epi_grid` raises, and still completes
+  the batch (`Batch complete.`) rather than propagating the exception --
+  so the fix is real and correct, but entirely unguarded, the same "no
+  regression test for a just-fixed real behavior" pattern items 129/134/135
+  already flag elsewhere in this repo. Severity: low (doesn't change
+  current behavior, since the fix is already correct) -- cheap to fix: add
+  a Julia-independent test to `tests/test_preprocessing_run_b0map.py` (or
+  a new file outside the `julia`-skip gate) that monkeypatches
+  `subprocess.run`/`resize_to_epi_grid`/`load_smaps` the way the repro
+  above does and asserts the batch survives a mid-sequence failure and
+  prints the expected `ERROR .../Skipping...` message.
+- [ ] **162. `preprocessing/gre_diagnostics.py` has zero test coverage
+  anywhere in the repo, including for the two `KeyError`-avoiding guard
+  clauses item 152 just added.** [measured, low severity] A repo-wide grep
+  confirms no `tests/test_preprocessing_gre_diagnostics.py` exists and no
+  other test file imports `preprocessing.gre_diagnostics`. Item 152's fix
+  added a `KeyError`-avoiding check for `TE_degre` (already existed,
+  copied from item 78's pattern) and a brand-new one for
+  `b0map_hz_degre` (`gre_diagnostics.py:82-89`) -- neither is exercised by
+  any test. Same "one-off diagnostic script with no test file" gap item
+  115 already documents for `plotting/`, not yet flagged for this file.
+  Fix direction: a small synthetic-fixture test (mirroring
+  `run_b0map.py`'s own test fixtures) asserting both `ValueError` guards
+  fire on malformed inputs, and that `main()` completes and writes the
+  expected PNG/NIfTI files on well-formed ones.
+- [ ] **163. `recon/operators_b0.py`'s frame-shared `c_phasors`/`b_by_echo`
+  tensors -- the fix for a documented real CUDA-OOM bug -- have no
+  regression test for the sharing/object-identity property that fix
+  depends on.** [measured] `operators_b0.py:213-221`'s own docstring
+  explains: an earlier version built an independent `(L,*N)` `c_phasors`
+  copy per frame, and at this repo's real scale that redundancy alone was
+  large enough (`L=16`) to push a real reconstruction into a CUDA OOM. The
+  fix (current code) constructs `c_phasors`/`b_by_echo` once in
+  `build_encoding_operator_b0` and passes the *same object* into every
+  frame's `GatheredSenseB0`. Verified this sharing currently holds:
+  `all(f.c_phasors.data_ptr() == A.A[0].c_phasors.data_ptr() for f in
+  A.A)` and the same for `b_by_echo` both come back `True` for a freshly
+  built operator. But no test anywhere checks `data_ptr()`/tensor-identity
+  across frames -- `test_build_encoding_operator_b0_matches_manual_per_frame_construction`
+  and its siblings only check output *values* match, which would pass
+  equally well if a future refactor accidentally cloned `c_phasors`/
+  `b_by_echo` per frame and silently reintroduced the OOM this fix exists
+  to prevent. Same "documented real bug, no test guards the fix" pattern
+  as items 129/134/135/161/162. Fix: add an assertion in an existing
+  `build_encoding_operator_b0` test that every frame's
+  `.c_phasors`/`.b_by_echo` share `data_ptr()` with frame 0's.
+- [ ] **164. `recon/operators_b0.py`'s `_check_b_weight_row_sums` --
+  the detector for a real, documented signal-loss/incoherent-noise bug --
+  is never tested actually firing on a bad input.** [measured]
+  `operators_b0.py:118-141`'s docstring explains this check exists
+  specifically because `nbins=20` was confirmed as the root cause of a
+  real ill-conditioned-segmentation-fit failure on real reconstructions
+  (see CLAUDE.md's `nbins` paragraph). The only test that touches it,
+  `test_production_nbins_avoids_row_sum_warning`, asserts the warning does
+  *not* fire at `nbins=128` (the production default) -- it never asserts
+  the warning *does* fire at a known-bad `nbins` (e.g. 20, the exact value
+  the docstring blames). Every other test in the file builds operators via
+  a local `_build_b0_operator` helper that calls `mri_exp_approx` directly
+  and never reaches `build_encoding_operator_b0`/`_check_b_weight_row_sums`
+  at all. Confirmed the detection logic does still work today (reproduced
+  the warning firing with a small `nbins=10` synthetic case at real-scale
+  field-map range), but a future change that weakens or inverts the
+  threshold (e.g. a `tol` sign flip, or the check silently becoming a
+  no-op) would pass the entire suite undetected -- the same
+  "fix exists, positive case untested" gap as item 163 just above. Fix:
+  add a test building `build_encoding_operator_b0(..., nbins=20)` (or
+  similarly coarse) at a scale reproducing the asymmetric in-object range
+  from CLAUDE.md's `nbins` paragraph, asserting `pytest.warns` fires.
 
 ## Conciseness & performance
 
@@ -1903,7 +2061,12 @@ regression and item 150's `noise.py` timing shortfall.
   Confirmed by direct side-by-side comparison of `run_rss.py`/
   `run_cg_sense.py` -- the shared structure is real, unambiguous
   duplication (not superficial similarity), and the drivers' own comments
-  already acknowledge they're siblings of one another. Fix direction: a
+  already acknowledge they're siblings of one another. (Re-verified
+  2026-09-10: `run_b0map.py`'s own try/except was widened by item 151's
+  fix to wrap its entire per-sequence body, now spanning lines 105-162 --
+  it still carries the identical `# noqa: BLE001`/print-message pattern
+  described above, so this item's substance is unchanged, only that one
+  citation's line range moved.) Fix direction: a
   shared helper (e.g. a `_run_batch(cfg, make_recon_fn, fn_recon_name,
   extra_attrs)` in a small shared module, or a decorator/context-manager
   wrapping the per-sequence try/except+prints) could factor out the outer
@@ -1955,3 +2118,22 @@ regression and item 150's `noise.py` timing shortfall.
   `get_block_type(b).has_trid` for the TRID-presence check instead of a
   duplicated `if b.label is not None:` scan (the value-extraction loop
   itself is unchanged).
+- [ ] **165. `recon/run_b0_recon.py`'s `ArbEPI_epi_zf.h5`/
+  `smaps_ArbEPI_sigpy.h5` cache-path construction is duplicated verbatim in
+  `recon/validate_against_mslr.py`.** [measured, low severity]
+  `run_b0_recon.py:72-73` and `validate_against_mslr.py:132-133` each
+  independently build `os.path.join(recon_dir, "ArbEPI_epi_zf.h5")` /
+  `os.path.join(recon_dir, "smaps_ArbEPI_sigpy.h5")` from a
+  locally-derived `recon_dir`, instead of sharing a helper or reading from
+  `preprocessing/config.py`'s `SeqPaths`. Same flavor as item 133
+  (preprocessing-side cache-path duplication across `preprocess.py`/
+  `smaps.py`/`run_b0map.py`/`gre_diagnostics.py`), just on `recon/`'s own
+  one-off driver scripts, not previously flagged there. Severity is low:
+  both are standalone, uncommitted-real-data-dependent scripts (not part
+  of any automated pipeline), and the two copies are currently
+  byte-for-byte consistent -- but a future rename of either cache file's
+  naming convention (the same risk item 133 already documents for its own
+  seven call sites) would need remembering to update this pair too. Fix:
+  fold into item 133's fix if `SeqPaths` grows `gre_cache`/`smaps_cache`
+  fields, or otherwise factor the two literals into one shared constant/
+  helper these two scripts both import.
