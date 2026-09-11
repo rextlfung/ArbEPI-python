@@ -3,6 +3,7 @@ import pytest
 
 pytest.importorskip("sigpy")
 
+from preprocessing.grid_resize import resize_to_epi_grid  # noqa: E402
 from preprocessing.smaps import estimate_smaps, process_smaps  # noqa: E402
 
 
@@ -93,6 +94,42 @@ def test_process_smaps_mask_crop_resize_normalize():
     nonzero = rss > 1e-6
     assert nonzero.any()
     np.testing.assert_allclose(rss[nonzero], 1.0, atol=1e-6)
+
+
+def test_process_smaps_background_is_exactly_zero_after_resize():
+    # Regression: cubic-spline resize (order=3) is a global IIR prefilter,
+    # so masking smaps_raw *before* the resize alone leaves a halo of small
+    # (~1e-6 to 1e-9) nonzero leaked values just outside the object on the
+    # target grid -- invisible until the RSS normalization below (or
+    # recon/reconstruct.py's own re-normalization on load) divides by that
+    # same tiny value and rescales it straight back up to full unit
+    # magnitude, silently erasing the mask everywhere except voxels that
+    # happen to be exact-zero. process_smaps must re-apply a hard,
+    # nearest-neighbor-resized mask *after* the resize so background stays
+    # exactly zero regardless.
+    Nx_gre, Ny_gre, Nz_gre, ncoils = 20, 20, 20, 3
+    rng = np.random.default_rng(0)
+    smaps_raw = rng.standard_normal((Nx_gre, Ny_gre, Nz_gre, ncoils)) + 1j * rng.standard_normal(
+        (Nx_gre, Ny_gre, Nz_gre, ncoils)
+    )
+
+    emap = np.zeros((Nx_gre, Ny_gre, Nz_gre))
+    emap[8:12, 8:12, 8:12] = 1.0  # small "object" cube in the center
+
+    fov = (0.2, 0.2, 0.2)  # same FOV both sides -- no z-crop, isolates the resize
+    n_target = (40, 40, 40)  # 2x upsample -- enough to trigger spline leakage
+
+    smaps = process_smaps(smaps_raw, emap, fov, fov, n_target, threshold_mask=0.5)
+    rss = np.sqrt(np.sum(np.abs(smaps) ** 2, axis=-1))
+
+    # Independently derive the same hard, nearest-neighbor-resized mask
+    # process_smaps itself now applies, to know exactly which target-grid
+    # voxels must be background.
+    target_mask = resize_to_epi_grid(
+        (emap > 0.5).astype(np.float64), fov, fov, n_target, order=0
+    ) > 0.5
+    assert (~target_mask).any()
+    np.testing.assert_array_equal(rss[~target_mask], 0.0)
 
 
 def test_process_smaps_rejects_epi_fov_larger_than_gre():
