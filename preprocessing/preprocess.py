@@ -338,6 +338,7 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
             smaps = process_smaps(
                 smaps_raw, emap, tuple(seq_params.fov_degre), tuple(fov),
                 (Nx, Ny, Nz), cfg.threshold_mask,
+                smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
             )
             with h5py.File(fn_smaps, 'w') as f:
                 f.create_dataset('smaps_raw', data=smaps_raw)

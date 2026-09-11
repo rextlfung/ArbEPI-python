@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from scipy import ndimage
 
 pytest.importorskip("sigpy")
 
@@ -130,6 +131,59 @@ def test_process_smaps_background_is_exactly_zero_after_resize():
     ) > 0.5
     assert (~target_mask).any()
     np.testing.assert_array_equal(rss[~target_mask], 0.0)
+
+
+def test_process_smaps_smoothing_reduces_roughness_but_keeps_mask_exact():
+    # smooth_sigma_mm > 0 (the default) should measurably reduce
+    # voxel-to-voxel roughness relative to smooth_sigma_mm=0 -- this is the
+    # fix for the blocky/rippling texture ESPIRiT's cal_size-resolution
+    # calibration leaves near the object edge after cubic-spline resize
+    # (confirmed on real data to be present even with no masking applied at
+    # all, so a genuine resolution artifact worth low-pass filtering, not
+    # an interpolation or masking bug -- see process_smaps' docstring).
+    # Smoothing must not compromise the exact-background-zero guarantee
+    # from the previous fix, since the mask-normalized blur intentionally
+    # smears slightly past the true boundary and must be cut back.
+    Nx_gre, Ny_gre, Nz_gre, ncoils = 24, 24, 24, 3
+    rng = np.random.default_rng(0)
+    smaps_raw = rng.standard_normal((Nx_gre, Ny_gre, Nz_gre, ncoils)) + 1j * rng.standard_normal(
+        (Nx_gre, Ny_gre, Nz_gre, ncoils)
+    )
+
+    emap = np.zeros((Nx_gre, Ny_gre, Nz_gre))
+    emap[4:20, 4:20, 4:20] = 1.0
+
+    fov = (0.18, 0.18, 0.18)
+    n_target = (91, 91, 91)  # large upsample factor -- where blockiness shows up
+
+    smaps_unsmoothed = process_smaps(
+        smaps_raw, emap, fov, fov, n_target, threshold_mask=0.5, smooth_sigma_mm=0,
+    )
+    smaps_smoothed = process_smaps(
+        smaps_raw, emap, fov, fov, n_target, threshold_mask=0.5, smooth_sigma_mm=6.0,
+    )
+
+    target_mask = resize_to_epi_grid(
+        (emap > 0.5).astype(np.float64), fov, fov, n_target, order=0
+    ) > 0.5
+
+    def roughness(vol):
+        # Mean absolute discrete Laplacian magnitude over interior mask
+        # voxels -- a standard roughness/blockiness proxy.
+        lap = sum(
+            np.abs(np.roll(vol, 1, axis=ax) + np.roll(vol, -1, axis=ax) - 2 * vol)
+            for ax in range(3)
+        )
+        interior = ndimage.binary_erosion(target_mask, iterations=2)
+        return np.abs(lap[interior]).mean()
+
+    rough_unsmoothed = roughness(np.abs(smaps_unsmoothed[..., 0]))
+    rough_smoothed = roughness(np.abs(smaps_smoothed[..., 0]))
+    assert rough_smoothed < 0.5 * rough_unsmoothed
+
+    # Both must still keep exact-zero background.
+    rss_smoothed = np.sqrt(np.sum(np.abs(smaps_smoothed) ** 2, axis=-1))
+    np.testing.assert_array_equal(rss_smoothed[~target_mask], 0.0)
 
 
 def test_process_smaps_rejects_epi_fov_larger_than_gre():
