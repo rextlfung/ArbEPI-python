@@ -34,6 +34,7 @@ relay, or --relay '' to force none. See build_ssh_prefix and README.md's
 
 import argparse
 import getpass
+import os
 import re
 import secrets
 import socket
@@ -113,13 +114,32 @@ done
 # side -- see ge/README.md for why), unpacks it into the per-user/
 # per-run directory, and moves just the .entry files into the shared
 # pulseq/v7/ namespace (the .pge files stay where they land).
+#
+# This scp's auth is documented (README's "hop 2") as key-only and must
+# never need a human at the keyboard -- this leg runs unattended, several
+# hops deep inside a remote script with no tty anywhere in the chain. Without
+# BatchMode=yes, a pubkey failure here (wrong/missing key offered, stale
+# authorized_keys entry, etc.) doesn't fail cleanly: the scanner's ssh falls
+# through to password auth, which -- on a host where DISPLAY is set but the
+# configured SSH_ASKPASS helper is missing/broken -- fails 3x (matching
+# ssh's default NumberOfPasswordPrompts) with a useless
+# "ksshaskpass: No such file or directory" instead of the real
+# "Permission denied (publickey)". BatchMode=yes disables every interactive
+# fallback outright, so a broken key surfaces as an immediate, diagnosable
+# error instead of this silent askpass noise. No -q, deliberately: verified
+# empirically (2026-09) that scp/ssh's -q suppresses the actual auth-failure
+# text too (e.g. "Host key verification failed."), not just the progress
+# meter -- with -q, a failure here surfaces as a bare, undiagnosable exit 1
+# with no message at all, which is what made this bug hard to root-cause in
+# the first place.
 _TRANSFER_SCRIPT = r"""
 set -eu
 basedir="$1"; run_dir="$2"; user="$3"; host_ip="$4"; tar_abspath="$5"; shift 5
 mkdir -p "$run_dir"
 cd "$run_dir"
 tar_name="${tar_abspath##*/}"
-scp -q "${user}@${host_ip}:${tar_abspath}" ./
+scp -o BatchMode=yes -o PreferredAuthentications=publickey \
+    "${user}@${host_ip}:${tar_abspath}" ./
 tar -xzf "$tar_name"
 rm -f "$tar_name"
 for n in "$@"; do
@@ -190,6 +210,28 @@ def _decode_output(result: subprocess.CompletedProcess) -> str:
     )
 
 
+def _ssh_env() -> dict[str, str]:
+    """Environment for every ssh/scp subprocess call below, with
+    DISPLAY/SSH_ASKPASS/SSH_ASKPASS_REQUIRE stripped. OpenSSH's
+    read_passphrase() -- used for both password and keyboard-interactive
+    (Duo) prompts -- prefers a graphical SSH_ASKPASS helper over prompting
+    directly on /dev/tty whenever DISPLAY is set and stdin isn't a tty (true
+    for run_remote/discover_relay_ip below, which pipe a script in via
+    `input=`). On a machine where that askpass helper is missing or broken
+    (observed here: DISPLAY set, but the configured helper shells out to
+    `ksshaskpass`, which isn't installed -- `/usr/lib/ssh/ssh-askpass: line
+    23: /usr/lib/ssh/ksshaskpass: No such file or directory`), this silently
+    breaks Duo auth instead of prompting on the terminal the way a manual
+    `ssh` invocation does. Stripping DISPLAY forces ssh straight to
+    /dev/tty for the prompt (which it opens directly, independent of fd 0/1/2
+    redirection) -- exactly what happens when running ssh by hand in this
+    same terminal."""
+    env = os.environ.copy()
+    for key in ('DISPLAY', 'SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE'):
+        env.pop(key, None)
+    return env
+
+
 def discover_relay_ip(user: str, relay: str) -> str:
     """relay's own public IP, queried by running the lookup directly on
     relay over a plain single-hop ssh (not through ssh_prefix's chain into
@@ -197,7 +239,7 @@ def discover_relay_ip(user: str, relay: str) -> str:
     if coppe.py were run locally on relay itself."""
     result = subprocess.run(
         ['ssh', '-q', f'{user}@{relay}', 'bash', '-s'],
-        input=_RELAY_IP_SCRIPT.encode(), capture_output=True,
+        input=_RELAY_IP_SCRIPT.encode(), capture_output=True, env=_ssh_env(),
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -218,7 +260,9 @@ def stage_tarball_on_relay(user: str, relay: str, tar_path: Path) -> str:
     scanner-side pull (_TRANSFER_SCRIPT) then scp's the tarball from
     there, reusing relay's already-provisioned hop-2 keys (see
     ge/README.md) rather than needing new ones set up for this host."""
-    result = subprocess.run(['ssh', '-q', f'{user}@{relay}', 'mktemp', '-d'], capture_output=True)
+    result = subprocess.run(
+        ['ssh', '-q', f'{user}@{relay}', 'mktemp', '-d'], capture_output=True, env=_ssh_env(),
+    )
     if result.returncode != 0:
         raise RuntimeError(
             f'could not create a staging directory on {relay} (exit {result.returncode})\n'
@@ -229,7 +273,8 @@ def stage_tarball_on_relay(user: str, relay: str, tar_path: Path) -> str:
         raise RuntimeError(f'could not create a staging directory on {relay} (empty response)')
 
     scp_result = subprocess.run(
-        ['scp', '-q', str(tar_path), f'{user}@{relay}:{remote_dir}/'], capture_output=True,
+        ['scp', '-q', str(tar_path), f'{user}@{relay}:{remote_dir}/'],
+        capture_output=True, env=_ssh_env(),
     )
     if scp_result.returncode != 0:
         cleanup_relay_staging(user, relay, remote_dir)
@@ -245,7 +290,8 @@ def cleanup_relay_staging(user: str, relay: str, remote_dir: str) -> None:
     never raises, mirroring release_locks's best-effort style."""
     try:
         subprocess.run(
-            ['ssh', '-q', f'{user}@{relay}', 'rm', '-rf', remote_dir], capture_output=True,
+            ['ssh', '-q', f'{user}@{relay}', 'rm', '-rf', remote_dir],
+            capture_output=True, env=_ssh_env(),
         )
     except OSError:
         pass
@@ -297,9 +343,26 @@ def run_remote(
     normally reads the actual secret from /dev/tty directly regardless of
     whether stdout/stderr are captured, so this mainly matters for
     *watching* prompts/progress (e.g. a Duo push), not for the prompt
-    itself to function."""
+    itself to function.
+
+    Uses `_ssh_env()` (DISPLAY stripped) defensively for *this* (the
+    local -> jump-host) connection, since OpenSSH's read_passphrase()
+    prefers a graphical SSH_ASKPASS helper over /dev/tty whenever DISPLAY
+    is set and stdin isn't a tty (true here -- script arrives via `input=`),
+    and a broken/missing askpass helper would otherwise turn a normal Duo
+    prompt into a silent auth failure. Not confirmed to matter for *this*
+    hop specifically, though: a 2026-09 investigation of exactly this
+    failure mode traced the actual observed askpass breakage to a
+    different connection entirely -- the scanner-initiated scp inside
+    `_TRANSFER_SCRIPT` (hop 2, scanner -> this host, docs above) pulling
+    the tarball back -- fixed there via `BatchMode=yes` instead (see that
+    script's own comment), since that connection is documented as
+    key-only and should never fall through to an interactive prompt at
+    all, let alone one this many hops deep with no tty to answer it."""
     argv = [*ssh_prefix, 'bash', '-s', '--', *args]
-    result = subprocess.run(argv, input=script.encode(), capture_output=not verbose)
+    result = subprocess.run(
+        argv, input=script.encode(), capture_output=not verbose, env=_ssh_env(),
+    )
     if result.returncode != 0:
         detail = '' if verbose else (
             (result.stdout or b'').decode(errors='replace')
