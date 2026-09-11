@@ -109,7 +109,7 @@ def test_recon_frames_estimates_smaps_when_no_cache(tmp_path, monkeypatch):
         calls['estimate_smaps'] = True
         return np.ones((Nx, Ny, Nz, Nvcoils), dtype=np.complex64), np.ones((Nx, Ny, Nz))
 
-    def fake_process_smaps(smaps_raw, emap, fov_gre, fov, n_target, threshold_mask):
+    def fake_process_smaps(smaps_raw, emap, fov_gre, fov, n_target, threshold_mask, **kwargs):
         calls['process_smaps'] = True
         return smaps_raw
 

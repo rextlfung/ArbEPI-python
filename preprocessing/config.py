@@ -46,6 +46,13 @@ class PreprocessingConfig:
     # (BART's ecalib / MATLAB PISCO are not ported -- see smaps.py).
     threshold_mask: float = 0.2
 
+    # Gaussian smoothing (mm, applied on the target grid) for the blocky/
+    # rippling texture ESPIRiT's cal_size-resolution calibration otherwise
+    # leaves near the object edge -- see process_smaps' own docstring for
+    # why this is a resolution artifact, not a bug, and safe to smooth away
+    # given real coil sensitivity profiles vary over centimeters. 0 disables.
+    smaps_smooth_sigma_mm: float = 6.0
+
     # Which of generate_degre's TE_degre echoes to use for coil-sensitivity
     # estimation (0 = TE1, the shorter echo -- less T2* decay, so higher
     # SNR; either echo works, see sequences/deGRE.py's module docstring).

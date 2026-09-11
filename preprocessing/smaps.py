@@ -21,6 +21,7 @@ import h5py
 import numpy as np
 import sigpy as sp
 import sigpy.mri.app as mri_app
+from scipy import ndimage
 
 from preprocessing.config import PreprocessingConfig, SeqParams, SeqPaths
 from preprocessing.grid_resize import resize_to_epi_grid
@@ -85,6 +86,32 @@ def estimate_smaps(
     return smaps, emap[0]
 
 
+def _masked_gaussian_smooth(
+    smaps: np.ndarray, mask: np.ndarray, sigma_vox: np.ndarray
+) -> np.ndarray:
+    """Per-coil, mask-normalized Gaussian smoothing: blur `smaps * mask` and
+    the mask itself with the same kernel, then divide, so the background
+    (exact zero) never bleeds into the blurred estimate near the boundary
+    (the standard trick for smoothing up to a mask edge without a dark
+    halo -- equivalent to a local weighted average that renormalizes for
+    however much of the kernel's support fell outside the mask). Real part
+    and imaginary part are blurred separately (`ndimage.gaussian_filter`
+    has no native complex support). Does *not* re-apply `mask` itself --
+    callers combine this with an exact re-mask afterward (see
+    process_smaps), since the normalized blur intentionally extends a
+    smoothed estimate slightly past the mask boundary by design.
+    """
+    weight = mask.astype(np.float64)
+    denom = ndimage.gaussian_filter(weight, sigma_vox)
+    denom[denom < 1e-6] = 1
+    out = np.empty_like(smaps)
+    for c in range(smaps.shape[-1]):
+        num_real = ndimage.gaussian_filter(smaps[..., c].real * weight, sigma_vox)
+        num_imag = ndimage.gaussian_filter(smaps[..., c].imag * weight, sigma_vox)
+        out[..., c] = (num_real + 1j * num_imag) / denom
+    return out
+
+
 def process_smaps(
     smaps_raw: np.ndarray,
     emap: np.ndarray,
@@ -92,11 +119,13 @@ def process_smaps(
     fov: tuple[float, float, float],
     n_target: tuple[int, int, int],
     threshold_mask: float,
+    smooth_sigma_mm: float = 6.0,
 ) -> np.ndarray:
-    """Mask, z-crop, resize, and RSS-normalize raw sensitivity maps to the
-    EPI acquisition grid. Ports process_smaps.m's 'bart' eigenvalue
+    """Mask, z-crop, resize, smooth, and RSS-normalize raw sensitivity maps
+    to the EPI acquisition grid. Ports process_smaps.m's 'bart' eigenvalue
     convention (high eigenvalue = inside object) -- the only convention
-    relevant here since PISCO isn't ported.
+    relevant here since PISCO isn't ported; the smoothing step has no
+    process_smaps.m equivalent (see below for why it was added).
 
     Assumption carried over from process_smaps.m: the GRE and EPI
     acquisitions share the same isocenter, so a symmetric z-crop is valid.
@@ -105,6 +134,8 @@ def process_smaps(
     emap: [Nx_gre, Ny_gre, Nz_gre]
     fov_gre, fov: (fx, fy, fz) in meters
     n_target: (Nx, Ny, Nz), the EPI acquisition grid
+    smooth_sigma_mm: Gaussian smoothing sigma in mm, applied on the target
+        grid (0 disables). See below for why this exists.
     """
     # 1. Eigenvalue support mask, applied pre-resize so out-of-object coil
     # values (garbage outside ESPIRiT's calibration support) don't bleed
@@ -135,6 +166,31 @@ def process_smaps(
         eig_mask.astype(np.float64), fov_gre, fov, n_target, order=0
     ) > 0.5
     smaps = smaps * target_mask[..., None]
+
+    # Smooth away the resolution-limited blocky/rippling texture visible
+    # near the object edge -- confirmed (by re-running estimate_smaps at
+    # cal_size up to 48, and on the fully unmasked resize) to be a genuine
+    # ESPIRiT-at-cal_size artifact, not an interpolation or masking bug: it
+    # shows up identically with no masking applied at all, and does not
+    # improve with a larger calibration grid (only with much higher
+    # runtime cost, ~6x at cal_size=48 vs. the cal_size=24 default) or a
+    # looser/tighter eigenvalue crop. Real coil sensitivity profiles vary
+    # smoothly over centimeters, so this noise is safe to remove with a
+    # mild low-pass filter without discarding real anatomical information.
+    # `_masked_gaussian_smooth` blurs up to the mask boundary without
+    # pulling in the (zero) background; converting to voxel units per
+    # axis (rather than a fixed voxel-count sigma) keeps the *physical*
+    # smoothing extent the same regardless of the target grid's own
+    # resolution. Re-masking after is required: the mask-normalized blur
+    # deliberately smears an estimate slightly past the true boundary
+    # (that's what avoids a dark halo), so it must be cut back to the same
+    # exact support computed above, or the "background is exactly zero"
+    # guarantee above would be undone again.
+    if smooth_sigma_mm > 0:
+        vox_mm = np.array(fov) / np.array(n_target) * 1000
+        sigma_vox = smooth_sigma_mm / vox_mm
+        smaps = _masked_gaussian_smooth(smaps, target_mask, sigma_vox)
+        smaps = smaps * target_mask[..., None]
 
     # 4. Normalize: divide by the cross-coil RSS so sum(|s_c|^2) <= 1
     # everywhere, matching the ESPIRiT convention regularized SENSE recon
@@ -206,6 +262,7 @@ def load_smaps(
             print(f'  Backfilling deGRE-grid smaps/emap into {fn_smaps}...')
             smaps_degre = process_smaps(
                 smaps_raw, emap, fov_degre, fov_degre, n_target_degre, cfg.threshold_mask,
+                smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
             )
             emap_degre = resize_to_epi_grid(emap, fov_degre, fov_degre, n_target_degre, order=3)
             with h5py.File(fn_smaps, 'a') as f:
@@ -229,9 +286,11 @@ def load_smaps(
     smaps = process_smaps(
         smaps_raw, emap, fov_degre, tuple(seq_params.fov),
         (seq_params.Nx, seq_params.Ny, seq_params.Nz), cfg.threshold_mask,
+        smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
     )
     smaps_degre = process_smaps(
         smaps_raw, emap, fov_degre, fov_degre, n_target_degre, cfg.threshold_mask,
+        smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
     )
     emap_degre = resize_to_epi_grid(emap, fov_degre, fov_degre, n_target_degre, order=3)
     with h5py.File(fn_smaps, 'w') as f:
