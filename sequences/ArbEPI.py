@@ -136,6 +136,17 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
 
     # Prephasers and spoilers
     gx_pre, gy_pre, gz_pre = make_prephasers(params.Nx, params.Ny, params.Nz, params.fov, sys, params.crt)
+
+    # Net kx moment left by gx_pre + the full readout train (gro1 + ETL
+    # echoes + gro2), measured once (fixed for the whole scan -- the kx
+    # trajectory never depends on the schedule, only on params.ETL's
+    # parity). gx_pre pre-winds to -S/2; a back-and-forth EPI readout of
+    # ETL echoes returns exactly to that same point for even ETL (net
+    # readout contribution 0) and to its mirror +S/2 for odd ETL (net
+    # readout contribution +S) -- confirmed by direct calculate_kspace()
+    # measurement, not derived by hand. Both cases reduce to this one
+    # closed form:
+    gx_residual = gx_pre.area * rg.gx_pre_scale * (1 if params.ETL % 2 == 0 else -1)
     # Built at the maximum cycles/voxel value on every axis; the per-shot
     # loop below scales each down (via pp.scale_grad) to that shot's
     # randomly-drawn cycles/voxel, so these fixed trapezoids' duration
@@ -204,7 +215,11 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
 
             # Fat-sat (label first block in each unique section with TRID for GE)
             seq.add_block(rfsat, pp.make_label('TRID', 'SET', 1))
-            seq.add_block(pp.scale_grad(gx_spoil, x_scale), pp.scale_grad(gz_spoil, z_scale))
+            seq.add_block(
+                pp.scale_grad(gx_spoil, x_scale),
+                pp.scale_grad(gy_spoil, y_scale),
+                pp.scale_grad(gz_spoil, z_scale),
+            )
 
             # RF spoiling (quadratic phase cycling)
             rf_phase = (0.5 * params.rf_phase_0 * rf_count**2) % 360.0
@@ -246,15 +261,19 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             seq.add_block(rg.adc, pp.scale_grad(rg.gro2, (-1) ** (params.ETL - 1)))
 
             # Spoilers: this shot's randomly-drawn x/y/z cycles/voxel
-            # (x_scale/y_scale/z_scale, see per-shot draw above) plus the
-            # mandatory y/z rewind-to-center term. The y/z 1-based-offset
+            # (x_scale/y_scale/z_scale, see per-shot draw above) plus each
+            # axis's own mandatory rewind-to-center term -- x rewinds the
+            # fixed net kx moment left by gx_pre+readout (gx_residual,
+            # computed once above; same for every shot since it doesn't
+            # depend on the schedule), y/z rewind the residual ky/kz
+            # blip-train moment for *this* shot. The y/z 1-based-offset
             # formula is ported literally from ArbEPI.m (substituting
             # 0-based y_locs[-1]+1 for y_locs(end)) rather than re-derived,
             # since it's unclear whether the missing "-1" relative to the
             # prephaser's k-offset formula is intentional (this is a
             # spoiler, so a 1-index residual is likely inconsequential).
             seq.add_block(
-                pp.scale_grad(gx_spoil, x_scale),
+                pp.scale_grad(gx_spoil, (x_scale * gx_spoil.area - gx_residual) / gx_spoil.area),
                 pp.scale_grad(
                     gy_spoil,
                     (y_scale * gy_spoil.area - (y_locs[-1] + 1 - Ny / 2) * rg.deltak[1]) / gy_spoil.area,

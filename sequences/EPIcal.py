@@ -62,6 +62,11 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
         params.res, [params.spoil_cycles_max] * 3, sys, params.crt
     )
 
+    # Net kx moment left by gx_pre + the full readout train -- identical
+    # formula/reasoning to sequences/ArbEPI.py's gx_residual (EPIcal's own
+    # kx trajectory is identical to ArbEPI's, see this module's docstring).
+    gx_residual = gx_pre.area * rg.gx_pre_scale * (1 if params.ETL % 2 == 0 else -1)
+
     # TE and TR delays (identical to ArbEPI)
     te_delay, tr_delay, min_te, min_tr = calc_te_tr_delays(
         rf, rfsat, gz_ss, gz_ssr, gx_pre, gy_pre, gz_pre, rg.gro, gx_spoil, gy_spoil, gz_spoil,
@@ -93,7 +98,11 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
 
         # Fat-sat
         seq.add_block(rfsat, pp.make_label('TRID', 'SET', TRID))
-        seq.add_block(pp.scale_grad(gx_spoil, x_scale), pp.scale_grad(gz_spoil, z_scale))
+        seq.add_block(
+            pp.scale_grad(gx_spoil, x_scale),
+            pp.scale_grad(gy_spoil, y_scale),
+            pp.scale_grad(gz_spoil, z_scale),
+        )
 
         # RF spoiling (quadratic phase cycling)
         rf_phase = (0.5 * params.rf_phase_0 * rf_count**2) % 360.0
@@ -136,11 +145,13 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
         else:
             seq.add_block(gro2_line)
 
-        # Spoilers: this shot's randomly-drawn x/y/z cycles/voxel (no
-        # rewind term needed on y/z here -- unlike ArbEPI, no ky/kz
-        # encoding was ever applied).
+        # Spoilers: this shot's randomly-drawn x/y/z cycles/voxel. x still
+        # rewinds gx_residual (the readout's own fixed net kx moment, same
+        # as ArbEPI -- EPIcal plays the identical kx trajectory); no rewind
+        # term is needed on y/z here since, unlike ArbEPI, no ky/kz
+        # encoding was ever applied.
         seq.add_block(
-            pp.scale_grad(gx_spoil, x_scale),
+            pp.scale_grad(gx_spoil, (x_scale * gx_spoil.area - gx_residual) / gx_spoil.area),
             pp.scale_grad(gy_spoil, y_scale),
             pp.scale_grad(gz_spoil, z_scale),
         )
