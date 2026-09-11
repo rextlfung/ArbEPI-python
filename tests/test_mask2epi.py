@@ -255,6 +255,45 @@ def test_mask2epi_radial_shot_order_is_golden_angle_like():
         assert max_gap(shot_angles[:N]) <= max_gap(naive_angles[:N]) + 1e-9
 
 
+def test_mask2epi_radial_start_directions_spread_around_full_circle():
+    """Regression test for a real reported bug: `axis_angle` (the
+    doubled-angle circular mean mask2epi_radial uses to find each shot's
+    spoke direction) always lands in (-pi/2, pi/2], so a plain "before =
+    negative projection" convention put every shot's echo-train start
+    (schedule index 0) near real angle axis_angle + pi -- the same half
+    of k-space (near -ky) for every shot, regardless of that shot's own
+    spoke orientation. `_golden_angle_flip_start` fixes this by choosing
+    which spoke end starts the train via a full-circle golden-angle
+    sequence, so start directions should spread around the whole circle
+    close to uniformly (prefix-uniform, same property
+    `_golden_angle_shot_order` already gives wedge selection mod pi)."""
+    Ny, Nz = 40, 28
+    R = 2
+    ETL = 14
+    mask = caipi_sample([Ny, Nz], R).astype(bool)
+    Nshots = int(mask.sum() // ETL)
+    assert mask.sum() == Nshots * ETL
+
+    schedule, _ = mask2epi_radial(mask, ETL, Nshots)
+    cy, cz = Ny / 2, Nz / 2
+    start_y = schedule[:, 0, 0].astype(float) - cy
+    start_z = schedule[:, 0, 1].astype(float) - cz
+    theta = np.mod(np.arctan2(start_z, start_y), 2 * np.pi)  # unfolded, [0, 2*pi)
+
+    # Not clustered into one half of the circle, unlike the pre-fix
+    # behavior (measured: 39/40 starts landed at ky < 0 before this fix).
+    assert np.sum(start_y < 0) > 0
+    assert np.sum(start_y > 0) > 0
+
+    def max_gap(angles):
+        s = np.sort(np.asarray(angles) % (2 * np.pi))
+        gaps = np.diff(np.concatenate([s, [s[0] + 2 * np.pi]]))
+        return gaps.max()
+
+    for N in (3, 6, 10, 20):
+        assert max_gap(theta[:N]) < (2 * np.pi / N) * 3
+
+
 def test_mask2epi_radial_rejects_wrong_sample_count():
     mask = np.zeros((4, 4), dtype=bool)
     mask[0, 0] = True

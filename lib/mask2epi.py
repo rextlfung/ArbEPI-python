@@ -70,6 +70,8 @@ from typing import Sequence
 
 import numpy as np
 
+GOLDEN_ANGLE = math.pi * (math.sqrt(5) - 1) / 2  # 180 deg / GR, folded mod pi
+
 
 def max_blip_steps(schedules: np.ndarray) -> tuple[float, float]:
     """Largest consecutive-sample ky/kz step size across every frame/shot in
@@ -863,11 +865,10 @@ def _golden_angle_shot_order(wedge_centers: np.ndarray) -> np.ndarray:
         wedge `order[t]`.
     """
     n = len(wedge_centers)
-    golden_angle = np.pi * (math.sqrt(5) - 1) / 2  # 180 deg / GR, folded mod pi
     order = np.empty(n, dtype=int)
     available = list(range(n))
     for t in range(n):
-        target = (t * golden_angle) % np.pi
+        target = (t * GOLDEN_ANGLE) % np.pi
         avail_centers = wedge_centers[available]
         d = np.abs(avail_centers - target)
         d = np.minimum(d, np.pi - d)
@@ -920,6 +921,44 @@ def _order_half_anchored(
     pass2 = pass1[_bottleneck_2opt_order(pass1, deltak, fix_end=True)]
 
     return pass2[1:] if near_first else pass2[:-1]
+
+
+def _golden_angle_flip_start(shot: int, axis_angle: float) -> bool:
+    """Whether shot `shot`'s echo train should start on the `axis_angle`
+    side of its spoke rather than the `axis_angle + pi` side that a plain
+    projection-sign split defaults to.
+
+    `axis_angle` (`0.5 * atan2(sin(2*theta).mean(), cos(2*theta).mean())`)
+    is the principal branch of a doubled-angle circular mean, so it always
+    lands in `(-pi/2, pi/2]` -- meaning `cos(axis_angle) >= 0` always.
+    Since the "before" (start) half is conventionally the *negative*-
+    projection side (`proj = dy*cos(axis_angle) + dz*sin(axis_angle)`),
+    that side is therefore always the one near real angle
+    `axis_angle + pi`, regardless of each spoke's own orientation -- every
+    shot's train would start in the same half of k-space (near real angle
+    pi, i.e. -ky-biased) rather than start directions spreading around the
+    full circle.
+
+    Fix: treat the spoke's two real ends (`axis_angle`, `axis_angle + pi`)
+    as the two candidate start directions and pick whichever is closer to
+    a running full-circle golden-angle target `shot * GOLDEN_ANGLE mod
+    2*pi` -- the same low-discrepancy angle `_golden_angle_shot_order`
+    uses for wedge sequencing (mod pi there since a spoke's two ends are
+    interchangeable for *wedge* purposes), just evaluated mod 2*pi here so
+    it ranges over real, unfolded directions. This gives actual start
+    points the same prefix-uniform spread around the full circle that
+    wedge selection already has around [0, pi).
+
+    Returns True when `axis_angle` itself (not `axis_angle + pi`) is
+    closer to the target, meaning the caller should negate its projection
+    so the positive-projection side becomes "before".
+    """
+    target = (shot * GOLDEN_ANGLE) % (2 * math.pi)
+    cand_pos = axis_angle % (2 * math.pi)
+    cand_neg = (axis_angle + math.pi) % (2 * math.pi)
+    d_pos = min(abs(cand_pos - target), 2 * math.pi - abs(cand_pos - target))
+    d_neg = min(abs(cand_neg - target), 2 * math.pi - abs(cand_neg - target))
+    return d_pos < d_neg
 
 
 def mask2epi_radial(
@@ -989,8 +1028,27 @@ def mask2epi_radial(
     projection-wise on the far side of center -- a deliberate tradeoff
     that guarantees the exact `target`/`ETL - 1 - target` counts the fixed
     TE echo index needs, at the cost of "before"/"after" not being a
-    literal geometric split around center. This projection sort only
-    decides *which* points land in which half -- the actual
+    literal geometric split around center.
+
+    Which physical end of the spoke becomes "before" (i.e. where the echo
+    train's start, schedule index 0, actually lands) also follows a
+    golden-angle-like pattern rather than a fixed convention:
+    `axis_angle` (the doubled-angle circular mean above) always lands in
+    `(-pi/2, pi/2]`, so a plain "before = negative projection" rule would
+    always put the train's start near real angle `axis_angle + pi` --
+    every shot starting in the same half of k-space regardless of its own
+    spoke orientation. `_golden_angle_flip_start` instead picks whichever
+    of the spoke's two real ends (`axis_angle` or `axis_angle + pi`) is
+    closer to a running full-circle target `shot * GOLDEN_ANGLE mod 2*pi`
+    (the same low-discrepancy angle `_golden_angle_shot_order` uses for
+    wedge sequencing, mod 2*pi here instead of mod pi since real,
+    unfolded start direction is what's being spread), negating `proj`
+    when needed so that end becomes "before" -- see its own docstring for
+    the full derivation.
+
+    This projection sort only decides *which* points land in which half
+    (and, with the flip above, which physical end is called "before" vs
+    "after") -- the actual
     visiting order within each half is decided by `_order_half_anchored`'s
     two-pass optimization (`_sum_optimized_order` for min-sum TSP,
     `_bottleneck_2opt_order` for bottleneck refinement -- see module
@@ -1077,6 +1135,8 @@ def mask2epi_radial(
         th = theta[idx]
         axis_angle = 0.5 * math.atan2(np.sin(2 * th).mean(), np.cos(2 * th).mean())
         proj = (shot_y - cy) * math.cos(axis_angle) + (shot_z - cz) * math.sin(axis_angle)
+        if _golden_angle_flip_start(shot, axis_angle):
+            proj = -proj
 
         proj_order = np.argsort(proj, kind='stable')
         shot_y, shot_z = shot_y[proj_order], shot_z[proj_order]
