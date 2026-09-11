@@ -106,7 +106,9 @@ def process_smaps(
     fov_gre, fov: (fx, fy, fz) in meters
     n_target: (Nx, Ny, Nz), the EPI acquisition grid
     """
-    # 1. Eigenvalue support mask.
+    # 1. Eigenvalue support mask, applied pre-resize so out-of-object coil
+    # values (garbage outside ESPIRiT's calibration support) don't bleed
+    # *into* the object region through the cubic-spline resize below.
     eig_mask = emap > threshold_mask
     smaps = smaps_raw * eig_mask[..., None]
 
@@ -114,6 +116,25 @@ def process_smaps(
     # EPI grid -- see grid_resize.py's module docstring for why this
     # deGRE-grid-to-EPI-grid crop+resize is shared with run_b0map.py.
     smaps = resize_to_epi_grid(smaps, fov_gre, fov, n_target, order=3)
+
+    # Re-apply the mask *after* the resize, nearest-neighbor (order=0) so
+    # it stays an exact 0/1 field with no interpolated values invented at
+    # the resample (grid_resize.py's own documented convention for
+    # boolean/label volumes). This is not redundant with step 1: cubic
+    # spline's prefilter is a global (IIR) operation, so step 1's hard
+    # edge leaks small (~1e-6 to 1e-9) nonzero values into a halo just
+    # outside the object after resize -- invisible on its own, but
+    # amplified straight back up to unit magnitude by the RSS
+    # normalization below (whose `rss < eps` clamp only catches values
+    # under ~2e-16, not this leakage) and again by recon/reconstruct.py's
+    # own RSS-renormalization on load, silently erasing the mask
+    # everywhere except exact-zero voxels. Masking again post-resize with
+    # an exact (not spline-leaked) field guarantees background is exactly
+    # zero regardless.
+    target_mask = resize_to_epi_grid(
+        eig_mask.astype(np.float64), fov_gre, fov, n_target, order=0
+    ) > 0.5
+    smaps = smaps * target_mask[..., None]
 
     # 4. Normalize: divide by the cross-coil RSS so sum(|s_c|^2) <= 1
     # everywhere, matching the ESPIRiT convention regularized SENSE recon
