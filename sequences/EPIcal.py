@@ -55,8 +55,11 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
 
     # Prephasers and spoilers (identical to ArbEPI)
     gx_pre, gy_pre, gz_pre = make_prephasers(params.Nx, params.Ny, params.Nz, params.fov, sys, params.crt)
+    # Built at the maximum cycles/voxel value on every axis; the per-shot
+    # loop below scales each down to that shot's randomly-drawn
+    # cycles/voxel (see sequences/ArbEPI.py's identical pattern).
     gx_spoil, gy_spoil, gz_spoil = make_spoilers(
-        params.Nx, params.Ny, params.Nz, params.fov, params.n_cycles_spoil, sys, params.crt
+        params.res, [params.spoil_cycles_max] * 3, sys, params.crt
     )
 
     # TE and TR delays (identical to ArbEPI)
@@ -72,14 +75,25 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
     seq = pp.Sequence(system=sys_seq)
 
     rf_count = 1
+    # Seeded (reproducible) per-shot spoiler cycles/voxel draws -- see
+    # params.py's spoil_cycles_min/max comment.
+    spoil_rng = np.random.default_rng(0)
 
     for shot in range(-params.Ndummyshots, params.Nshots):
         is_dummy = shot < 0
         TRID = 1 if is_dummy else 2  # TRID 1 = dummy, TRID 2 = real (see Pulseq on GE manual)
 
+        # Per-shot random spoiler cycles/voxel, independent per axis,
+        # reused for both this shot's fat-sat crusher (below) and its
+        # post-readout spoiler (after the readout).
+        cx, cy, cz = spoil_rng.uniform(params.spoil_cycles_min, params.spoil_cycles_max, size=3)
+        x_scale = cx / params.spoil_cycles_max
+        y_scale = cy / params.spoil_cycles_max
+        z_scale = cz / params.spoil_cycles_max
+
         # Fat-sat
         seq.add_block(rfsat, pp.make_label('TRID', 'SET', TRID))
-        seq.add_block(gx_spoil, gz_spoil)
+        seq.add_block(pp.scale_grad(gx_spoil, x_scale), pp.scale_grad(gz_spoil, z_scale))
 
         # RF spoiling (quadratic phase cycling)
         rf_phase = (0.5 * params.rf_phase_0 * rf_count**2) % 360.0
@@ -122,8 +136,14 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
         else:
             seq.add_block(gro2_line)
 
-        # Spoilers: x dephase, y/z no net phase (no encoding was applied)
-        seq.add_block(gx_spoil, pp.scale_grad(gy_spoil, 0), pp.scale_grad(gz_spoil, 1))
+        # Spoilers: this shot's randomly-drawn x/y/z cycles/voxel (no
+        # rewind term needed on y/z here -- unlike ArbEPI, no ky/kz
+        # encoding was ever applied).
+        seq.add_block(
+            pp.scale_grad(gx_spoil, x_scale),
+            pp.scale_grad(gy_spoil, y_scale),
+            pp.scale_grad(gz_spoil, z_scale),
+        )
 
         # TR padding delay
         if params.TR > min_tr:

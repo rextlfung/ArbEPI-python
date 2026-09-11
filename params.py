@@ -132,7 +132,17 @@ class Params:
     rf_dur: float  # s
     rf_tb: float
     rf_phase_0: float  # degrees
-    n_cycles_spoil: int
+
+    # Gradient spoiler design (lib/make_spoilers.py): area is expressed
+    # directly in cycles of phase twist per voxel along each axis. Varied
+    # shot-to-shot (uniform-random within this range, independently per
+    # axis) rather than held constant, so a residual coherence pathway
+    # that survives one RF-spoiling phase-cycle period doesn't also see
+    # an identical net spoiler moment -- see CLAUDE.md's RF-spoiling
+    # section for why a constant per-shot spoiler moment lets that
+    # periodicity through undisturbed.
+    spoil_cycles_min: float  # cycles/voxel
+    spoil_cycles_max: float  # cycles/voxel
 
     # Fat saturation
     fat_chem_shift: float  # ppm (dimensionless ratio)
@@ -323,8 +333,19 @@ def load_params(output_dir: str = 'output') -> Params:
     fa = 180 / math.pi * math.acos(math.exp(-TR / T1))
     rf_dur = 2e-3
     rf_tb = 6
-    rf_phase_0 = 117
-    n_cycles_spoil = 2
+    # Quadratic RF-spoiling phase increment. 115.4 degrees (not the more
+    # commonly-cited 117) per Leupold, Weigel & Bär, PLOS ONE 2025 ("On
+    # the choice of the phase difference increment in RF-spoiled
+    # gradient-echo MRI of liquids with consideration of diffusion"),
+    # which tested exactly this phantom-imaging scenario (liquid
+    # phantoms) and found 115.4 outperforms 117 among commonly-used
+    # increments.
+    rf_phase_0 = 115.4
+    # Gradient spoiler cycles/voxel range -- see Params.spoil_cycles_min's
+    # comment. 3-4 cycles/voxel, independently per axis, drawn fresh each
+    # shot (see sequences/ArbEPI.py's per-shot loop).
+    spoil_cycles_min = 3.0
+    spoil_cycles_max = 4.0
 
     fat_chem_shift = 3.5 * 1e-6
     fat_offres_freq = sys.gamma * sys.B0 * fat_chem_shift
@@ -409,7 +430,8 @@ def load_params(output_dir: str = 'output') -> Params:
         rf_dur=rf_dur,
         rf_tb=rf_tb,
         rf_phase_0=rf_phase_0,
-        n_cycles_spoil=n_cycles_spoil,
+        spoil_cycles_min=spoil_cycles_min,
+        spoil_cycles_max=spoil_cycles_max,
         fat_chem_shift=fat_chem_shift,
         fat_offres_freq=fat_offres_freq,
         fatsat=fatsat,

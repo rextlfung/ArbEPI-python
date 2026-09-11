@@ -136,8 +136,13 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
 
     # Prephasers and spoilers
     gx_pre, gy_pre, gz_pre = make_prephasers(params.Nx, params.Ny, params.Nz, params.fov, sys, params.crt)
+    # Built at the maximum cycles/voxel value on every axis; the per-shot
+    # loop below scales each down (via pp.scale_grad) to that shot's
+    # randomly-drawn cycles/voxel, so these fixed trapezoids' duration
+    # (and therefore calc_te_tr_delays' min_te/min_tr) never changes
+    # shot-to-shot -- only the amplitude does.
     gx_spoil, gy_spoil, gz_spoil = make_spoilers(
-        params.Nx, params.Ny, params.Nz, params.fov, params.n_cycles_spoil, sys, params.crt
+        params.res, [params.spoil_cycles_max] * 3, sys, params.crt
     )
 
     # Delays to achieve desired TE and TR. echo_offset anchors the
@@ -181,13 +186,25 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
 
     rf_count = 1
     Ny, Nz = params.Ny, params.Nz
+    # Seeded (reproducible) per-shot spoiler cycles/voxel draws -- see
+    # params.py's spoil_cycles_min/max comment for why this varies rather
+    # than staying constant.
+    spoil_rng = np.random.default_rng(0)
 
     for frame in tqdm(range(params.Nframes), desc='Writing frames'):
 
         for shot in range(params.Nshots):
+            # Per-shot random spoiler cycles/voxel, independent per axis,
+            # reused for both this shot's fat-sat crusher (below) and its
+            # post-readout spoiler (after the readout).
+            cx, cy, cz = spoil_rng.uniform(params.spoil_cycles_min, params.spoil_cycles_max, size=3)
+            x_scale = cx / params.spoil_cycles_max
+            y_scale = cy / params.spoil_cycles_max
+            z_scale = cz / params.spoil_cycles_max
+
             # Fat-sat (label first block in each unique section with TRID for GE)
             seq.add_block(rfsat, pp.make_label('TRID', 'SET', 1))
-            seq.add_block(gx_spoil, gz_spoil)
+            seq.add_block(pp.scale_grad(gx_spoil, x_scale), pp.scale_grad(gz_spoil, z_scale))
 
             # RF spoiling (quadratic phase cycling)
             rf_phase = (0.5 * params.rf_phase_0 * rf_count**2) % 360.0
@@ -228,17 +245,23 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             # in both the normal case and the ETL=1 empty-loop case.
             seq.add_block(rg.adc, pp.scale_grad(rg.gro2, (-1) ** (params.ETL - 1)))
 
-            # Spoilers: x/z dephase, y rewind to center. Ported literally
-            # from ArbEPI.m's 1-based formula (substituting 0-based
-            # y_locs[-1]+1 for y_locs(end)) rather than re-derived, since
-            # it's unclear whether the missing "-1" relative to the
+            # Spoilers: this shot's randomly-drawn x/y/z cycles/voxel
+            # (x_scale/y_scale/z_scale, see per-shot draw above) plus the
+            # mandatory y/z rewind-to-center term. The y/z 1-based-offset
+            # formula is ported literally from ArbEPI.m (substituting
+            # 0-based y_locs[-1]+1 for y_locs(end)) rather than re-derived,
+            # since it's unclear whether the missing "-1" relative to the
             # prephaser's k-offset formula is intentional (this is a
             # spoiler, so a 1-index residual is likely inconsequential).
             seq.add_block(
-                gx_spoil,
-                pp.scale_grad(gy_spoil, -((y_locs[-1] + 1 - Ny / 2) * rg.deltak[1]) / gy_spoil.area),
+                pp.scale_grad(gx_spoil, x_scale),
                 pp.scale_grad(
-                    gz_spoil, (gz_spoil.area - (z_locs[-1] + 1 - Nz / 2) * rg.deltak[2]) / gz_spoil.area
+                    gy_spoil,
+                    (y_scale * gy_spoil.area - (y_locs[-1] + 1 - Ny / 2) * rg.deltak[1]) / gy_spoil.area,
+                ),
+                pp.scale_grad(
+                    gz_spoil,
+                    (z_scale * gz_spoil.area - (z_locs[-1] + 1 - Nz / 2) * rg.deltak[2]) / gz_spoil.area,
                 ),
             )
 
