@@ -118,22 +118,44 @@ scope; six survived independent re-verification and are recorded below,
 the rest (several test-coverage-gap candidates that overlapped existing
 items, and one low-confidence/unmeasured hypothesis about
 `run_b0_recon.py` rebuilding its encoding operator twice) were judged
-either duplicates or not solid enough to record.
+either duplicates or not solid enough to record. Items 166-168 are new
+findings from a later pass (2026-09-11, against `046ef61`) that also
+re-verified the state of the tree since the previous pass: `git diff
+dac8252 HEAD --stat` shows only `docs/review-findings.md` (items 160-165,
+added by the previous pass) and one new test,
+`tests/test_arbepi_kx_oversamples_when_nyquist_rate_exceeds_max_grad`
+(`tests/test_trajectory_matches_schedule.py`, a pure regression-test
+addition with no production-code change) changed in that span -- so every
+still-open item's cited code is exactly as it was when last verified, and
+none needed re-checking line-by-line; this pass instead spent its budget
+entirely on hunting for new findings. Split across four parallel
+subagents with the same scope as the previous two passes (`sampling/`+
+`plotting/`; `ge/`+`lib/`+`sequences/`; `preprocessing/`; `recon/`+
+`params.py`/`main.py`/`scanners.py`+docs), each independently re-verifying
+its assigned scope's open items were still accurately described (not just
+trusting this file) before hunting for anything new; three findings
+survived independent reproduction against the live tree (recorded as
+items 166-168 below) and are recorded in the section their content best
+matches (all three landed in Correctness) rather than strictly by which
+subagent found them. One subagent (`recon/`+top-level) found nothing new
+after checking several specific hypotheses that all turned out to already
+be covered or to check out as correct; one candidate from another
+subagent (a latent `gz_ss.delay` negative-delay risk, item 168) was kept
+despite being "not live today" -- the same disposition as items 45/107's
+sibling 122 -- since it's a real, reproducible code gap with no test or
+guard, not a stylistic nitpick.
 
-## Current baseline (2026-09-10, against `dac8252`)
+## Current baseline (2026-09-11, against `046ef61`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
   errors**, all `E501` -- unchanged from the previous pass.
-- `uv run pytest` (plain main venv): **141 passed, 15 skipped**, re-run
-  after `rm -rf output` -- the +6 passes vs. the previous pass's 135 are
-  new tests added by the intervening items-127/147-159 fixes
-  (`test_balanced_factors_raises_when_no_factor_pair_divides` and the
-  shipped-default-config cases in `tests/test_caipi_sample.py`/
-  `tests/test_ticaipi_sample.py`, `test_noise_repetition_duration_matches_epi_readout`,
-  and `tests/test_plotting.py`'s two new `nominal_te_value` cases), not a
-  change in skip composition. With `--extra preprocessing` also synced:
-  **171 passed, 11 skipped** (re-measured fresh this pass, `rm -rf output`
-  first; same +6 delta from the previous pass's 165, same cause). Skip
+- `uv run pytest` (plain main venv): **142 passed, 15 skipped**, re-run
+  after `rm -rf output` -- the +1 pass vs. the previous pass's 141 is the
+  one new regression test added since
+  (`test_arbepi_kx_oversamples_when_nyquist_rate_exceeds_max_grad`, not a
+  change in skip composition). With `--extra preprocessing` also synced:
+  **172 passed, 11 skipped** (re-measured fresh this pass, `rm -rf output`
+  first; same +1 delta from the previous pass's 171, same cause). Skip
   breakdown (`uv run pytest -q -rs`) unchanged in composition: **6** `could
   not import 'torch'` (all six `tests/test_recon_*.py` files, the `recon`
   extra) and **5** `julia executable not found on PATH` (all in
@@ -1037,6 +1059,119 @@ either duplicates or not solid enough to record.
   `write_ceq`/`read_pge` round trip (a built `ArbEPI.pge`) and a synthetic
   `n_samples=1` case confirming `_read_arbitrary` now returns a length-1
   tuple, not a bare scalar.
+- [ ] **166. `plotting/compare_readout_pns.py`'s `_overlay_figure` centers its
+  "gx zoom" panel ~8ms (about 7.5 echo spacings) away from the actual
+  nominal-TE echo, because it mixes two different time origins.** [measured]
+  `_build` (`compare_readout_pns.py:68`) reads `te_realized` from
+  `scan_info.mat`'s `schedules[..., 2]`, which CLAUDE.md's ".mat file
+  format" section defines as "echo time in seconds since RF excitation" --
+  i.e. relative to the RF pulse, not to the start of the sequence/shot.
+  `_overlay_figure` (`:81`) instead samples gradients via
+  `sample_gradients_tesla_per_m(v['seq'], time_range=(0.0, p.TR))`, whose
+  `t=0` is the absolute start of shot 0's block sequence -- which begins
+  with a fat-sat pulse and spoiler block (`sequences/ArbEPI.py:189-190`)
+  *before* the excitation RF (`:199`), not the RF itself. Line 92,
+  `t_c = v['te_realized']`, uses the RF-relative value directly as an
+  index into the absolute-time-sampled array, with no correction for the
+  fat-sat/spoiler lead-in. Reproduced directly against this repo's shipped
+  default params (`Nframes=1`, seed=0): `seq.calculate_kspace()`'s
+  `t_excitation[0]` = 8.052 ms (the true absolute RF start), `te_realized`
+  = 34.90 ms, so the script's `t_c` (34.90 ms) is short of the correct
+  absolute reference (`t_excitation[0] + te_realized` = 42.95 ms) by
+  exactly 8.052 ms -- at this config's echo spacing `D` = 1076 us, about
+  7.5 echo spacings, far outside the plotted `±1.5*D` zoom window. The
+  panel's x-axis label ("time relative to each variant's nominal TE echo")
+  and title ("~3 echo spacings around the TE echo... slow rise on the left
+  of each lobe, fast fall on the right") both therefore describe an
+  earlier, unrelated echo of the train, not the nominal-TE echo they claim
+  to show. Scope is narrow: only `ax_gx`'s zoom window is affected -- the
+  printed comparison table, the `ax_pns` total-PNS overlay curve, and the
+  separate per-variant `plot_pns_one_tr` figures all use correct absolute
+  time references and are untouched by this bug. Since the fat-sat/spoiler
+  timing is essentially identical between the `symmetric`/`pope` variants
+  (governed by `params.fatsat`/spoiler design, not
+  `ro_slew_rise`/`ro_slew_fall`/`blip_slew`), both curves are shifted by
+  roughly the same amount, so the two curves stay comparable to each
+  other even though neither is anchored where the plot claims. Doesn't
+  touch any shipped `.seq`/`.pge` output or the `main.py` pipeline -- only
+  this one-off analysis script's `compare_pns.png` gx-zoom panel (last
+  run 2026-08-27 per CLAUDE.md's PNS finding history). Fix: compute the
+  absolute RF start time (e.g. `seq.calculate_kspace()[2][0]`) inside
+  `_build` and use `t_c = t_excitation0 + te_realized` in
+  `_overlay_figure`.
+- [ ] **167. `preprocessing/recon_frames.py`'s `recon_frames()` unconditionally
+  calls `load_smaps()` even when `recon_fn` doesn't use sensitivity maps at
+  all -- crashing RSS-only reconstruction whenever no GRE/smaps cache
+  exists.** [measured] `recon_frames()` (`recon_frames.py:76`) opens with
+  `smaps, _smaps_degre, _emap_degre, nvcoils = load_smaps(cfg, paths,
+  seq_params)`, unconditional on what `recon_fn` actually needs. But
+  `run_rss.py`'s own module docstring states this driver is "root-sum-of-
+  squares reconstruction (**no smaps, no BART**)", and its `_rss_recon(data,
+  _smaps)` (`run_rss.py:30-31`) explicitly discards its `smaps` argument
+  (underscore-prefixed, never read). `load_smaps`'s fresh-estimation branch
+  (`smaps.py:204`) unconditionally opens `<datdir>/recon/<seqname>_gre.h5`
+  (`with h5py.File(fn_gre, 'r') as f:`), which raises `FileNotFoundError` if
+  that file doesn't exist. Reproduced directly: a minimal `ksp_epi_zf.h5`
+  with no matching `<seqname>_gre.h5` present (a real scenario -- deGRE
+  wasn't acquired, or its cache was cleaned up independently of the EPI
+  data, since nothing ties their lifecycles together) makes
+  `recon_frames(cfg, paths, seq_params, _rss_recon)` raise `FileNotFoundError:
+  ... 'testseq_gre.h5' ... No such file or directory` before ever touching
+  the k-space data RSS actually needs. Even when the GRE cache *is*
+  present, every RSS run still pays for a full ESPIRiT sensitivity-map
+  estimation (or at least a cache-validity check load) for a value it then
+  throws away -- the same "confirmed expensive" cost `smaps.py`'s own
+  `estimate_smaps` docstring documents elsewhere in this codebase (a
+  full-resolution GRE volume "thrashed 14GB+ of memory and never completed
+  in over an hour" before the `cal_size` fix). Confirmed intentional-looking,
+  not a typo: `tests/test_preprocessing_recon_frames.py::test_recon_frames_
+  estimates_smaps_when_no_cache` already exercises (and expects) this eager
+  smaps estimation, so this is a real design gap in `recon_frames()`'s API
+  (no way to opt out of smaps loading), not an accidental leftover. Fix
+  direction: thread whether `recon_fn` needs smaps into `recon_frames()`
+  (e.g. a `needs_smaps: bool` parameter defaulting `True`, with `run_rss.py`
+  passing `False`), deriving `nvcoils` from `f['ksp_epi_zf'].shape[3]`
+  instead of `load_smaps`'s return value when smaps aren't needed, skipping
+  `load_smaps()` entirely on that path.
+- [ ] **168. `lib/make_excitation_pulse.py`'s (and `sequences/deGRE.py`'s
+  identical inline copy) post-`trap4ge` RF/slice-select resync has no guard
+  against producing a negative gradient delay.** [measured, not live today]
+  `make_excitation_pulse.py:42` (and `deGRE.py:82`, an intentional inline
+  duplicate per that file's own docstring) computes
+  `gz_ss.delay = rf.delay - gz_ss.rise_time` to re-center the RF pulse in
+  `gz_ss`'s flat top after `trap4ge` rebuilds the trapezoid with raster-
+  rounded rise/flat/fall times (`trap4ge` always resets `delay` to 0
+  regardless of whether rounding changed anything, per `deGRE.py`'s own
+  docstring paragraph explaining why this resync exists). `rf.delay` is
+  fixed at RF-pulse-construction time (effectively `max(pre-trap4ge
+  gz.rise_time, sys.rf_dead_time)`); if `crt` is large enough that
+  `trap4ge`'s rounded-up `gz_ss.rise_time` exceeds that margin, the
+  subtraction goes negative, which pypulseq's `seq.check_timing()` flags
+  as a hard `NEGATIVE_DELAY` error. Reproduced directly by calling
+  `make_excitation_pulse` with the repo's real default `fa`/`rf_dur`/
+  `rf_tb`/`fov`/`sys` at three `crt` values: shipped default `crt=4e-6` ->
+  `gz_ss.delay=88.00us` (safe, matches CLAUDE.md's "trap4ge is a proven
+  no-op at crt==grad_raster_time" claim); the one alternate value CLAUDE.md
+  itself names as a plausible future setting, `crt=20e-6` (reverting to
+  Siemens-dual-raster compatibility) -> `gz_ss.delay=80.00us` (still safe);
+  but `crt=150e-6` (roughly `rf.delay`'s own 100us margin) ->
+  `gz_ss.delay=-50.00us`, and adding the resulting `gz_ss` to a block and
+  calling `seq.check_timing()` confirms pypulseq reports `error_type=
+  'NEGATIVE_DELAY'`. So this is a real, reproducible gap -- no
+  `assert`/`max(0, ...)` clamp documents or enforces the implicit
+  "trap4ge's rounding delta must stay under rf.delay's margin" assumption
+  -- but it isn't reachable at the shipped `crt` and isn't reachable at the
+  one alternate `crt` value this codebase's own docs contemplate either, so
+  it's in the same "not live today" category as items 45/122. Flagging
+  because the resync logic itself fails silently at the point of cause (a
+  future change to RF pulse timing -- shorter `sys.rf_dead_time`, longer
+  slice-select rise time -- could trip it with no defensive check to
+  explain why `check_timing()` suddenly fails). Fix direction: either clamp
+  (`gz_ss.delay = max(0.0, rf.delay - gz_ss.rise_time)`, accepting the
+  pulse re-decenters slightly rather than crashing) or add an explicit
+  `assert gz_ss.rise_time <= rf.delay` with a message naming the `crt`/
+  `rf.delay` relationship, in both `make_excitation_pulse.py` and
+  `deGRE.py`.
 
 ## Consistency & documentation
 
