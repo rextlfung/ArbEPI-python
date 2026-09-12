@@ -143,35 +143,67 @@ be covered or to check out as correct; one candidate from another
 subagent (a latent `gz_ss.delay` negative-delay risk, item 168) was kept
 despite being "not live today" -- the same disposition as items 45/107's
 sibling 122 -- since it's a real, reproducible code gap with no test or
-guard, not a stylistic nitpick.
+guard, not a stylistic nitpick. Items 169-180 are new findings from a
+later pass (2026-09-12, against `ecb8f2f`) that also re-verified every
+item 107-168 against the current tree: `git diff 046ef61 HEAD --stat`
+shows `ge/coppe.py`, `lib/make_spoilers.py`, `lib/mask2epi.py`,
+`params.py`, `preprocessing/config.py`, `preprocessing/preprocess.py`,
+`preprocessing/smaps.py`, `sequences/ArbEPI.py`, `sequences/EPIcal.py`,
+and two test files changed in that span -- a gradient-spoiler redesign
+(area now expressed as cycles/voxel, varied per shot, with a new
+gx-residual cancellation term), `mask2epi_radial`'s golden-angle-based
+echo-train start-direction flip, an RF-spoiling phase increment change
+from 117 to 115.4 degrees, a `ge/coppe.py` fix for a silently-failing SSH
+hop, and `preprocessing/smaps.py`'s new sensitivity-map edge smoothing --
+alongside this doc itself. Every item citing an unchanged file was
+confirmed still accurate; items 117, 132, 133, 138, 139, 140, 141, and 142
+needed citation and/or substance updates (applied in place below) since
+their cited code moved or its surrounding behavior changed by these
+commits. This pass split the review across four parallel subagents
+(`lib/`+`sequences/`+`params.py`'s spoiler/golden-angle changes;
+`preprocessing/`'s smaps changes; `ge/coppe.py`'s SSH fix; `recon/`,
+untouched this round, a lighter re-verification-plus-hunt pass), each
+re-verifying its assigned open items against the live tree before hunting
+for anything new; eleven of their findings survived independent
+verification and are recorded as items 170-180 below. Item 169 (a real TE-
+feasibility regression in the shipped default config, caused by the
+golden-angle change increasing the worst-case ky blip step from 37 to 39
+samples) was found and verified directly in this pass's own synthesis
+step, not by a subagent, after a fresh `main.py --ge` build surfaced a new
+`calc_te_tr_delays` warning no prior baseline had reported; confirmed by
+reproducing `max_blip_steps` with `_golden_angle_flip_start` forced off
+(37) vs. on (39) against the same seed-0 schedules.
 
-## Current baseline (2026-09-11, against `046ef61`)
+## Current baseline (2026-09-12, against `ecb8f2f`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
   errors**, all `E501` -- unchanged from the previous pass.
-- `uv run pytest` (plain main venv): **142 passed, 15 skipped**, re-run
-  after `rm -rf output` -- the +1 pass vs. the previous pass's 141 is the
-  one new regression test added since
-  (`test_arbepi_kx_oversamples_when_nyquist_rate_exceeds_max_grad`, not a
-  change in skip composition). With `--extra preprocessing` also synced:
-  **172 passed, 11 skipped** (re-measured fresh this pass, `rm -rf output`
-  first; same +1 delta from the previous pass's 171, same cause). Skip
-  breakdown (`uv run pytest -q -rs`) unchanged in composition: **6** `could
-  not import 'torch'` (all six `tests/test_recon_*.py` files, the `recon`
-  extra) and **5** `julia executable not found on PATH` (all in
-  `tests/test_preprocessing_run_b0map.py`); **zero** GERecon-gated. `recon`
-  extras re-synced fresh this pass (`uv sync --extra recon` succeeds:
-  `torch==2.13.0+cu130` CPU-only, `mirtorch==0.3.1`) -- **`tests/test_recon_*.py`:
-  34 passed**, 0 failed, unchanged from the previous pass.
+- `uv run pytest` (plain main venv, fresh `.venv`, `rm -rf output` first):
+  **143 passed, 15 skipped** -- +1 pass vs. the previous pass's 142, same
+  skip composition (**9** `sigpy`/`nibabel`-gated `preprocessing` files,
+  **6** `could not import 'torch'` `recon` files). With `--extra
+  preprocessing --extra recon` also synced: **209 passed, 5 skipped**, all
+  five `julia executable not found on PATH` (`tests/
+  test_preprocessing_run_b0map.py`), **zero** GERecon-gated -- confirming
+  every `preprocessing`/`recon`-gated skip from the plain-venv run is
+  addressable by syncing extras, none is a real failure.
+  `tests/test_recon_*.py` alone: **34 passed**, 0 failed, unchanged from
+  the previous pass.
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, GE_MR750, `PNSwt = [0.8, 1.0, 0.7]`, seed 0) --
   all four sequences `.ok`, re-measured fresh this pass (`rm -rf output`
-  first) and **unchanged from the previous baseline in every figure**:
+  first). **`ArbEPI.seq`/`EPIcal.seq`'s acoustics moved from 0.1484 to
+  0.1764** (the fat-sat crusher now also plays `gy_spoil`, per commit
+  `7af04d4`, adding real acoustic content on an axis that previously
+  carried none there) and **peak PNS ticked up slightly** (79.8% -> 79.9%,
+  78.1% -> 78.2%) -- both still comfortably `OK` under their 0.3/80%
+  limits, so this is a recorded baseline shift, not a regression needing
+  action. `deGRE.seq`/`noise.seq` are unchanged from the previous pass:
 
   | sequence | peak PNS | acoustics | max grad | max slew |
   |---|---|---|---|---|
-  | `ArbEPI.seq` | 79.8% | 0.1484 | 50.00 mT/m | 119.0 T/m/s |
-  | `EPIcal.seq` | 78.1% | 0.1484 | 50.00 mT/m | 119.0 T/m/s |
+  | `ArbEPI.seq` | 79.9% | 0.1764 | 50.00 mT/m | 119.0 T/m/s |
+  | `EPIcal.seq` | 78.2% | 0.1764 | 50.00 mT/m | 119.0 T/m/s |
   | `deGRE.seq` | 77.4% | 0.2556 | 49.76 mT/m | 174.3 T/m/s |
   | `noise.seq` | 0.0% | 0.0000 | 0.00 mT/m | 0.0 T/m/s |
 
@@ -180,6 +212,15 @@ guard, not a stylistic nitpick.
   `ge/check.py`'s module docstring -- see item 123 below, a third,
   previously-unflagged occurrence of the same stale figure item 111
   already tracked in CLAUDE.md and this file's own table).
+
+  **This build also printed a new warning absent from every prior
+  baseline**: `Minimum achievable TE (35.104 ms) exceeds prescribed TE
+  (34.900 ms)` -- see item 169 below. This means the "min TE 34.86 ms"
+  figure CLAUDE.md's "PNS finding history" cites for the tuned
+  `blip_slew=105` defaults is now stale too, on top of item 111/123's
+  already-tracked acoustics staleness -- out of scope to edit CLAUDE.md
+  this pass (only `docs/review-findings.md` may be modified), flagged here
+  for the next pass that touches it.
 
 ## Correctness
 
@@ -763,11 +804,17 @@ guard, not a stylistic nitpick.
   least one axis, asserting `_reg_weights`'s implied `p_k` matches what
   `patchSVST` actually used.
 - [ ] **132. `preprocessing/recon_frames.py`'s per-frame failure message
-  never says which frame failed.** [measured] `_recon_one_frame`
+  never says which frame failed.** [measured; citations updated 2026-09-12
+  against `ecb8f2f` -- these had already drifted before the previous
+  (2026-09-11) baseline was cut, from commit `c4d1794`'s
+  `_worker_state`/`_init_worker`/`_recon_one_frame_worker` insertion; not
+  a change from this pass's own diff, just never previously corrected]
+  `_recon_one_frame`
   (`recon_frames.py:33-38`) catches any exception from `recon_fn` and
   prints `f'recon_frames: reconstruction failed on a frame -- skipping.
   {e}'` -- both call sites (the serial list comprehension and
-  `_recon_one_frame_worker`, `recon_frames.py:94,96`) dispatch over
+  `_recon_one_frame_worker`, `recon_frames.py:98,100`, was `:94,96`)
+  dispatch over
   `frame_data = (f['ksp_epi_zf'][...,frame] for frame in
   range(nframes))` but never thread `frame` into `_recon_one_frame`
   itself, so the printed message carries no frame index. With the
@@ -775,7 +822,8 @@ guard, not a stylistic nitpick.
   indistinguishable lines, and the only way to identify which frame(s)
   actually failed is to notice which slices of the returned `img` array
   are all-zero after the fact (the existing "all output frames are zero"
-  check at `:104-107` only catches the all-frames-failed case, not a
+  check at `:109-112`, was `:104-107`, only catches the all-frames-failed
+  case, not a
   partial failure). Low severity -- doesn't change any computed output,
   only debuggability when `recon_fn` raises on a subset of frames -- but
   cheap to fix: thread `frame` through `_recon_one_frame`'s signature and
@@ -902,46 +950,78 @@ guard, not a stylistic nitpick.
   `get_block_type`/`get_dynamics`/`seq2ceq` -- the same untested-bug
   pattern item 134 already flags for `write_ceq`/`read_pge`, one level up
   the pipeline.
-- [ ] **138. `sequences/ArbEPI.py`'s (and identically `EPIcal.py`'s)
-  post-readout spoiler scaling has a quantifiable off-by-one against this
-  repo's 0-based indexing convention, already flagged in an inline
-  comment but untracked in this backlog.** [measured, low severity]
-  `sequences/ArbEPI.py:237-243`:
+- [ ] **138. `sequences/ArbEPI.py`'s post-readout spoiler scaling has a
+  quantifiable off-by-one against this repo's 0-based indexing
+  convention, already flagged in an inline comment but untracked in this
+  backlog.** [measured, low severity; re-verified/updated 2026-09-12
+  against `ecb8f2f` -- the buggy formula, its cause, and its severity are
+  unchanged, but the surrounding code was rewritten by commit `8448ff3`
+  ("Vary gradient spoiler per shot, switch RF phase increment to 115.4
+  deg", introducing `params.py`'s `spoil_cycles_min`/`max`), so the quoted
+  code/numbers/citation below replace the now-stale originals, and the
+  "(and identically EPIcal.py's)" claim in
+  this item's own title was wrong even before that rewrite and is
+  corrected below] `sequences/ArbEPI.py:276-284`:
   ```python
   seq.add_block(
-      gx_spoil,
-      pp.scale_grad(gy_spoil, -((y_locs[-1] + 1 - Ny / 2) * rg.deltak[1]) / gy_spoil.area),
-      pp.scale_grad(gz_spoil, (gz_spoil.area - (z_locs[-1] + 1 - Nz / 2) * rg.deltak[2]) / gz_spoil.area),
+      pp.scale_grad(gx_spoil, (x_scale * gx_spoil.area - gx_residual) / gx_spoil.area),
+      pp.scale_grad(
+          gy_spoil,
+          (y_scale * gy_spoil.area - (y_locs[-1] + 1 - Ny / 2) * rg.deltak[1]) / gy_spoil.area,
+      ),
+      pp.scale_grad(
+          gz_spoil,
+          (z_scale * gz_spoil.area - (z_locs[-1] + 1 - Nz / 2) * rg.deltak[2]) / gz_spoil.area,
+      ),
   )
   ```
-  The `+ 1` doesn't match the 0-based `y_locs`/`z_locs` convention used
-  everywhere else in this file (e.g. the prephaser scale a few lines
-  earlier: `(y_locs[0] - Ny/2) / (-Ny/2)`, no `+1`) -- CLAUDE.md's "Index
-  convention" section documents 0-based as the deliberate, repo-wide
-  internal convention. The code already carries an inline comment
-  disclosing the uncertainty ("ported literally from ArbEPI.m's 1-based
-  formula... unclear whether the missing '-1' ... is intentional...
-  likely inconsequential"), but the magnitude was never quantified and
-  it isn't tracked here. Measured against the real seed-0 default-params
-  schedule: the y-axis ends the TR at ky = -deltak[1] (-4.6296 m^-1)
-  instead of exactly 0 ("rewind to center" per the comment), and the
-  z-axis spoiler delivers `gz_spoil.area - deltak[2]` instead of the full
-  intended area -- a shortfall of deltak[2] = 24.691 against a total
-  `gz_spoil.area` of 2222.2, i.e. ~1.1% less z-spoiling than intended
-  (~0.1% of the y k-space extent for the y residual). Severity is
-  genuinely low (well under the spoiler's own dephasing margin, and
-  spoilers tolerate slack by design) -- this item exists to give the
-  already-flagged uncertainty a numbered, quantified entry rather than
-  leaving it as an untracked in-code question mark. Fix direction: drop
-  the `+ 1` to match the 0-based convention (or confirm via a fresh
-  MATLAB comparison that the `+1` is intentional and update the comment
-  instead), then re-verify against
+  The `+ 1` in the y/z terms still doesn't match the 0-based `y_locs`/
+  `z_locs` convention used everywhere else in this file -- CLAUDE.md's
+  "Index convention" section documents 0-based as the deliberate,
+  repo-wide internal convention. **Correcting this item's own title: this
+  bug is `ArbEPI.py`-only, not "identically EPIcal.py's".**
+  `sequences/EPIcal.py`'s post-readout spoiler block (`:150-157`, both
+  before and after the per-shot-randomization rewrite) has never contained
+  a `y_locs`/`z_locs`-based rewind term at all -- EPIcal applies no ky/kz
+  encoding, so there's nothing to rewind on those axes (its own comment
+  says exactly this: "no rewind term is needed on y/z here since, unlike
+  ArbEPI, no ky/kz encoding was ever applied"); only its x-axis
+  `gx_residual` cancellation is shared logic with ArbEPI, and that term
+  isn't schedule-index-based, so it's unaffected by this `+1` issue.
+
+  **Framing correction**: the previous "ends at ky = -deltak[1] instead of
+  0" description is now stale -- that was accurate when the y-axis
+  spoiler was a pure rewind-to-center term (pre-`8448ff3`:
+  `pp.scale_grad(gy_spoil, -((y_locs[-1]+1-Ny/2)*deltak[1])/gy_spoil.area)`,
+  no additive spoiling). Post-rewrite, y legitimately carries its own
+  per-shot-randomized spoiling moment (`y_scale * gy_spoil.area`) on top
+  of the rewind, so the correct framing is: the spoiler under-delivers by
+  exactly `deltak[1]` relative to the intended `y_scale * gy_spoil.area`
+  target, not "ends at -deltak[1] instead of 0."
+
+  **Updated magnitude** (seed-0 default-params schedule, measured against
+  the current `spoil_cycles_max=4.0` build, which replaced the old fixed
+  `n_cycles_spoil=2`): the shortfall is still exactly `deltak[1] = 4.6296
+  m^-1` (y) / `deltak[2] = 24.6914 m^-1` (z) in absolute terms (depends
+  only on `Ny`/`Nz`/`deltak`, confirmed identical across shots 0-2), but
+  as a *fraction* of the actually-delivered z-spoil area it's now
+  **~0.56%-0.74%** (down from the old fixed ~1.1%), since `gz_spoil.area`
+  moved from 2222.2 to a per-shot-randomized value in `[3333.3, 4444.4]`
+  at the new `spoil_cycles_min/max = [3.0, 4.0]` range. Severity remains
+  low (well under the spoiler's own dephasing margin). Fix direction
+  unchanged: drop the `+ 1` to match the 0-based convention (or confirm
+  via a fresh MATLAB comparison that the `+1` is intentional and update
+  the comment instead), then re-verify against
   `tests/test_trajectory_matches_schedule.py`'s existing k-space coverage
   checks.
 - [ ] **139. `preprocessing/config.py`'s `load_seq_params` reads
   `scan_info.mat` via a bare `h5py.File`, not `matio.read_mat`,
   contradicting `matio.py`'s own unconditional stated rule.** [verify,
-  not live today] `config.py:170-193` opens `paths.scan_info` directly
+  not live today; citation updated 2026-09-12 against `ecb8f2f` --
+  `config.py` gained a 7-line `smaps_smooth_sigma_mm` field above
+  `load_seq_params`, shifting it from old `:162-193` to `config.py:169-200`
+  (body `:177-199`); substance unchanged] `config.py:177-199` opens
+  `paths.scan_info` directly
   and reads every field with plain `f[name][()]`
   (`.item()`/`.ravel()`), never calling
   `preprocessing.matio.read_mat`/`read_mat_array`. `matio.py`'s module
@@ -1172,6 +1252,174 @@ guard, not a stylistic nitpick.
   `assert gz_ss.rise_time <= rf.delay` with a message naming the `crt`/
   `rf.delay` relationship, in both `make_excitation_pulse.py` and
   `deGRE.py`.
+- [ ] **169. `mask2epi_radial`'s new golden-angle echo-train start-flip
+  logic increased the worst-case ky blip step, pushing `min_te` above the
+  prescribed `TE` in the shipped default config -- the realized TE is now
+  silently ~0.2 ms later than documented, not the "min TE 34.86 ms"
+  CLAUDE.md's PNS finding history cites.** [measured, live in the shipped
+  default config today] Commit `a20da01` ("distribute radial echo-train
+  starts via golden angle") added `lib/mask2epi.py`'s
+  `_golden_angle_flip_start` helper, which flips which physical end of
+  each shot's spoke becomes schedule index 0 ("before") based on a
+  running full-circle golden-angle target, so echo-train start directions
+  spread around the whole circle instead of clustering in one half (see
+  `mask2epi_radial`'s own docstring for the full rationale -- this part of
+  the change is a deliberate, documented improvement, not itself a bug).
+  But changing which points land at the start/end of each shot's tour
+  also changes the largest consecutive-sample ky/kz jump `max_blip_steps`
+  measures across the whole schedule, which
+  `lib/make_readout_grads.py`/`calc_te_tr_delays.py` size the readout's
+  blip-turnaround geometry (and hence `gro`'s duration and
+  `ReadoutGrads.echo_offset`) against. Reproduced directly against this
+  repo's real seed-0 default-params schedule (`load_params()`,
+  `resolve_omegas`, `mask2epi_radial` per frame): `max_blip_steps` with
+  `_golden_angle_flip_start` forced to always return `False` (reproducing
+  the pre-`a20da01` start-selection behavior) gives `max_ky_step=37`, vs.
+  **`max_ky_step=39`** with the flip active (current code) -- `max_kz_step`
+  unchanged at 8 either way. This 2-sample increase in the worst-case blip
+  widens the readout's required blip-turnaround area, which increases
+  `pp.calc_duration(gro)` and therefore `calc_te_tr_delays`'s `min_te =
+  ... + (ETL/2 - 0.5) * pp.calc_duration(gro)` term. Confirmed end to end:
+  a fresh `uv run python main.py --ge` build (full default params, seed 0)
+  now prints `UserWarning: Minimum achievable TE (35.104 ms) exceeds
+  prescribed TE (34.900 ms)` from `lib/calc_te_tr_delays.py:54` -- a
+  warning absent from every prior baseline in this file, and from
+  CLAUDE.md's own "PNS finding history" section, which cites "**min TE
+  34.86 ms**" for these exact tuned defaults (`slew_derate=100,
+  ro_slew_rise=100, ro_slew_fall=120, blip_slew=105`). Per CLAUDE.md's own
+  documented `calc_te_tr_delays` contract ("only warns, never raises... 
+  silently falls back to zero padding delay, so the sequence still builds
+  with the *wrong* TE/TR baked in"), the shipped default `ArbEPI.seq`
+  today silently builds with `te_delay=0` and a realized TE of
+  `min_te=35.104 ms`, not the prescribed `34.9 ms` -- a ~0.2 ms/~0.6%
+  timing error baked into every default-params sequence this repo
+  generates, with no error or loud warning in `main.py`'s own summary
+  output (the warning appears mid-build, easy to miss in a long log, and
+  `main.py --ge`'s own `OK`/feasibility summary says nothing about TE
+  accuracy). This also means the PNS/acoustics/TE numbers throughout
+  CLAUDE.md's "PNS finding history" (79.8% peak "at min TE 34.86 ms") and
+  this file's own historical entries are now stale on the TE axis, on top
+  of item 111/123's already-tracked acoustics staleness and this pass's
+  own "Current baseline" table's updated acoustics/PNS figures above.
+  Severity: real, live, and silent -- not "not live today" like items
+  45/107's sibling 122/168 -- but bounded (a fraction of a millisecond,
+  well inside typical EPI timing tolerances, and PNS/feasibility are still
+  `OK` per this pass's fresh `main.py --ge` build). Fix direction: either
+  (a) treat this as an accepted, deliberate cost of the golden-angle
+  start-spreading improvement and update `TE` in `params.py` (or
+  `blip_slew`/other slew tuning) to restore margin, re-verifying PNS per
+  CLAUDE.md's own "re-verify after any seed/mask/R/ETL/resolution change"
+  guidance (a golden-angle start-direction change is exactly this kind of
+  schedule-affecting change, even though it isn't literally a
+  seed/mask/R/ETL/resolution edit), or (b) revisit whether
+  `_golden_angle_flip_start` can be constrained to avoid increasing the
+  worst-case blip step while still spreading start directions. Either way,
+  CLAUDE.md's "PNS finding history" numbers need refreshing to match --
+  out of scope to edit this pass (only `docs/review-findings.md` may be
+  modified), flagged here for the next pass that touches it.
+- [ ] **170. `lib/calc_te_tr_delays.py`'s `min_tr` formula omits `gy_spoil`
+  from its pre-excitation (fat-sat crusher) spoiler-block duration term,
+  while that block now actually plays `gx_spoil`/`gy_spoil`/`gz_spoil`
+  together -- undercounts `min_tr` under anisotropic resolution.**
+  [measured, not live at the shipped isotropic default, live and
+  quantified under anisotropic `res`] Commit `7af04d4` ("Add gy to fat-sat
+  crusher, cancel gx readout residual in spoiler") changed
+  `sequences/ArbEPI.py`'s (and `EPIcal.py`'s) fat-sat crusher block to play
+  all three spoiler axes together:
+  ```python
+  seq.add_block(
+      pp.scale_grad(gx_spoil, x_scale),
+      pp.scale_grad(gy_spoil, y_scale),
+      pp.scale_grad(gz_spoil, z_scale),
+  )
+  ```
+  but `lib/calc_te_tr_delays.py` was not touched by that commit, and its
+  `min_tr` formula's term for that same block still accounts for only x/z:
+  ```python
+  # lib/calc_te_tr_delays.py:61
+  min_tr = (
+      pp.calc_duration(rfsat)
+      + max(pp.calc_duration(gx_spoil), pp.calc_duration(gz_spoil))   # no gy_spoil
+      ...
+  ```
+  (the function's *second*, post-readout spoiler term, `:67`, does
+  correctly include `gy_spoil` -- `gy_spoil` has been a parameter to this
+  function since before this diff, so only the first term's `max(...)`
+  call was missed, not a plumbing gap.) Reproduced and quantified: at the
+  current isotropic default (`res=[0.9,0.9,0.9]mm`) all three spoiler
+  durations are equal (4.676 ms derated), so `max(gx,gz)` trivially equals
+  `max(gx,gy,gz)` and the bug is inert today -- confirmed by this pass's
+  `main.py --ge` build showing no `min_tr` warning. Varying only `res[1]`
+  (the y/phase-encode resolution) reproduces a real, growing undercount:
+
+  | `res_y` | `dur(gy_spoil)` | `min_tr` undercount |
+  |---|---|---|
+  | 0.90 mm (default) | 4.676 ms | 0.000 ms (inert) |
+  | 0.70 mm | 5.872 ms | 1.196 ms (live) |
+  | 0.50 mm | 8.016 ms | 3.340 ms (live) |
+  | 0.30 mm | 13.028 ms | 8.352 ms (live) |
+
+  Confirmed directly by assembling the real two-block (fat-sat + crusher)
+  sequence at `res_y=0.3mm` and measuring its actual duration (17.388 ms)
+  against what `min_tr`'s formula computes for that same part (9.036 ms)
+  -- an 8.352 ms gap, exactly `calc_duration(gy_spoil) -
+  max(calc_duration(gx_spoil), calc_duration(gz_spoil))`. Effect: since
+  `min_tr` is under-reported, `tr_delay = floor((TR - min_tr)/raster) *
+  raster` comes out larger than the true minimum requires, so the
+  *realized* total TR runs measurably longer than intended by exactly the
+  undercount -- the mirror-image failure mode of the TE bug CLAUDE.md
+  already documents fixing ("saved per-echo times and the realized TE ran
+  ~0.6-0.7 ms late because calc_te_tr_delays's min_te omitted the gro1
+  lead-in block..."), just for TR and via this newly-introduced omission.
+  `seq.check_timing()` cannot catch this -- it only validates raster
+  alignment of the already-correct real blocks, not that
+  `calc_te_tr_delays`'s own estimate matches them. No test exists for
+  `lib/calc_te_tr_delays.py` at all (`tests/` has no
+  `test_calc_te_tr_delays.py`, matching item 144's own coverage-gap
+  finding), so nothing would catch this. Fix: change
+  `lib/calc_te_tr_delays.py:61` to `max(pp.calc_duration(gx_spoil),
+  pp.calc_duration(gy_spoil), pp.calc_duration(gz_spoil))`, and add an
+  anisotropic-resolution regression case (could share test infrastructure
+  with item 142's suggested anisotropic-`res` test for `make_spoilers.py`).
+- [ ] **171. `ge/coppe.py`'s hop-2 SSH-failure fix (commit `3de4d58`) was
+  applied to only 1 of 7 ssh/scp invocations in the file, leaving the
+  identical silent-failure mode live on every other hop.** [measured code
+  state; the underlying failure mode was previously verified live by this
+  same commit's own investigation, not independently re-triggered here]
+  The commit's own comment (`ge/coppe.py:129-134`) states, as an empirical
+  finding, that `-q` "suppresses the actual auth-failure text too (e.g.
+  'Host key verification failed.'), not just the progress meter" -- and
+  removes `-q` from `_TRANSFER_SCRIPT`'s hop-2 `scp` (`ge/coppe.py:141-142`)
+  for exactly that reason, alongside a new `_ssh_env()` helper (stripping
+  `DISPLAY`/`SSH_ASKPASS`/`SSH_ASKPASS_REQUIRE`) and `BatchMode=yes`/
+  `PreferredAuthentications=publickey` to force a fast, diagnosable
+  non-interactive failure instead of an askpass fallback -- a real,
+  structural fix, not a fragile stderr-text-classification one (no
+  output-heuristic grepping was introduced anywhere in the diff). But `-q`
+  is still present, unremoved, on every other ssh/scp call in the module:
+  `ge/coppe.py:241` (`discover_relay_ip`'s `ssh -q user@relay`), `:264` and
+  `:276` (`stage_tarball_on_relay`'s `ssh -q ... mktemp -d` and `scp -q`),
+  `:293` (`cleanup_relay_staging`'s `ssh -q ... rm -rf`), and `:327-329`
+  (`build_ssh_prefix`, both the outer local->epyc/goliath hop and the
+  nested epyc/goliath->scanner hop -- used by every `run_remote` call:
+  `query_existing_entries`, `query_run_entries`, `claim_entry_numbers`,
+  `release_locks`, and the transfer trigger itself). Since `-q` suppresses
+  the SSH client's own client-side auth-failure diagnostics (not remote-
+  command output, which `-q` doesn't affect), an authentication failure on
+  any of these remaining hops -- e.g. a rotated/expired hop-1 key, a relay
+  host-key change, a bad `--user` -- would still surface only as
+  `run_remote`'s generic `RuntimeError(f'remote command failed (exit
+  {result.returncode})\n{detail}')` with `detail` empty or unhelpful,
+  reproducing the exact "bare, undiagnosable exit 1" symptom this commit
+  set out to fix, just on a different hop. Not a rare edge case: hop 1
+  (`query_run_entries`, the very first network call `main()` makes) is on
+  the critical path of every single invocation. `run_remote`'s docstring
+  (`ge/coppe.py:348-361`) discusses only the `DISPLAY`/askpass side of this
+  fix and doesn't mention that `-q` independently undermines the
+  "surfaces as diagnosable error" property the commit message claims for
+  the fix as a whole. Fix direction: drop `-q` from the same five
+  remaining call sites (keeping stderr capture, already correct there) the
+  same way it was dropped from `_TRANSFER_SCRIPT`.
 
 ## Consistency & documentation
 
@@ -1510,15 +1758,19 @@ guard, not a stylistic nitpick.
   which would make the claim true again.
 - [ ] **133. The `<seqname>_gre.h5`/`smaps_<seqname>_sigpy.h5` cache paths
   are hand-built with the identical f-string independently in 3-4
-  separate files instead of being `SeqPaths` fields.** [measured]
-  `<datdir>/recon/<seqname>_gre.h5`'s path is independently constructed
-  via `os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')` (or
-  the equivalent with a bare `seqname`) in `preprocess.py:310`,
-  `smaps.py:157`, `run_b0map.py:69`, and `gre_diagnostics.py:39`
-  (shifted down from `:34` by item 152's docstring/guard-clause additions;
-  the duplicated path itself is untouched);
-  `<datdir>/recon/smaps_<seqname>_sigpy.h5`'s path independently in
-  `preprocess.py:324`, `smaps.py:155`, and `run_b0map.py:91`. `SeqPaths`
+  separate files instead of being `SeqPaths` fields.** [measured;
+  citations updated 2026-09-12 against `ecb8f2f` -- `smaps.py`'s
+  edge-smoothing feature (`0e4e86e`) inserted ~80 lines above these,
+  shifting them down; `preprocess.py`, `run_b0map.py`, `gre_diagnostics.py`
+  are unchanged since last verified] `<datdir>/recon/<seqname>_gre.h5`'s
+  path is independently constructed via `os.path.join(cfg.datdir, 'recon',
+  f'{paths.seqname}_gre.h5')` (or the equivalent with a bare `seqname`) in
+  `preprocess.py:310`, `smaps.py:234` (was `:157`), `run_b0map.py:69`, and
+  `gre_diagnostics.py:39` (shifted down from `:34` by item 152's
+  docstring/guard-clause additions; the duplicated path itself is
+  untouched); `<datdir>/recon/smaps_<seqname>_sigpy.h5`'s path
+  independently in `preprocess.py:324`, `smaps.py:232` (was `:155`), and
+  `run_b0map.py:91`. `SeqPaths`
   (`preprocessing/config.py`) already centralizes every *other*
   per-sequence path (`scan_info`, `cal`, `noise`, `epi`, `recon`) for
   exactly this reason, but conspicuously omits these two. Currently
@@ -1537,18 +1789,21 @@ guard, not a stylistic nitpick.
 - [ ] **140. `preprocessing/nifti_io.py`'s module docstring caller list is
   stale on two counts: it names a module that no longer calls
   `save_recon_nifti`, and omits one that does and contradicts its
-  "always the EPI grid" claim.** [measured] `nifti_io.py:2-9` names
+  "always the EPI grid" claim.** [measured; citations updated 2026-09-12
+  against `ecb8f2f`] `nifti_io.py:2-9` names
   callers as "run_rss.py/run_cg_sense.py/run_recon_sigpy.py ...
   preprocess.py/recon_frames.py (sensitivity maps ...), and
   run_b0map.py (the field map itself ... on the EPI grid, same as every
   other NIfTI this pipeline writes ...)". A repo-wide grep of
   `save_recon_nifti(` calls shows: (a) `recon_frames.py` never calls
   `save_recon_nifti` -- that responsibility moved to `smaps.py`
-  (`smaps.py:195,226`) per `smaps.py`'s own docstring ("was
+  (`smaps.py:273,306`, was `:195,226` -- shifted by the edge-smoothing
+  commit's ~80-line insertion above) per `smaps.py`'s own docstring ("was
   `recon_frames.py`'s private `_load_smaps` -- moved here"), so the
-  docstring names the wrong module; (b) `gre_diagnostics.py:70` also
+  docstring names the wrong module; (b) `gre_diagnostics.py:75` also
   calls `save_recon_nifti` and isn't mentioned at all -- and it passes
-  `fov=sp.fov_degre` (`gre_diagnostics.py:71`, the deGRE grid), directly
+  `fov=sp.fov_degre` (`gre_diagnostics.py:76`, was `:70,71` before item
+  152's docstring/guard-clause additions shifted it, the deGRE grid), directly
   contradicting the same sentence's blanket claim that every NIfTI this
   pipeline writes is "on the EPI grid". Severity is low (documentation
   only) -- this is the same docstring item 67 already touched for a
@@ -1559,15 +1814,20 @@ guard, not a stylistic nitpick.
 - [ ] **141. Addendum to item 117: `preprocess.py`'s STEP 3 never writes
   `smaps_degre`/`emap_degre`, so `smaps.py`'s "legacy cache" backfill
   branch fires on every fresh full-pipeline run, not just an occasional
-  older cache.** [measured] Item 117 (still open) already flags that
+  older cache.** [measured; citations updated 2026-09-12 against `ecb8f2f`,
+  substance and liveness confirmed unchanged] Item 117 (still open)
+  already flags that
   `preprocess.py`'s STEP 3 hand-rolls a narrower copy of `smaps.py`'s
   `load_smaps()` caching logic instead of calling it directly. A
   concrete, previously-undocumented consequence of that narrowness:
-  STEP 3's fresh-estimation branch (`preprocess.py:335-346`) writes only
+  STEP 3's fresh-estimation branch (`preprocess.py:335-347`, was
+  `:335-346` -- grew by the new `smooth_sigma_mm=cfg.smaps_smooth_sigma_mm`
+  kwarg line) writes only
   `smaps_raw`/`emap`/`smaps` + `Nvcoils` -- it never computes or writes
   `smaps_degre`/`emap_degre`. `smaps.py`'s canonical `load_smaps`
-  (`smaps.py:208-222`) always computes and writes both alongside a fresh
-  estimate, and its own docstring (`:151-153`) describes the
+  (`smaps.py:286-303`, was `:208-222`) always computes and writes both
+  alongside a fresh
+  estimate, and its own docstring (now `:225-227`, was `:151-153`) describes the
   no-`smaps_degre` case as "an older cache written before these existed"
   that gets "backfilled in place" -- language implying an occasional,
   legacy case. Reproduced directly: writing a cache with exactly STEP 3's
@@ -1589,35 +1849,31 @@ guard, not a stylistic nitpick.
   x/y/z trapezoids, unlike the structurally-identical
   `lib/make_prephasers.py` (already fixed for exactly this reason -- see
   the dangling-but-real item 28, item 113).** [measured, low severity,
-  not live today] `lib/make_spoilers.py:23-43` builds
-  `gx_spoil`/`gy_spoil`/`gz_spoil` independently, each via its own
-  `pp.make_trapezoid(ch, ..., area=...)` call with no shared `duration=`
-  kwarg -- the exact pattern `make_prephasers.py`'s docstring documents
-  as "a real, if not previously live, consistency bug in this port"
-  (item 28; the fix itself -- building every axis's trapezoid at one
-  shared `duration = max(pp.calc_duration(g) for g in natural)` -- is
-  real and present at `make_prephasers.py:31-32`). `gx_spoil`/
-  `gy_spoil`/`gz_spoil` are played together in the same block in both
-  `ArbEPI.py` and `EPIcal.py` (the post-readout spoiler block item 138
-  above also touches), exactly the situation the prephaser fix targets:
-  since a pypulseq block's duration is set by its longest gradient event
-  regardless, an axis with its own shorter independently-computed
-  duration just idles for the rest of the block once its own trapezoid
-  finishes, with no benefit, and its gradient shape (steeper ramps for a
-  smaller-area/shorter-duration trapezoid) can differ unnecessarily
-  between axes and across FOV/resolution changes. Currently not live: at
-  this repo's default isotropic (0.9mm) resolution, `deltak[i] * N_i`
-  cancels to the same value on every axis, so all three spoilers already
-  come out to identical durations (measured: 2.588 ms each) -- the same
-  "inert at today's isotropic default, live under anisotropic
-  resolution" situation `make_prephasers.py`'s own anisotropic-FOV
-  regression test exists to guard. Reproduced the divergence
-  synthetically by varying only `fov` to be anisotropic: z-axis spoiler
-  duration drops to 1.544 ms while x/y stay at 2.588 ms. No test exists
-  for `make_spoilers.py` at all (`make_prephasers.py` has the
-  anisotropic-FOV regression test; there's no `test_make_spoilers.py`).
-  Fix: apply the same shared-`duration` construction `make_prephasers.py`
-  uses, and add an analogous anisotropic-FOV regression test.
+  not live at the shipped default; re-verified/updated 2026-09-12 against
+  `ecb8f2f` -- `lib/make_spoilers.py` was reworked by commit `8448ff3`
+  (the cycles/voxel redesign) to take `res`+`n_cycles_spoil` instead of
+  `Nx`/`Ny`/`Nz`/`fov`/a scalar, but the underlying gap is unchanged]
+  `lib/make_spoilers.py:23-46` still
+  builds `gx_spoil`/`gy_spoil`/`gz_spoil` independently in a loop, each
+  via its own `pp.make_trapezoid(axis, ..., area=...)` call with **no
+  shared `duration=`** -- the exact pattern `make_prephasers.py` was fixed
+  for (item 28/113). The rework changes *when* durations diverge only
+  quantitatively, not qualitatively: `area = n_cyc / res_ax` now, and
+  since every axis is currently built at the same `n_cyc =
+  params.spoil_cycles_max` (see `sequences/ArbEPI.py`'s/`EPIcal.py`'s
+  `make_spoilers(params.res, [params.spoil_cycles_max] * 3, ...)` call),
+  the three durations still coincide exactly whenever `res` is isotropic
+  -- measured now at **4.428 ms** each (up from the old commit's 2.588 ms,
+  since `spoil_cycles_max=4.0` replaced the old flat `n_cycles_spoil=2`).
+  Reproduced the divergence again by varying only `res` to `[0.9, 0.9,
+  1.8] mm`: z-axis spoiler duration drops to **2.340 ms** while x/y stay
+  at **4.428 ms** -- same "inert at isotropic default, live under
+  anisotropic resolution" situation as before, just with updated absolute
+  numbers. Still no `test_make_spoilers.py`. Fix: apply the same
+  shared-`duration` construction `make_prephasers.py` uses, and add an
+  analogous anisotropic-`res` regression test (this could share
+  infrastructure with item 170's fix, which needs the same anisotropic-
+  resolution scenario for a related `calc_te_tr_delays` bug).
 - [x] **152.** Resolved: `gre_diagnostics.py`'s module docstring now names
   the actual keys read (`finit_hz`/`b0map_hz_degre`/`mask_degre`) and
   states the dependency on `run_b0map.py`'s post-processing having
@@ -1654,6 +1910,108 @@ guard, not a stylistic nitpick.
   something unambiguous, e.g. "(at this repo's default 0.9mm `res`, with a
   hypothetical Nz/R chosen to survive the restriction)", in both
   `caipi_sample.py` and the test file's matching comment.
+- [ ] **176. `sequences/ArbEPI.py` and `sequences/EPIcal.py` both seed their
+  per-shot spoiler-randomization RNG with the identical literal `0`,
+  undocumented as to whether the sharing is intentional.** [verified, low
+  severity, design-choice rather than clearly a bug] Commit `8448ff3`
+  added `spoil_rng = np.random.default_rng(0)` at both
+  `sequences/ArbEPI.py:203` and `sequences/EPIcal.py:85`. Since both are
+  freshly seeded with the same constant, the two sequences draw the *same*
+  sequence of `(cx, cy, cz)` cycles/voxel triples, just consumed at
+  different starting points in their respective per-shot loops (ArbEPI's
+  draw index corresponds to `(frame=i//Nshots, shot=i%Nshots)` starting at
+  frame 0/shot 0; EPIcal's corresponds to `shot = i - Ndummyshots`
+  starting at the first *dummy* shot) -- e.g. EPIcal's dummy shot 0 gets
+  the exact same triple ArbEPI's frame-0/shot-0 got. This isn't flagged as
+  a correctness bug -- there's no apparent reason EPIcal's spoiler draws
+  need to be decorrelated from ArbEPI's for the stated purpose (breaking a
+  residual coherence pathway within *one* sequence's own repeated TR
+  structure, per `params.py`'s `spoil_cycles_min`/`max` comment) -- but
+  it's undocumented, so a future reader could easily mistake the
+  duplicated literal `0` for copy-paste residue rather than a deliberate
+  choice. Fix: add a short comment beside each `spoil_rng =
+  np.random.default_rng(0)` line (or in `params.py`'s
+  `spoil_cycles_min`/`max` docstring) stating explicitly that sharing seed
+  0 across the two generators is intentional and why.
+- [ ] **177. `preprocessing/smaps.py`'s `process_smaps` inline
+  step-numbering comments no longer match its own docstring's step count
+  after two new steps were added.** [measured, very low severity]
+  `smaps.py:124`'s docstring now advertises "Mask, z-crop, resize, smooth,
+  and RSS-normalize" -- five verbs/stages -- but the inline comments still
+  only number three of them: `# 1. Eigenvalue support mask...`
+  (`smaps.py:140`), `# 2+3. Crop z...interpolate...` (`smaps.py:146`), and
+  `# 4. Normalize...` (`smaps.py:195`). The two new stages added by
+  `0e4e86e`/`f470f53` -- the post-resize re-mask (`smaps.py:151-168`) and
+  the Gaussian smoothing block (`smaps.py:170-193`) -- sit unlabeled
+  between "2+3" and the now-mislabeled "4" (normalize is really the sixth
+  step by the docstring's own count). A reader skimming the numbered
+  comments for an overview would miss that two whole stages exist between
+  resize and normalize. Fix: renumber as 1 / 2+3 / 4 (re-mask) / 5
+  (smooth) / 6 (normalize), or drop the numbering scheme now that it no
+  longer covers every step.
+- [ ] **178. `preprocessing/smaps.py`'s `_masked_gaussian_smooth` uses
+  `scipy.ndimage.gaussian_filter`'s default `mode='reflect'` boundary
+  handling, inconsistent with `preprocessing/grid_resize.py`'s documented
+  `mode='nearest'` convention for the same pipeline -- confirmed to have
+  no live effect, but undocumented.** [verified, very low severity]
+  `smaps.py:105,109-110` (added by `0e4e86e`) call
+  `ndimage.gaussian_filter(weight, sigma_vox)` and the matching call on
+  the numerator array with no explicit `mode=`, so reflect-padding applies
+  at the outermost voxels of the target grid. `grid_resize.py`'s module
+  docstring (`grid_resize.py:36-39`) explicitly chose `mode='nearest'`
+  over reflect/wrap for the resize step specifically because those "mix in
+  wrap-around or reflected samples that make even less physical sense for
+  a truncated anatomical/field-map volume" -- the same reasoning would
+  apply here. Verified this has no live effect by construction, not just
+  by assumption: the object essentially never touches the outer edge of
+  the acquisition FOV, and where the mask is 0 at the array edge,
+  `_masked_gaussian_smooth`'s `denom` clamps to 1 and `num` is 0, giving
+  exactly 0 regardless of padding mode. Fix: pass `mode='nearest'`
+  explicitly for consistency with `grid_resize.py`'s stated convention, or
+  add a one-line comment explaining why reflect is fine here.
+- [ ] **179. `recon/sweep_time_segments.py`'s module docstring and its own
+  printed sweep-table marker both still call `L=6` "the current production
+  default," stale since item 82 changed the default to `L=32`.**
+  [measured, low severity, self-referentially ironic] The module docstring
+  (`recon/sweep_time_segments.py:9-11`) says "...L=6 (the current
+  production default, params.py-adjacent choice in
+  operators_b0.py/run_b0_recon.py)..." and the sweep report's own printed
+  marker (`:148`, `marker = "  <- current default" if L == 6 else ""`)
+  labels the `L==6` row as current -- but `recon/operators_b0.py:151`,
+  `recon/reconstruct.py:161`, and `recon/run_b0_recon.py:69,149` all
+  default `L`/`L_b0` to **32**, matching CLAUDE.md's explicit statement
+  that this exact sweep script is what established L=32 as the correct
+  choice over the old L=6 default. Both the docstring sentence and the
+  `L == 6` marker condition were evidently never updated once that
+  conclusion took effect. Severity is low (a one-off analysis script, not
+  part of any pipeline or test), but the mislabeled `<- current default`
+  marker appears in the script's actual printed output, not just a
+  comment, so anyone re-running the sweep today gets a table flagging the
+  wrong `L` as current. Fix: update both the docstring sentence and the
+  `L == 6` marker condition to `L == 32` (or read the production default
+  from a single named constant so this can't re-drift the next time it
+  changes).
+- [ ] **180. `recon/validate_against_mslr.py`'s module docstring documents
+  only the three radial-dataset validation configs, omitting the three
+  matching laminar-dataset configs CLAUDE.md documents as validated via
+  this same script.** [measured, low severity, documentation only]
+  `recon/validate_against_mslr.py:20-33`'s "Validated results (2026-08-25,
+  RTX A6000, 20260822ball_radial dataset...)" paragraph lists only the
+  radial L/G/G+L rows. CLAUDE.md's `recon/` section documents six configs
+  from the same 2026-08-25 validation run -- the same three radial rows
+  plus three matching laminar rows (`20260822ball_laminar`) -- explicitly
+  stating "all six run via `recon/validate_against_mslr.py`." This isn't
+  just a stale copy-paste: the script's own inline comment
+  (`recon/validate_against_mslr.py:103`, "Multi-scale reg_cost...
+  accumulates more floating-point noise... measured ~1-2e-4 on both real
+  G+L runs (radial and laminar)") already references the laminar run's
+  measured tolerance directly -- i.e. the laminar validation was
+  incorporated into the script's tolerance-setting logic but never added
+  to its own results-table docstring. A maintainer reading only this
+  file's docstring would incorrectly believe laminar was never validated
+  against real MSLR output. Fix: add the three laminar rows (or a pointer
+  to CLAUDE.md's fuller six-row table) to
+  `recon/validate_against_mslr.py:20-33`.
 
 ## Test & tooling health
 
@@ -1993,6 +2351,91 @@ guard, not a stylistic nitpick.
   add a test building `build_encoding_operator_b0(..., nbins=20)` (or
   similarly coarse) at a scale reproducing the asymmetric in-object range
   from CLAUDE.md's `nbins` paragraph, asserting `pytest.warns` fires.
+- [ ] **172. The new per-shot spoiler-cycles randomization and
+  `gx_residual` net-kx cancellation (`sequences/ArbEPI.py`/`EPIcal.py`,
+  commit `7af04d4`) has zero test coverage despite real, non-trivial
+  arithmetic.** [measured -- verified correct by hand/script this pass,
+  but unguarded] `grep -rn "spoil_cycles|gx_residual|spoil_rng" tests/`
+  returns nothing. This is exactly the kind of gradient/blip-logic change
+  CLAUDE.md says `tests/test_trajectory_matches_schedule.py` exists to
+  guard ("this is the test to extend when changing gradient/blip logic"),
+  yet that file wasn't extended here. This pass independently verified two
+  key correctness properties by direct calculation against
+  `Sequence.calculate_kspace()` (not just by reading the code): (a)
+  `gx_residual = gx_pre.area * rg.gx_pre_scale * (1 if ETL % 2 == 0 else
+  -1)` matches the true net kx position after `gx_pre + gro1 + the full
+  readout train` exactly (to float precision) for both even and odd `ETL`;
+  (b) `pp.scale_grad(gx_spoil, (x_scale * gx_spoil.area - gx_residual) /
+  gx_spoil.area)` is algebraically self-consistent -- it delivers physical
+  area `x_scale*gx_spoil.area - gx_residual`, which added to the
+  pre-spoiler kx position (`gx_residual`) lands exactly at the intended
+  `x_scale*gx_spoil.area`, in both `ArbEPI.py:276` and `EPIcal.py:154`.
+  So there's no live bug today, but none of this is guarded by a
+  regression test -- a future edit to any of these formulas (a sign flip,
+  an off-by-one in the scale-factor derivation) would not be caught by the
+  existing suite. Fix: add (a) a k-space-based test asserting the
+  post-readout-spoiler-block kx/ky/kz position matches the intended
+  `x_scale`/`y_scale`/`z_scale * area` targets (modulo item 138's known
+  y/z offset) for a couple of `ETL` parities, and (b) a
+  `make_spoilers.py`-level duration/area unit test per item 142.
+- [ ] **173. `ge/coppe.py`'s hop-2 SSH-failure fix (commit `3de4d58` --
+  the `BatchMode`/`PreferredAuthentications`/`-q` change in
+  `_TRANSFER_SCRIPT`, and the new `_ssh_env()` helper) has zero test
+  coverage, matching the "no regression test for a just-fixed bug" pattern
+  items 129/134/135/161 already flag elsewhere in this repo.** [measured]
+  `grep -rn "coppe" tests/` finds only `tests/test_coppe_assign.py`, whose
+  own docstring explicitly disclaims the remote-facing functions ("thin
+  wrappers around subprocess calls to a real scanner and aren't exercised
+  here") and whose imports (`assign_entry_numbers, find_pge_files,
+  split_reused_files, stage_entry_files`) never touch `_ssh_env`,
+  `_TRANSFER_SCRIPT`, `run_remote`, or any ssh/scp-invoking function.
+  Unlike the genuinely network-dependent functions that file's docstring
+  excuses, both new pieces here are trivially unit-testable with zero
+  network/SSH dependency: `_ssh_env()` is a pure function (assert it
+  strips exactly `{DISPLAY, SSH_ASKPASS, SSH_ASKPASS_REQUIRE}` from a
+  supplied env dict and leaves everything else untouched), and
+  `_TRANSFER_SCRIPT` is a plain module-level string (assert it contains
+  `BatchMode=yes` and `PreferredAuthentications=publickey` and that its
+  `scp` invocation no longer carries a bare `-q`). Given item 171 above,
+  such a test would also directly regression-guard against silently
+  reintroducing `-q` on the hop-2 leg, or against a future edit forgetting
+  to route a new subprocess call through `_ssh_env()`.
+- [ ] **174. `preprocessing/preprocess.py`'s STEP 3 smaps branch --
+  including the new `smooth_sigma_mm` threading added by `0e4e86e` -- has
+  no dedicated test.** [measured, low severity] A repo-wide grep confirms
+  `tests/test_preprocessing_preprocess.py` has zero references to
+  `smaps`/`process_smaps`/`estimate_smaps` -- STEP 3's cache-validity
+  check, its `process_smaps` call (now including
+  `smooth_sigma_mm=cfg.smaps_smooth_sigma_mm`, `preprocess.py:341`), and
+  its narrower write (see item 117's sharpened entry above) are entirely
+  untested in isolation; they only run implicitly whenever `preprocess()`
+  itself is exercised end-to-end (GERecon-gated, so effectively never in
+  this suite). This means the new `smooth_sigma_mm` threading was verified
+  by code reading this pass, not by any test. Fix: a light regression test
+  the way `tests/test_preprocessing_recon_frames.py` covers `load_smaps`'s
+  call sites, or -- better -- fold into whatever eventually resolves item
+  117 (calling `load_smaps` directly from STEP 3 would make this moot).
+- [ ] **175. `preprocessing/smaps.py`'s two new Gaussian-smoothing tests
+  don't exercise an anisotropic target grid, the one shape of bug the
+  physical-mm sigma conversion could plausibly hide.** [measured, low-
+  medium severity] Both new tests (`tests/test_preprocessing_smaps.py:100-133`,
+  `:136-187`, added by `0e4e86e`) use isotropic `fov`/`n_target`
+  (`(0.2,0.2,0.2)`/`(40,40,40)` and `(0.18,0.18,0.18)`/`(91,91,91)`).
+  `smaps.py:190-191`'s `vox_mm = np.array(fov) / np.array(n_target) *
+  1000; sigma_vox = smooth_sigma_mm / vox_mm` is only meaningfully tested
+  when x/y/z voxel size is identical -- a per-axis mix-up (e.g. swapping
+  `fov`/`n_target` order, or using the wrong tuple) would silently pass
+  both current tests. This repo's own real acquisitions are *not*
+  isotropic (e.g. CLAUDE.md's `240,240,45` grids -- z is coarser than x/y
+  by ~5x), so this is exactly the untested regime. Checked the arithmetic
+  by hand for a realistic case (`fov=(0.24,0.24,0.1013)`,
+  `n_target=(240,240,45)` -> `vox_mm~=(1.0,1.0,2.25)` -> `sigma_vox~=
+  (6.0,6.0,2.67)`, physically sensible -- larger index-space sigma on the
+  finer axis to keep the same mm-scale blur) -- no live bug today, just an
+  untested axis-order assumption. Fix: add one anisotropic-grid test
+  (e.g. asserting the fitted/observed smoothing extent in physical units
+  is similar across axes despite differing voxel size, or directly
+  asserting `sigma_vox` per-axis via a stub).
 
 ## Conciseness & performance
 
@@ -2153,15 +2596,36 @@ guard, not a stylistic nitpick.
   `recon_frames.py` or `run_b0map.py` runs later. Not a correctness bug
   today (the backfill path is real and tested), but it's duplicated
   cache-validity logic in two places that can already drift: item 41's
-  fix made `smaps.py:170-173` compare `int(f.attrs['Nvcoils'])` against a
-  freshly-read `ksp_gre.shape[-1]`, while `preprocess.py:330` still
-  compares `f.attrs.get('Nvcoils') == Nvcoils` -- similar but not the same
-  check, with no test pinning them to identical behavior. Since
+  fix made `smaps.py:244-250` (shifted from `:170-173` by the smoothing
+  commit's +80-line insertion above it) compare `int(f.attrs['Nvcoils'])`
+  against a freshly-read `ksp_gre.shape[-1]`, while `preprocess.py:330`
+  still compares `f.attrs.get('Nvcoils') == Nvcoils` -- similar but not the
+  same check, with no test pinning them to identical behavior. Since
   `paths.recon`'s GRE cache (read by `load_smaps`) is the very file STEP 2
   just wrote moments earlier, `preprocess.py` could call `load_smaps(cfg,
   paths, seq_params)` directly instead -- which would also produce a
   complete cache (with `smaps_degre`/`emap_degre`) on the very first run
   rather than deferring that to a later backfill.
+
+  **Sharpened 2026-09-12** (`ecb8f2f`): `smaps.py`'s new
+  edge-smoothing feature (`process_smaps`'s `smooth_sigma_mm` parameter,
+  added by `0e4e86e`) makes this duplication concretely worse, not just
+  theoretically riskier. `preprocess.py`'s STEP 3 is now a **fourth**
+  call site (on top of `load_smaps`'s three) that has to be kept in sync
+  with `process_smaps`'s growing signature by hand -- `preprocess.py:341`
+  does correctly thread `smooth_sigma_mm=cfg.smaps_smooth_sigma_mm`
+  through today (verified: all 4 production `process_smaps(` call sites
+  repo-wide pass it consistently, so a fresh STEP 3 estimate's
+  smoothing/masking behavior is currently functionally identical to one
+  produced via `load_smaps`), but this is a demonstrated instance of
+  exactly the drift risk this item already warns about -- the
+  `Nvcoils`-check divergence noted above has already persisted through
+  this change unnoticed, and a future `process_smaps` parameter could
+  just as easily be missed in one of the 4 sites next time. `preprocess.py`'s
+  STEP 3 smaps branch itself also has no dedicated test
+  (`tests/test_preprocessing_preprocess.py` has zero references to
+  `smaps`/`process_smaps`/`estimate_smaps`), so nothing would catch such a
+  miss either -- see item 174.
 - [ ] **118. `sampling/pd_sample.py`'s `dtype` parameter
   (`'logical'`/`'double'`/`'complex'`) is dead in production and
   untested.** [measured] `pd_sample`'s `dtype` branch (`:295-300`) is only
