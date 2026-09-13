@@ -172,14 +172,39 @@ samples) was found and verified directly in this pass's own synthesis
 step, not by a subagent, after a fresh `main.py --ge` build surfaced a new
 `calc_te_tr_delays` warning no prior baseline had reported; confirmed by
 reproducing `max_blip_steps` with `_golden_angle_flip_start` forced off
-(37) vs. on (39) against the same seed-0 schedules.
+(37) vs. on (39) against the same seed-0 schedules. Items 181-187 are new
+findings from a later pass (2026-09-13, against `5e263f3`) that also
+re-verified the state of the tree since the previous pass: `git diff
+ecb8f2f HEAD --stat` shows only `docs/review-findings.md` itself changed
+in that span (items 169-180, added by the previous pass) -- the source
+tree is byte-for-byte identical to what that pass reviewed, confirmed
+again by a fresh `uv run ruff check .` (29 errors, all `E501`), `uv run
+pytest` (143 passed/15 skipped plain, 209 passed/5 skipped with
+`preprocessing`+`recon` extras, 34 passed for `tests/test_recon_*.py`
+alone), and a fresh `main.py --ge` build (identical peak-PNS/acoustics
+numbers and the identical item-169 TE-feasibility warning) all matching
+the previous pass's baseline exactly -- so no still-open item needed
+re-verification against changed code this pass; the entire budget went
+into hunting for new findings. Split across four parallel subagents with
+the same scope as the previous several passes (`sampling/`+`plotting/`;
+`ge/`+`lib/`+`sequences/`+`params.py`/`main.py`/`scanners.py`;
+`preprocessing/`; `recon/`), each confirming its assigned scope's open
+items were unchanged before hunting for anything new; seven findings
+survived independent re-verification against the live tree (not just
+trusted from each subagent's own report -- every one below was re-checked
+by direct code reading and, where executable, a fresh reproduction) and
+are recorded as items 181-187 below. Also sharpened item 115's own
+citation: one of its supporting sub-claims ("no test file... imports
+`plotting.plotting` at all") went stale after `tests/test_plotting.py` was
+added for items 127/149, though that item's substantive finding -- none of
+the actual plotting *functions* are tested -- remains fully open.
 
-## Current baseline (2026-09-12, against `ecb8f2f`)
+## Current baseline (2026-09-13, against `5e263f3`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
   errors**, all `E501` -- unchanged from the previous pass.
 - `uv run pytest` (plain main venv, fresh `.venv`, `rm -rf output` first):
-  **143 passed, 15 skipped** -- +1 pass vs. the previous pass's 142, same
+  **143 passed, 15 skipped** -- unchanged from the previous pass, same
   skip composition (**9** `sigpy`/`nibabel`-gated `preprocessing` files,
   **6** `could not import 'torch'` `recon` files). With `--extra
   preprocessing --extra recon` also synced: **209 passed, 5 skipped**, all
@@ -192,13 +217,10 @@ reproducing `max_blip_steps` with `_golden_angle_flip_start` forced off
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, GE_MR750, `PNSwt = [0.8, 1.0, 0.7]`, seed 0) --
   all four sequences `.ok`, re-measured fresh this pass (`rm -rf output`
-  first). **`ArbEPI.seq`/`EPIcal.seq`'s acoustics moved from 0.1484 to
-  0.1764** (the fat-sat crusher now also plays `gy_spoil`, per commit
-  `7af04d4`, adding real acoustic content on an axis that previously
-  carried none there) and **peak PNS ticked up slightly** (79.8% -> 79.9%,
-  78.1% -> 78.2%) -- both still comfortably `OK` under their 0.3/80%
-  limits, so this is a recorded baseline shift, not a regression needing
-  action. `deGRE.seq`/`noise.seq` are unchanged from the previous pass:
+  first). Numbers unchanged from the previous pass -- the source tree is
+  identical (see the provenance note above), and the same item-169
+  `Minimum achievable TE (35.104 ms) exceeds prescribed TE (34.900 ms)`
+  warning still fires, confirming the build is byte-for-byte reproducible:
 
   | sequence | peak PNS | acoustics | max grad | max slew |
   |---|---|---|---|---|
@@ -211,16 +233,12 @@ reproducing `max_blip_steps` with `_golden_angle_flip_start` forced off
   already-corrected table, not the stale 0.2456 still quoted in
   `ge/check.py`'s module docstring -- see item 123 below, a third,
   previously-unflagged occurrence of the same stale figure item 111
-  already tracked in CLAUDE.md and this file's own table).
-
-  **This build also printed a new warning absent from every prior
-  baseline**: `Minimum achievable TE (35.104 ms) exceeds prescribed TE
-  (34.900 ms)` -- see item 169 below. This means the "min TE 34.86 ms"
-  figure CLAUDE.md's "PNS finding history" cites for the tuned
-  `blip_slew=105` defaults is now stale too, on top of item 111/123's
-  already-tracked acoustics staleness -- out of scope to edit CLAUDE.md
-  this pass (only `docs/review-findings.md` may be modified), flagged here
-  for the next pass that touches it.
+  already tracked in CLAUDE.md and this file's own table). Item 169's TE-
+  feasibility warning, item 111/123's acoustics staleness, and CLAUDE.md's
+  now-stale "min TE 34.86 ms" PNS-finding-history figure are all still
+  open, unchanged, and still out of scope to fix here (only
+  `docs/review-findings.md` may be modified this pass) -- carried forward
+  for the next pass that touches CLAUDE.md.
 
 ## Correctness
 
@@ -1420,6 +1438,165 @@ reproducing `max_blip_steps` with `_golden_angle_flip_start` forced off
   the fix as a whole. Fix direction: drop `-q` from the same five
   remaining call sites (keeping stderr capture, already correct there) the
   same way it was dropped from `_TRANSFER_SCRIPT`.
+- [ ] **181. `sequences/deGRE.py`'s ADC delay is derived from a pre-`trap4ge`
+  gradient object, not the one actually played -- if `crt` ever diverges from
+  `grad_raster_time`, the readout's first sample lands inside the gx ramp
+  instead of on the flat top.** [measured] `deGRE.py:112-119`:
+  ```python
+  gxtmp = pp.make_trapezoid(
+      'x', system=sys, amplitude=params.Nx_degre * deltak[0] / Tread, flat_time=Tread
+  )
+  ...
+  adc = pp.make_adc(params.Nx_degre, system=sys, duration=Tread, delay=gxtmp.rise_time)
+  ```
+  `gxtmp` is a plain `pp.make_trapezoid(...)`, never passed through `trap4ge` --
+  it exists only so `gx_pre`'s area can be derived from `-gxtmp.area / 2` and so
+  `adc.delay` can be set from its `rise_time`. But the gradient actually played
+  during the readout, `gx` (`:122-129`), is a *separate* object built afterward
+  with a slightly different `flat_time` (`Tread + adc.dead_time`) and *is*
+  passed through `trap4ge(..., crt, sys)`, which rounds rise/flat/fall times up
+  to `crt` multiples -- so `gx.rise_time` only equals `gxtmp.rise_time` when
+  `trap4ge` is a no-op, i.e. `crt == grad_raster_time` (today's shipped
+  default, `crt = 4e-6`, per `params.py:287`'s comment). Reproduced directly:
+  at `crt=4e-6`, `gxtmp.rise_time == gx.rise_time == 156 us` (inert); at
+  `crt=20e-6` (the one alternate value CLAUDE.md itself names as a plausible
+  future setting, for Siemens-dual-raster compatibility), `gx.rise_time`
+  becomes `160 us` while `adc.delay` stays at `gxtmp`'s stale `156 us`.
+  Building the real `generate_degre()` output at `crt=20e-6` and inspecting
+  the first acquisition block confirms the consequence directly: the gx flat
+  top starts at `0.00016 s` but the ADC starts at `0.000156 s` -- 4 us (one
+  full dwell) early, so the ADC's first sample (centered at
+  `adc.delay + 0.5*dwell = 0.000158 s`) lands during the ramp, not the flat
+  top, corrupting kx-trajectory linearity for that sample.
+  `seq.check_timing()` passes (it only validates raster alignment of each
+  object in isolation, not cross-object consistency between `adc.delay` and a
+  *different* gradient's realized rise time), and no test exercises
+  `crt != grad_raster_time` for deGRE (`tests/test_trajectory_matches_schedule.py`'s
+  only deGRE-specific cases, `test_degre_excitation_is_centered` and
+  `test_degre_raises_actionable_error_below_minimum_tr`, neither vary `crt`
+  nor check ADC/gradient alignment). Distinct from the two already-documented
+  "same class" `trap4ge`-resync issues (the RF-pulse decentering CLAUDE.md's
+  `trap4ge` paragraph describes, and item 168's `gz_ss.delay` negative-delay
+  gap): `gxtmp` itself is never passed through `trap4ge`, so it's outside the
+  audited "0 of 11 real call sites" set those cover -- this bug is the
+  *mismatch* between an untransformed reference object and the transformed
+  one actually played, not a `trap4ge` call site misbehaving. Fix: derive
+  `adc.delay` from the same post-`trap4ge` gradient that's actually played
+  (e.g. build/trap4ge `gx` first, or trap4ge `gxtmp` too, before reading a
+  rise time for `adc.delay`), and add a regression test building
+  `generate_degre` at a non-default `crt` (e.g. `20e-6`) asserting
+  `adc.delay == gx.delay + gx.rise_time`.
+- [ ] **182. `preprocessing/recon_frames.py`'s `use_parfor=True` path drains
+  its own memory-bounding frame generator eagerly, defeating the design its
+  own comment describes.** [measured] `recon_frames()` builds
+  `frame_data = (f['ksp_epi_zf'][:, :, :, :, frame] for frame in
+  range(nframes))` specifically, per the adjacent comment (`recon_frames.py:89-92`),
+  "to bound memory" for a full-res acquisition that can otherwise exceed
+  physical RAM. When `cfg.use_parfor` is `True` (`:96-98`), this generator is
+  handed straight to `concurrent.futures.ProcessPoolExecutor.map()`. The
+  stdlib `Executor.map()` implementation eagerly builds
+  `fs = [self.submit(fn, *args) for args in zip(*iterables)]` before
+  returning anything -- i.e. it fully drains the iterable up front,
+  submitting every frame's task (and therefore reading every frame's HDF5
+  slice into memory) regardless of worker count or how fast tasks are
+  consumed. Reproduced directly two ways: (a) a standalone repro
+  (`ProcessPoolExecutor(max_workers=2).map(slow_fn, generator)`, `slow_fn`
+  sleeping 0.3s) shows all 10 generator items produced before `map()` even
+  returns, well before either worker finishes its first task; (b) an
+  instrumented real `recon_frames()` run (patching `h5py.Dataset.__getitem__`
+  to timestamp reads), `use_parfor=True`, `recon_fn` sleeping 0.2s: all 8
+  frame slices were read from the HDF5 file within 0.05s -- before any
+  worker had finished even its first (0.2s) task -- confirming the same
+  eager-drain happens in the real code path, not just the abstract repro. At
+  this repo's real scale (240x240x45x18-coil complex64, ~373MB/frame per
+  CLAUDE.md's own cited chunk size, up to 30 frames ~= 11GB), this means the
+  `use_parfor=True` path reads essentially the entire acquisition into
+  memory at once -- exactly the OOM scenario the streaming-generator design
+  exists to avoid. Distinct from the already-resolved item 105 (which fixed
+  re-pickling `smaps` per dispatched task, not this generator-draining
+  issue). Latent in the shipped default (`PreprocessingConfig.use_parfor`
+  defaults to `False`), but real and reproducible for any user who opts into
+  parallel reconstruction -- a real, documented config knob, not a
+  hypothetical. No test in `tests/test_preprocessing_recon_frames.py`
+  exercises `use_parfor=True` at all, so nothing catches this. Fix: bound
+  submission with a semaphore/rolling window (submit new work only as prior
+  futures complete), or dispatch via `executor.submit()` one frame at a time
+  against a bounded in-flight queue, instead of a bare `.map()` over an
+  unbounded-lookahead generator.
+- [ ] **183. `preprocessing/julia/b0map.jl`'s `romeo_finit` never receives
+  the sensitivity maps the module docstring says replace its noisy
+  coil-combine fallback -- the ROMEO-unwrapped `finit` is always built from
+  the same low-SNR phase-contrast combine, regardless of whether real `smap`
+  was loaded.** [verified by code reading -- no `julia` executable available
+  in this environment to execute it, same constraint this repo's own test
+  suite already accepts for this file] The module docstring (`b0map.jl:71-90`)
+  states the `smap` feature "replaces MRIFieldmaps' own phase-contrast
+  coil-combine fallback (`coil_combine(images, nothing)`, ...) with a true
+  matched-filter combine (`coil_combine(images, smap)`, ...)", motivated by
+  reduced noise "in this pipeline's real low-per-coil-SNR object-center
+  regions." That's accurate for the main fit call, `b0map(finit, images,
+  echotime; smap, mask, precon)` (`:242`), which does receive `smap`. But
+  `romeo_finit(images, echotime, mask)` (`:192-198`) -- the function that
+  builds the NCG solve's *initial guess* by ROMEO-unwrapping the coil-combined
+  phase difference -- has no `smap` parameter at all, and its one
+  `coil_combine` call (`:193`) is hardcoded `coil_combine(images, nothing)`
+  unconditionally. In `main()` (`:200-242`), `smap` is fully loaded from
+  `smaps_h5_path` (`:221-231`) *before* `finit = romeo_finit(images,
+  echotime, mask)` is called (`:234`) -- so a real `smap` is sitting right
+  there, unused by the one call that could use it. Since `main()`'s own
+  docstring stresses that a bad `finit` can make the NCG solve converge to
+  the wrong 2π branch entirely (not just a locally noisier optimum), this gap
+  means the `smap` improvement documented in CLAUDE.md's B0 off-resonance
+  section is only half-applied: the initial guess is seeded from exactly the
+  noisier combine the feature was added to move away from, in precisely the
+  low-SNR regions that motivated it. `preprocessing/run_b0map.py` now passes
+  a real `smaps_path` whenever `load_smaps()` succeeds (the common case, not
+  a corner case), so this is live in essentially every real run today, not a
+  rare edge case. `tests/test_preprocessing_run_b0map.py` never exercises the
+  `smaps_h5_path` argument at all (confirmed via grep -- zero occurrences),
+  so nothing would catch this either way. Fix: thread `smap` into
+  `romeo_finit`'s signature and call `coil_combine(images, smap)` when `smap`
+  is available (mirroring what the main fit call already does), falling back
+  to `coil_combine(images, nothing)` only when no `smap` was loaded.
+- [ ] **184. `recon/lowrank.py`'s `img2patches`/`patches2img` silently zero
+  out real image voxels whenever `stride_size > patch_size` on an axis --
+  unvalidated, and untested in that regime.** [measured] `_patch_starts(n,
+  patch, stride)` (`lowrank.py:21-23`) places patch starts at
+  `min(i*stride, n-patch)`, guaranteeing the *last* patch reaches `n-patch`,
+  but nothing constrains `stride <= patch` the way `img2patches`/
+  `patches2img` already validate `stride > 0` (`:29-30`) -- so when
+  `stride > patch`, consecutive patch windows can leave real gaps between
+  them that no patch ever covers. Reproduced directly:
+  ```python
+  img = torch.arange(23, dtype=torch.float32).reshape(23,1,1,1)
+  P = img2patches(img, (3,1,1), (10,1,1))
+  patches2img(P, (3,1,1), (10,1,1), (23,1,1))
+  # -> [0,1,2, 0,0,0,0,0,0,0, 10,11,12, 0,0,0,0,0,0,0, 20,21,22]
+  ```
+  Voxels 3-9 and 13-19 come back exact zero -- not an approximation, an
+  actual overwrite, since `patches2img`'s `pcount` (`:57,65,68`) is exactly 0
+  there and gets `.clamp_(min=1.0)`'d before the final `img / pcount`
+  divide, so those voxels compute `0/1 = 0` with no warning, NaN, or error.
+  At a more realistic 3D scale (`23x23x5`, patch `(3,3,3)`, stride
+  `(10,10,10)`), `patchSVST(..., beta=0.0)` -- which should be a near-identity
+  round-trip -- zeroes **84.7%** of all voxels. Since `reconstruct.py`'s
+  `g_prox`/`reg_cost` call `patchSVST`/`img2patches` every iteration for
+  every scale (`reconstruct.py:257,266`), a config that trips this would
+  silently zero out most of a scale's contribution to `X_recon` on every
+  iteration. Latent, not live today: every current call site
+  (`reconstruct.py`'s own tests, `run_b0_recon.py`/`validate_against_mslr.py`,
+  which both read `patch_sizes`/`strides` from the external Julia reference
+  `.mat` already byte-validated against real MSLR output per CLAUDE.md's
+  table) uses `stride <= patch` on every axis -- confirmed by grepping every
+  `strides=`/`patch_sizes=` call site repo-wide. `tests/test_recon_lowrank.py`'s
+  only stride-related test (`test_img2patches_rejects_nonpositive_stride`)
+  checks `stride <= 0`, not `stride > patch`; every other test uses
+  non-overlapping or half-overlapping strides. Fix: assert
+  `all(s <= p for s, p in zip(stride_size, (psx,psy,psz)))` in
+  `img2patches`/`patches2img` (mirroring the existing nonpositive-stride
+  guard) and raise a clear `ValueError`, or have `_patch_starts` clamp
+  `stride` to `patch`; either way, add a regression test exercising
+  `stride > patch`.
 
 ## Consistency & documentation
 
@@ -2012,6 +2189,24 @@ reproducing `max_blip_steps` with `_golden_angle_flip_start` forced off
   against real MSLR output. Fix: add the three laminar rows (or a pointer
   to CLAUDE.md's fuller six-row table) to
   `recon/validate_against_mslr.py:20-33`.
+- [ ] **185. CLAUDE.md's "Plotting" paragraph undercounts
+  `plotting/plot_last_run.py`'s functions -- "four" should be "five" -- and
+  has been wrong since the sentence was written.** [measured, low severity]
+  `CLAUDE.md`'s Plotting paragraph says "`plotting/plot_last_run.py` drives
+  all four plotting functions against the most recent `output/` run." But
+  `plot_last_run.py:19-23,36-53` actually calls five: `plot_sampling_mask`,
+  `plot_psf`, `plot_trajectory`, `plot_one_tr`, and `plot_pns_one_tr`,
+  writing `mask.png`, `psf.png`, `trajectory.png`, `one_tr.png`, and
+  `PNS_one_tr.png`. Git-blaming both the CLAUDE.md sentence and
+  `plot_pns_one_tr`'s definition shows they were introduced in the *same*
+  commit (`f7fdf0c`, 2026-08-20) -- so this wasn't a later addition making a
+  previously-true "four" go stale, the claim was already off-by-one the
+  moment it was written. Distinct from item 114 (README's separate,
+  already-tracked omission of `PNS_one_tr.png` from its own file list) --
+  this is CLAUDE.md's function-count claim, a different sentence in a
+  different file. Fix: change "four" to "five", optionally naming
+  `plot_pns_one_tr` alongside `plot_one_tr` the way the paragraph already
+  singles out `plot_one_tr`.
 
 ## Test & tooling health
 
@@ -2070,10 +2265,17 @@ reproducing `max_blip_steps` with `_golden_angle_flip_start` forced off
   total) being genuinely L-independent -- not "static, L-independent"
   overall.
 - [ ] **115. `plotting/` has zero test coverage -- including no regression
-  guard for item 96's real, previously-shipped PSF bug.** [measured] A
-  repo-wide grep confirms no file under `tests/` references `plot_psf`,
-  `plot_trajectory`, `plot_sampling_mask`, `plot_one_tr`,
-  `plot_pns_one_tr`, or imports `plotting.plotting` at all. This matters
+  guard for item 96's real, previously-shipped PSF bug.** [measured; citation
+  sharpened 2026-09-13 -- one supporting sub-claim went stale, substance
+  unchanged] `tests/test_plotting.py` now exists (added for items 127/149,
+  importing `plotting.plotting.nominal_te_value`) so this item's original
+  "no file under `tests/` ... imports `plotting.plotting` at all" clause is
+  no longer literally true. But that file only tests the standalone
+  `nominal_te_value` helper -- it does not smoke-test or regression-guard
+  any of the five actual plotting *functions*, so a repo-wide grep still
+  confirms none of `plot_psf`, `plot_trajectory`, `plot_sampling_mask`,
+  `plot_one_tr`, `plot_pns_one_tr` is referenced by any test, and this
+  item's substantive finding is entirely unaddressed. This matters
   concretely because item 96 documents a real, previously-shipped
   correctness bug in `plot_psf` (wrong FFT-shift convention, fixed by
   switching to `fftshift(ifft2(ifftshift(omega)))`,
@@ -2436,6 +2638,28 @@ reproducing `max_blip_steps` with `_golden_angle_flip_start` forced off
   (e.g. asserting the fitted/observed smoothing extent in physical units
   is similar across axes despite differing voxel size, or directly
   asserting `sigma_vox` per-axis via a stub).
+- [ ] **187. `sampling/gen_sampling_masks.py`'s `'rand'` sampling method has
+  zero test coverage through its actual dispatch path.** [measured] The
+  `'rand'` branch (`gen_sampling_masks.py:70-72`, including the
+  `rand_gaussian_sigma = np.array([Ny, Nz]) / 6` default at `:45-47`) wires
+  `gen_gaussian_pdf`'s weight map into `rand_sample` -- but
+  `tests/test_gen_sampling_masks.py` only ever sets `sampling_method` to
+  `'caipi'`, `'ticaipi'`, `'pd'`, or a deliberately-invalid `'bogus'` (for
+  the unknown-method error case); a repo-wide grep confirms no call
+  anywhere (not in `tests/`, not in `main.py`) ever exercises
+  `gen_sampling_masks(..., params)` with `params.sampling_method ==
+  'rand'`. `rand_sample.py`/`gen_gaussian_pdf.py` each have their own
+  dedicated unit tests (`tests/test_rand_sample.py`,
+  `tests/test_gen_gaussian_pdf.py`), so the individual building blocks are
+  covered, but the actual integration through `gen_sampling_masks` --
+  including the `rand_gaussian_sigma=None` default-fallback path -- is not.
+  `'rand'` isn't the shipped default (`'pd'` is), so this is latent, not
+  live, but it's a real, documented, user-selectable config option running
+  with no regression coverage at all, unlike its three siblings. Fix: add
+  a `test_gen_sampling_masks_rand_*` case to `tests/test_gen_sampling_masks.py`
+  analogous to the existing `caipi`/`ticaipi`/`pd` ones (shape, dtype,
+  sample count, and that the default `rand_gaussian_sigma=None` path
+  doesn't crash).
 
 ## Conciseness & performance
 
@@ -2736,3 +2960,28 @@ reproducing `max_blip_steps` with `_golden_angle_flip_start` forced off
   fold into item 133's fix if `SeqPaths` grows `gre_cache`/`smaps_cache`
   fields, or otherwise factor the two literals into one shared constant/
   helper these two scripts both import.
+- [ ] **186. `recon/run_b0_recon.py` carries its own independent copy of
+  `_load_omega` instead of importing `recon/reconstruct.py`'s, inconsistent
+  with the sibling helpers items 90/94 already deduplicated the same way.**
+  [measured, low severity -- not a live bug, item 74 already fixed the
+  correctness issue in both copies] `run_b0_recon.py:36` already imports
+  `_load_array, _load_echo_times, _load_normalized_smaps, run_recon` from
+  `recon.reconstruct` -- three helpers items 90 and 94 each added "next to
+  `_load_omega`" specifically so both driver scripts would share one
+  implementation. But `_load_omega` itself is not among the imports;
+  `run_b0_recon.py:41-66` instead defines its own separate function whose
+  own docstring says "Mirrors `recon/reconstruct.py`'s own `_load_omega`" --
+  one returns a `torch.Tensor` already on-device (`reconstruct.py:69-103`),
+  the other a `numpy.ndarray` (`run_b0_recon.py`, converted to a tensor by
+  its caller at `:93`). Item 74's own resolution text (still describing this
+  as fixed) explicitly frames the change as making `run_b0_recon.py`'s copy
+  "mirror `reconstruct._load_omega`'s non-fallback path" -- i.e. it kept two
+  parallel implementations in sync by hand, even as items 90/94 eliminated
+  the equivalent duplication for the two functions sitting right next to it
+  in the same file. Same duplication class item 74 itself named for this
+  exact function, just never finished. Fix: have `run_b0_recon.py` import
+  `_load_omega` from `recon.reconstruct` (converting to numpy at the call
+  site if needed) the same way it already imports the other three helpers,
+  removing its own copy -- or, if the torch/numpy return-type difference is
+  deliberate, factor out one shared core (read `omegas` + fallback) with a
+  thin per-caller wrapper.
