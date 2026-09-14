@@ -228,33 +228,50 @@ def process_smaps(
     # `smaps_raw *= eig_mask` line used to sit here to enforce this
     # defensively, but multiplying an array by a mask it's already exactly
     # zero outside of is a no-op -- removed per this repo's convention of
-    # not validating invariants a caller already guarantees. `eig_mask` is
-    # still needed below, to build the post-resize `target_mask`.
-    eig_mask = emap > crop
+    # not validating invariants a caller already guarantees.
 
     # Crop z to match EPI FOV, then interpolate (cubic spline) to the EPI
     # grid -- see grid_resize.py's module docstring for why this
     # deGRE-grid-to-EPI-grid crop+resize is shared with run_b0map.py.
     smaps = resize_to_epi_grid(smaps_raw, fov_gre, fov, n_target, order=3)
 
-    # Mask *after* the resize, nearest-neighbor (order=0) so it stays an
-    # exact 0/1 field with no interpolated values invented at the resample
-    # (grid_resize.py's own documented convention for boolean/label
-    # volumes). This step is not redundant, unlike the pre-resize multiply
-    # removed above: cubic spline's prefilter is a global (IIR) operation,
-    # so `smaps_raw`'s hard zero boundary leaks small (~1e-6 to 1e-9)
-    # nonzero values into a halo just outside the object after resize --
-    # invisible on its own, but amplified straight back up to unit
-    # magnitude by the RSS normalization below (whose `rss < eps` clamp
-    # only catches values under ~2e-16, not this leakage) and again by
+    # Object mask, built by interpolating the *continuous* emap (cubic
+    # spline, same as smaps_raw above) to the target grid and thresholding
+    # at `crop` there -- not by binarizing emap at cal_size=24 resolution
+    # first and nearest-neighbor-resizing that already-binary field (this
+    # function's earlier approach). The earlier approach preserved each
+    # coarse calibration-grid voxel's own 0/1 value as a solid block
+    # spanning the full zoom factor (Nx/24, ~1.7-4.5x at this pipeline's
+    # real target grids) on the target grid -- visibly blocky/stair-stepped
+    # on real data even though the true object boundary is round (confirmed:
+    # a real 24-voxel calibration's emap already has a smooth eigenvalue
+    # roll-off over its outermost ~2-3 voxels near the object edge, so
+    # binarizing before resizing throws that smooth sub-cal_size-voxel
+    # information away for good). Interpolating the continuous field first
+    # and thresholding on the fine grid instead recovers a much rounder
+    # boundary at essentially the same mask size (<0.2 percentage point
+    # difference in total mask fraction, measured on real data) -- this is
+    # also already what run_b0map.py/b0map.jl does with its own `emap_degre`
+    # ESPIRiT-eigenvalue mask, so this brings process_smaps' mask in line
+    # with the more careful approach already used elsewhere in this
+    # pipeline. Cubic spline can overshoot near a hard step the same way it
+    # does for smaps_raw (see below) -- irrelevant here since only which
+    # side of `crop` each interpolated value lands on matters, not its
+    # exact value.
+    #
+    # This masking step is still needed at all (whether built this way or
+    # the old way) because cubic spline's prefilter is a global (IIR)
+    # operation: `smaps_raw`'s hard zero boundary leaks small (~1e-6 to
+    # 1e-9) nonzero values into a halo just outside the object after its own
+    # resize above -- invisible on its own, but amplified straight back up
+    # to unit magnitude by the RSS normalization below (whose `rss < eps`
+    # clamp only catches values under ~2e-16, not this leakage) and again by
     # recon/reconstruct.py's own RSS-renormalization on load, silently
-    # erasing the mask everywhere except exact-zero voxels. Masking
-    # post-resize with an exact (not spline-leaked) field guarantees
-    # background is exactly zero regardless of how the source array's own
-    # zero region came to be.
-    target_mask = resize_to_epi_grid(
-        eig_mask.astype(np.float64), fov_gre, fov, n_target, order=0
-    ) > 0.5
+    # erasing the mask everywhere except exact-zero voxels. An exact 0/1
+    # re-mask (thresholding, not interpolating, the final decision) after
+    # both resizes guarantees background is exactly zero regardless.
+    emap_resized = resize_to_epi_grid(emap, fov_gre, fov, n_target, order=3)
+    target_mask = emap_resized > crop
     smaps = smaps * target_mask[..., None]
 
     # Smooth away the resolution-limited blocky/rippling texture visible

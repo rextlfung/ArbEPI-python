@@ -132,12 +132,12 @@ def test_process_smaps_background_is_exactly_zero_after_resize():
     smaps = process_smaps(smaps_raw, emap, fov, fov, n_target, crop=0.5)
     rss = np.sqrt(np.sum(np.abs(smaps) ** 2, axis=-1))
 
-    # Independently derive the same hard, nearest-neighbor-resized mask
-    # process_smaps itself now applies, to know exactly which target-grid
-    # voxels must be background.
-    target_mask = resize_to_epi_grid(
-        (emap > 0.5).astype(np.float64), fov, fov, n_target, order=0
-    ) > 0.5
+    # Independently derive the same mask process_smaps itself now applies
+    # (cubic-spline-resize the continuous emap, then threshold on the fine
+    # grid -- see process_smaps' docstring for why, not a nearest-neighbor
+    # resize of an already-binarized coarse mask), to know exactly which
+    # target-grid voxels must be background.
+    target_mask = resize_to_epi_grid(emap, fov, fov, n_target, order=3) > 0.5
     assert (~target_mask).any()
     np.testing.assert_array_equal(rss[~target_mask], 0.0)
 
@@ -175,9 +175,7 @@ def test_process_smaps_smoothing_reduces_roughness_but_keeps_mask_exact():
         smaps_raw, emap, fov, fov, n_target, crop=0.5, smooth_sigma_mm=6.0,
     )
 
-    target_mask = resize_to_epi_grid(
-        (emap > 0.5).astype(np.float64), fov, fov, n_target, order=0
-    ) > 0.5
+    target_mask = resize_to_epi_grid(emap, fov, fov, n_target, order=3) > 0.5
 
     def roughness(vol):
         # Mean absolute discrete Laplacian magnitude over interior mask
