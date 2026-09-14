@@ -44,6 +44,13 @@ def estimate_smaps(
     outputting one set of maps", so unlike BART's ecalib there's no
     emaps(...,end)-style selection among several map sets to do).
 
+    crop: sigpy's own EspiritCalib default is 0.95, but 0.8 is used here
+        to match makeSmaps.m's `bart('ecalib', ksp)` call, which passes no
+        `-c` flag and so runs at *BART's* default crop threshold instead --
+        confirmed as 0.8 directly from BART's source (`ecalib_conf.crop`
+        in bart/src/calib/calib.c). Keep this at 0.8, not sigpy's 0.95,
+        to preserve the original algorithm's behavior.
+
     cal_size: resize ksp_gre's spatial dims to this matrix size (per axis)
         before running ESPIRiT, rather than passing the full acquisition
         grid -- a center-*crop* only on axes where the source is larger
