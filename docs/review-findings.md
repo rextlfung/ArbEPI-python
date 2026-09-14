@@ -197,9 +197,47 @@ are recorded as items 181-187 below. Also sharpened item 115's own
 citation: one of its supporting sub-claims ("no test file... imports
 `plotting.plotting` at all") went stale after `tests/test_plotting.py` was
 added for items 127/149, though that item's substantive finding -- none of
-the actual plotting *functions* are tested -- remains fully open.
+the actual plotting *functions* are tested -- remains fully open. Item 188
+is a new finding from a later pass (2026-09-14, against `a6759be`) that
+also re-verified every item 107-187 against the current tree: `git diff
+5e263f3 HEAD --stat` shows only `docs/review-findings.md` itself changed in
+that span (items 181-187, added by the previous pass) -- the source tree is
+byte-for-byte identical to what that pass reviewed, confirmed again by a
+fresh `uv run ruff check .` (29 errors, all `E501`), `uv run pytest` (143
+passed/15 skipped plain, 209 passed/5 skipped with `preprocessing`+`recon`
+extras, 34 passed for `tests/test_recon_*.py` alone), and a fresh `main.py
+--ge` build (identical peak-PNS/acoustics numbers and the identical
+item-169 TE-feasibility warning) all matching the previous pass's baseline
+exactly. Split across four parallel subagents with the same scope as the
+previous several passes (`sampling/`+`plotting/`; `ge/`+`lib/`+`sequences/`+
+`params.py`/`main.py`/`scanners.py`; `preprocessing/`; `recon/`), each
+independently re-verifying its assigned open items against the live tree
+(not just trusting this file) before hunting for anything new. Three of the
+four subagents (`ge/`+`lib/`+`sequences/`+`params.py`/`main.py`/
+`scanners.py`; `preprocessing/`; `recon/`) confirmed every one of their
+assigned open items unchanged and found nothing new that survived their own
+verification bar -- expected at this point given how many prior passes have
+already combed this exact scope at high rigor (matching the 2026-09-11
+pass's own precedent for a clean "nothing new" result). The `preprocessing/`
+subagent's one candidate finding, a third untracked instance of item 133's
+cache-path-duplication pattern (`<seqname>_b0map.h5`, independently
+hand-built in `run_b0map.py:76`/`gre_diagnostics.py:40`), survived
+independent re-verification and is recorded as item 188 below. The
+`sampling/`+`plotting/` subagent confirmed all eight of its assigned open
+items unchanged, found no new findings, but while re-running item 136's own
+reproduction methodology found that one of its two reported mechanisms
+needed a substantive correction: mechanism (b) (the calibration-disc
+seed-stall) reproduced precisely, with a sharper root-cause confirmation
+than originally reported (frame 3's raw pre-crop mask sums to exactly
+`n_calib`, confirming zero points were placed beyond the calibration disc),
+but mechanism (a) (the claimed "~2% every single run" unfiltered-fill leak)
+did not reproduce across 100 independent trials in this environment and has
+been downgraded to `[verify]`/unconfirmed in place below, rather than
+re-reported as newly measured -- this is a correction to an existing item,
+not a new finding, so it isn't separately numbered. Item 110 also needed a
+one-line citation update (write site shifted from `:413` to `:414`).
 
-## Current baseline (2026-09-13, against `5e263f3`)
+## Current baseline (2026-09-14, against `a6759be`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
   errors**, all `E501` -- unchanged from the previous pass.
@@ -217,8 +255,8 @@ the actual plotting *functions* are tested -- remains fully open.
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, GE_MR750, `PNSwt = [0.8, 1.0, 0.7]`, seed 0) --
   all four sequences `.ok`, re-measured fresh this pass (`rm -rf output`
-  first). Numbers unchanged from the previous pass -- the source tree is
-  identical (see the provenance note above), and the same item-169
+  first). Numbers unchanged from the previous several passes -- the source
+  tree is identical (see the provenance note above), and the same item-169
   `Minimum achievable TE (35.104 ms) exceeds prescribed TE (34.900 ms)`
   warning still fires, confirming the build is byte-for-byte reproducible:
 
@@ -537,9 +575,12 @@ the actual plotting *functions* are tested -- remains fully open.
   (drop the `Nx` expand), matching `reconstruct.py`'s/`run_b0_recon.py`'s
   convention.
 - [ ] **110. `preprocessing/preprocess.py`'s `n_frames_discard` is
-  computed and written but has no reader anywhere in the repo.** [verify]
-  `preprocess.py:274` computes `NframesDiscard =
-  round(seq_params.discard_duration / seq_params.volume_tr)` and `:413`
+  computed and written but has no reader anywhere in the repo.** [verify;
+  citation updated 2026-09-14 against `a6759be` -- the write site shifted
+  from `:413` to `:414` after `0e4e86e`'s `smooth_sigma_mm` kwarg addition
+  earlier in the same function; substance unchanged] `preprocess.py:274`
+  computes `NframesDiscard =
+  round(seq_params.discard_duration / seq_params.volume_tr)` and `:414`
   writes it as `mf.attrs['n_frames_discard']`; a repo-wide grep for
   `n_frames_discard` finds only this write site -- no reader in
   `recon_frames.py`, `run_rss.py`, `run_cg_sense.py`,
@@ -848,28 +889,45 @@ the actual plotting *functions* are tested -- remains fully open.
   into both call sites' generator/worker so the printed message names the
   failing frame index.
 - [ ] **136. `sampling/pd_sample.py`'s `crop_corner=True` contract is
-  silently violated -- both routinely (~2% of samples, every frame) and
-  severely (~17% of samples, on an occasional frame, live in this repo's
-  own shipped default config).** [measured] Two distinct, compounding
-  mechanisms:
+  silently violated on an occasional frame in this repo's own shipped
+  default config, via a calibration-disc seed-stall in the Poisson-disc
+  growth process; a second, routine-leak mechanism originally reported
+  alongside it did not reproduce and should be treated as unconfirmed.**
+  [measured for mechanism (b); mechanism (a) downgraded to \[verify\] and
+  its "every single run" claim retracted, 2026-09-14 against `a6759be` --
+  re-running this item's own reproduction methodology found mechanism (b)
+  reproduces precisely (with a sharper smoking gun than originally
+  reported) but mechanism (a) does not reproduce at all across 100
+  independent trials; see below] Originally two distinct, compounding
+  mechanisms were reported:
 
-  (a) The exact-count enforcement step (`pd_sample.py:287-293`) fills any
-  shortfall between the binary-search mask and `target_samples` from
-  `np.flatnonzero(~mask)` -- every currently-unsampled pixel in the full
-  rectangular `(ny, nx)` grid, with **no** `rho <= 1` filter -- even
-  though `crop_corner=True`'s earlier step (`:261-262`,
-  `mask = mask * (rho <= 1)`) is supposed to confine every sample to the
-  centered inscribed ellipse. Confirmed live, not hypothetical: with
-  `calib_frac=0` (isolating this from mechanism (b) entirely), 5
-  independently seeded runs at this repo's real production scale
-  (`Ny=240, Nz=45, R=9, decay=1.4`) each still land 20-28 of 1200 samples
-  (~2%) outside the ellipse -- every single run, since the binary
-  search's own `accel_search = accel * 0.95` deliberately biases toward
-  undershooting the target count ("to ensure enough points to prune
-  later" -- but pruning only handles *overshoot*; undershoot falls
-  straight into this unfiltered fill path).
+  (a) [\[verify\], unconfirmed] The exact-count enforcement step
+  (`pd_sample.py:287-293`) fills any shortfall between the binary-search
+  mask and `target_samples` from `np.flatnonzero(~mask)` -- every
+  currently-unsampled pixel in the full rectangular `(ny, nx)` grid, with
+  **no** `rho <= 1` filter -- even though `crop_corner=True`'s earlier step
+  (`:261-262`, `mask = mask * (rho <= 1)`) is supposed to confine every
+  sample to the centered inscribed ellipse. This code path is real and
+  still genuinely unguarded as described. But the claim that it leaks on
+  "every single run" (originally: 5 seeded runs at `Ny=240, Nz=45, R=9,
+  decay=1.4, calib_frac=0`, each landing 20-28/1200 (~2%) samples outside
+  the ellipse) did **not** reproduce this pass: re-running the identical
+  isolated repro across 30 seeds gave **0/30** leaked samples, and a
+  broadened sweep (5 `decay` values x 20 seeds) gave **0/100**. Root cause
+  of the original claim not holding: the binary search's `accel_search =
+  accel * 0.95` biases toward a *higher*-density target than requested, and
+  at this grid's aspect ratio the post-crop sample count consistently
+  converges from the **overshoot** side (~1250-1260 vs. target 1200) in
+  this environment, which routes into the *prune* branch (`mask &
+  ~calib_mask`, already filtered to inside the ellipse, safe) rather than
+  the unguarded *fill* branch this sub-claim depends on. Whether an
+  undershoot (and hence this leak) is ever reachable in practice needs a
+  fresh, explicit repro before being cited as measured again -- until then,
+  treat mechanism (a) as a real but unconfirmed code-level gap, not a
+  reproduced leak.
 
-  (b) `_poisson_disc_core_jit`'s growth process starts from exactly one
+  (b) [measured, reproduced with a sharper root-cause confirmation this
+  pass] `_poisson_disc_core_jit`'s growth process starts from exactly one
   randomly-placed active point (`:106-107`, uniform over the whole grid,
   no check against `calib_mask`), and `mask = calib_mask.copy()` (`:93`)
   pre-fills the entire calibration disc as already-sampled before growth
@@ -879,27 +937,34 @@ the actual plotting *functions* are tested -- remains fully open.
   `r = max(rho - rho_calib, 0)` is identically 0 inside the calib disc
   regardless of `slope`, `:239`,`:254-255`) -- all `max_attempts` (30)
   placement attempts fail, the sole active point is removed, and the
-  growth loop terminates immediately with the mask still equal to
-  nothing but the calibration disc, for every slope tried across the
-  entire 50-iteration binary search (deterministic given the seed).
-  Mechanism (a)'s fill step then has to supply nearly the *entire*
-  remaining budget uniformly from the whole rectangle for that frame,
-  bypassing both the density falloff and the crop-corner ellipse
-  wholesale.
-
-  Reproduced end to end against the actual shipped pipeline, unmodified
-  `load_params()` defaults, `main.py`'s exact call
-  (`gen_sampling_masks(p.R, p, rng=np.random.default_rng(p.seed))`,
-  `seed=0`): of 30 frames, **frame 3 has 204 of its 1200 samples (17%)
-  outside the crop-corner ellipse**, vs. 9-18 (`<1.5%`) for every other
-  frame -- an order-of-magnitude outlier, deterministic and reproduced
-  identically across repeated runs. This is live in the shipped default
-  configuration today, not a theoretical corner case.
+  growth loop terminates immediately with the mask still equal to nothing
+  but the calibration disc, for every slope tried across the entire
+  50-iteration binary search (deterministic given the seed). The
+  exact-count fill step (mechanism (a)'s code, but exercised here as an
+  *unfiltered fallback of last resort*, not as (a)'s own claimed routine
+  leak) then has to supply nearly the *entire* remaining budget uniformly
+  from the whole rectangle for that frame, bypassing both the density
+  falloff and the crop-corner ellipse wholesale. Reproduced against the
+  actual shipped pipeline, unmodified `load_params()` defaults, `main.py`'s
+  exact call (`gen_sampling_masks(p.R, p, rng=np.random.default_rng(p.seed))`,
+  `seed=0`) directly this pass: frame 3's raw pre-crop Poisson-disc mask has
+  `mask.sum() == n_calib` **exactly** (362 == 362) -- i.e. growth placed
+  literally zero points beyond the calibration disc, confirming the
+  seed-stall mechanism precisely rather than just by shape-level
+  correlation. This pass measured **185 of 1200 samples (15.4%)** on frame
+  3 landing outside the crop-corner ellipse -- same frame index, same
+  order of magnitude, same mechanism as the original 204/1200 (17%)
+  report; the small numeric drift is most likely floating-point/RNG-stream
+  sensitivity inside the `numba`-JIT'd core (the pinned `numba==0.66.0` is
+  unchanged in `uv.lock` across this span, so it is not a code regression),
+  not evidence the underlying bug changed. This remains live in the
+  shipped default configuration today, not a theoretical corner case.
 
   Consequence: `crop_corner`'s documented contract ("whether to crop
-  sampling corners (elliptical mask)", `:203`) is silently violated on
-  essentially every frame at the ~2% level and severely on an occasional
-  frame. These out-of-ellipse samples flow directly into
+  sampling corners (elliptical mask)", `:203`) is silently violated on an
+  occasional frame via mechanism (b) (confirmed), and potentially on a
+  more routine basis via mechanism (a) (unconfirmed pending a fresh
+  repro). These out-of-ellipse samples flow directly into
   `lib/mask2epi.py`'s per-frame schedule construction with nothing
   downstream to detect or reject them (`Nshots*ETL` only checks the total
   count, not spatial extent), and CLAUDE.md's own `blip_slew=105` PNS
@@ -916,15 +981,17 @@ the actual plotting *functions* are tested -- remains fully open.
   so nothing catches either mechanism. Fix direction: (a) restrict the
   exact-count fill step's candidate pool to
   `np.flatnonzero(~mask & (rho <= 1))` when `crop_corner=True` (with
-  explicit handling if that pool is insufficient); (b) prevent the
+  explicit handling if that pool is insufficient) -- still worth doing
+  defensively even with the routine-leak claim unconfirmed, since it's the
+  same code path mechanism (b) falls through to; (b) prevent the
   seed-stall by rejecting an initial active point that lands inside
   `calib_mask` and redrawing (or seeding several scattered initial
-  points). Both are independently necessary -- (a) fixes the ~2%
-  baseline leak, (b) fixes the severe per-frame amplification. Add a
-  regression test with `calib_frac > 0`, `crop_corner=True`, asserting
-  zero samples outside `rho <= 1` across a range of seeds including one
-  that reproduces the stall (e.g. this repo's own `seed=0` at production
-  scale).
+  points) -- this is the confirmed, higher-priority fix. Add a regression
+  test with `calib_frac > 0`, `crop_corner=True`, asserting zero samples
+  outside `rho <= 1` across a range of seeds including one that reproduces
+  the stall (e.g. this repo's own `seed=0` at production scale); if a
+  future pass re-derives a genuine repro for mechanism (a)'s undershoot
+  path, add a seed for that too.
 - [ ] **137. `ge/blocks.py`'s `get_block_type` reads a nonexistent `.trig`
   attribute instead of pypulseq's real `.trigger` dict, so physio-trigger
   blocks are never detected.** [measured] `ge/blocks.py:38-39`:
@@ -2207,6 +2274,27 @@ the actual plotting *functions* are tested -- remains fully open.
   different file. Fix: change "four" to "five", optionally naming
   `plot_pns_one_tr` alongside `plot_one_tr` the way the paragraph already
   singles out `plot_one_tr`.
+- [ ] **188. `<seqname>_b0map.h5`'s cache path is hand-built independently in
+  two files -- a third, previously-untracked instance of item 133's already-
+  documented pattern.** [measured] `preprocessing/run_b0map.py:76`
+  (`output_path = os.path.join(cfg.datdir, 'recon', f'{seqname}_b0map.h5')`)
+  and `preprocessing/gre_diagnostics.py:40` (`fn_b0map = os.path.join(
+  recon_dir, f"{seqname}_b0map.h5")`) each independently construct the same
+  filename pattern, the same way item 133 already documents for
+  `<seqname>_gre.h5`/`smaps_<seqname>_sigpy.h5` across `preprocess.py`/
+  `smaps.py`/`run_b0map.py`/`gre_diagnostics.py` -- but item 133's own
+  citation list doesn't mention `_b0map.h5` at all, and a repo-wide check
+  confirms this file's own numbering has never recorded it before now.
+  Currently harmless (both sites use the identical `f'{seqname}_b0map.h5'`
+  format string) -- the same "latent-drift risk, not a live bug" class item
+  133 already describes: a future rename of the b0map cache convention that
+  updates one site but not the other would silently break
+  `gre_diagnostics.py`'s consumption of a file `run_b0map.py` no longer
+  writes there, with no error until that downstream read fails to find its
+  input. Fix: fold into item 133's own resolution -- add a `b0map_cache`
+  field to `SeqPaths` alongside the `gre_cache`/`smaps_cache` fields that
+  item proposes, computed once in `set_seq_paths`, and update both call
+  sites above to read it instead of re-deriving the filename.
 
 ## Test & tooling health
 
