@@ -28,12 +28,30 @@ from preprocessing.grid_resize import resize_to_epi_grid
 from preprocessing.nifti_io import save_recon_nifti
 
 
+def _default_device() -> sp.Device:
+    """GPU if sigpy/cupy sees one, else CPU. ESPIRiT's per-voxel eigen
+    decomposition (the `AHA @ x` power iteration in sigpy's own
+    EspiritCalib) is a batched, embarrassingly parallel linear-algebra op
+    over every calibration-grid voxel at once -- exactly the kind of
+    workload that's much faster on GPU -- so there's no reason to force CPU
+    when hardware is present. Falls back silently (not an error) when cupy
+    isn't installed or no device is visible, matching this repo's general
+    stance on optional acceleration (e.g. GERecon/Julia are also
+    opportunistic, not hard requirements -- see CLAUDE.md)."""
+    if sp.config.cupy_enabled:
+        import cupy
+        if cupy.cuda.runtime.getDeviceCount() > 0:
+            return sp.Device(0)
+    return sp.cpu_device
+
+
 def estimate_smaps(
     ksp_gre: np.ndarray,
     calib_width: int = 24,
     thresh: float = 0.02,
-    crop: float = 0.8,
+    crop: float = 0.95,
     cal_size: int = 24,
+    device: sp.Device | int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """ESPIRiT sensitivity map estimation from fully-sampled GRE k-space.
 
@@ -44,12 +62,41 @@ def estimate_smaps(
     outputting one set of maps", so unlike BART's ecalib there's no
     emaps(...,end)-style selection among several map sets to do).
 
-    crop: sigpy's own EspiritCalib default is 0.95, but 0.8 is used here
-        to match makeSmaps.m's `bart('ecalib', ksp)` call, which passes no
-        `-c` flag and so runs at *BART's* default crop threshold instead --
-        confirmed as 0.8 directly from BART's source (`ecalib_conf.crop`
-        in bart/src/calib/calib.c). Keep this at 0.8, not sigpy's 0.95,
-        to preserve the original algorithm's behavior.
+    crop: sigpy's own EspiritCalib default (0.95) -- a stricter minimum-
+        eigenvalue threshold than BART ecalib's own default of 0.8, which
+        `makeSmaps.m`'s `bart('ecalib', ksp)` call (passing no `-c` flag)
+        implicitly used. This repo previously pinned 0.8 to match that
+        MATLAB/BART reference exactly; explicit decision (2026-09-14) to
+        use sigpy's own default instead, accepting a smaller (more tightly
+        cropped) retained sensitivity-map support than the original
+        MATLAB pipeline produced.
+
+        This is now the *only* eigenvalue threshold in the whole
+        smaps pipeline -- `process_smaps` takes this same value (as its own
+        `crop` parameter) to build its object-support mask, rather than a
+        second, independently-configured threshold. Two separate knobs used
+        to exist here (`process_smaps`' own `threshold_mask`, default 0.2)
+        and actively fought each other: since `threshold_mask < crop`
+        always held, `process_smaps`' mask was strictly looser than what
+        `crop` had already zeroed inside ESPIRiT, so the boundary annulus
+        between the two thresholds survived as tiny cubic-spline-interpolated
+        residuals -- which the final RSS-normalization step then amplified
+        back up to full unit magnitude. Net effect: the exported object mask
+        tracked `threshold_mask` alone (measured ~80-85% of the calibration
+        volume across four real datasets) and was completely insensitive to
+        `crop` (bit-identical masks at crop=0.8 vs. crop=0.95) -- ESPIRiT's
+        own crop threshold was silently neutered by the time it reached the
+        actual output. At this pipeline's `cal_size=24` resolution, `emap`
+        is itself nearly saturated (>0.99) over most of the calibration cube
+        with only the outermost ~1-2 voxels rolling off, so a low threshold
+        like the old 0.2 default barely constrains anything: measured mask
+        fraction was ~80% vs. the true object's ~32-38% (from thresholding
+        the actual reconstructed EPI magnitude image) -- a ~2-2.5x oversized
+        mask. Using `crop` alone (0.95) instead cuts the mask to ~43% of the
+        calibration volume, much closer to the true object extent, and
+        removes the two-parameters-fighting failure mode entirely by
+        construction (single source of truth for "is this voxel inside the
+        object").
 
     cal_size: resize ksp_gre's spatial dims to this matrix size (per axis)
         before running ESPIRiT, rather than passing the full acquisition
@@ -75,7 +122,20 @@ def estimate_smaps(
         no-op on x/y (where the source is >= 24) and the covariance/
         eigenmap stage runs at the same small size throughout; z is the
         one axis where that "no-op" claim doesn't fully hold, per above.
+
+    device: sigpy Device (or a plain int -- sigpy's own convention, -1 for
+        CPU, >=0 for a GPU index) to run ESPIRiT's calibration/power
+        iteration on. None (default) auto-selects a GPU via
+        `_default_device()` when sigpy/cupy sees one, else CPU -- ESPIRiT's
+        per-voxel eigen decomposition is a large batched linear-algebra op
+        that benefits substantially from GPU parallelism. `ksp_gre` itself
+        stays plain numpy regardless -- sigpy's EspiritCalib moves only the
+        (small, cal_size-shaped) calibration region onto `device` internally
+        -- and this function always returns plain numpy arrays, converting
+        back off the compute device if one was used, so callers never need
+        to know whether GPU acceleration happened.
     """
+    device = _default_device() if device is None else sp.Device(device)
     ksp_coils_first = np.moveaxis(ksp_gre, -1, 0)
     if cal_size is not None:
         ncoils = ksp_coils_first.shape[0]
@@ -85,10 +145,13 @@ def estimate_smaps(
         calib_width=calib_width,
         thresh=thresh,
         crop=crop,
+        device=device,
         show_pbar=False,
         output_eigenvalue=True,
     )
     mps, emap = calib.run()
+    mps = sp.to_device(mps, sp.cpu_device)
+    emap = sp.to_device(emap, sp.cpu_device)
     smaps = np.moveaxis(mps, 0, -1)
     return smaps, emap[0]
 
@@ -125,7 +188,7 @@ def process_smaps(
     fov_gre: tuple[float, float, float],
     fov: tuple[float, float, float],
     n_target: tuple[int, int, int],
-    threshold_mask: float,
+    crop: float,
     smooth_sigma_mm: float = 6.0,
 ) -> np.ndarray:
     """Mask, z-crop, resize, smooth, and RSS-normalize raw sensitivity maps
@@ -141,13 +204,25 @@ def process_smaps(
     emap: [Nx_gre, Ny_gre, Nz_gre]
     fov_gre, fov: (fx, fy, fz) in meters
     n_target: (Nx, Ny, Nz), the EPI acquisition grid
+    crop: the same eigenvalue threshold passed to `estimate_smaps`'s
+        `EspiritCalib` call -- must be the identical value the caller used
+        there. This function used to take its own independent
+        `threshold_mask` (default 0.2) for its object-support mask; that
+        was a real bug (see `estimate_smaps`'s `crop` docstring for the
+        full measurement), since a threshold looser than ESPIRiT's own
+        `crop` never actually constrained anything -- `smaps_raw` already
+        had zeros below `crop`, and RSS-normalization below erases the
+        difference between "just above threshold_mask" and "an interpolated
+        near-zero residual" by renormalizing either back to unit magnitude.
+        Reusing `crop` here makes the pre- and post-resize masks agree with
+        what ESPIRiT itself already decided, by construction.
     smooth_sigma_mm: Gaussian smoothing sigma in mm, applied on the target
         grid (0 disables). See below for why this exists.
     """
     # 1. Eigenvalue support mask, applied pre-resize so out-of-object coil
     # values (garbage outside ESPIRiT's calibration support) don't bleed
     # *into* the object region through the cubic-spline resize below.
-    eig_mask = emap > threshold_mask
+    eig_mask = emap > crop
     smaps = smaps_raw * eig_mask[..., None]
 
     # 2+3. Crop z to match EPI FOV, then interpolate (cubic spline) to the
@@ -268,7 +343,7 @@ def load_smaps(
         if not has_degre:
             print(f'  Backfilling deGRE-grid smaps/emap into {fn_smaps}...')
             smaps_degre = process_smaps(
-                smaps_raw, emap, fov_degre, fov_degre, n_target_degre, cfg.threshold_mask,
+                smaps_raw, emap, fov_degre, fov_degre, n_target_degre, cfg.crop,
                 smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
             )
             emap_degre = resize_to_epi_grid(emap, fov_degre, fov_degre, n_target_degre, order=3)
@@ -289,14 +364,14 @@ def load_smaps(
     with h5py.File(fn_gre, 'r') as f:
         ksp_gre = f['ksp_gre'][()]
     nvcoils = ksp_gre.shape[-1]
-    smaps_raw, emap = estimate_smaps(ksp_gre)
+    smaps_raw, emap = estimate_smaps(ksp_gre, crop=cfg.crop)
     smaps = process_smaps(
         smaps_raw, emap, fov_degre, tuple(seq_params.fov),
-        (seq_params.Nx, seq_params.Ny, seq_params.Nz), cfg.threshold_mask,
+        (seq_params.Nx, seq_params.Ny, seq_params.Nz), cfg.crop,
         smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
     )
     smaps_degre = process_smaps(
-        smaps_raw, emap, fov_degre, fov_degre, n_target_degre, cfg.threshold_mask,
+        smaps_raw, emap, fov_degre, fov_degre, n_target_degre, cfg.crop,
         smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
     )
     emap_degre = resize_to_epi_grid(emap, fov_degre, fov_degre, n_target_degre, order=3)

@@ -43,8 +43,17 @@ class PreprocessingConfig:
     show_epi_phase_diff: bool = True
 
     # Sensitivity map estimation. SENSEmethod is always 'sigpy' in this port
-    # (BART's ecalib / MATLAB PISCO are not ported -- see smaps.py).
-    threshold_mask: float = 0.2
+    # (BART's ecalib / MATLAB PISCO are not ported -- see smaps.py). Single
+    # eigenvalue threshold, passed to *both* sigpy's EspiritCalib (its own
+    # `crop`) and process_smaps' object-support mask -- previously two
+    # separate parameters (this field was `threshold_mask`, default 0.2)
+    # that fought each other: a mask threshold looser than ESPIRiT's own
+    # crop never actually constrained the exported mask (RSS-normalization
+    # erases the difference), so the real mask silently tracked the old
+    # threshold_mask alone and was insensitive to crop entirely -- see
+    # smaps.py's estimate_smaps `crop` docstring for the measured bug and
+    # fix. Default matches sigpy's EspiritCalib own default (0.95).
+    crop: float = 0.95
 
     # Gaussian smoothing (mm, applied on the target grid) for the blocky/
     # rippling texture ESPIRiT's cal_size-resolution calibration otherwise

@@ -200,7 +200,7 @@ end
 function main(
     gre_h5_path::AbstractString, output_h5_path::AbstractString,
     smaps_h5_path::AbstractString = "",
-    eig_mask_threshold::Real = 0.2,
+    eig_mask_threshold::Real = 0.95,
     threshold::Real = 0.1, precon::Symbol = :diag,
 )
     println("Loading '$gre_h5_path'...")

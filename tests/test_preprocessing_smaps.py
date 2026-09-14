@@ -84,7 +84,7 @@ def test_process_smaps_mask_crop_resize_normalize():
     fov = (0.216, 0.216, 0.108)  # half the z-FOV -> expect a symmetric z-crop
     n_target = (16, 16, 8)
 
-    smaps = process_smaps(smaps_raw, emap, fov_gre, fov, n_target, threshold_mask=0.5)
+    smaps = process_smaps(smaps_raw, emap, fov_gre, fov, n_target, crop=0.5)
 
     assert smaps.shape == (16, 16, 8, ncoils)
 
@@ -120,7 +120,7 @@ def test_process_smaps_background_is_exactly_zero_after_resize():
     fov = (0.2, 0.2, 0.2)  # same FOV both sides -- no z-crop, isolates the resize
     n_target = (40, 40, 40)  # 2x upsample -- enough to trigger spline leakage
 
-    smaps = process_smaps(smaps_raw, emap, fov, fov, n_target, threshold_mask=0.5)
+    smaps = process_smaps(smaps_raw, emap, fov, fov, n_target, crop=0.5)
     rss = np.sqrt(np.sum(np.abs(smaps) ** 2, axis=-1))
 
     # Independently derive the same hard, nearest-neighbor-resized mask
@@ -157,10 +157,10 @@ def test_process_smaps_smoothing_reduces_roughness_but_keeps_mask_exact():
     n_target = (91, 91, 91)  # large upsample factor -- where blockiness shows up
 
     smaps_unsmoothed = process_smaps(
-        smaps_raw, emap, fov, fov, n_target, threshold_mask=0.5, smooth_sigma_mm=0,
+        smaps_raw, emap, fov, fov, n_target, crop=0.5, smooth_sigma_mm=0,
     )
     smaps_smoothed = process_smaps(
-        smaps_raw, emap, fov, fov, n_target, threshold_mask=0.5, smooth_sigma_mm=6.0,
+        smaps_raw, emap, fov, fov, n_target, crop=0.5, smooth_sigma_mm=6.0,
     )
 
     target_mask = resize_to_epi_grid(
