@@ -408,6 +408,8 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
                 shape=(Nx, Ny, Nz, Nvcoils, Nframes),
                 dtype=np.complex64,
                 chunks=(Nx, Ny, Nz, Nvcoils, 1),
+                compression='gzip',
+                compression_opts=4,
             )
             mf.create_dataset('omegas', data=_build_omegas(schedules, Ny, Nz))
             mf.create_dataset('echo_times', data=_build_echo_times(schedules, echo_times, Ny, Nz))
