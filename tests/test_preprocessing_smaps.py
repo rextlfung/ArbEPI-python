@@ -79,6 +79,10 @@ def test_process_smaps_mask_crop_resize_normalize():
 
     emap = np.zeros((Nx_gre, Ny_gre, Nz_gre))
     emap[4:16, 4:16, 2:10] = 1.0  # "object" region has high eigenvalue
+    # process_smaps no longer masks smaps_raw itself (see its docstring) --
+    # it assumes this invariant already holds, exactly as estimate_smaps'
+    # real output does via sigpy's own internal crop.
+    smaps_raw *= (emap > 0.5)[..., None]
 
     fov_gre = (0.216, 0.216, 0.216)
     fov = (0.216, 0.216, 0.108)  # half the z-FOV -> expect a symmetric z-crop
@@ -116,6 +120,11 @@ def test_process_smaps_background_is_exactly_zero_after_resize():
 
     emap = np.zeros((Nx_gre, Ny_gre, Nz_gre))
     emap[8:12, 8:12, 8:12] = 1.0  # small "object" cube in the center
+    # process_smaps assumes smaps_raw is already zero outside emap>crop
+    # (see its docstring) -- matches estimate_smaps' real invariant, and
+    # still produces the same sharp zero/nonzero edge this test's cubic-
+    # spline leakage regression needs.
+    smaps_raw *= (emap > 0.5)[..., None]
 
     fov = (0.2, 0.2, 0.2)  # same FOV both sides -- no z-crop, isolates the resize
     n_target = (40, 40, 40)  # 2x upsample -- enough to trigger spline leakage
@@ -152,6 +161,9 @@ def test_process_smaps_smoothing_reduces_roughness_but_keeps_mask_exact():
 
     emap = np.zeros((Nx_gre, Ny_gre, Nz_gre))
     emap[4:20, 4:20, 4:20] = 1.0
+    # See test_process_smaps_background_is_exactly_zero_after_resize's
+    # comment -- process_smaps no longer masks smaps_raw itself.
+    smaps_raw *= (emap > 0.5)[..., None]
 
     fov = (0.18, 0.18, 0.18)
     n_target = (91, 91, 91)  # large upsample factor -- where blockiness shows up

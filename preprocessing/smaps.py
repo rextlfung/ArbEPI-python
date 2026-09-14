@@ -207,43 +207,51 @@ def process_smaps(
     crop: the same eigenvalue threshold passed to `estimate_smaps`'s
         `EspiritCalib` call -- must be the identical value the caller used
         there. This function used to take its own independent
-        `threshold_mask` (default 0.2) for its object-support mask; that
-        was a real bug (see `estimate_smaps`'s `crop` docstring for the
+        `threshold_mask` (default 0.2) and apply it to `smaps_raw` directly
+        (a distinct pre-resize masking step, since removed -- see below);
+        that was a real bug (see `estimate_smaps`'s `crop` docstring for the
         full measurement), since a threshold looser than ESPIRiT's own
         `crop` never actually constrained anything -- `smaps_raw` already
-        had zeros below `crop`, and RSS-normalization below erases the
-        difference between "just above threshold_mask" and "an interpolated
-        near-zero residual" by renormalizing either back to unit magnitude.
-        Reusing `crop` here makes the pre- and post-resize masks agree with
-        what ESPIRiT itself already decided, by construction.
+        had zeros below `crop`, and RSS-normalization erased the difference
+        between "just above threshold_mask" and "an interpolated near-zero
+        residual" by renormalizing either back to unit magnitude. `crop` is
+        used here only to rebuild `eig_mask` for the post-resize re-mask
+        below -- see there for why a *pre*-resize mask on `smaps_raw` is no
+        longer applied at all.
     smooth_sigma_mm: Gaussian smoothing sigma in mm, applied on the target
         grid (0 disables). See below for why this exists.
     """
-    # 1. Eigenvalue support mask, applied pre-resize so out-of-object coil
-    # values (garbage outside ESPIRiT's calibration support) don't bleed
-    # *into* the object region through the cubic-spline resize below.
+    # `smaps_raw` is assumed already zero wherever `emap <= crop` -- true by
+    # construction for this function's only real caller (`estimate_smaps`,
+    # via sigpy's own `EspiritCalib.crop`, the identical `emap > crop`
+    # comparison), confirmed bit-exact on real project data. A pre-resize
+    # `smaps_raw *= eig_mask` line used to sit here to enforce this
+    # defensively, but multiplying an array by a mask it's already exactly
+    # zero outside of is a no-op -- removed per this repo's convention of
+    # not validating invariants a caller already guarantees. `eig_mask` is
+    # still needed below, to build the post-resize `target_mask`.
     eig_mask = emap > crop
-    smaps = smaps_raw * eig_mask[..., None]
 
-    # 2+3. Crop z to match EPI FOV, then interpolate (cubic spline) to the
-    # EPI grid -- see grid_resize.py's module docstring for why this
+    # Crop z to match EPI FOV, then interpolate (cubic spline) to the EPI
+    # grid -- see grid_resize.py's module docstring for why this
     # deGRE-grid-to-EPI-grid crop+resize is shared with run_b0map.py.
-    smaps = resize_to_epi_grid(smaps, fov_gre, fov, n_target, order=3)
+    smaps = resize_to_epi_grid(smaps_raw, fov_gre, fov, n_target, order=3)
 
-    # Re-apply the mask *after* the resize, nearest-neighbor (order=0) so
-    # it stays an exact 0/1 field with no interpolated values invented at
-    # the resample (grid_resize.py's own documented convention for
-    # boolean/label volumes). This is not redundant with step 1: cubic
-    # spline's prefilter is a global (IIR) operation, so step 1's hard
-    # edge leaks small (~1e-6 to 1e-9) nonzero values into a halo just
-    # outside the object after resize -- invisible on its own, but
-    # amplified straight back up to unit magnitude by the RSS
-    # normalization below (whose `rss < eps` clamp only catches values
-    # under ~2e-16, not this leakage) and again by recon/reconstruct.py's
-    # own RSS-renormalization on load, silently erasing the mask
-    # everywhere except exact-zero voxels. Masking again post-resize with
-    # an exact (not spline-leaked) field guarantees background is exactly
-    # zero regardless.
+    # Mask *after* the resize, nearest-neighbor (order=0) so it stays an
+    # exact 0/1 field with no interpolated values invented at the resample
+    # (grid_resize.py's own documented convention for boolean/label
+    # volumes). This step is not redundant, unlike the pre-resize multiply
+    # removed above: cubic spline's prefilter is a global (IIR) operation,
+    # so `smaps_raw`'s hard zero boundary leaks small (~1e-6 to 1e-9)
+    # nonzero values into a halo just outside the object after resize --
+    # invisible on its own, but amplified straight back up to unit
+    # magnitude by the RSS normalization below (whose `rss < eps` clamp
+    # only catches values under ~2e-16, not this leakage) and again by
+    # recon/reconstruct.py's own RSS-renormalization on load, silently
+    # erasing the mask everywhere except exact-zero voxels. Masking
+    # post-resize with an exact (not spline-leaked) field guarantees
+    # background is exactly zero regardless of how the source array's own
+    # zero region came to be.
     target_mask = resize_to_epi_grid(
         eig_mask.astype(np.float64), fov_gre, fov, n_target, order=0
     ) > 0.5
