@@ -334,10 +334,10 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
                 smaps = f['smaps'][()]
         else:
             print('Estimating sensitivity maps via sigpy ESPIRiT...')
-            smaps_raw, emap = estimate_smaps(ksp_gre)
+            smaps_raw, emap = estimate_smaps(ksp_gre, crop=cfg.crop)
             smaps = process_smaps(
                 smaps_raw, emap, tuple(seq_params.fov_degre), tuple(fov),
-                (Nx, Ny, Nz), cfg.threshold_mask,
+                (Nx, Ny, Nz), cfg.crop,
                 smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
             )
             with h5py.File(fn_smaps, 'w') as f:

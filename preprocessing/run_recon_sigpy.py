@@ -37,7 +37,7 @@ def run_recon_sigpy(cfg: PreprocessingConfig) -> None:
                 lamb_l1=cfg.lamb_l1,
                 lamb_tv=cfg.lamb_tv,
                 num_iter=cfg.num_iter,
-                threshold_mask=cfg.threshold_mask,
+                crop=cfg.crop,
                 do_sense=cfg.do_sense,
                 cc_energy_thresh=cfg.cc_energy_thresh,
                 seqname=seqname,

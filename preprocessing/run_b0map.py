@@ -106,7 +106,7 @@ def run_b0map(cfg: PreprocessingConfig) -> None:
             subprocess.run(
                 [
                     julia_bin, f'--project={_JULIA_DIR}', _JULIA_SCRIPT,
-                    gre_cache_path, output_path, smaps_path, str(cfg.threshold_mask),
+                    gre_cache_path, output_path, smaps_path, str(cfg.crop),
                     str(cfg.b0map_mask_thresh), cfg.b0map_precon,
                 ],
                 check=True,

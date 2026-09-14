@@ -79,12 +79,16 @@ def test_process_smaps_mask_crop_resize_normalize():
 
     emap = np.zeros((Nx_gre, Ny_gre, Nz_gre))
     emap[4:16, 4:16, 2:10] = 1.0  # "object" region has high eigenvalue
+    # process_smaps no longer masks smaps_raw itself (see its docstring) --
+    # it assumes this invariant already holds, exactly as estimate_smaps'
+    # real output does via sigpy's own internal crop.
+    smaps_raw *= (emap > 0.5)[..., None]
 
     fov_gre = (0.216, 0.216, 0.216)
     fov = (0.216, 0.216, 0.108)  # half the z-FOV -> expect a symmetric z-crop
     n_target = (16, 16, 8)
 
-    smaps = process_smaps(smaps_raw, emap, fov_gre, fov, n_target, threshold_mask=0.5)
+    smaps = process_smaps(smaps_raw, emap, fov_gre, fov, n_target, crop=0.5)
 
     assert smaps.shape == (16, 16, 8, ncoils)
 
@@ -116,19 +120,24 @@ def test_process_smaps_background_is_exactly_zero_after_resize():
 
     emap = np.zeros((Nx_gre, Ny_gre, Nz_gre))
     emap[8:12, 8:12, 8:12] = 1.0  # small "object" cube in the center
+    # process_smaps assumes smaps_raw is already zero outside emap>crop
+    # (see its docstring) -- matches estimate_smaps' real invariant, and
+    # still produces the same sharp zero/nonzero edge this test's cubic-
+    # spline leakage regression needs.
+    smaps_raw *= (emap > 0.5)[..., None]
 
     fov = (0.2, 0.2, 0.2)  # same FOV both sides -- no z-crop, isolates the resize
     n_target = (40, 40, 40)  # 2x upsample -- enough to trigger spline leakage
 
-    smaps = process_smaps(smaps_raw, emap, fov, fov, n_target, threshold_mask=0.5)
+    smaps = process_smaps(smaps_raw, emap, fov, fov, n_target, crop=0.5)
     rss = np.sqrt(np.sum(np.abs(smaps) ** 2, axis=-1))
 
-    # Independently derive the same hard, nearest-neighbor-resized mask
-    # process_smaps itself now applies, to know exactly which target-grid
-    # voxels must be background.
-    target_mask = resize_to_epi_grid(
-        (emap > 0.5).astype(np.float64), fov, fov, n_target, order=0
-    ) > 0.5
+    # Independently derive the same mask process_smaps itself now applies
+    # (cubic-spline-resize the continuous emap, then threshold on the fine
+    # grid -- see process_smaps' docstring for why, not a nearest-neighbor
+    # resize of an already-binarized coarse mask), to know exactly which
+    # target-grid voxels must be background.
+    target_mask = resize_to_epi_grid(emap, fov, fov, n_target, order=3) > 0.5
     assert (~target_mask).any()
     np.testing.assert_array_equal(rss[~target_mask], 0.0)
 
@@ -152,20 +161,21 @@ def test_process_smaps_smoothing_reduces_roughness_but_keeps_mask_exact():
 
     emap = np.zeros((Nx_gre, Ny_gre, Nz_gre))
     emap[4:20, 4:20, 4:20] = 1.0
+    # See test_process_smaps_background_is_exactly_zero_after_resize's
+    # comment -- process_smaps no longer masks smaps_raw itself.
+    smaps_raw *= (emap > 0.5)[..., None]
 
     fov = (0.18, 0.18, 0.18)
     n_target = (91, 91, 91)  # large upsample factor -- where blockiness shows up
 
     smaps_unsmoothed = process_smaps(
-        smaps_raw, emap, fov, fov, n_target, threshold_mask=0.5, smooth_sigma_mm=0,
+        smaps_raw, emap, fov, fov, n_target, crop=0.5, smooth_sigma_mm=0,
     )
     smaps_smoothed = process_smaps(
-        smaps_raw, emap, fov, fov, n_target, threshold_mask=0.5, smooth_sigma_mm=6.0,
+        smaps_raw, emap, fov, fov, n_target, crop=0.5, smooth_sigma_mm=6.0,
     )
 
-    target_mask = resize_to_epi_grid(
-        (emap > 0.5).astype(np.float64), fov, fov, n_target, order=0
-    ) > 0.5
+    target_mask = resize_to_epi_grid(emap, fov, fov, n_target, order=3) > 0.5
 
     def roughness(vol):
         # Mean absolute discrete Laplacian magnitude over interior mask

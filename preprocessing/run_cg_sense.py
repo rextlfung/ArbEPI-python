@@ -34,7 +34,7 @@ def run_cg_sense(cfg: PreprocessingConfig) -> None:
             save_recon_nifti(
                 fn_recon, img,
                 num_iter=cfg.num_iter,
-                threshold_mask=cfg.threshold_mask,
+                crop=cfg.crop,
                 do_sense=cfg.do_sense,
                 cc_energy_thresh=cfg.cc_energy_thresh,
                 seqname=seqname,
