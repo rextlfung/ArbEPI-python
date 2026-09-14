@@ -98,6 +98,41 @@ def estimate_smaps(
         construction (single source of truth for "is this voxel inside the
         object").
 
+        Residual, deliberately accepted, ~11%-by-volume oversizing at
+        crop=0.95 (investigated 2026-09-14, after the mask-fighting and
+        blocky-boundary fixes above): on `01_fullsamp_4p55mm` (the *only*
+        one of this session's four sequences with a trustworthy ground
+        truth -- see below), the final mask covers 43.3% of the volume vs.
+        38.9% for the true object (magnitude-thresholded EPI reconstruction),
+        roughly 1-2 voxels (~5-9mm) too far out on each side. Two candidate
+        fixes were tested directly against that ground truth and one was
+        ruled out: raising `cal_size` (24->32->48) does not shrink the
+        margin at all (if anything it grows slightly, 43.3%->43.9%->44.4%)
+        while costing far more compute (11s->17s->47s for one sequence) --
+        the residual isn't a calibration-*resolution* artifact. Raising
+        `crop` itself does close the gap: 0.97 -> 40.2%, 0.98 -> 38.6%
+        (a near-exact match to the true 38.9%), but 0.99 overshoots the
+        other way and starts excluding real signal (edge offsets flip
+        positive, i.e. the mask edge sits *inside* the true object
+        boundary on multiple lines). Explicit decision: keep 0.95 rather
+        than chase the closer 0.98 match, because the two failure
+        directions are not symmetric for a SENSE encoding operator -- a
+        mask that's too large costs nothing (the extra voxels have near-zero
+        true coil sensitivity anyway, so RSS-normalizing them contributes
+        no real signal), while a mask that's too tight discards real,
+        unrecoverable k-space-encoded information at the object boundary.
+        0.95 errs on the safe side of that asymmetry.
+
+        The `02_11x_2mm`/`03_ultrafast_1shot_2mm`/`04_ultrafast_2shot_2mm`
+        sequences could *not* be used to validate any of the above: they're
+        accelerated (R~11 to ~142), and root-sum-of-squares reconstruction
+        of an accelerated acquisition with no unfolding produces severe
+        aliasing -- confirmed directly (attempting the same ground-truth
+        comparison on `02_11x_2mm`'s RSS recon gave a nonsensical "true
+        object" covering 72% of the volume, an aliasing artifact, not real
+        anatomy). Only a fully-sampled (R=1) sequence's RSS reconstruction
+        is a valid ground truth for this kind of check.
+
     cal_size: resize ksp_gre's spatial dims to this matrix size (per axis)
         before running ESPIRiT, rather than passing the full acquisition
         grid -- a center-*crop* only on axes where the source is larger
