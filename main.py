@@ -4,7 +4,9 @@ Ported from ../ArbEPI/main.m. Edit params.py to configure the experiment,
 then run this script. Sequences are written to the output/ directory.
 
 Order matters: generate_arbepi must run first because generate_epical and
-generate_noise load scan_info.mat that it produces.
+generate_noise load scan_info.mat that it produces, and generate_degre must
+run after it so its scan_info.mat TE_degre patch (see generate_degre's
+docstring) takes effect -- so generate_degre runs last.
 """
 
 import argparse
@@ -35,11 +37,14 @@ def main(export_ge: bool = False, plot: bool = False):
     # 2. Calibration sequence (ghost correction + receiver gain)
     generate_epical(params)
 
-    # 3. deGRE: dual-echo gradient echo reference (sensitivity maps + B0 field map)
-    generate_degre(params)
-
-    # 4. Noise prescan (noise covariance)
+    # 3. Noise prescan (noise covariance)
     generate_noise(params)
+
+    # 4. deGRE: dual-echo gradient echo reference (sensitivity maps + B0 field
+    # map). Last, not because 2/3 depend on it, but so its scan_info.mat
+    # TE_degre patch (see generate_degre's docstring) runs after
+    # generate_arbepi has created that file.
+    generate_degre(params)
 
     if plot:
         # Diagnostic sampling-mask/trajectory/PSF plots — see plot_last_run.py.
@@ -55,7 +60,7 @@ def main(export_ge: bool = False, plot: bool = False):
 
         seq_paths = {
             name: os.path.join(params.output_dir, f'{name}.seq')
-            for name in ('ArbEPI', 'EPIcal', 'deGRE', 'noise')
+            for name in ('ArbEPI', 'EPIcal', 'noise', 'deGRE')
         }
 
         # Check all four sequences for GE hardware/PNS/acoustic-resonance
