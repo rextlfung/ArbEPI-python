@@ -3,18 +3,25 @@ calibration region, for a fast look at a dataset without running the full
 iterative Stage-2 pipeline (recon_frames.py / recon/).
 
 Every frame's (ky, kz) sampling mask (see sampling/pd_sample.py's
-`calib_frac`) always includes a small, fully-sampled centered ellipse --
+`calib_frac`) always includes a small, fully-sampled centered region --
 the calibration region ESPIRiT itself is calibrated from (via the deGRE
 scan, not this one). That same guarantee holds for the *EPI* acquisition's
 own per-frame mask: `omegas[..., t]` is `calib_mask | (extra incoherent
 samples)` for every frame `t`, so `np.all(omegas, axis=-1)` (the
 intersection across all frames) recovers exactly that calibration region --
 no need to know `params.pd_calib_frac`/`R` ahead of time, or assume they
-match the current defaults for a dataset acquired under different settings.
+match the current defaults for a dataset acquired under different settings,
+and no dependence on the region's shape either (a plain set intersection,
+which works the same whether `calib_mask` is an ellipse or a rectangle).
 Verified empirically on both `20260822ball_*` datasets: 362/10800 (ky, kz)
 locations, a centered ellipse, identical between the radial/laminar
 variants (they share the same underlying (ky, kz) mask, only the per-frame
-EPI shot ordering differs).
+EPI shot ordering differs) -- both acquired under `pd_sample.py`'s older
+area-matched-ellipse `calib_frac` semantics (fraction of the sample
+budget), since superseded by a centered-rectangle, fraction-of-kmax
+definition (see that module's docstring); this paragraph's specific
+numbers are a historical record of those two datasets, not a current
+claim about the shape a fresh acquisition's calibration region will have.
 
 Since that region is exactly, not approximately, fully sampled, no
 iterative reconstruction is needed: masking `ksp_epi_zf` down to it,
@@ -142,7 +149,12 @@ def lowres_calib_recon(
     xs, ys, zs = grid['x_slice'], grid['y_slice'], grid['z_slice']
 
     ksp_crop = ksp_epi_zf[xs, ys, zs, :, :]  # [Nx_eff, Ny_eff, Nz_eff, Nvcoils, Nframes]
-    calib_mask_crop = calib_mask[ys, zs]  # [Ny_eff, Nz_eff] -- the ellipse within its bounding box
+    # [Ny_eff, Nz_eff] -- calib_mask's own shape within its bounding box. A
+    # no-op for a rectangular calib_mask (its bounding box is itself, fully
+    # true), but real masking for e.g. an older ellipse-shaped one, whose
+    # own bounding box has corners outside the region -- kept generic since
+    # calib_mask's shape isn't assumed here.
+    calib_mask_crop = calib_mask[ys, zs]
     ksp_crop = ksp_crop * calib_mask_crop[None, :, :, None, None]  # zero any stray non-calib sample
 
     img_coils = _ift3(ksp_crop)  # [Nx_eff, Ny_eff, Nz_eff, Nvcoils, Nframes]

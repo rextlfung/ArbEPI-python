@@ -3227,3 +3227,25 @@ recorded.
   removing its own copy -- or, if the torch/numpy return-type difference is
   deliberate, factor out one shared core (read `omegas` + fallback) with a
   thin per-caller wrapper.
+- [x] **193.** Resolved: `sampling/pd_sample.py`'s `_poisson_disc_core_jit`
+  drew its single initial active point uniformly over the *whole* grid,
+  including the pre-filled calibration region -- a seed landing inside it
+  collides on every one of its `max_attempts` tries (everything nearby is
+  already "occupied"), the active list drops to zero on the first outer
+  iteration, and the function returns `calib_mask` completely unchanged.
+  Because `pd_sample` reuses the *same* fixed seed across every
+  binary-search iteration (by design, see the module docstring's point 1),
+  this silently killed genuine Poisson-disc placement for the entire call,
+  not just one unlucky iteration -- `pd_sample`'s exact-count step then
+  filled the whole non-calibration budget via uniform-random selection
+  instead of density-tapered placement, with no error or warning. [measured,
+  medium severity] Confirmed by direct reproduction: a seed landing inside a
+  ~13%-area calibration region returned zero grown points every time.
+  Probability of triggering scales with the calibration region's area
+  fraction, which was about to grow under the same change that surfaced
+  this (see `sampling/pd_sample.py`'s `calib_frac` redefinition from an
+  area-matched ellipse to a per-axis fraction-of-kmax rectangle). Fixed by
+  rejection-sampling the initial seed against `calib_mask` (module
+  docstring point 4); verified the fix eliminates the failure across 2000
+  seeds at a deliberately large (~18%) calibration-region fraction where
+  the old code failed on the very first seed tried.

@@ -396,10 +396,13 @@ def load_params(output_dir: str = 'output') -> Params:
     n_cycles_spoil_degre = 2
     Tpre = 1.0e-3
 
-    # Fully-sampled central calibration region: a centered ellipse,
-    # aspect-matched to (Ny, Nz), sized to hold 30% of the R-dependent
-    # sample budget (floor(Ny*Nz/R) -- see sampling/pd_sample.py).
-    pd_calib_frac = 0.3
+    # Fully-sampled central calibration region: a centered rectangle
+    # covering this fraction of each axis' own kmax, independently -- e.g.
+    # 0.2 means |ky| <= 0.2*ky_max and |kz| <= 0.2*kz_max (see
+    # sampling/pd_sample.py's calib_frac docstring). Not a fraction of the
+    # R-dependent sample budget (a stale, removed semantics) -- pixel area
+    # is calib_frac**2 of the full (Ny, Nz) grid, independent of R.
+    pd_calib_frac = 0.2
     pd_crop_corner = True
     pd_decay = 1.4
     rand_gaussian_sigma = None
