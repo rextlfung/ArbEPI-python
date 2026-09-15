@@ -236,8 +236,53 @@ been downgraded to `[verify]`/unconfirmed in place below, rather than
 re-reported as newly measured -- this is a correction to an existing item,
 not a new finding, so it isn't separately numbered. Item 110 also needed a
 one-line citation update (write site shifted from `:413` to `:414`).
+Items 189-191 are new findings from a later pass (2026-09-15, against
+`b701489`) that also re-verified every item 107-188 against the current
+tree: `git diff a6759be HEAD --stat` shows `preprocessing/config.py`,
+`preprocessing/julia/b0map.jl`, `preprocessing/preprocess.py`,
+`preprocessing/run_b0map.py`, `preprocessing/run_cg_sense.py`,
+`preprocessing/run_recon_sigpy.py`, `preprocessing/smaps.py` (heavily
+rewritten, +208/-lines), and two test files changed in that span --
+`PreprocessingConfig.threshold_mask` (default 0.2) was renamed to `crop`
+(default 0.95, now a single eigenvalue threshold shared between sigpy's
+EspiritCalib and `process_smaps`'s object mask, itself the fix for a
+previously-tracked two-thresholds-fighting bug), `preprocess.py` gained
+gzip compression on `ksp_epi_zf`, and `smaps.py` gained masked Gaussian
+re-smoothing helpers, GPU device auto-selection, and a post-resize
+re-mask step while dropping a now-redundant pre-resize mask -- alongside
+this doc itself. Every item citing only the unchanged files (ge/, lib/,
+sequences/, sampling/, plotting/, recon/, params.py, scanners.py,
+main.py -- byte-identical since the last several passes, reconfirmed
+again this pass by a fresh `uv run ruff check .` (29 errors, all
+`E501`), `uv run pytest` (143 passed/15 skipped plain, 209 passed/5
+skipped with `preprocessing`+`recon` extras, 34 passed for
+`tests/test_recon_*.py` alone), and a fresh `main.py --ge` build
+(identical peak-PNS/acoustics numbers and the identical item-169
+TE-feasibility warning)) needed no re-verification. Items 110, 117, 139,
+141, 175, and 178 needed citation-only updates (line numbers shifted by
+the `smaps.py`/`config.py`/`preprocess.py` changes, substance unchanged
+in every case); items 161, 174, 183, and 188 were confirmed fully
+unchanged (their cited lines fall outside the diff's actual edits).
+Item 177 was closed as superseded -- the specific numbered comments it
+quoted (`# 1. Eigenvalue support mask...`, `# 2+3. Crop
+z...interpolate...`) no longer exist in `smaps.py` after the crop/mask
+rewrite removed the step they partly labeled -- and item 192 records the
+differently-shaped inconsistency the rewrite left behind (a single
+orphaned `# 4. Normalize` with no `1`/`2`/`3` above it). This pass split
+its budget across two parallel subagents: one focused entirely on
+re-verifying the items above against the actual `preprocessing/` diff and
+hunting for new findings there (items 189-190 plus the item 177/192
+disposition), the other doing a lighter fresh-eyes hunt across the
+unchanged areas per the established rotation (found one new
+documentation gap, item 191, plus confirmation that several other
+specific hypotheses it traced -- a README `--plot` file-list omission, a
+spoiler off-by-one, a `calc_te_tr_delays` missing term, missing
+`write_ceq`/`read_pge` coverage -- were all already-tracked duplicates,
+not new). Every finding below was independently re-verified against the
+live tree (not just trusted from either subagent's report) before being
+recorded.
 
-## Current baseline (2026-09-14, against `a6759be`)
+## Current baseline (2026-09-15, against `b701489`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
   errors**, all `E501` -- unchanged from the previous pass.
@@ -255,8 +300,11 @@ one-line citation update (write site shifted from `:413` to `:414`).
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, GE_MR750, `PNSwt = [0.8, 1.0, 0.7]`, seed 0) --
   all four sequences `.ok`, re-measured fresh this pass (`rm -rf output`
-  first). Numbers unchanged from the previous several passes -- the source
-  tree is identical (see the provenance note above), and the same item-169
+  first). Numbers unchanged from the previous several passes -- this
+  build path only touches `ge/`/`lib/`/`sequences/`/`params.py`/
+  `scanners.py`/`main.py`, none of which changed this pass (only
+  `preprocessing/` changed, see the provenance note above, and that
+  subtree isn't part of the `--ge` build path) -- and the same item-169
   `Minimum achievable TE (35.104 ms) exceeds prescribed TE (34.900 ms)`
   warning still fires, confirming the build is byte-for-byte reproducible:
 
@@ -576,11 +624,12 @@ one-line citation update (write site shifted from `:413` to `:414`).
   convention.
 - [ ] **110. `preprocessing/preprocess.py`'s `n_frames_discard` is
   computed and written but has no reader anywhere in the repo.** [verify;
-  citation updated 2026-09-14 against `a6759be` -- the write site shifted
-  from `:413` to `:414` after `0e4e86e`'s `smooth_sigma_mm` kwarg addition
-  earlier in the same function; substance unchanged] `preprocess.py:274`
+  citation updated 2026-09-15 against `b701489` -- the write site shifted
+  from `:414` to `:416` after `b701489` added `compression='gzip',
+  compression_opts=4` (2 lines) to the `ksp_epi_zf` dataset creation just
+  above it; substance unchanged] `preprocess.py:274`
   computes `NframesDiscard =
-  round(seq_params.discard_duration / seq_params.volume_tr)` and `:414`
+  round(seq_params.discard_duration / seq_params.volume_tr)` and `:416`
   writes it as `mf.attrs['n_frames_discard']`; a repo-wide grep for
   `n_frames_discard` finds only this write site -- no reader in
   `recon_frames.py`, `run_rss.py`, `run_cg_sense.py`,
@@ -1102,10 +1151,11 @@ one-line citation update (write site shifted from `:413` to `:414`).
 - [ ] **139. `preprocessing/config.py`'s `load_seq_params` reads
   `scan_info.mat` via a bare `h5py.File`, not `matio.read_mat`,
   contradicting `matio.py`'s own unconditional stated rule.** [verify,
-  not live today; citation updated 2026-09-12 against `ecb8f2f` --
-  `config.py` gained a 7-line `smaps_smooth_sigma_mm` field above
-  `load_seq_params`, shifting it from old `:162-193` to `config.py:169-200`
-  (body `:177-199`); substance unchanged] `config.py:177-199` opens
+  not live today; citation updated 2026-09-15 against `b701489` --
+  `config.py`'s `threshold_mask` field was renamed to `crop` with a 9-line
+  docstring expansion above `load_seq_params`, shifting it from
+  `config.py:169-200` (body `:177-199`) to `config.py:178-209` (body
+  `:186-209`); substance unchanged] `config.py:186-208` opens
   `paths.scan_info` directly
   and reads every field with plain `f[name][()]`
   (`.item()`/`.ravel()`), never calling
@@ -2058,20 +2108,23 @@ one-line citation update (write site shifted from `:413` to `:414`).
 - [ ] **141. Addendum to item 117: `preprocess.py`'s STEP 3 never writes
   `smaps_degre`/`emap_degre`, so `smaps.py`'s "legacy cache" backfill
   branch fires on every fresh full-pipeline run, not just an occasional
-  older cache.** [measured; citations updated 2026-09-12 against `ecb8f2f`,
+  older cache.** [measured; citations updated 2026-09-15 against `b701489`,
   substance and liveness confirmed unchanged] Item 117 (still open)
   already flags that
   `preprocess.py`'s STEP 3 hand-rolls a narrower copy of `smaps.py`'s
   `load_smaps()` caching logic instead of calling it directly. A
   concrete, previously-undocumented consequence of that narrowness:
-  STEP 3's fresh-estimation branch (`preprocess.py:335-347`, was
-  `:335-346` -- grew by the new `smooth_sigma_mm=cfg.smaps_smooth_sigma_mm`
-  kwarg line) writes only
+  STEP 3's fresh-estimation branch (`preprocess.py:335-347`, unchanged by
+  `b701489` -- that commit's gzip-compression addition lands later in the
+  same function) writes only
   `smaps_raw`/`emap`/`smaps` + `Nvcoils` -- it never computes or writes
   `smaps_degre`/`emap_degre`. `smaps.py`'s canonical `load_smaps`
-  (`smaps.py:286-303`, was `:208-222`) always computes and writes both
+  (`smaps.py:427-444`, was `:286-303` -- `smaps.py` was substantially
+  rewritten by `b701489`'s crop/mask/GPU/smoothing changes) always
+  computes and writes both
   alongside a fresh
-  estimate, and its own docstring (now `:225-227`, was `:151-153`) describes the
+  estimate, and its own docstring (now `smaps.py:370-372`, was `:225-227`)
+  describes the
   no-`smaps_degre` case as "an older cache written before these existed"
   that gets "backfilled in place" -- language implying an occasional,
   legacy case. Reproduced directly: writing a cache with exactly STEP 3's
@@ -2177,28 +2230,28 @@ one-line citation update (write site shifted from `:413` to `:414`).
   np.random.default_rng(0)` line (or in `params.py`'s
   `spoil_cycles_min`/`max` docstring) stating explicitly that sharing seed
   0 across the two generators is intentional and why.
-- [ ] **177. `preprocessing/smaps.py`'s `process_smaps` inline
-  step-numbering comments no longer match its own docstring's step count
-  after two new steps were added.** [measured, very low severity]
-  `smaps.py:124`'s docstring now advertises "Mask, z-crop, resize, smooth,
-  and RSS-normalize" -- five verbs/stages -- but the inline comments still
-  only number three of them: `# 1. Eigenvalue support mask...`
-  (`smaps.py:140`), `# 2+3. Crop z...interpolate...` (`smaps.py:146`), and
-  `# 4. Normalize...` (`smaps.py:195`). The two new stages added by
-  `0e4e86e`/`f470f53` -- the post-resize re-mask (`smaps.py:151-168`) and
-  the Gaussian smoothing block (`smaps.py:170-193`) -- sit unlabeled
-  between "2+3" and the now-mislabeled "4" (normalize is really the sixth
-  step by the docstring's own count). A reader skimming the numbered
-  comments for an overview would miss that two whole stages exist between
-  resize and normalize. Fix: renumber as 1 / 2+3 / 4 (re-mask) / 5
-  (smooth) / 6 (normalize), or drop the numbering scheme now that it no
-  longer covers every step.
+- [x] **177.** Closed as superseded, 2026-09-15 against `b701489`: the
+  code this item cited no longer exists in that form.
+  `preprocessing/smaps.py`'s `crop`/mask redesign (`b701489`) removed the
+  pre-resize masking step this item's `# 1. Eigenvalue support mask...`
+  comment used to label (see the new comment at `smaps.py:259-266`
+  explaining why that step became unnecessary) and rewrote the z-crop/
+  resize step's comment (now `smaps.py:268-270`) without a leading number
+  either -- so the `# 1.`/`# 2+3.` comments this item quoted are gone
+  verbatim, not just shifted. See item 192 for the fresh, differently-shaped
+  finding this left behind (a single orphaned `# 4.` with no `1`/`2`/`3`
+  anywhere above it, which is arguably a worse inconsistency than the one
+  this item originally described, not a fix).
 - [ ] **178. `preprocessing/smaps.py`'s `_masked_gaussian_smooth` uses
   `scipy.ndimage.gaussian_filter`'s default `mode='reflect'` boundary
   handling, inconsistent with `preprocessing/grid_resize.py`'s documented
   `mode='nearest'` convention for the same pipeline -- confirmed to have
-  no live effect, but undocumented.** [verified, very low severity]
-  `smaps.py:105,109-110` (added by `0e4e86e`) call
+  no live effect, but undocumented.** [verified, very low severity;
+  citation updated 2026-09-15 against `b701489` -- `_masked_gaussian_smooth`
+  moved to `smaps.py:194-217` and its three unset-`mode` calls to
+  `smaps.py:210,214-215` after the surrounding crop/mask redesign;
+  substance unchanged] `smaps.py:210,214-215` (originally added by
+  `0e4e86e`) call
   `ndimage.gaussian_filter(weight, sigma_vox)` and the matching call on
   the numerator array with no explicit `mode=`, so reflect-padding applies
   at the outermost voxels of the target grid. `grid_resize.py`'s module
@@ -2213,6 +2266,28 @@ one-line citation update (write site shifted from `:413` to `:414`).
   exactly 0 regardless of padding mode. Fix: pass `mode='nearest'`
   explicitly for consistency with `grid_resize.py`'s stated convention, or
   add a one-line comment explaining why reflect is fine here.
+- [ ] **192. `preprocessing/smaps.py`'s `process_smaps` now has a single
+  orphaned `# 4. Normalize` comment with no `1`/`2`/`3` anywhere above it
+  -- the successor to item 177, left behind by the same crop/mask redesign
+  that closed it.** [measured, very low severity] `b701489`'s rewrite of
+  `process_smaps` (`smaps.py:220-342`) removed the pre-resize masking step
+  item 177's `# 1. Eigenvalue support mask...` comment used to label
+  (replaced by an unnumbered explanatory comment at `smaps.py:259-266`
+  about why that step is no longer needed) and left the z-crop/resize
+  comment (`smaps.py:268-270`, was `# 2+3. Crop z...interpolate...`)
+  unnumbered too -- but `# 4. Normalize...` (`smaps.py:337`) survived
+  verbatim, still carrying its old number. The module docstring
+  (`smaps.py:229`) still advertises five stages ("Mask, z-crop, resize,
+  smooth, and RSS-normalize"), and the two stages between resize and
+  normalize -- the post-resize re-mask (`smaps.py:308-310`) and the
+  Gaussian-smoothing block (`smaps.py:331-335`) -- are both unlabeled, same
+  as item 177 already found. What's new: a lone "4." with nothing before
+  it reads as though three steps were deleted by mistake (or that there
+  are only 4 steps total), which is a more actively misleading signal than
+  177's original "numbering undercounts the steps" framing. Fix: either
+  drop the leftover "4." (matching the other four now-unnumbered stage
+  comments, which is the simpler fix given how much this function has
+  already been restructured) or renumber all five stages consistently.
 - [ ] **179. `recon/sweep_time_segments.py`'s module docstring and its own
   printed sweep-table marker both still call `L=6` "the current production
   default," stale since item 82 changed the default to `L=32`.**
@@ -2295,6 +2370,56 @@ one-line citation update (write site shifted from `:413` to `:414`).
   field to `SeqPaths` alongside the `gre_cache`/`smaps_cache` fields that
   item proposes, computed once in `set_seq_paths`, and update both call
   sites above to read it instead of re-deriving the filename.
+- [ ] **190. `preprocessing/preprocess.py`'s new gzip compression on
+  `ksp_epi_zf` carries no in-code rationale, and the sibling module that
+  documents this exact dataset's read performance now silently describes
+  data from before the change.** [measured, low-medium severity]
+  `preprocess.py:411-412` (`compression='gzip', compression_opts=4`, added
+  by `b701489` to the `ksp_epi_zf` dataset's `create_dataset` call) carries
+  no comment at all -- but the commit that added it states a concrete,
+  measured justification ("a real 210GB file compresses ~117x with gzip
+  level 4 (measured on a real frame chunk: 231MB -> 2MB)") that appears
+  nowhere in the source tree: not in `preprocess.py` itself, not in
+  CLAUDE.md's `.mat`/`.h5` file-format paragraphs (`grep -n
+  "gzip\|compress" CLAUDE.md` finds only unrelated "coil compression"
+  hits), and not in `recon/reconstruct.py:45-57`'s `_load_array`
+  docstring, which documents this exact dataset's own read-performance
+  characteristics ("~500 MB/s reading one same-sized chunk slice at a
+  time") on data that predates this compression change and doesn't
+  mention it's now compressed at all. This repo's own established
+  convention (visible throughout CLAUDE.md and nearly every design
+  decision in `smaps.py`/`grid_resize.py`) is to record measured rationale
+  for exactly this kind of choice directly in code so it survives
+  independent of git history -- here a real, well-justified number is
+  invisible to anyone reading the source. `tests/test_recon_reconstruct.py`'s
+  fixtures also write `ksp_epi_zf` uncompressed and unchunked, so
+  `_load_array`'s chunk-by-chunk read path is untested against real
+  gzip-compressed data. Fix: add a short comment at `preprocess.py:409-412`
+  carrying the ~117x/231MB->2MB measurement (or a pointer to `b701489`),
+  and a one-line caveat in `recon/reconstruct.py`'s `_load_array`
+  docstring noting the dataset is now gzip-compressed and that the cited
+  throughput figure predates that change.
+- [ ] **191. README.md's Architecture file tree omits `ge/validate_pns.py`
+  from its `ge/` subsection, even though CLAUDE.md cites it by name as
+  `ge/pns.py`'s MATLAB-validation script.** [measured, low severity]
+  `README.md:209-221` lists all 12 other `ge/*.py` modules with a one-line
+  description each (`ge_export.py`, `ceq.py`, `blocks.py`, `seq2ceq.py`,
+  `writeceq.py`, `read_pge.py`, `pns.py`, `acoustics.py`, `check.py`,
+  `validate_against_matlab.py`, `coppe.py`), but `ge/validate_pns.py`
+  (present in the repo -- `ls ge/*.py` lists 13 files, this is the only
+  one absent from README's tree) is never mentioned anywhere in README.md
+  (`grep -n validate_pns README.md` returns nothing). CLAUDE.md's PNS
+  section names it in the same breath as `read_pge.py`/
+  `validate_against_matlab.py`: "Both `ge/pns.py` and `ge/acoustics.py`
+  match real MATLAB output to float64/float32 precision on identical
+  input (`ge/validate_pns.py` + the since-removed
+  `dump_pns_test.m`/`dump_acoustics_test.m`)". Severity is low
+  (documentation completeness only, same class as item 185's "four should
+  be five"), but it's a real, verified gap, not a duplicate (grepped this
+  file for `validate_pns`/`ge/ tree` -- no hits). Fix: add a line after
+  `read_pge.py` or `pns.py` in `README.md`'s `ge/` tree, e.g.
+  `validate_pns.py   Validates ge/pns.py against real MATLAB pge2.pns.m
+  output (not a pytest test)`.
 
 ## Test & tooling health
 
@@ -2708,10 +2833,14 @@ one-line citation update (write site shifted from `:413` to `:414`).
 - [ ] **175. `preprocessing/smaps.py`'s two new Gaussian-smoothing tests
   don't exercise an anisotropic target grid, the one shape of bug the
   physical-mm sigma conversion could plausibly hide.** [measured, low-
-  medium severity] Both new tests (`tests/test_preprocessing_smaps.py:100-133`,
-  `:136-187`, added by `0e4e86e`) use isotropic `fov`/`n_target`
+  medium severity; citation updated 2026-09-15 against `b701489` -- the
+  two tests moved to `tests/test_preprocessing_smaps.py:104-142`/`:145-196`
+  (was `:100-133`/`:136-187`) and the `vox_mm`/`sigma_vox` lines moved to
+  `smaps.py:332-333` (was `:190-191`) after the surrounding crop/mask
+  redesign; substance unchanged] Both new tests (`tests/test_preprocessing_smaps.py:104-142`,
+  `:145-196`, added by `0e4e86e`) use isotropic `fov`/`n_target`
   (`(0.2,0.2,0.2)`/`(40,40,40)` and `(0.18,0.18,0.18)`/`(91,91,91)`).
-  `smaps.py:190-191`'s `vox_mm = np.array(fov) / np.array(n_target) *
+  `smaps.py:332-333`'s `vox_mm = np.array(fov) / np.array(n_target) *
   1000; sigma_vox = smooth_sigma_mm / vox_mm` is only meaningfully tested
   when x/y/z voxel size is identical -- a per-axis mix-up (e.g. swapping
   `fov`/`n_target` order, or using the wrong tuple) would silently pass
@@ -2748,6 +2877,29 @@ one-line citation update (write site shifted from `:413` to `:414`).
   analogous to the existing `caipi`/`ticaipi`/`pd` ones (shape, dtype,
   sample count, and that the default `rand_gaussian_sigma=None` path
   doesn't crash).
+- [ ] **189. `preprocessing/smaps.py`'s new `_default_device()` GPU/CPU
+  auto-selection has zero test coverage.** [measured, low severity]
+  `_default_device()` (`smaps.py:31-45`, added by `b701489`) decides
+  GPU-vs-CPU dispatch for every real ESPIRiT calibration call via
+  `sp.config.cupy_enabled` + `cupy.cuda.runtime.getDeviceCount()`, and is
+  now the implicit default (`estimate_smaps(..., device=None)`) for the
+  entire sensitivity-map pipeline. `grep -n "_default_device\|device="
+  tests/test_preprocessing_smaps.py` finds no reference -- neither branch
+  (cupy-enabled-with-a-visible-device vs. the CPU fallback) is exercised
+  by an explicit test; `estimate_smaps`'s own tests call it only with the
+  default `device=None`, implicitly running whichever branch this
+  environment happens to hit (almost certainly the no-cupy/CPU fallback)
+  with no assertion on which path was taken. Severity is low (a short,
+  straightforward function), but it's the entry point that decides GPU
+  dispatch for every real ESPIRiT run in the pipeline, and a regression
+  here (e.g. a typo in the `cupy.cuda.runtime.getDeviceCount()` call)
+  could silently always fall back to CPU, or crash on a machine with cupy
+  installed but no visible device, without any test catching it -- the
+  same "no regression test for a just-added real behavior" pattern items
+  161/174/175/178 already flag elsewhere in this same file/module. Fix:
+  add tests that monkeypatch `sp.config.cupy_enabled`/a stub `cupy` module
+  and assert `_default_device()` returns `sp.cpu_device` when cupy is
+  disabled and `sp.Device(0)` when a device is reported present.
 
 ## Conciseness & performance
 
@@ -2898,7 +3050,10 @@ one-line citation update (write site shifted from `:413` to `:414`).
   (`use_parfor=False`) path unchanged.
 - [ ] **117. `preprocessing/preprocess.py`'s STEP 3 duplicates
   `smaps.py`'s `load_smaps()` caching logic instead of calling it, and the
-  duplicate is already narrower and drifting.** [verify] `preprocess()`'s
+  duplicate is already narrower and drifting.** [verify; citation updated
+  2026-09-15 against `b701489` -- item 41's `Nvcoils` check moved to
+  `smaps.py:386-392` (was `:244-250`) after the crop/mask/GPU/smoothing
+  redesign; substance unchanged] `preprocess()`'s
   STEP 3 (`preprocess.py:323-353`) hand-rolls the same "check cached
   `Nvcoils` attr, load-or-estimate-and-cache" pattern
   `smaps.load_smaps()` (used by `recon_frames.py:76`) already implements
@@ -2908,8 +3063,7 @@ one-line citation update (write site shifted from `:413` to `:414`).
   `recon_frames.py` or `run_b0map.py` runs later. Not a correctness bug
   today (the backfill path is real and tested), but it's duplicated
   cache-validity logic in two places that can already drift: item 41's
-  fix made `smaps.py:244-250` (shifted from `:170-173` by the smoothing
-  commit's +80-line insertion above it) compare `int(f.attrs['Nvcoils'])`
+  fix made `smaps.py:386-392` compare `int(f.attrs['Nvcoils'])`
   against a freshly-read `ksp_gre.shape[-1]`, while `preprocess.py:330`
   still compares `f.attrs.get('Nvcoils') == Nvcoils` -- similar but not the
   same check, with no test pinning them to identical behavior. Since
