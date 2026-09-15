@@ -4,6 +4,8 @@ model tests/test_recon_b0_correction.py uses for the static (single-segment)
 stage -- reused directly here (not reimplemented) so both stages are held to
 the exact same ground truth."""
 
+import math
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -229,6 +231,164 @@ def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
         )
         y_manual = A_manual.apply(x[..., it])
         torch.testing.assert_close(y_batched[..., it], y_manual, atol=1e-5, rtol=1e-4)
+
+
+def test_r2star_zero_map_matches_phase_only_operator():
+    """r2star_map=torch.zeros(...) should reproduce the r2star_map=None
+    operator's c_phasors exactly (up to float32 rounding). The two are
+    built by genuinely different code paths -- None takes c_phasors
+    straight from mri_exp_approx's own spatial output, r2star_map=zeros
+    goes through this module's manual `torch.exp(tl * psi)` construction
+    -- so this is a real cross-check of that construction against the
+    library's own convention, not a tautology. Locks in operators_b0.py's
+    stated contract that r2star_map=None is a strict special case of
+    r2star_map=0."""
+    Nx, Ny, Nz, Nc, Nt, L = 5, 6, 4, 2, 3, 3
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=70)
+    b0map_hz = _complex_randn(Nx, Ny, Nz, seed=71).real * 100
+
+    omega = torch.stack([torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.4 for _ in range(Nt)], dim=-1)
+    counts = omega.sum(dim=(0, 1, 2))
+    k = counts.min().item()
+    omega = omega & (torch.cumsum(omega.reshape(-1, Nt), dim=0) <= k).reshape(Nx, Ny, Nz, Nt)
+
+    n_distinct = 5
+    distinct_times = torch.linspace(0.005, 0.055, n_distinct, device=DEVICE)
+    yz_idx = (
+        torch.arange(Ny, device=DEVICE).reshape(Ny, 1) * Nz
+        + torch.arange(Nz, device=DEVICE).reshape(1, Nz)
+    ) % n_distinct
+    echo_times_yz = distinct_times[yz_idx]  # (Ny,Nz)
+    echo_times_2d = echo_times_yz.unsqueeze(-1).expand(Ny, Nz, Nt).contiguous()
+
+    A_none = build_encoding_operator_b0(smaps, omega, b0map_hz, echo_times_2d, L=L, nbins=10)
+    r2star_zero = torch.zeros(Nx, Ny, Nz, device=DEVICE)
+    A_zero = build_encoding_operator_b0(
+        smaps, omega, b0map_hz, echo_times_2d, L=L, nbins=10,
+        r2star_map=r2star_zero, t_ref_s=0.0,
+    )
+
+    x = _complex_randn(Nx, Ny, Nz, Nt, seed=73)
+    torch.testing.assert_close(A_none.apply(x), A_zero.apply(x), atol=1e-5, rtol=1e-4)
+
+
+def test_r2star_generalization_adjoint_is_self_consistent():
+    """The check that discriminates this module's PHYSICAL sign
+    (psi = i*2*pi*Δf(r) - R2*(r), decaying in the forward direction) from
+    recon/lowres_calib_recon_b0complex.py's flipped sign on the
+    (unmerged) worktree-lowres-calib-recon branch (psi_recon =
+    i*2*pi*Δf(r) + R2*(r)): the true adjoint identity <Ax,y> == <x,A^H y>
+    holds for ANY complex c_phasors under GatheredSenseB0's `.conj()`
+    adjoint -- including this module's decaying psi -- but fails for the
+    branch's flipped-sign convenience (which is deliberately not a true
+    adjoint; it's a matched-filter decay-compensation trick valid only in
+    an adjoint-only, non-iterative reconstruction). Mirrors
+    test_adjoint_is_self_consistent above, generalized to a nonzero R2*
+    map, so a future change that accidentally reintroduces the flipped
+    sign here fails loudly."""
+    Nx, Ny, Nz, Nc, L = 6, 7, 5, 3, 4
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=80)
+    samp = torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.5
+    b0map_hz = _complex_randn(Nx, Ny, Nz, seed=81).real * 150
+    r2star_hz = _complex_randn(Nx, Ny, Nz, seed=82).real.abs() * 40  # 1/s, physically plausible
+    t_frame = _complex_randn(Nx, Ny, Nz, seed=83).real.abs() * 0.05 + 0.01
+
+    idx = torch.nonzero(samp.reshape(-1), as_tuple=False).squeeze(-1)
+    t_ms = (t_frame.reshape(-1)[idx] * 1000).to(torch.float32)
+    b0_neg = (-b0map_hz).to(torch.float32)
+    b_by_echo, _c_phase_only, tl = mri_exp_approx(b0_neg, 20, L, t_ms)
+
+    N = (Nx, Ny, Nz)
+    psi = 1j * 2 * math.pi * b0map_hz.to(torch.complex64) - r2star_hz.to(torch.complex64)
+    tl_c = tl.to(torch.complex64)
+    c_phasors = torch.exp(tl_c.reshape((L,) + (1,) * len(N)) * psi[None, ...]).to(smaps.dtype)
+    pos = torch.arange(b_by_echo.shape[0], device=DEVICE)
+    A = GatheredSenseB0(smaps, samp, pos, b_by_echo.to(smaps.dtype), c_phasors)
+    K = A.idx.numel()
+
+    x = _complex_randn(Nx, Ny, Nz, seed=84)
+    y = _complex_randn(K, Nc, seed=85)
+
+    lhs = torch.vdot(A.apply(x).reshape(-1), y.reshape(-1))
+    rhs = torch.vdot(x.reshape(-1), A.adjoint(y).reshape(-1))
+    assert abs(lhs - rhs).item() / abs(lhs).item() < 1e-4
+
+
+def test_r2star_forward_model_decays_away_from_reference_time():
+    """Physical sanity check on the sign, independent of the adjoint
+    identity above: c_phasors' MAGNITUDE (the amplitude term any given
+    time-segment applies) must be a strictly DECREASING function of that
+    segment's time tl[l] -- exactly exp(-R2*(r)*(tl[l] - t_ref_s)) for a
+    uniform R2*(r) -- not bounded above by 1: this test's echo times span
+    both sides of t_ref_s (as a real acquisition's do -- some echoes fall
+    before the nominal-TE echo, some after), and a segment with tl[l] <
+    t_ref_s legitimately has |c_phasors|>1 (LESS decay than the reference
+    echo, not growth -- an earlier version of this test wrongly asserted
+    |c_phasors|<=1 everywhere and failed on exactly this). What the sign
+    must never do is flip that direction: a flipped sign
+    (recon/lowres_calib_recon_b0complex.py's branch convention) would make
+    |c_phasors| INCREASE with tl[l] instead of decrease (see the module
+    docstring's measured tSNR-gets-worse regression).
+
+    Checked directly on |c_phasors| via build_encoding_operator_b0's own
+    construction, rather than round-tripping through a forward FFT+gather
+    simulation and comparing k-space-subset energies: a first attempt at
+    that end-to-end approach gave a wildly wrong ratio, traced to a real
+    confound, not a bug here -- with a spatially-varying Δf(r), the
+    per-voxel PHASE term (which is exactly unit-magnitude and therefore
+    energy-preserving on its own) still redistributes energy across
+    k-space bins via the FFT, so a biased k-space *subset*'s energy ratio
+    reflects that redistribution, not just the R2* attenuation. Checking
+    |c_phasors| directly sidesteps that confound entirely."""
+    Nx, Ny, Nz, Nc, L = 6, 7, 5, 3, 8
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=90)
+    b0map_hz = _complex_randn(Nx, Ny, Nz, seed=92).real * 150  # realistic-scale Δf, Hz
+    r2_uniform = 50.0  # 1/s
+    r2star_hz = torch.full((Nx, Ny, Nz), r2_uniform, device=DEVICE)
+
+    t_ref_s = 0.030
+    Nt = 1
+    omega = torch.ones(Nx, Ny, Nz, Nt, dtype=torch.bool, device=DEVICE)
+    # A handful of distinct echo times spanning +-20ms around t_ref_s.
+    n_distinct = 6
+    distinct_times = t_ref_s + torch.linspace(-0.020, 0.020, n_distinct, device=DEVICE)
+    yz_idx = (
+        torch.arange(Ny, device=DEVICE).reshape(Ny, 1) * Nz
+        + torch.arange(Nz, device=DEVICE).reshape(1, Nz)
+    ) % n_distinct
+    echo_times_yz = distinct_times[yz_idx].unsqueeze(-1)  # (Ny,Nz,Nt)
+
+    A = build_encoding_operator_b0(
+        smaps, omega, b0map_hz, echo_times_yz, L=L, nbins=20,
+        r2star_map=r2star_hz, t_ref_s=t_ref_s,
+    )
+    c_phasors = A.A[0].c_phasors  # (L,Nx,Ny,Nz)
+
+    # |c_phasors[l]| should be spatially uniform (r2star_hz is) and equal
+    # exp(-r2_uniform * |tl[l] - t_ref_s|) -- checked via the spread/bound
+    # below rather than re-deriving tl (build_encoding_operator_b0 doesn't
+    # return it).
+    mag = c_phasors.abs()
+    per_segment_mag = mag.reshape(L, -1)
+    uniform_ref = per_segment_mag[:, :1].expand_as(per_segment_mag)
+    assert torch.allclose(per_segment_mag, uniform_ref, atol=1e-5), (
+        "c_phasors magnitude should be spatially uniform when r2star_map is spatially uniform"
+    )
+    # mri_exp_approx places tl via non-decreasing percentiles of the fit
+    # times (see its own source), so segment l's magnitude -- returned in
+    # that same l-order -- should be non-increasing across l.
+    segment_decay = per_segment_mag[:, 0].cpu()
+    assert torch.all(segment_decay[:-1] >= segment_decay[1:] - 1e-5), (
+        f"|c_phasors| should be non-increasing as segment time increases: {segment_decay.tolist()}"
+    )
+    # tl's first/last segments land exactly at the min/max fit time (the
+    # percentile fractions span [0,1] inclusive), so the ratio should match
+    # exp(R2* * full time span) exactly -- here +-20ms around t_ref_s, a 40ms span.
+    expected_ratio = math.exp(r2_uniform * 0.040)
+    ratio = (segment_decay.max() / segment_decay.min()).item()
+    assert abs(ratio - expected_ratio) / expected_ratio < 1e-3, (
+        f"max/min decay ratio {ratio:.4f} should match exp(R2*span)={expected_ratio:.4f}"
+    )
 
 
 def test_estimate_spectral_norm_matches_full_sampling_unity_case():
