@@ -42,12 +42,36 @@ the default full-scale params:
    taking 3.5+ minutes) instead of naturally saturating. The cap forces
    termination at the same point real sigpy does.
 
-Even with all three fixes, `_poisson_disc_core`'s point-placement loop
+4. **Seed the growth front outside the calibration region.** The single
+   initial active point used to be drawn uniformly over the whole grid.
+   The calibration region starts pre-filled (every one of its cells
+   already "occupied"), so a seed landing inside it collides on every one
+   of its `max_attempts` tries -- nothing outside a fully-sampled region
+   is ever within one exclusion radius of a point deep inside it -- the
+   active list drops to zero on the very first outer-loop iteration, and
+   `_poisson_disc_core` returns `calib_mask` completely unchanged. Because
+   the same fixed seed is reused across every binary-search iteration
+   (point 1 above), this isn't a one-off fluke: it silently kills genuine
+   Poisson-disc placement for the *entire* call, and `pd_sample`'s
+   exact-count step then hits the target count via uniform-random fill
+   over the whole non-calibration budget instead of density-tapered
+   placement -- confirmed by direct reproduction (a seed landing inside a
+   ~13%-area calibration region returned `mask == calib_mask`, zero grown
+   points). `_poisson_disc_core_jit` now rejection-samples the initial
+   point against `calib_mask` so growth always starts outside it; this is
+   guaranteed to terminate because `pd_sample` only ever calls it with
+   `calib_mask.sum() <= target_samples < nx*ny` (checked before the
+   binary-search loop), so at least one non-calibration cell always
+   exists, but the loop is still capped defensively since the function is
+   callable directly.
+
+Even with all four fixes, `_poisson_disc_core`'s point-placement loop
 itself is a tight, highly sequential (each new point depends on all prior
 ones -- not vectorizable) loop that can run hundreds of thousands of
 iterations for the worst-case radius/seed combinations above; in pure
 Python this still took up to ~12s per `pd_sample()` call even after fixes
-1-3 (measured across 60 seeds at production scale). It is JIT-compiled
+1-3 (point 4 added later, measured across 60 seeds at production scale).
+It is JIT-compiled
 with `numba` for this reason -- the same reason real sigpy JIT-compiles
 its own equivalent function. `numba` is added as a narrow, single-function
 dependency here (unlike the earlier attempt to depend on the `sigpy`
@@ -71,13 +95,19 @@ def _rho_grid(ny: int, nx: int) -> np.ndarray:
     return np.sqrt(yn**2 + xn**2)
 
 
-def _calib_rho(target_samples: int, nx: int, ny: int, calib_frac: float) -> float:
-    """Radius (in the normalized units of `_rho_grid`) of a centered,
-    aspect-matched ellipse whose pixel area is `calib_frac * target_samples`."""
+def _calib_mask_rect(ny: int, nx: int, calib_frac: float) -> np.ndarray:
+    """(ny, nx) boolean mask of a centered rectangle covering `calib_frac`
+    of each axis' own half-extent (kmax) independently: |ky| <= calib_frac
+    * ky_max and |kz| <= calib_frac * kz_max, using the same per-axis
+    normalization as `_rho_grid` (ky_max/kz_max correspond to ny/2, nx/2
+    in pixel units, so this rectangle's pixel area is calib_frac**2 of the
+    full (ny, nx) grid). calib_frac <= 0 -> no calibration region."""
     if calib_frac <= 0:
-        return 0.0
-    rho_calib = math.sqrt(4 * calib_frac * target_samples / (math.pi * nx * ny))
-    return min(rho_calib, 0.999)
+        return np.zeros((ny, nx), dtype=bool)
+    Y, X = np.meshgrid(np.arange(ny), np.arange(nx), indexing='ij')
+    yn = np.abs((Y - ny / 2) / (ny / 2))
+    xn = np.abs((X - nx / 2) / (nx / 2))
+    return (yn <= calib_frac) & (xn <= calib_frac)
 
 
 @nb.njit(cache=True)
@@ -103,8 +133,22 @@ def _poisson_disc_core_jit(
     # MATLAB original.
     pxs = np.empty(nx * ny, dtype=np.float64)
     pys = np.empty(nx * ny, dtype=np.float64)
-    pxs[0] = float(np.random.randint(0, nx))
-    pys[0] = float(np.random.randint(0, ny))
+
+    # Rejection-sample the initial seed outside the calibration region --
+    # see module docstring point 4: a seed landing inside it can never
+    # grow (everything nearby is already "occupied"), silently killing
+    # placement for the whole call. Bounded defensively even though
+    # `pd_sample`'s own pre-check guarantees at least one non-calibration
+    # cell exists whenever this is reached via that path.
+    x0 = np.random.randint(0, nx)
+    y0 = np.random.randint(0, ny)
+    attempts = 0
+    while calib_mask[y0, x0] and attempts < nx * ny:
+        x0 = np.random.randint(0, nx)
+        y0 = np.random.randint(0, ny)
+        attempts += 1
+    pxs[0] = float(x0)
+    pys[0] = float(y0)
     num_actives = 1
 
     while num_actives > 0 and num_actives < nx * ny:
@@ -195,10 +239,21 @@ def pd_sample(
         front and reused (fixed) across every binary-search iteration --
         see module docstring point 1; `rng` itself is used directly for
         the exact-count prune/fill step below.
-    calib_frac : fraction of the target sample budget (floor(ny*nx/accel))
-        to place in a fully-sampled calibration region: a centered ellipse,
-        aspect-matched to (ny, nx), sized so its pixel area equals
-        `calib_frac * target_samples`. 0 = no calibration region.
+    calib_frac : fraction of each axis' own k-space half-extent (kmax)
+        covered by a centered, fully-sampled *rectangular* calibration
+        region: |ky| <= calib_frac * ky_max and |kz| <= calib_frac *
+        kz_max, applied independently per axis (ky_max/kz_max correspond
+        to ny/2, nx/2 in pixel units -- see `_calib_mask_rect`), so its
+        pixel area is `calib_frac**2` of the full (ny, nx) grid -- not a
+        function of `accel`/`target_samples` the way it used to be. 0 = no
+        calibration region. The surrounding variable-density taper (`r`
+        below) still transitions outward using the elliptical (Euclidean)
+        `_rho_grid` metric at the same `calib_frac` radius -- an ellipse
+        inscribed in the calibration rectangle, touching it exactly on
+        each axis -- rather than switching to the rectangle's own
+        (Chebyshev) metric, so the rectangle's corners (outside that
+        inscribed ellipse) are still forced fully sampled via `calib_mask`
+        directly; they just don't drive the taper's own shape.
     dtype : 'logical', 'double', or 'complex'.
     crop_corner : whether to crop sampling corners (elliptical mask).
     max_attempts : max attempts to generate a point per active point.
@@ -220,8 +275,11 @@ def pd_sample(
     target_samples = math.floor(total_pixels / accel)
 
     rho = _rho_grid(ny, nx)
-    rho_calib = _calib_rho(target_samples, nx, ny, calib_frac)
-    calib_mask = rho <= rho_calib
+    calib_mask = _calib_mask_rect(ny, nx, calib_frac)
+    # Elliptical taper radius matching the rectangle's per-axis extent --
+    # see pd_sample's calib_frac docstring for why the taper stays
+    # elliptical rather than switching to the rectangle's own metric.
+    rho_calib = min(max(calib_frac, 0.0), 0.999)
 
     # The exact-count prune/fill step below can only remove non-calibration
     # samples, so if the calibration region alone already exceeds the target

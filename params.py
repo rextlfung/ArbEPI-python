@@ -101,7 +101,6 @@ class Params:
 
     sys: pp.Opts
     crt: float  # common raster time (s)
-    dwell: float  # s, ADC sample time
 
     # PNS-driven slew limits (T/m/s), the single source of truth consumed
     # via lib/readout_from_params.py (ArbEPI/EPIcal used to hardcode a
@@ -184,8 +183,8 @@ def load_params(output_dir: str = 'output') -> Params:
     # Spatial parameters: voxel resolution [x, y, z] (m) and acquisition
     # matrix size [Nx, Ny, Nz]. x/y are the in-plane (readout/phase-encode)
     # axes, z is the slice-select/partition axis.
-    res = np.array([0.9, 0.9, 0.9]) * 1e-3
-    N = np.array([240, 240, 45])
+    res = np.array([2.4, 2.4, 2.4]) * 1e-3
+    N = np.array([90, 90, 60])
     fov = N * res
     Nx, Ny, Nz = int(N[0]), int(N[1]), int(N[2])
 
@@ -195,9 +194,13 @@ def load_params(output_dir: str = 'output') -> Params:
     # can make this value unreachable. calc_te_tr_delays only *warns* and
     # silently falls back to zero padding delay if so, so check its output
     # after changing any of the above.
-    TE = 34.9e-3
-    # Time to acquire one full 3D volume (all shots), s.
-    volume_tr = 2
+    TE = 30e-3
+    # Time to acquire one full 3D volume (all shots), s. Must clear min_tr
+    # (Nshots * per-shot min TR, printed as a warning by calc_te_tr_delays
+    # if not) -- at the current ETL=60/R=6/Nx=90/res=2.4mm config this
+    # measures min_tr = 60.224 ms/shot * 15 shots = 903.36 ms; 1.0s leaves
+    # ~6.4% margin (explicit user decision, 2026-09-15).
+    volume_tr = 1.0
     # Total scan duration across all frames/timepoints, s.
     duration = 60
     # Tissue T1, s -- used below to compute the Ernst-angle flip angle.
@@ -239,7 +242,7 @@ def load_params(output_dir: str = 'output') -> Params:
         custom_omegas = None
 
         # Acceleration factor applied to the (ky, kz) sampling pattern.
-        R = 9
+        R = 6
         Nshots = math.ceil(Ny * Nz / R / ETL)
 
         # ky-kz(-t) sampling pattern: 'pd' (Poisson-disc, recommended), 'caipi',
@@ -285,7 +288,13 @@ def load_params(output_dir: str = 'output') -> Params:
     )
 
     crt = 4e-6  # s, GE raster time only; would need 20e-6 (lcm of Siemens 10us, GE 4us) for GE AND Siemens compatibility
-    dwell = 2e-6  # s, for ADC/RF
+    # ADC dwell is not set here: lib/readout_from_params.py's
+    # find_min_feasible_dwell searches for the fastest (smallest) dwell --
+    # an integer multiple of sys.adc_raster_time -- that keeps the EPI
+    # readout-lobe geometry feasible for the actual sampling mask's
+    # max_ky_step/max_kz_step (see docs/review-findings.md item 146: a
+    # fixed dwell can make the POPE readout ramps alone exceed the
+    # required k-space area at some Nx/fov/slew/mask combinations).
 
     # PNS-driven slew limits (T/m/s) -- see the Params field comments.
     # Values below are the outcome of an empirical sweep (2026-08-27, ~600
@@ -396,10 +405,13 @@ def load_params(output_dir: str = 'output') -> Params:
     n_cycles_spoil_degre = 2
     Tpre = 1.0e-3
 
-    # Fully-sampled central calibration region: a centered ellipse,
-    # aspect-matched to (Ny, Nz), sized to hold 30% of the R-dependent
-    # sample budget (floor(Ny*Nz/R) -- see sampling/pd_sample.py).
-    pd_calib_frac = 0.3
+    # Fully-sampled central calibration region: a centered rectangle
+    # covering this fraction of each axis' own kmax, independently -- e.g.
+    # 0.2 means |ky| <= 0.2*ky_max and |kz| <= 0.2*kz_max (see
+    # sampling/pd_sample.py's calib_frac docstring). Not a fraction of the
+    # R-dependent sample budget (a stale, removed semantics) -- pixel area
+    # is calib_frac**2 of the full (Ny, Nz) grid, independent of R.
+    pd_calib_frac = 0.2
     pd_crop_corner = True
     pd_decay = 1.4
     rand_gaussian_sigma = None
@@ -407,7 +419,6 @@ def load_params(output_dir: str = 'output') -> Params:
     return Params(
         sys=sys,
         crt=crt,
-        dwell=dwell,
         slew_derate=slew_derate,
         ro_slew_rise=ro_slew_rise,
         ro_slew_fall=ro_slew_fall,

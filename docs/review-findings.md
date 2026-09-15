@@ -1182,7 +1182,7 @@ recorded.
   outlier, not the rule. Fix: route `load_seq_params` through
   `matio.read_mat`/`read_mat_array` like every other `scan_info.mat`
   reader in this repo.
-- [ ] **146. `lib/make_readout_grads.py`'s POPE readout can hard-crash
+- [x] **146. `lib/make_readout_grads.py`'s POPE readout can hard-crash
   (`AssertionError`) on a legitimate small-readout-FOV/sparse-mask
   combination, with no fallback and no actionable guidance toward the fix.**
   [measured] `make_readout_grads.py:245-260` sizes the flat-top readout
@@ -1226,6 +1226,46 @@ recorded.
   message's own `sqrt(2*S/(1/slew_rise + 1/slew_fall))` formula) rather
   than requiring the caller to hand-tune `dwell`/`Nx` until it happens to
   fit.
+
+  Resolved 2026-09-15: reproduced independently against the repo's own
+  *default* (non-custom-mask) params after an in-progress, uncommitted
+  resolution change (`res` 0.9mm -> 2.4mm, `N` 240x240x45 -> 90x90x60,
+  `fov` unchanged at 216mm) -- confirming this is purely
+  `1/res[0]`-vs-ramp-area structural, not mask-sparsity-driven as
+  originally written above: at the shipped `dwell=2e-6`, the POPE ramps
+  alone (`A*(r+d)/2`, with `A` pinned at `sys.max_grad` since
+  `1/(fov[0]*dwell)` already exceeds it) consume more k-space area than
+  `Nx*deltak[0]` needs even with zero blip contribution (`M=0`), so no
+  mask/ETL/trajectory choice could have avoided it at that `Nx`/`dwell`.
+  Fix direction 1 (`dwell`, named in the assertion message above) is what
+  got implemented, per explicit user request rather than the "fuller fix"
+  direction 2 (solving for a smaller `A`): `dwell` is no longer a fixed
+  `params.py` field at all -- `lib/readout_from_params.py`'s new
+  `find_min_feasible_dwell` linearly searches ADC-raster-quantum
+  multiples of `dwell` (the required flat-top duration is monotonically
+  non-decreasing in `dwell`, so the first feasible one found is also the
+  fastest) and `make_readout_grads_from_params` calls it internally --
+  every existing 3-arg call site (`ArbEPI.py`/`EPIcal.py`/`noise.py`,
+  `plotting/compare_readout_pns.py`, and the test suite) needed no
+  signature change. At the reproducing config this landed on `dwell=4e-6`
+  (one raster step up from the old fixed `2e-6`), which also happens to
+  drop the readout out of the hardware-clamped regime entirely (echo
+  spacing 392us/line); full ArbEPI/EPIcal/noise/deGRE builds all pass
+  `ge/check.py` feasibility with peak PNS well under the 80% normal-mode
+  line (69.6%/64.5%/0%/77.4%) at this lower resolution. One test
+  (`test_arbepi_kx_oversamples_when_nyquist_rate_exceeds_max_grad`) had
+  to pin a local `Nx=240` override so it keeps exercising the
+  hardware-clamped/oversampled branch regardless of the global default's
+  own `Nx`, since auto-search now actively steers away from that regime
+  whenever a larger dwell both fixes feasibility and clears the clamp.
+  `sequences/deGRE.py`'s unrelated `dwell_degre` floor (previously
+  `params.dwell`, i.e. always exactly `sys.adc_raster_time`) now reads
+  `sys.adc_raster_time` directly -- behavior-preserving, no coupling to
+  the EPI search. Not addressed: `dwell` is not surfaced into
+  `scan_info.mat`'s scalar snapshot (it never was, even when fixed), so a
+  `preprocessing/`-side consumer keying off the realized dwell (e.g. a
+  future `calibrate_delay.py` refinement) still has no direct read path --
+  only a printed console line at `ArbEPI.py` generation time.
 - [x] **147.** Resolved: `balanced_factors` now restricts its candidate
   search to `(Ry, Rz)` pairs that evenly divide `(Ny, Nz)` (raising a
   clear `ValueError` if none exist, e.g. `balanced_factors([64,64], 9)`,
@@ -3227,3 +3267,25 @@ recorded.
   removing its own copy -- or, if the torch/numpy return-type difference is
   deliberate, factor out one shared core (read `omegas` + fallback) with a
   thin per-caller wrapper.
+- [x] **193.** Resolved: `sampling/pd_sample.py`'s `_poisson_disc_core_jit`
+  drew its single initial active point uniformly over the *whole* grid,
+  including the pre-filled calibration region -- a seed landing inside it
+  collides on every one of its `max_attempts` tries (everything nearby is
+  already "occupied"), the active list drops to zero on the first outer
+  iteration, and the function returns `calib_mask` completely unchanged.
+  Because `pd_sample` reuses the *same* fixed seed across every
+  binary-search iteration (by design, see the module docstring's point 1),
+  this silently killed genuine Poisson-disc placement for the entire call,
+  not just one unlucky iteration -- `pd_sample`'s exact-count step then
+  filled the whole non-calibration budget via uniform-random selection
+  instead of density-tapered placement, with no error or warning. [measured,
+  medium severity] Confirmed by direct reproduction: a seed landing inside a
+  ~13%-area calibration region returned zero grown points every time.
+  Probability of triggering scales with the calibration region's area
+  fraction, which was about to grow under the same change that surfaced
+  this (see `sampling/pd_sample.py`'s `calib_frac` redefinition from an
+  area-matched ellipse to a per-axis fraction-of-kmax rectangle). Fixed by
+  rejection-sampling the initial seed against `calib_mask` (module
+  docstring point 4); verified the fix eliminates the failure across 2000
+  seeds at a deliberately large (~18%) calibration-region fraction where
+  the old code failed on the very first seed tried.
