@@ -89,8 +89,11 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     # params.py) -- stretch dwell just enough to keep the flat-top
     # amplitude within max_grad (same oversampling tradeoff
     # make_readout_grads.py makes for the EPI readout), rounded up to the
-    # ADC raster so Tread stays sampleable.
-    dwell_degre = max(params.dwell, deltak[0] / sys.max_grad)
+    # ADC raster so Tread stays sampleable. Floored at the ADC raster
+    # itself (the minimum possible dwell), not a fixed params.dwell --
+    # this sequence has no EPI-readout triangular-lobe constraint (see
+    # lib/readout_from_params.py's find_min_feasible_dwell) to couple to.
+    dwell_degre = max(sys.adc_raster_time, deltak[0] / sys.max_grad)
     dwell_degre = math.ceil(dwell_degre / sys.adc_raster_time) * sys.adc_raster_time
     Tread = params.Nx_degre * dwell_degre
 

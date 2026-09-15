@@ -42,17 +42,73 @@ def blip_sys(params: Params) -> pp.Opts:
     return sys
 
 
+def find_min_feasible_dwell(
+    max_ky_step: float, max_kz_step: float, params: Params, max_multiple: int = 100,
+) -> float:
+    """Smallest ADC dwell (an integer multiple of sys.adc_raster_time, the
+    GE hardware dwell quantum) for which make_readout_grads's readout-lobe
+    geometry is feasible -- i.e. doesn't hit the "triangular lobe" crash
+    (docs/review-findings.md item 146: at a small readout FOV/dwell
+    combination, the flat-top amplitude pins at sys.max_grad and the
+    asymmetric POPE ramps alone can already exceed the k-space area a
+    Nyquist-sampled readout of width Nx needs, making the required
+    flat-top duration negative).
+
+    Smaller dwell means denser/faster sampling (shorter Tread, shorter
+    echo spacing), and the required flat-top duration is monotonically
+    non-decreasing in dwell (larger dwell -> smaller flat-top amplitude
+    A = min(deltak[0]/dwell, max_grad) -> smaller-or-equal ramp times ->
+    smaller-or-equal ramp area to make up for), so a linear search
+    upward from the hardware dwell quantum finds the *fastest* feasible
+    dwell, not just *a* feasible one -- no need to solve the flat >= 0
+    inequality in closed form (it also depends on max_ky_step/max_kz_step
+    via the blip-duration/raster-rounding terms, not just Nx/fov/slews).
+    """
+    quantum = params.sys.adc_raster_time
+    gamma = params.sys.gamma
+    for n in range(1, max_multiple + 1):
+        dwell = n * quantum
+        try:
+            make_readout_grads(
+                max_ky_step,
+                max_kz_step,
+                params.Nx,
+                params.fov,
+                dwell,
+                blip_sys(params),
+                params.crt,
+                slew_rise=params.ro_slew_rise * gamma,
+                slew_fall=params.ro_slew_fall * gamma,
+            )
+            return dwell
+        except AssertionError:
+            continue
+    raise RuntimeError(
+        f'No feasible ADC dwell found up to {max_multiple} x adc_raster_time '
+        f'({max_multiple * quantum * 1e6:.0f} us) for max_ky_step={max_ky_step}, '
+        f'max_kz_step={max_kz_step} -- this Nx/fov/slew/mask combination may be '
+        'fundamentally infeasible; see docs/review-findings.md item 146.'
+    )
+
+
 def make_readout_grads_from_params(
     max_ky_step: float, max_kz_step: float, params: Params
 ) -> ReadoutGrads:
-    """The one canonical make_readout_grads call (POPE slews from params)."""
+    """The one canonical make_readout_grads call (POPE slews from params).
+
+    dwell is not a fixed params field: it's searched here via
+    find_min_feasible_dwell for the fastest (smallest) ADC dwell that
+    keeps this mask's own max_ky_step/max_kz_step readout-lobe geometry
+    feasible (see that function's docstring).
+    """
     gamma = params.sys.gamma
+    dwell = find_min_feasible_dwell(max_ky_step, max_kz_step, params)
     return make_readout_grads(
         max_ky_step,
         max_kz_step,
         params.Nx,
         params.fov,
-        params.dwell,
+        dwell,
         blip_sys(params),
         params.crt,
         slew_rise=params.ro_slew_rise * gamma,

@@ -222,16 +222,16 @@ def test_arbepi_kx_coverage_and_nyquist(tmp_path):
 
 
 def test_arbepi_kx_oversamples_when_nyquist_rate_exceeds_max_grad(tmp_path):
-    """lib/make_readout_grads.py's `A = min(deltak[0]/dwell, sys.max_grad)`
-    keeps dwell fixed regardless of the target resolution/FOV: it only
-    throttles the readout flat-top amplitude down to the resolution-driven
-    exact-Nyquist rate (deltak[0]/dwell) when that's achievable in
-    hardware, and clamps to sys.max_grad -- oversampling kx, since dwell
-    doesn't change -- as a fallback when it isn't (explicit user decision:
-    the exact-Nyquist throttle stays for configs where it's achievable,
-    rather than always running at hardware max). At this repo's params
-    (GE_MR750, default Nx/fov), the fallback IS the live branch:
-    deltak[0]/dwell needs more amplitude than max_grad allows. This is a
+    """lib/make_readout_grads.py's `A = min(deltak[0]/dwell, sys.max_grad)`:
+    dwell itself is auto-selected by find_min_feasible_dwell (see
+    lib/readout_from_params.py) as the smallest ADC-raster multiple for
+    which the readout-lobe geometry is feasible -- it only throttles the
+    readout flat-top amplitude down to the resolution-driven exact-Nyquist
+    rate (deltak[0]/dwell) when that's achievable in hardware at that
+    minimal dwell, and clamps to sys.max_grad -- oversampling kx -- as a
+    fallback when it isn't. At this repo's params (GE_MR750, default
+    Nx/fov), the fallback IS the live branch even at the smallest possible
+    dwell: deltak[0]/dwell needs more amplitude than max_grad allows. This is a
     regression test for that specific branch: test_arbepi_kx_coverage_and_
     nyquist only asserts an upper bound on kx spacing (<= deltak), which
     would also hold at exact Nyquist -- it wouldn't catch a change that
@@ -243,7 +243,15 @@ def test_arbepi_kx_oversamples_when_nyquist_rate_exceeds_max_grad(tmp_path):
     with these same params and successfully regrids the resulting
     (oversampled, Nfid > what exact-Nyquist would need) kxo/kxe back onto
     the Nx-sized target grid."""
-    p = _small_params(tmp_path)
+    # Nx bumped well above _small_params' inherited default: dwell is now
+    # auto-selected (find_min_feasible_dwell) for the *smallest* feasible
+    # readout FOV/dwell combination, which at small Nx exits the
+    # hardware-clamped branch entirely (a bigger dwell both fixes
+    # feasibility and drops the exact-Nyquist rate below max_grad) -- a
+    # large-enough Nx (matching this test's own fov[0]) keeps the minimal
+    # feasible dwell at the ADC-raster quantum, so the clamped/oversampled
+    # branch this test targets stays live.
+    p = replace(_small_params(tmp_path), Nx=240)
     omegas = resolve_omegas(p)
     seq = generate_arbepi(omegas, p, seqname='xcheck')
 
@@ -255,7 +263,7 @@ def test_arbepi_kx_oversamples_when_nyquist_rate_exceeds_max_grad(tmp_path):
     rg = make_readout_grads_from_params(max_ky_step, max_kz_step, p)
 
     deltak_x = rg.deltak[0]
-    nyquist_rate = deltak_x / p.dwell
+    nyquist_rate = deltak_x / rg.adc.dwell
     assert nyquist_rate > p.sys.max_grad, (
         'test params no longer hit the hardware-clamped branch -- pick params '
         'where deltak[0]/dwell exceeds max_grad to keep this test meaningful'
@@ -272,8 +280,8 @@ def test_arbepi_kx_oversamples_when_nyquist_rate_exceeds_max_grad(tmp_path):
     typical_step = np.median(np.abs(np.diff(kx)))
     assert typical_step < deltak_x * 0.999, (
         f'expected kx oversampled (median step {typical_step:.4f} denser than '
-        f'Nyquist step {deltak_x:.4f}); dwell should stay fixed regardless of '
-        'resolution/FOV while the readout is hardware-clamped'
+        f'Nyquist step {deltak_x:.4f}); the minimal feasible dwell should still '
+        'leave the readout hardware-clamped, not throttled down to exact Nyquist'
     )
 
 

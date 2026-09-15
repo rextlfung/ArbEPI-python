@@ -133,6 +133,11 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # Readout gradients and ADC event (asymmetric POPE ramps + blip slew
     # from params -- see lib/readout_from_params.py)
     rg = make_readout_grads_from_params(max_ky_step, max_kz_step, params)
+    print(
+        f'Selected ADC dwell: {rg.adc.dwell * 1e6:.1f} us '
+        f'(fastest feasible for Nx={params.Nx}, fov_x={params.fov[0] * 1e3:.1f} mm -- '
+        'see lib/readout_from_params.py\'s find_min_feasible_dwell)'
+    )
 
     # Prephasers and spoilers
     gx_pre, gy_pre, gz_pre = make_prephasers(params.Nx, params.Ny, params.Nz, params.fov, sys, params.crt)
