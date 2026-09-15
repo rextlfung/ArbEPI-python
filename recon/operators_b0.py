@@ -35,6 +35,7 @@ under 1%. See that script and CLAUDE.md's recon/ section (B0 subsection)
 for the full sweep and the cost-vs-L tradeoff (recon/benchmark_b0_cost.py).
 """
 
+import math
 import warnings
 
 import torch
@@ -150,6 +151,8 @@ def build_encoding_operator_b0(
     echo_times_yz: torch.Tensor,
     L: int = 32,
     nbins: int = 128,
+    r2star_map: torch.Tensor | None = None,
+    t_ref_s: float = 0.0,
 ) -> BlockDiagonal:
     """smaps: (Nc,Nx,Ny,Nz) complex64. omega: (Nx,Ny,Nz,Nt) bool, same
     sample count K per frame (asserted by the caller, matching
@@ -219,28 +222,115 @@ def build_encoding_operator_b0(
     OOM during the low-rank prox step (measured; see git history). Sharing
     one c_phasors tensor across every frame's GatheredSenseB0 (safe --
     _apply/_apply_adjoint only ever read it) fixes both.
+
+    r2star_map: optional (Nx,Ny,Nz) real, 1/s, same EPI grid as b0map_hz --
+    generalizes the real off-resonance field Δf(r) to a complex field
+    ψ(r) = i*2*pi*Δf(r) - R2*(r), so the same segmented-exponential
+    machinery corrects T2*/T1 amplitude decay alongside phase (motivation:
+    a given (ky,kz) location is acquired at a different echo index, hence
+    a different amount of decay, in different frames -- see
+    preprocessing/r2star_map.py and CLAUDE.md's recon/ "B0 off-resonance
+    correction" section). None (default) reproduces the original
+    phase-only operator bit-for-bit: c_phasors then comes straight from
+    mri_exp_approx's own spatial output, exactly as before this parameter
+    existed, and t_ref_s is ignored.
+
+    IMPORTANT, and NOT the sign convention used by
+    recon/lowres_calib_recon_b0complex.py on the (unmerged)
+    worktree-lowres-calib-recon branch: this operator is bidirectional
+    (recon/reconstruct.py's run_recon calls both .apply() and .adjoint()
+    through POGM, and estimate_spectral_norm's power iteration needs both
+    too), so c_phasors here is built from the PHYSICAL forward exponent
+    exp(psi(r)*t) with psi(r) = i*2*pi*Δf(r) - R2*(r) -- decaying, not
+    growing, as t increases -- and GatheredSenseB0._apply_adjoint's
+    existing `c_phasors[l].conj()` is left untouched. That conjugate
+    already *is* the true mathematical adjoint of a per-voxel diagonal
+    scaling for ANY complex c_phasors, decaying or not (the adjoint of a
+    diagonal matrix is its conjugate, full stop -- no "does conjugating
+    undo the decay" question ever enters into whether `_apply_adjoint` is
+    correct). The branch's calib-region script instead flips the sign
+    (its psi_recon = i*2*pi*Δf + R2*) because it only ever calls
+    `.adjoint()`, never `.apply()`, on a non-iterative, adjoint-only
+    reconstruction, and wants matched-filter-style decay *compensation*
+    (an approximate deconvolution) rather than a faithful forward model.
+    Porting that flipped sign into *this* bidirectional operator would
+    make `.apply()` model signal growth (exp(+R2*(r)*t), unbounded as t
+    grows) instead of decay: wrong physically, and it would inflate
+    `estimate_spectral_norm`'s power-iteration estimate and collapse
+    POGM's step size. Do not "fix" this to match the branch --
+    tests/test_recon_operators_b0.py's
+    `test_r2star_generalization_adjoint_is_self_consistent` locks the
+    distinction in via an adjoint dot-product check, which the branch's
+    convention fails and this one passes.
+
+    t_ref_s: reference time (seconds since RF excitation) the R2* decay is
+    measured relative to -- ignored when r2star_map is None. Only matters
+    once -R2*(r)*t enters the exponent: with t measured from excitation
+    (t_ref_s=0), short-T2* voxels get heavily down-weighted relative to
+    long-T2* ones in the segmentation fit (needlessly ill-conditioned),
+    and the reconstructed image would mean "the undecayed image at the
+    moment of excitation" rather than the standard T2*-weighted
+    image-at-TE convention. Pass the nominal-TE echo's acquisition time
+    (scan_info.mat's schedules[0,0,(ETL-1)//2,2] -- see
+    preprocessing/r2star_map.py's caller for how to read it) so decay
+    factors straddle 1 and the reconstruction target is "the image as it
+    would appear at the prescribed TE" -- matches
+    recon/lowres_calib_recon_b0complex.py's own TE-referencing for the
+    same reason (unlike the sign, this part of its design *is* reused
+    as-is). The phase-only path (r2star_map=None) needs no such shift: a
+    global time-reference change to Δf alone only rescales the image by a
+    per-voxel phase, and shifting it would perturb the exact bit-for-bit
+    match with the pre-R2* operator this function preserves whenever
+    r2star_map is None.
     """
     Nt = omega.shape[-1]
     N = tuple(smaps.shape[1:])
     Ny, Nz = N[1], N[2]
     n_yz = Ny * Nz
     echo_times_flat = echo_times_yz.reshape(n_yz, Nt)  # (Ny*Nz,Nt), no Nx broadcast
+    # R2* path references times to TE_nominal (see docstring); phase-only
+    # path is unshifted so this reduces to the exact pre-R2* operator.
+    fit_times_flat = echo_times_flat if r2star_map is None else echo_times_flat - t_ref_s
     b0_neg = (-b0map_hz).to(torch.float32)  # see module docstring's sign-convention note
 
     samp0 = omega[..., 0]
     idx0 = torch.nonzero(samp0.reshape(-1), as_tuple=False).squeeze(-1)
-    t0_ms = (echo_times_flat[idx0 % n_yz, 0] * 1000).to(torch.float32)
+    t0_ms = (fit_times_flat[idx0 % n_yz, 0] * 1000).to(torch.float32)
     unique_t_ms = torch.unique(t0_ms, sorted=True)
-    b_by_echo, c, _tl = mri_exp_approx(b0_neg, nbins, L, unique_t_ms)
+    b_by_echo, c, tl = mri_exp_approx(b0_neg, nbins, L, unique_t_ms)
     _check_b_weight_row_sums(b_by_echo, "shared (frame 0's distinct echo times)")
     b_by_echo = b_by_echo.to(smaps.dtype)  # (n_unique_t,L), shared across every frame below
-    c_phasors = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)  # (Nvox,L)->(L,Nvox)->(L,*N)
+
+    if r2star_map is None:
+        # (Nvox,L)->(L,Nvox)->(L,*N)
+        c_phasors = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)
+    else:
+        assert tuple(r2star_map.shape) == N, (
+            f"r2star_map shape {tuple(r2star_map.shape)} != smaps grid {N}"
+        )
+        r2_hz = r2star_map.to(torch.float32)
+        t_span_s = float((unique_t_ms.max() - unique_t_ms.min()).item()) / 1000
+        bt_df = float(b0map_hz.max() - b0map_hz.min()) * t_span_s
+        bt_r2 = float(r2_hz.max()) * t_span_s
+        print(
+            f"  build_encoding_operator_b0: R2* decay-time product = {bt_r2:.4f} vs "
+            f"Δf's bandwidth-time product = {bt_df:.2f} (should be much smaller -- this "
+            "is what justifies reusing Δf-only-tuned b_by_echo/tl for the complex field; "
+            "see module docstring)."
+        )
+        # Physical forward exponent (decaying, not the branch script's
+        # flipped-sign reconstruction convenience) -- see docstring.
+        psi = 1j * 2 * math.pi * b0map_hz.to(torch.complex64) - r2_hz.to(torch.complex64)
+        tl_c = tl.to(torch.complex64)  # tl already in seconds (mri_exp_approx divides by 1000)
+        c_phasors = torch.exp(
+            tl_c.reshape((L,) + (1,) * len(N)) * psi[None, ...]
+        ).to(smaps.dtype)
 
     frames = []
     for it in range(Nt):
         samp = omega[..., it]
         idx = torch.nonzero(samp.reshape(-1), as_tuple=False).squeeze(-1)
-        t_ms = (echo_times_flat[idx % n_yz, it] * 1000).to(torch.float32)
+        t_ms = (fit_times_flat[idx % n_yz, it] * 1000).to(torch.float32)
         # Map each sample's time to its row in b_by_echo, rather than
         # assuming a fixed order -- an explicit exact-match check, so a
         # dataset that ever breaks the frame-invariant-timing assumption

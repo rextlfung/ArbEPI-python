@@ -160,6 +160,8 @@ def run_recon(
     fn_b0map: str | None = None,
     L_b0: int = 32,
     nbins_b0: int = 128,
+    r2star_map: torch.Tensor | None = None,
+    t_ref_s: float = 0.0,
 ) -> ReconResult:
     """fn_b0map: optional path to a run_b0map.py output (<seqname>_b0map.h5,
     'b0map_hz' on the EPI grid -- see preprocessing/run_b0map.py). When
@@ -177,7 +179,16 @@ def run_recon(
     match the uncorrected operator's, and supplying a too-small sigma1A
     silently makes POGM's step size too large (divergence, not a clean
     failure). Pass sigma1A explicitly to skip this measurement (e.g. when
-    reusing a previously-measured value)."""
+    reusing a previously-measured value).
+
+    r2star_map/t_ref_s: optional -- forwarded to build_encoding_operator_b0
+    to also correct T2*/T1 amplitude decay (see that function's docstring
+    for the complex-field ψ(r) = i*2*pi*Δf(r) - R2*(r) generalization, the
+    sign-convention divergence from the worktree-lowres-calib-recon
+    branch's adjoint-only calib script, and why t_ref_s should be the
+    nominal-TE echo's acquisition time). Ignored (and must be left None)
+    when fn_b0map is None -- R2* correction only makes sense layered on
+    top of the B0-corrected operator, not the plain one."""
     device = torch.device(device)
     Nscales = len(patch_sizes)
 
@@ -206,10 +217,21 @@ def run_recon(
             f"b0map_hz shape {tuple(b0map_hz.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz})"
         )
         echo_times_yz = _load_echo_times(fn_ksp, device)
+        if r2star_map is not None:
+            print(f"  R2* correction enabled (t_ref_s={t_ref_s * 1000:.3f} ms)...")
+            assert tuple(r2star_map.shape) == (Nx, Ny, Nz), (
+                f"r2star_map shape {tuple(r2star_map.shape)} doesn't match k-space dims "
+                f"({Nx},{Ny},{Nz})"
+            )
         A = build_encoding_operator_b0(
-            smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0
+            smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0,
+            r2star_map=r2star_map, t_ref_s=t_ref_s,
         )
     else:
+        assert r2star_map is None, (
+            "run_recon: r2star_map requires fn_b0map (R2* correction is layered on top of "
+            "the B0-corrected operator, not the plain one)"
+        )
         A = build_encoding_operator(smaps_chw, omega)
 
     if sigma1A is None:

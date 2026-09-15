@@ -1165,6 +1165,58 @@ operator, consuming `preprocessing/run_b0map.py`'s field map
   FFT/gather and scatter/IFFT/coil-combine rather than duplicating that
   math a second time.
 
+**Optional T2*/T1 amplitude-decay correction, layered on top of the
+time-segmented stage.** `build_encoding_operator_b0`'s optional
+`r2star_map`/`t_ref_s` generalize the real off-resonance field Δf(r) to a
+complex field ψ(r) = i*2*pi*Δf(r) - R2*(r), reusing the same
+`mri_exp_approx`-fit segment weights/placement (still solved from Δf(r)
+alone -- valid as long as R2*'s own decay-time product stays much smaller
+than Δf's bandwidth-time product, checked and printed at construction
+time) so one L-segment machinery corrects magnitude decay alongside
+phase. `r2star_map=None` (the default) reproduces the pre-existing
+phase-only operator bit-for-bit. R2* itself comes from
+`preprocessing/r2star_map.py`'s two-point log-ratio estimate on the same
+dual-echo deGRE data already used for Δf(r); `recon/run_b0_recon.py --r2star`
+wires it end to end (estimates R2*, reads the nominal-TE reference time
+from `scan_info.mat`, and saves under a separate `mslr_b0complex/`
+output directory so a `--r2star` run never collides with a plain
+B0-only run at the same `L`).
+
+**Sign convention diverges deliberately from the (unmerged, exploratory)
+`worktree-lowres-calib-recon` branch's `recon/lowres_calib_recon_b0complex.py`
+-- do not "fix" one to match the other.** That branch script is
+adjoint-only (a fast, non-iterative reconstruction of just the
+calibration region -- it never calls `.apply()`) and deliberately flips
+the sign (its `psi_recon = i*2*pi*Δf(r) + R2*(r)`) because
+`GatheredSenseB0._apply_adjoint` always conjugates `c_phasors`, and
+conjugating a *real* quantity is a no-op -- without the flip, the
+adjoint alone would re-apply the same decay attenuation instead of
+undoing it (confirmed empirically there: the physical sign made tSNR get
+monotonically *worse* through uncorrected -> phase-only -> complex-field).
+`build_encoding_operator_b0` here is bidirectional, though --
+`recon/reconstruct.py`'s `run_recon` calls both `.apply()` and
+`.adjoint()` through POGM, and `estimate_spectral_norm`'s power iteration
+needs both too -- so it uses the PHYSICAL forward exponent
+`psi = i*2*pi*Δf(r) - R2*(r)` (decaying, not growing, as t increases) and
+leaves `_apply_adjoint`'s existing `.conj()` untouched: that conjugate
+already *is* the true mathematical adjoint of a per-voxel diagonal
+scaling for any complex `c_phasors`, decaying or not, so no compensating
+sign trick is needed or correct here. Porting the branch's flipped sign
+into this operator would make `.apply()` model signal *growth*
+(unbounded as t grows) instead of decay -- wrong physically, and it would
+inflate the power-iteration spectral-norm estimate and collapse POGM's
+step size.
+`tests/test_recon_operators_b0.py`'s
+`test_r2star_generalization_adjoint_is_self_consistent` locks this in via
+an adjoint dot-product check (`<Ax,y> == <x,A^H y>`), which the branch's
+sign convention fails and this one passes;
+`test_r2star_zero_map_matches_phase_only_operator` locks in the
+`r2star_map=None`-is-a-strict-special-case-of-zero contract; and
+`test_r2star_forward_model_decays_away_from_reference_time` checks
+`c_phasors`' magnitude directly (not via a forward FFT+gather energy
+comparison -- a first attempt at that confounded a spatially-varying Δf
+phase's k-space energy redistribution with the R2* attenuation itself).
+
 **Sign convention and `mri_exp_approx`'s Hz/ms calling convention.**
 Both stages share one convention, derived from Sutton, Noll, Fessler
 ("Fast, iterative image reconstruction for MRI in the presence of field
