@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from sampling.pd_sample import _calib_mask_rect, pd_sample
+from sampling.pd_sample import _calib_mask_rect, _calib_side_frac, pd_sample
 
 
 def test_pd_sample_exact_count():
@@ -46,8 +46,36 @@ def test_pd_sample_calibration_region_fully_sampled():
     calib_frac = 0.2
     mask = pd_sample([ny, nx], accel, rng, calib_frac=calib_frac, crop_corner=True, decay=1.0)
 
-    calib_mask = _calib_mask_rect(ny, nx, calib_frac)
+    target_samples = math.floor(ny * nx / accel)
+    side_frac = _calib_side_frac(target_samples, nx, ny, calib_frac)
+    calib_mask = _calib_mask_rect(ny, nx, side_frac)
     assert mask[calib_mask].all()
+
+
+def test_calib_side_frac_scales_with_sample_budget_not_grid():
+    """The whole point of _calib_side_frac (docs/review-findings.md item
+    195): the calibration region should hold a constant *fraction of the
+    sample budget* across acceleration factors, not a fixed fraction of
+    k-space -- so side_frac, and hence the realized calib pixel count,
+    must shrink as accel grows (target_samples shrinks) at a fixed
+    calib_frac, unlike a plain calib_frac-as-side_frac mapping which
+    would stay constant regardless of accel."""
+    ny, nx = 270, 180
+    calib_frac = 0.1
+
+    small_budget = math.floor(ny * nx / 6)  # low accel -- large budget
+    large_budget = math.floor(ny * nx / 94)  # high accel -- small budget, as in the 0.8mm config
+
+    side_frac_low_accel = _calib_side_frac(small_budget, nx, ny, calib_frac)
+    side_frac_high_accel = _calib_side_frac(large_budget, nx, ny, calib_frac)
+    assert side_frac_high_accel < side_frac_low_accel
+
+    calib_pixels_high_accel = int(_calib_mask_rect(ny, nx, side_frac_high_accel).sum())
+    # The calibration region should be a roughly constant share of each
+    # budget (allowing for pixel-grid rounding), not close to consuming
+    # the entire (much smaller) high-accel budget the way a fixed-kmax-
+    # fraction region did (487 of 520 samples at the real 0.8mm config).
+    assert calib_pixels_high_accel < 0.3 * large_budget
 
 
 def test_pd_sample_density_falls_off_from_center():

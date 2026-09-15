@@ -95,19 +95,52 @@ def _rho_grid(ny: int, nx: int) -> np.ndarray:
     return np.sqrt(yn**2 + xn**2)
 
 
-def _calib_mask_rect(ny: int, nx: int, calib_frac: float) -> np.ndarray:
-    """(ny, nx) boolean mask of a centered rectangle covering `calib_frac`
-    of each axis' own half-extent (kmax) independently: |ky| <= calib_frac
-    * ky_max and |kz| <= calib_frac * kz_max, using the same per-axis
+def _calib_mask_rect(ny: int, nx: int, side_frac: float) -> np.ndarray:
+    """(ny, nx) boolean mask of a centered rectangle covering `side_frac`
+    of each axis' own half-extent (kmax) independently: |ky| <= side_frac
+    * ky_max and |kz| <= side_frac * kz_max, using the same per-axis
     normalization as `_rho_grid` (ky_max/kz_max correspond to ny/2, nx/2
-    in pixel units, so this rectangle's pixel area is calib_frac**2 of the
-    full (ny, nx) grid). calib_frac <= 0 -> no calibration region."""
-    if calib_frac <= 0:
+    in pixel units, so this rectangle's pixel area is side_frac**2 of the
+    full (ny, nx) grid). side_frac <= 0 -> no calibration region.
+
+    Named `side_frac`, not `calib_frac`, because callers that want a
+    calibration region sized as a fraction of the *sample budget*
+    (`pd_sample`'s `calib_frac`, R-dependent) must first convert that
+    fraction into this per-axis side fraction via `_calib_side_frac` --
+    passing `calib_frac` straight through here instead makes the region's
+    pixel area a fixed fraction of the whole grid, independent of R (the
+    bug `_calib_side_frac` exists to fix -- see its docstring)."""
+    if side_frac <= 0:
         return np.zeros((ny, nx), dtype=bool)
     Y, X = np.meshgrid(np.arange(ny), np.arange(nx), indexing='ij')
     yn = np.abs((Y - ny / 2) / (ny / 2))
     xn = np.abs((X - nx / 2) / (nx / 2))
-    return (yn <= calib_frac) & (xn <= calib_frac)
+    return (yn <= side_frac) & (xn <= side_frac)
+
+
+def _calib_side_frac(target_samples: int, nx: int, ny: int, calib_frac: float) -> float:
+    """Per-axis side fraction (see `_calib_mask_rect`) whose rectangle
+    pixel area equals `calib_frac * target_samples` -- i.e. the
+    calibration region holds a *constant fraction of the R-dependent
+    sample budget* regardless of acceleration, not a fixed fraction of
+    k-space. side_frac**2 * nx*ny = calib_frac*target_samples =>
+    side_frac = sqrt(calib_frac*target_samples / (nx*ny)).
+
+    This restores the pre-existing "fraction of the sample budget"
+    semantics (see docs/review-findings.md item 195) that a since-reverted
+    change had replaced with a fixed side_frac = calib_frac (fraction of
+    each axis' own kmax, independent of R): at high acceleration,
+    target_samples shrinks a lot faster than the grid does, so a
+    fixed-kmax-fraction region can end up holding nearly the *entire*
+    sample budget (or exceeding it outright) -- confirmed on a real
+    0.8mm/R~94 config, where a 0.1 kmax-fraction rectangle (487 pixels)
+    left only 33 of 520 target samples for the actual variable-density
+    region. Scaling side_frac with target_samples keeps the calibration
+    region's own share of the budget constant across every resolution/R
+    combination instead."""
+    if calib_frac <= 0:
+        return 0.0
+    return min(math.sqrt(calib_frac * target_samples / (nx * ny)), 0.999)
 
 
 @nb.njit(cache=True)
@@ -239,21 +272,24 @@ def pd_sample(
         front and reused (fixed) across every binary-search iteration --
         see module docstring point 1; `rng` itself is used directly for
         the exact-count prune/fill step below.
-    calib_frac : fraction of each axis' own k-space half-extent (kmax)
-        covered by a centered, fully-sampled *rectangular* calibration
-        region: |ky| <= calib_frac * ky_max and |kz| <= calib_frac *
-        kz_max, applied independently per axis (ky_max/kz_max correspond
-        to ny/2, nx/2 in pixel units -- see `_calib_mask_rect`), so its
-        pixel area is `calib_frac**2` of the full (ny, nx) grid -- not a
-        function of `accel`/`target_samples` the way it used to be. 0 = no
-        calibration region. The surrounding variable-density taper (`r`
-        below) still transitions outward using the elliptical (Euclidean)
-        `_rho_grid` metric at the same `calib_frac` radius -- an ellipse
-        inscribed in the calibration rectangle, touching it exactly on
-        each axis -- rather than switching to the rectangle's own
-        (Chebyshev) metric, so the rectangle's corners (outside that
-        inscribed ellipse) are still forced fully sampled via `calib_mask`
-        directly; they just don't drive the taper's own shape.
+    calib_frac : fraction of the target sample budget (`target_samples =
+        floor(ny*nx/accel)`) to place in a centered, fully-sampled
+        *rectangular* calibration region -- a constant share of the
+        acquisition regardless of acceleration (see
+        `_calib_side_frac`/docs/review-findings.md item 195). The
+        rectangle's own per-axis half-width (`side_frac`, in the same
+        ky_max/kz_max-normalized units `_calib_mask_rect` and `_rho_grid`
+        use) is derived so its pixel area equals `calib_frac *
+        target_samples`; pass that derived `side_frac`, not `calib_frac`
+        itself, to `_calib_mask_rect`. 0 = no calibration region. The
+        surrounding variable-density taper (`r` below) still transitions
+        outward using the elliptical (Euclidean) `_rho_grid` metric at
+        that same `side_frac` radius -- an ellipse inscribed in the
+        calibration rectangle, touching it exactly on each axis -- rather
+        than switching to the rectangle's own (Chebyshev) metric, so the
+        rectangle's corners (outside that inscribed ellipse) are still
+        forced fully sampled via `calib_mask` directly; they just don't
+        drive the taper's own shape.
     dtype : 'logical', 'double', or 'complex'.
     crop_corner : whether to crop sampling corners (elliptical mask).
     max_attempts : max attempts to generate a point per active point.
@@ -275,11 +311,12 @@ def pd_sample(
     target_samples = math.floor(total_pixels / accel)
 
     rho = _rho_grid(ny, nx)
-    calib_mask = _calib_mask_rect(ny, nx, calib_frac)
+    side_frac = _calib_side_frac(target_samples, nx, ny, calib_frac)
+    calib_mask = _calib_mask_rect(ny, nx, side_frac)
     # Elliptical taper radius matching the rectangle's per-axis extent --
     # see pd_sample's calib_frac docstring for why the taper stays
     # elliptical rather than switching to the rectangle's own metric.
-    rho_calib = min(max(calib_frac, 0.0), 0.999)
+    rho_calib = min(max(side_frac, 0.0), 0.999)
 
     # The exact-count prune/fill step below can only remove non-calibration
     # samples, so if the calibration region alone already exceeds the target

@@ -3289,3 +3289,79 @@ recorded.
   docstring point 4); verified the fix eliminates the failure across 2000
   seeds at a deliberately large (~18%) calibration-region fraction where
   the old code failed on the very first seed tried.
+- [x] **194.** Resolved 2026-09-15: `lib/readout_from_params.py`'s
+  `find_min_feasible_dwell` (item 146/193) only checked the "triangular
+  lobe" geometric feasibility of a candidate dwell, not whether the
+  resulting echo spacing lands in the scanner coil's forbidden
+  acoustic-resonance band (`ge/acoustics.py`'s `_ESP_BANDS_US`, e.g.
+  `xrm`'s x/y band 410-510us, z band 360-440us) -- `ge/check.py`'s real
+  FFT-based acoustics check only *warns* on this (matching MATLAB's own
+  non-blocking `check_grad_acoustics.m` behavior, see the GE export
+  section above), but exceeding it is a genuine hardware-damage risk on
+  real scanner gradient coils, not just a modeling nicety, per explicit
+  user information. [measured, real risk] Reproduced building a
+  fully-sampled (R=1) 5.4mm-isotropic ArbEPI variant
+  (`Nx=Ny=40,Nz=27,ETL=60,Nshots=18`): the auto-selected minimal-feasible
+  dwell (6us) gave a 484us echo spacing, landing squarely inside `xrm`'s
+  410-510us forbidden band -- measured acoustics 0.6203, over twice the
+  0.3 threshold (vs. 0.023-0.066 for every other sequence generated this
+  session). Fixed by extending `find_min_feasible_dwell` to also reject
+  any dwell whose `pp.calc_duration(rg.gro)` echo spacing falls within
+  `ACOUSTIC_MARGIN_US` (20us) of any of `params.spec.ge_coil`'s forbidden
+  bands (checked against the union of all three axes' band lists, matching
+  `check_grad_acoustics.m`'s own cross-product check rather than just the
+  x-axis list) -- landed on dwell=8us (echo spacing 544us, clear of the
+  band with margin) for the reproducing config, dropping acoustics to
+  0.0666 with PNS essentially unchanged (69.0%/63.2%, both still well
+  under the 80% normal-mode line). Verified the default R=6/2.4mm config's
+  own dwell selection (4us, echo spacing 680us, already clear of the band)
+  is unaffected. Full test suite still passes (146 passed, 15 skipped).
+  Not addressed: `ACOUSTIC_MARGIN_US` is a single flat margin applied
+  uniformly, not derived from any measured sensitivity to how close is
+  "close enough" -- tighten or loosen it if a future measured acoustics
+  number sits uncomfortably close to 0.3 despite clearing the band by more
+  than the margin, or vice versa.
+- [x] **195.** Resolved 2026-09-15: `sampling/pd_sample.py`'s calibration
+  region (`8efa7dd`, "redefine calibration region as a per-axis
+  kmax-fraction rectangle") sized `calib_mask` as a *fixed fraction of
+  k-space* (`side_frac**2 * Ny*Nz` pixels), independent of `accel`/
+  `target_samples` -- a deliberate change at the time, but a real
+  regression at high acceleration: `target_samples` shrinks much faster
+  than the grid does as R grows, so a fixed-k-space-fraction region can
+  end up holding nearly the *entire* sample budget, leaving almost no
+  samples for actual incoherent variable-density coverage outside it.
+  [measured, real quality impact] Reported directly by the user after
+  inspecting the generated 1.6mm/0.8mm sampling-mask plots for this
+  session's `ball` protocol ("we pretty much only get a low-res calib
+  region with a handful of samples outside"); confirmed numerically at
+  the real 0.8mm/R~94 config (`Ny=270,Nz=180`, `pd_calib_frac=0.2`): the
+  fixed-kmax-fraction region held 487 of 520 target samples (93.6%),
+  leaving only 33 for the entire rest of k-space. This was the deeper
+  cause of that config needing `pd_calib_frac` dropped to 0.1 as a
+  workaround (see item 194's neighboring conversation) -- a workaround,
+  not a fix, since it only shrank the problem rather than removing its
+  R-dependence.
+
+  Fixed by `_calib_side_frac(target_samples, nx, ny, calib_frac)`: derives
+  the rectangle's per-axis side fraction from `calib_frac * target_samples
+  / (nx*ny)` (restoring the *original* pre-`8efa7dd` semantics --
+  `calib_frac` = fraction of the R-dependent sample budget, not of
+  k-space -- see `2a7ec06`, which `8efa7dd` had superseded) instead of
+  treating `calib_frac` itself as the rectangle's side fraction. Keeps
+  `8efa7dd`'s rectangle *shape* (and its real seed-rejection-sampling
+  fix, item 193, which is independent of region shape) -- only how the
+  rectangle's *size* is computed changes. Verified: at the same 0.8mm/R~94
+  config, `pd_calib_frac=0.2` (the actual default, no override needed
+  anymore) now gives a calibration region of 117 of 520 samples (22.5%,
+  matching the requested fraction) instead of 487 (93.6%); regenerating
+  that session's 0.8mm ArbEPI sequence with the fix and the default
+  `pd_calib_frac=0.2` (no longer needing the 0.1 workaround) dropped peak
+  PNS from 95.0% to 84.2% as a side effect (a denser non-calibration
+  region gives `mask2epi_radial` shorter average consecutive-sample steps
+  to work with). `tests/test_pd_sample.py`'s new
+  `test_calib_side_frac_scales_with_sample_budget_not_grid` locks in the
+  core invariant (side_frac, and hence realized calib pixel count, must
+  shrink as accel grows at fixed `calib_frac`); full test suite (147
+  passed) and this session's four resolution variants (5.4mm R=1,
+  2.4mm R=6, 1.6mm R~14.5, 0.8mm R~93.5) all regenerated clean after the
+  fix.

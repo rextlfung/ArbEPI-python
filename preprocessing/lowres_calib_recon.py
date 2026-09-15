@@ -16,12 +16,17 @@ which works the same whether `calib_mask` is an ellipse or a rectangle).
 Verified empirically on both `20260822ball_*` datasets: 362/10800 (ky, kz)
 locations, a centered ellipse, identical between the radial/laminar
 variants (they share the same underlying (ky, kz) mask, only the per-frame
-EPI shot ordering differs) -- both acquired under `pd_sample.py`'s older
+EPI shot ordering differs) -- both acquired under `pd_sample.py`'s original
 area-matched-ellipse `calib_frac` semantics (fraction of the sample
-budget), since superseded by a centered-rectangle, fraction-of-kmax
-definition (see that module's docstring); this paragraph's specific
-numbers are a historical record of those two datasets, not a current
-claim about the shape a fresh acquisition's calibration region will have.
+budget); a since-reverted intermediate version briefly made calib_frac a
+fixed fraction of k-space instead (independent of R), but that let the
+calibration region consume nearly the entire sample budget at high
+acceleration, so `_calib_side_frac` restored the fraction-of-sample-budget
+sizing -- now realized as a rectangle rather than the original ellipse
+(see that module's docstring and docs/review-findings.md item 195). This
+paragraph's specific numbers are a historical record of those two
+(ellipse-shaped) datasets, not a current claim about the shape a fresh
+acquisition's calibration region will have.
 
 Since that region is exactly, not approximately, fully sampled, no
 iterative reconstruction is needed: masking `ksp_epi_zf` down to it,
