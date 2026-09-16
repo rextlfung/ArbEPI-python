@@ -1,18 +1,21 @@
-"""Stage 2 batch driver: combined L1-wavelet + TV regularized reconstruction
-via sigpy. Ports run_bart.m (BART's pics replaced by recon_sigpy.py -- see
-that module's docstring for why and how).
+"""Stage 2 batch driver: CG-SENSE reconstruction. Ports run_cg_sense.m.
+No BART dependency -- cg_sense.py is plain numpy.
 """
 
 import functools
 import os
 
+from preprocessing.cg_sense import cg_sense
 from preprocessing.config import PreprocessingConfig, load_config, load_seq_params, set_seq_paths
 from preprocessing.nifti_io import save_recon_nifti
-from preprocessing.recon_frames import recon_frames
-from preprocessing.recon_sigpy import wavelet_tv_recon
+from recon.recon_frames import recon_frames
 
 
-def run_recon_sigpy(cfg: PreprocessingConfig) -> None:
+def _cg_sense_recon(data, smaps, num_iter):
+    return cg_sense(data, smaps, num_iter)[..., 0]
+
+
+def run_cg_sense(cfg: PreprocessingConfig) -> None:
     print(f'Batch: {len(cfg.seqnames)} sequence(s) in {cfg.datdir}')
     for i, seqname in enumerate(cfg.seqnames, start=1):
         print(f'\n[{i}/{len(cfg.seqnames)}] {seqname}')
@@ -21,21 +24,15 @@ def run_recon_sigpy(cfg: PreprocessingConfig) -> None:
 
         out_dir = os.path.join(cfg.datdir, 'recon', 'basic')
         os.makedirs(out_dir, exist_ok=True)
-        fn_recon = os.path.join(
-            out_dir, f'{seqname}_recon_sigpy_l1_r{cfg.lamb_l1:.4f}_tv_r{cfg.lamb_tv:.4f}'
-        )
+        fn_recon = os.path.join(out_dir, f'{seqname}_recon_cgs_i{cfg.num_iter}')
 
         try:
-            recon_fn = functools.partial(
-                wavelet_tv_recon, lamb_l1=cfg.lamb_l1, lamb_tv=cfg.lamb_tv, num_iter=cfg.num_iter
-            )
+            recon_fn = functools.partial(_cg_sense_recon, num_iter=cfg.num_iter)
             img, sp, runtime_s = recon_frames(cfg, paths, seq_params, recon_fn)
 
             print(f'Saving reconstruction to {fn_recon}.nii.gz')
             save_recon_nifti(
                 fn_recon, img,
-                lamb_l1=cfg.lamb_l1,
-                lamb_tv=cfg.lamb_tv,
                 num_iter=cfg.num_iter,
                 crop=cfg.crop,
                 do_sense=cfg.do_sense,
@@ -44,11 +41,11 @@ def run_recon_sigpy(cfg: PreprocessingConfig) -> None:
                 runtime_s=runtime_s,
                 **sp,
             )
-        except Exception as e:  # noqa: BLE001 -- mirrors run_bart.m's per-sequence try/catch
+        except Exception as e:  # noqa: BLE001 -- mirrors run_cg_sense.m's per-sequence try/catch
             print(f"ERROR [{seqname}]: {e}\nSkipping...")
     print('\nBatch complete.')
 
 
 if __name__ == '__main__':
     cfg = load_config(datdir='/path/to/data/', seqnames=['caipi_ts'])
-    run_recon_sigpy(cfg)
+    run_cg_sense(cfg)

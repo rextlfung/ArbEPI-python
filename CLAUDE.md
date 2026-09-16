@@ -605,14 +605,24 @@ It's a separate `pyproject.toml` optional-dependency group
 dependency set -- see below for why it also needs its own venv.
 
 **Two-stage pipeline, same structure as the MATLAB original**: Stage 1
-(`preprocess.py`, ported from `preprocess.m`) reads raw ScanArchives,
-whitens/coil-compresses/grids/phase-corrects, and writes a zero-filled
-k-space volume. Stage 2 (`recon_frames.py` + `run_cg_sense.py`/`run_rss.py`/
-`run_recon_sigpy.py`, ported from `recon_frames.m` + its three driver
-scripts) reconstructs every frame via CG-SENSE, RSS, or combined
-L1-wavelet+TV regularized SENSE -- all three are wired up as sanity checks
-for validating Stage 1's output against real acquired data, not the final
-production reconstruction (a separate, more advanced Julia pipeline).
+(`preprocess.py`, ported from `preprocess.m`, stays in `preprocessing/`)
+reads raw ScanArchives, whitens/coil-compresses/grids/phase-corrects, and
+writes a zero-filled k-space volume. Stage 2 (`recon/recon_frames.py` +
+`recon/run_cg_sense.py`/`recon/run_rss.py`/`recon/run_recon_sigpy.py`,
+ported from `recon_frames.m` + its three driver scripts) reconstructs
+every frame via CG-SENSE, RSS, or combined L1-wavelet+TV regularized
+SENSE -- all three are wired up as sanity checks for validating Stage 1's
+output against real acquired data, not the final production reconstruction
+(the multi-scale-low-rank pipeline described in the `recon/` section
+below). These Stage 2 drivers (plus `recon/lowres_calib_recon.py`,
+`recon/recon_sigpy.py`) moved from `preprocessing/` into `recon/` to live
+alongside the other reconstruction code -- they still run in the
+`.venv-preprocessing` environment, not `.venv-recon` (see the `recon/`
+section's venv-split note below: they need sigpy/h5py/matplotlib, not
+torch/mirtorch, so `recon/` itself is not a single-venv package). Only
+Stage 1 (`preprocess.py`, `raw_io.py`, `calibrate_delay.py`,
+`gre_diagnostics.py`, and the shared config/coil/grid/nifti helpers) stays
+in `preprocessing/` now.
 
 **Raw ScanArchive reading needs GE's proprietary Orchestra SDK
 (`GERecon`), isolated to one module (`raw_io.py`).** This is not optional --
@@ -981,6 +991,22 @@ pure Python, pip-installable, no cross-language embedding problem to solve)
 -- tests gate on it via `pytest.importorskip("torch")`/`("mirtorch")`, not a
 `shutil.which` subprocess check, so the main test suite still collects
 without the `recon` venv active.
+
+**`recon/` is not a single-venv package.** Alongside the torch/mirtorch-based
+MSLR files described below, it also holds the Stage 2 sigpy-based
+reconstruction drivers moved here from `preprocessing/`:
+`recon_frames.py`, `run_cg_sense.py`, `run_rss.py`, `run_recon_sigpy.py`,
+`recon_sigpy.py`, `lowres_calib_recon.py` (see the `preprocessing/`
+section's "Two-stage pipeline" paragraph above for why they moved). Those
+six files need `sigpy`/`h5py`/`matplotlib`/`nibabel`, not `torch`/`mirtorch`,
+and run in `.venv-preprocessing`, exactly as they did before the move --
+moving a file into `recon/` changes where it lives, not what it imports or
+which venv actually has those imports. `recon/cg_sense_b0.py` (literal
+conjugate-gradient SENSE -- see below -- using the B0-corrected operator)
+is the one Stage-2-shaped file that genuinely needs `.venv-recon`, since it
+imports `build_encoding_operator_b0` directly. When adding a new file
+here, pick its venv by what it actually imports, not by which directory it
+sits in.
 
 **Module layout**: `recon/lowrank.py` (patch extraction/recombination +
 singular-value soft-thresholding, ported from `../mslr-recon/src/recon.jl`)

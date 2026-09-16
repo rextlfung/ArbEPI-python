@@ -11,7 +11,7 @@ pytest.importorskip("sigpy")
 pytest.importorskip("nibabel")
 
 from preprocessing.config import SeqParams, load_config, set_seq_paths  # noqa: E402
-from preprocessing.recon_frames import recon_frames  # noqa: E402
+from recon.recon_frames import recon_frames  # noqa: E402
 
 
 def _sum_coils(data, smaps):
