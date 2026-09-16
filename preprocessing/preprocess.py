@@ -298,6 +298,15 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     ksp_gre_all = apply_whitening(ksp_gre_all, W)
 
     ksp_gre = ksp_gre_all[..., cfg.gre_echo_idx, :]
+    # Captured here, before PCA coil compression below overwrites `ksp_gre`
+    # -- the single-echo, whitened-but-not-compressed k-space is what lets
+    # smaps.py's load_smaps calibrate a true per-physical-coil (e.g. 32-
+    # channel) sensitivity map set later, independent of whatever Nvcoils
+    # compression selects. complex64, not complex128 (apply_whitening's
+    # Cholesky solve promotes dtype) -- matches ksp_gre/ksp_gre_echoes'
+    # own precision and this pipeline's ksp_epi_zf convention, half the
+    # size for no loss relevant at this SNR.
+    ksp_gre_uncompressed = ksp_gre.astype(np.complex64)
     cov = compute_coil_covariance(ksp_gre)
     Nvcoils, Nvcoils_energy = select_nvcoils(cov, cfg.cc_energy_thresh, floor=int(2 * R))
     print(f'  Energy threshold {cfg.cc_energy_thresh:.4f}: {Nvcoils_energy} components needed')
@@ -317,10 +326,35 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
         # a B0-mapping consumer the ΔTE it needs for phase-difference field
         # mapping without any other file.
         f.create_dataset('ksp_gre_echoes', data=ksp_gre_all)
+        # [Nx_degre, Ny_degre, Nz_degre, Ncoils] -- cfg.gre_echo_idx only,
+        # whitened, *not* PCA-compressed (Ncoils = the physical receive
+        # coil count, e.g. 32, not Nvcoils). See smaps.py's load_smaps for
+        # the consumer: a single ESPIRiT calibration on this, projected
+        # through `cc_matrix` below for the Nvcoils-compressed set, rather
+        # than a second independent calibration on `ksp_gre`.
+        f.create_dataset('ksp_gre_uncompressed', data=ksp_gre_uncompressed)
+        # [Nvcoils, Ncoils] -- the exact PCA compression matrix applied
+        # above, so load_smaps can linearly project an ESPIRiT calibration
+        # run on `ksp_gre_uncompressed` into the Nvcoils-compressed maps
+        # this pipeline's SENSE reconstruction uses, instead of spending a
+        # second full ESPIRiT calibration on `ksp_gre`. Mathematically
+        # exact under the ideal SENSE model, not an approximation: for a
+        # fixed object rho(r), img_c(r) = s_c(r)*rho(r) for every coil c,
+        # so for any linear per-sample coil combination M (coil
+        # compression is exactly this), img'_v(r) = sum_c M[v,c] img_c(r)
+        # = [sum_c M[v,c] s_c(r)] * rho(r) -- the virtual-coil sensitivity
+        # is that same linear combination of the true per-coil
+        # sensitivities. See smaps.py's load_smaps for the consumer.
+        f.create_dataset('cc_matrix', data=cc_matrix)
         if seq_params.TE_degre is not None:
             f.attrs['TE_degre'] = np.asarray(seq_params.TE_degre)
 
     # STEP 3 -- sensitivity maps (before EPI is loaded, so ksp_gre can be freed)
+    # Nvcoils-compressed only -- this cache, like before, gets its
+    # smaps_degre/emap_degre and the uncompressed-coil set backfilled
+    # lazily by smaps.py's load_smaps() the first time something (recon_
+    # frames.py, run_b0map.py) actually needs them, rather than duplicating
+    # that estimation here.
     fn_smaps = os.path.join(cfg.datdir, 'recon', f'smaps_{paths.seqname}_sigpy.h5')
     smaps = None
     if cfg.do_sense:
