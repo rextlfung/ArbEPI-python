@@ -225,6 +225,7 @@ def process_smaps(
     n_target: tuple[int, int, int],
     crop: float,
     smooth_sigma_mm: float = 6.0,
+    zero_pad_z: bool = False,
 ) -> np.ndarray:
     """Mask, z-crop, resize, smooth, and RSS-normalize raw sensitivity maps
     to the EPI acquisition grid. Ports process_smaps.m's 'bart' eigenvalue
@@ -255,6 +256,14 @@ def process_smaps(
         longer applied at all.
     smooth_sigma_mm: Gaussian smoothing sigma in mm, applied on the target
         grid (0 disables). See below for why this exists.
+    zero_pad_z: forwarded to resize_to_epi_grid -- set True to zero-fill
+        (rather than raise on) the EPI grid's outermost z-slices when the
+        EPI acquisition's own z-FOV exceeds fov_gre's (deGRE's fixed z-FOV
+        not covering one particular EPI resolution variant's rounding-
+        driven z-FOV, a real case this was added for -- see
+        resize_to_epi_grid's own docstring and docs/review-findings.md
+        item 196). Leave False unless the caller has made that deliberate
+        call for a specific already-acquired dataset.
     """
     # `smaps_raw` is assumed already zero wherever `emap <= crop` -- true by
     # construction for this function's only real caller (`estimate_smaps`,
@@ -268,7 +277,7 @@ def process_smaps(
     # Crop z to match EPI FOV, then interpolate (cubic spline) to the EPI
     # grid -- see grid_resize.py's module docstring for why this
     # deGRE-grid-to-EPI-grid crop+resize is shared with run_b0map.py.
-    smaps = resize_to_epi_grid(smaps_raw, fov_gre, fov, n_target, order=3)
+    smaps = resize_to_epi_grid(smaps_raw, fov_gre, fov, n_target, order=3, zero_pad_z=zero_pad_z)
 
     # Object mask, built by interpolating the *continuous* emap (cubic
     # spline, same as smaps_raw above) to the target grid and thresholding
@@ -305,7 +314,7 @@ def process_smaps(
     # erasing the mask everywhere except exact-zero voxels. An exact 0/1
     # re-mask (thresholding, not interpolating, the final decision) after
     # both resizes guarantees background is exactly zero regardless.
-    emap_resized = resize_to_epi_grid(emap, fov_gre, fov, n_target, order=3)
+    emap_resized = resize_to_epi_grid(emap, fov_gre, fov, n_target, order=3, zero_pad_z=zero_pad_z)
     target_mask = emap_resized > crop
     smaps = smaps * target_mask[..., None]
 

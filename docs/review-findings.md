@@ -3540,3 +3540,43 @@ recorded there despite the size of that rewrite.
   non-trivial to discover once. Fix direction: factor the chunked-read
   loop into a tiny shared module (e.g. `preprocessing/matio.py`, imported
   by both packages) both `preprocessing/` and `recon/` can call.
+- [x] **203.** Resolved 2026-09-16: `preprocessing/grid_resize.py`'s
+  `resize_to_epi_grid` (used by both `smaps.py`'s `process_smaps` and
+  `run_b0map.py`'s field-map resize) unconditionally raised whenever the
+  *target* (EPI) z-FOV exceeded the *source* (deGRE) z-FOV, with no
+  fallback -- correct in general (there's no real coil-sensitivity/field
+  data to resize *from* for a z-extent deGRE never covered), but a real,
+  already-acquired dataset this session hit exactly that case: deGRE's
+  fixed 144mm z-FOV (72 partitions @ 2mm) vs. the 5.4mm-resolution EPI
+  variant's own 145.8mm z-FOV (`Nz=27` from `round(144mm/5.4mm)`, which
+  rounds *up* past the 144mm target -- flagged proactively before
+  scanning ("is the deGRE FOV matching the EPI scan?"), then confirmed
+  live once real data landed and `process_smaps` actually raised on it).
+  Since both acquisitions are already on disk, neither retroactive fix
+  (shrinking the EPI z-extent, or re-acquiring a taller deGRE) is
+  possible -- the practical options were skip smaps/B0-correction for
+  that one resolution entirely, or accept a zero (not fabricated) value
+  at the ~0.9mm-per-side edge deGRE never measured. Explicit user
+  decision: zero-pad it.
+
+  Fixed by a new `zero_pad_z: bool` parameter on `resize_to_epi_grid`
+  (default `False`, preserving the existing raise for every other
+  caller): when set, resizes onto only the inner target-grid z-slices
+  within the source's real coverage (computed conservatively -- ceil the
+  inner start, floor the inner end, so a boundary slice straddling real/
+  fake coverage is zeroed entirely rather than credited with partial real
+  data) and zero-fills the rest, rather than raising. Zero, not edge-
+  replication, is the correct fill: real coil sensitivity/field values
+  vary fastest right at a slab's edge, the worst place to fake constancy.
+  Threaded through as an opt-in parameter on `process_smaps` and
+  `run_b0map` (not a new `PreprocessingConfig` field -- this is a
+  per-dataset condition, not a general scan setting) so every other
+  resolution's behavior is byte-identical to before. Verified on the real
+  5.4mm case (`tests/test_preprocessing_grid_resize.py`'s
+  `test_resize_to_epi_grid_zero_pad_z_matches_real_5p4mm_config`): exactly
+  slices 0 and 26 of 27 zeroed, matching the actual cache files built for
+  this dataset (`smaps_1_1x_5.4mm_sigpy.h5`, `1_1x_5.4mm_b0map.h5`) --
+  both of which now exist and were consumed successfully by downstream
+  RSS and B0-informed CG-SENSE reconstructions of real data, not just
+  unit-tested in isolation. 2 new tests total; full suite (149 passed)
+  unaffected.

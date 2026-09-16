@@ -55,7 +55,16 @@ _JULIA_DIR = os.path.join(os.path.dirname(__file__), 'julia')
 _JULIA_SCRIPT = os.path.join(_JULIA_DIR, 'b0map.jl')
 
 
-def run_b0map(cfg: PreprocessingConfig) -> None:
+def run_b0map(cfg: PreprocessingConfig, zero_pad_z: bool = False) -> None:
+    """zero_pad_z: forwarded to the EPI-grid resize_to_epi_grid calls below
+    -- set True when this batch includes an acquisition whose own z-FOV
+    exceeds deGRE's fixed z-FOV (e.g. a resolution whose Nz rounds up past
+    the deGRE slab, see smaps.py's process_smaps and
+    docs/review-findings.md item 196), so the outermost z-slices deGRE
+    never covered are zero-filled rather than raising. Applies to every
+    seqname in this batch call; run affected/unaffected seqnames as
+    separate calls if only some need it.
+    """
     julia_bin = shutil.which('julia')
     if julia_bin is None:
         raise RuntimeError(
@@ -130,10 +139,11 @@ def run_b0map(cfg: PreprocessingConfig) -> None:
             n_target = (seq_params.Nx, seq_params.Ny, seq_params.Nz)
             b0map_hz = resize_to_epi_grid(
                 b0map_hz_degre * mask_degre, seq_params.fov_degre, seq_params.fov,
-                n_target, order=3,
+                n_target, order=3, zero_pad_z=zero_pad_z,
             ).astype(np.float32)
             mask = resize_to_epi_grid(
                 mask_degre, seq_params.fov_degre, seq_params.fov, n_target, order=0,
+                zero_pad_z=zero_pad_z,
             ).astype(bool)
 
             # Keep the native deGRE-grid arrays too (diagnostic/QC use, e.g.
