@@ -814,6 +814,39 @@ Both are plain numpy-order HDF5 (see the `.h5`-vs-`.mat` convention note
 above) -- a consumer needs only `h5py`/`HDF5.jl`, never GERecon or the raw
 ScanArchive.
 
+**STEP 2 also writes `ksp_gre_uncompressed`** (`[Nx_degre, Ny_degre,
+Nz_degre, Ncoils]`, the same `cfg.gre_echo_idx` echo as `ksp_gre`,
+whitened but captured *before* PCA coil compression -- `Ncoils` is the
+real physical receive-coil count, e.g. 32, not `Nvcoils`) -- the input
+`smaps.py`'s `load_smaps` needs to calibrate a true per-physical-coil
+sensitivity-map set (see below), since a PCA-compressed map set can't be
+projected back into per-coil profiles after the fact (`cc_matrix` is
+rank-reducing). A `<seqname>_gre.h5` written before this field existed
+has no way to backfill it (the raw ScanArchive isn't available to
+`load_smaps`, only the raw-archive-reading `preprocess()` itself, which
+needs GERecon) -- `load_smaps` degrades gracefully rather than raising,
+see below.
+
+**`smaps.py`'s `load_smaps` now returns a fifth value,
+`smaps_degre_uncompressed`** -- ESPIRiT sensitivity maps at the deGRE
+grid/FOV, estimated independently from `ksp_gre_uncompressed` rather than
+derived from the Nvcoils-compressed `smaps_degre` (same reasoning as
+above: PCA compression can't be undone after the fact, so this is its own
+`estimate_smaps`/`process_smaps` call, cached alongside the existing
+Nvcoils set as `smaps_raw_uncompressed`/`emap_uncompressed`/
+`smaps_degre_uncompressed` in `smaps_<seqname>_sigpy.h5`). It is `None`
+when the `<seqname>_gre.h5` cache predates `ksp_gre_uncompressed` and
+can't be backfilled -- the only field in `load_smaps`' return tuple that
+can come back `None`; both of its current callers (`recon_frames.py`,
+`run_b0map.py`) already discard this return value, so nothing downstream
+consumes it yet -- it exists for a future full-coil-domain consumer.
+`preprocessing/preprocess.py`'s own inline STEP 3 (used only for the
+NIfTI/console-output side effect during `preprocess()` itself) still
+computes only the Nvcoils-compressed set directly; `smaps_degre`/
+`emap_degre`/`smaps_degre_uncompressed` all continue to be backfilled
+lazily by `load_smaps` the first time something needs them, matching the
+pre-existing `smaps_degre`/`emap_degre` backfill design.
+
 **B0 field map estimation is implemented, via
 [MRIFieldmaps.jl](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl)
 (Lin & Fessler, "Efficient Regularized Field Map Estimation in 3D MRI",

@@ -73,7 +73,7 @@ def recon_frames(
     """
     Nx, Ny, Nz = seq_params.Nx, seq_params.Ny, seq_params.Nz
 
-    smaps, _smaps_degre, _emap_degre, nvcoils = load_smaps(cfg, paths, seq_params)
+    smaps, _smaps_degre, _emap_degre, nvcoils, _smaps_degre_unc = load_smaps(cfg, paths, seq_params)
 
     with h5py.File(paths.recon, 'r') as f:
         nframes_avail = f['ksp_epi_zf'].shape[4]
