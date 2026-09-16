@@ -23,6 +23,7 @@ import sigpy as sp
 import sigpy.mri.app as mri_app
 from scipy import ndimage
 
+from preprocessing.coils import apply_coil_compression
 from preprocessing.config import PreprocessingConfig, SeqParams, SeqPaths
 from preprocessing.grid_resize import resize_to_epi_grid
 from preprocessing.nifti_io import save_recon_nifti
@@ -342,87 +343,44 @@ def process_smaps(
     return smaps / rss[..., None]
 
 
-def _estimate_uncompressed_smaps(
-    ksp_gre_uncompressed: np.ndarray,
-    fov_degre: tuple[float, float, float],
-    n_target_degre: tuple[int, int, int],
-    cfg: PreprocessingConfig,
+def _calibrate_and_compress(
+    ksp_gre_uncompressed: np.ndarray, cc_matrix: np.ndarray, crop: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """ESPIRiT calibration + deGRE-grid mask/resize/smooth/normalize on
-    whitened-but-not-PCA-compressed GRE k-space (preprocess.py's STEP 2
-    `ksp_gre_uncompressed`) -- a true per-physical-coil (e.g. 32-channel)
-    calibration, run independently of the Nvcoils-compressed calibration
-    above rather than derived from it (`cc_matrix` is rank-reducing, so a
-    PCA-compressed sensitivity map set can't be projected back into
-    per-physical-coil profiles after the fact). Returns
-    (smaps_raw_uncompressed, emap_uncompressed, smaps_degre_uncompressed);
-    `emap_uncompressed` must stay paired with `smaps_raw_uncompressed`
-    (not swapped for the Nvcoils-compressed `emap`) -- process_smaps
-    assumes `smaps_raw` is already exactly zero wherever its own paired
-    `emap <= crop` (see process_smaps' docstring), and only a
-    self-consistent pair guarantees that.
-    """
-    smaps_raw_unc, emap_unc = estimate_smaps(ksp_gre_uncompressed, crop=cfg.crop)
-    smaps_degre_unc = process_smaps(
-        smaps_raw_unc, emap_unc, fov_degre, fov_degre, n_target_degre, cfg.crop,
-        smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
-    )
-    return smaps_raw_unc, emap_unc, smaps_degre_unc
+    """A single ESPIRiT calibration on the whitened, uncompressed (real
+    physical receive-coil count, e.g. 32) GRE k-space, then the
+    Nvcoils-compressed calibration this pipeline's SENSE reconstruction
+    actually uses derived from it by *linear projection* through
+    `cc_matrix` -- not a second, independent ESPIRiT calibration on
+    separately PCA-compressed k-space.
 
+    This is mathematically exact under the ideal SENSE signal model, not
+    an approximation of convenience: for a fixed object rho(r),
+    img_c(r) = s_c(r) * rho(r) for every physical coil c. Coil compression
+    is a linear combination of channels applied identically at every
+    k-space sample, `y'_v = sum_c M[v,c] y_c`, so in image space
+    `img'_v(r) = sum_c M[v,c] img_c(r) = [sum_c M[v,c] s_c(r)] * rho(r)`
+    -- the virtual-coil sensitivity is that *same* linear combination of
+    the true per-coil sensitivities, `s'_v(r) = sum_c M[v,c] s_c(r)`.
+    `apply_coil_compression(smaps_raw_uncompressed, cc_matrix)` computes
+    exactly this. (Not bit-identical to a second calibration in practice,
+    since ESPIRiT's own per-voxel eigenvector fit isn't perfectly linear
+    in the coil axis -- but it is the same physical quantity, at half the
+    ESPIRiT cost.)
 
-def _backfill_uncompressed_smaps(
-    fn_smaps: str,
-    fn_gre: str,
-    fov_degre: tuple[float, float, float],
-    n_target_degre: tuple[int, int, int],
-    cfg: PreprocessingConfig,
-) -> np.ndarray | None:
-    """Best-effort (re)fill of `smaps_degre_uncompressed` into an existing
-    smaps cache -- either it predates the dataset entirely, or its cached
-    `Ncoils` attr has gone stale relative to the current
-    `ksp_gre_uncompressed` (mirroring the outer `Nvcoils` staleness check
-    this function's caller already does for the compressed set). Needs
-    `ksp_gre_uncompressed` in the GRE cache (preprocess.py's STEP 2, only
-    written from this feature onward) -- returns None with a printed
-    warning, rather than raising, when that input isn't available (a
-    `<seqname>_gre.h5` written before this feature, or already cleaned
-    up): the same tolerance load_seq_params already extends to durable,
-    non-regeneratable per-acquisition records that predate a later field
-    (see its n_echoes_degre/TE_degre defaults).
+    A useful side effect: `smaps_raw_compressed` inherits the
+    exact-zero-background invariant process_smaps depends on (see its
+    docstring) for free -- `smaps_raw_uncompressed` is already exactly
+    zero wherever `emap <= crop` (sigpy's own internal crop), and any
+    linear combination of an all-zero coil vector is still zero, so no
+    separate per-coil-count emap is needed; both the compressed and
+    uncompressed maps share this one `emap`.
+
+    Returns (smaps_raw_uncompressed, smaps_raw_compressed, emap), all at
+    ESPIRiT's own calibration resolution (see estimate_smaps' cal_size).
     """
-    if not os.path.exists(fn_gre):
-        print(
-            f"  WARNING: '{fn_gre}' not found -- skipping uncompressed-coil "
-            'smaps backfill (re-run preprocess() to populate it).'
-        )
-        return None
-    with h5py.File(fn_gre, 'r') as f:
-        if 'ksp_gre_uncompressed' not in f:
-            print(
-                f"  WARNING: '{fn_gre}' has no 'ksp_gre_uncompressed' dataset "
-                '(written by a pre-uncompressed-smaps preprocess() run) -- '
-                'skipping uncompressed-coil smaps backfill; re-run preprocess() '
-                'to populate it.'
-            )
-            return None
-        ksp_gre_uncompressed = f['ksp_gre_uncompressed'][()]
-    print(f'  Backfilling uncompressed-coil deGRE-grid smaps into {fn_smaps}...')
-    smaps_raw_unc, emap_unc, smaps_degre_unc = _estimate_uncompressed_smaps(
-        ksp_gre_uncompressed, fov_degre, n_target_degre, cfg,
-    )
-    with h5py.File(fn_smaps, 'a') as f:
-        # del-if-present rather than a bare create_dataset: this can also
-        # run to *repair* a cache whose Ncoils has gone stale (see the
-        # cache-valid branch's staleness check above), in which case these
-        # three names already exist and create_dataset would raise.
-        for name in ('smaps_raw_uncompressed', 'emap_uncompressed', 'smaps_degre_uncompressed'):
-            if name in f:
-                del f[name]
-        f.create_dataset('smaps_raw_uncompressed', data=smaps_raw_unc)
-        f.create_dataset('emap_uncompressed', data=emap_unc)
-        f.create_dataset('smaps_degre_uncompressed', data=smaps_degre_unc)
-        f.attrs['Ncoils'] = ksp_gre_uncompressed.shape[-1]
-    return smaps_degre_unc
+    smaps_raw_uncompressed, emap = estimate_smaps(ksp_gre_uncompressed, crop=crop)
+    smaps_raw_compressed = apply_coil_compression(smaps_raw_uncompressed, cc_matrix)
+    return smaps_raw_uncompressed, smaps_raw_compressed, emap
 
 
 def load_smaps(
@@ -435,67 +393,104 @@ def load_smaps(
     there, instead of leaving B0 field-map estimation to MRIFieldmaps'
     phase-contrast coil-combine fallback, is expected to reduce field-map
     noise in this pipeline's real low-per-coil-SNR object-center regions),
-    and a *second*, independently-calibrated deGRE-grid set estimated from
-    the whitened-but-not-PCA-compressed GRE k-space (the real physical
-    receive-coil count -- e.g. 32 -- not Nvcoils). `emap_degre` is
-    ESPIRiT's own dominant-eigenvalue map, also resized to the deGRE grid,
-    for an optional ESPIRiT-informed image-support mask in b0map.jl
-    (thresholded the same way process_smaps already does for `eig_mask`)
-    -- a complement to its own magnitude-based mask, not a guaranteed fix
-    for the same reason a raw magnitude threshold already has known
-    limits near low-SNR/partial-volume voxels (see CLAUDE.md's recon/
-    section).
+    and a true per-physical-coil (e.g. 32-channel) deGRE-grid set for a
+    consumer that needs real per-coil profiles rather than a
+    PCA-compressed subspace.
 
-    `smaps_degre_uncompressed` is a true per-physical-coil calibration
-    for a consumer that needs real per-coil profiles rather than a
-    PCA-compressed subspace -- it is *not* derivable from `smaps_degre`
-    after the fact (`cc_matrix` is rank-reducing: `cc_matrix.conj().T @
-    smaps_degre` would only be a rank-Nvcoils approximation of the true
-    per-coil maps, not the real thing), so it always comes from its own
-    ESPIRiT calibration on `ksp_gre_uncompressed` (see
-    `_estimate_uncompressed_smaps`). It is `None` when the
-    `<seqname>_gre.h5` cache predates `ksp_gre_uncompressed` (a
-    pre-this-feature preprocess() run) and can't be backfilled -- re-run
-    preprocess() to populate it; this is the only field in this return
-    tuple that can come back None. Cached under its own `Ncoils` attr
-    (independent of `Nvcoils`, which only guards the compressed set) --
-    a coil-compression-setting change moves `Nvcoils` without touching
-    `Ncoils`, and vice versa for a different physical coil array or a
-    re-run archive, so both are checked and backfilled independently.
+    Both the Nvcoils-compressed set and the uncompressed set come from
+    **one** ESPIRiT calibration, on the whitened-but-not-PCA-compressed
+    GRE k-space (preprocess.py's STEP 2 `ksp_gre_uncompressed`) -- the
+    Nvcoils-compressed set is a linear projection of that single
+    calibration through `cc_matrix` (also cached in `<seqname>_gre.h5`),
+    not a second, independent calibration on separately-compressed
+    k-space. See `_calibrate_and_compress`'s docstring for why this is
+    mathematically exact under the ideal SENSE model, not an
+    approximation of convenience. `emap`/`emap_degre` (ESPIRiT's own
+    dominant-eigenvalue map, for an optional ESPIRiT-informed image-
+    support mask in b0map.jl, thresholded the same way process_smaps
+    already does for `eig_mask`) is shared between both coil counts for
+    the same reason -- it's the same calibration.
 
-    The two deGRE-grid-Nvcoils arrays (`smaps_degre`/`emap_degre`) are
-    resized from the same `cal_size`-cropped ESPIRiT calibration
-    (`smaps_raw`/`emap`, see `estimate_smaps`) as `smaps` via
-    `process_smaps`/`resize_to_epi_grid` -- deGRE-grid uses `fov_gre` as
-    both source *and* target FOV (only resolution changes, no z-crop),
-    EPI-grid is the existing crop+resize. Loads from/writes
+    `smaps_degre_uncompressed` is `None` when the `<seqname>_gre.h5`
+    cache predates `ksp_gre_uncompressed`/`cc_matrix` (a pre-this-feature
+    preprocess() run); in that case `load_smaps` falls back to the
+    original design -- an independent ESPIRiT calibration directly on the
+    Nvcoils-compressed `ksp_gre` -- for the compressed set alone, since
+    that's a durable, non-regeneratable per-acquisition record load_smaps
+    can't rebuild without re-running preprocess() (which needs the raw
+    ScanArchive via GERecon). This is the only field in this return tuple
+    that can come back `None`. Cached under its own `Ncoils` attr
+    (independent of `Nvcoils`) -- a coil-compression-setting change moves
+    `Nvcoils` without touching `Ncoils`, and vice versa for a different
+    physical coil array or a re-run archive, so a mismatch on either one
+    invalidates the whole cache (both coil counts derive from the same
+    calibration, so there's no way to partially reuse one without the
+    other).
+
+    `smaps_degre`/`emap_degre` are resized from the same calibration as
+    `smaps` via `process_smaps`/`resize_to_epi_grid` -- deGRE-grid uses
+    `fov_gre` as both source *and* target FOV (only resolution changes,
+    no z-crop), EPI-grid is the existing crop+resize. Loads from/writes
     `<datdir>/recon/smaps_<seqname>_sigpy.h5` (was `recon_frames.py`'s
     private `_load_smaps` -- moved here, and extended with the
     `smaps_degre`/`emap_degre` datasets, so `run_b0map.py` can reuse the
     same cache instead of re-running ESPIRiT). An older cache written
-    before these existed is backfilled in place rather than re-estimating
-    from scratch (`smaps_raw`/`emap` are already cached); the uncompressed
-    set is backfilled the same way when its own input is available.
+    before `smaps_degre`/`emap_degre` existed is backfilled in place
+    rather than re-estimating from scratch (`smaps_raw`/`emap` are
+    already cached).
     """
     fn_smaps = os.path.join(cfg.datdir, 'recon', f'smaps_{paths.seqname}_sigpy.h5')
     fn_smaps_nifti = fn_smaps[: -len('.h5')] + '.nii.gz'
     fn_gre = os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5')
     fov_degre = tuple(seq_params.fov_degre)
     n_target_degre = (seq_params.Nx_degre, seq_params.Ny_degre, seq_params.Nz_degre)
+    fov_epi = tuple(seq_params.fov)
+    n_target_epi = (seq_params.Nx, seq_params.Ny, seq_params.Nz)
 
-    # Guard against a stale cache from a run with a different Nvcoils (e.g.
-    # coil-compression settings changed since the cache was written) --
-    # matching preprocess.py's own smaps_valid check. Falls through to
-    # re-estimation below on mismatch, same as if fn_smaps didn't exist. If
-    # fn_gre isn't available to check against (e.g. already cleaned up),
-    # trust the existing cache rather than failing outright.
+    # Prefer the single-calibration-plus-projection path (needs cc_matrix
+    # and ksp_gre_uncompressed, both written by preprocess.py's STEP 2) --
+    # falls back to independently calibrating on the compressed ksp_gre
+    # (this module's original design) for a <seqname>_gre.h5 that predates
+    # them. If fn_gre isn't available at all (e.g. already cleaned up),
+    # there's nothing to check staleness against below -- trust the
+    # existing smaps cache rather than failing outright.
+    use_projection = False
+    current_nvcoils = current_ncoils = None
+    if os.path.exists(fn_gre):
+        with h5py.File(fn_gre, 'r') as f:
+            use_projection = 'cc_matrix' in f and 'ksp_gre_uncompressed' in f
+            if use_projection:
+                current_nvcoils = f['cc_matrix'].shape[0]
+                current_ncoils = f['ksp_gre_uncompressed'].shape[-1]
+            elif 'ksp_gre' in f:
+                current_nvcoils = f['ksp_gre'].shape[-1]
+
+    # Guard against a stale cache (e.g. coil-compression settings changed,
+    # a different physical coil array, or a re-run archive since the cache
+    # was written) -- matching preprocess.py's own smaps_valid check.
+    # Falls through to re-estimation below on mismatch, same as if
+    # fn_smaps didn't exist.
+    #
+    # When use_projection is True but the cache has no 'Ncoils' attr at
+    # all (an otherwise-valid Nvcoils-matching cache written by the old,
+    # independent-calibration design, before its <seqname>_gre.h5 had
+    # cc_matrix/ksp_gre_uncompressed to project from), this deliberately
+    # invalidates the *whole* cache -- not a staleness bug, but a one-time
+    # opportunistic upgrade: since both coil counts must now come from one
+    # shared calibration (see _calibrate_and_compress), there's no way to
+    # add the uncompressed set alongside the old independently-calibrated
+    # compressed set without breaking that invariant. This costs one extra
+    # ESPIRiT run exactly once per acquisition, the first time load_smaps
+    # runs after its GRE cache gains projection support; every load after
+    # that (once 'Ncoils' is cached) is cheap again.
     smaps_cache_valid = os.path.exists(fn_smaps)
-    if smaps_cache_valid and os.path.exists(fn_gre):
+    if smaps_cache_valid and current_nvcoils is not None:
         with h5py.File(fn_smaps, 'r') as f:
             cached_nvcoils = int(f.attrs['Nvcoils'])
-        with h5py.File(fn_gre, 'r') as f:
-            current_nvcoils = f['ksp_gre'].shape[-1]
+            cached_ncoils = int(f.attrs['Ncoils']) if 'Ncoils' in f.attrs else None
         smaps_cache_valid = cached_nvcoils == current_nvcoils
+        if use_projection:
+            smaps_cache_valid = smaps_cache_valid and cached_ncoils == current_ncoils
 
     if smaps_cache_valid:
         print(f'Loading precomputed sensitivity maps from {fn_smaps}')
@@ -506,19 +501,9 @@ def load_smaps(
                 smaps_degre, emap_degre = f['smaps_degre'][()], f['emap_degre'][()]
             else:
                 smaps_raw, emap = f['smaps_raw'][()], f['emap'][()]
-            has_uncompressed = 'smaps_degre_uncompressed' in f
-            if has_uncompressed:
-                cached_ncoils = int(f.attrs.get('Ncoils', -1))
-                smaps_degre_uncompressed = f['smaps_degre_uncompressed'][()]
-        # Ncoils staleness check, mirroring the outer Nvcoils one above --
-        # independent axes (a coil-compression-setting change moves
-        # Nvcoils; a different physical coil array or a re-run archive
-        # moves Ncoils), so Nvcoils matching says nothing about whether
-        # the cached uncompressed set still matches the current GRE cache.
-        if has_uncompressed and os.path.exists(fn_gre):
-            with h5py.File(fn_gre, 'r') as f:
-                if 'ksp_gre_uncompressed' in f:
-                    has_uncompressed = cached_ncoils == f['ksp_gre_uncompressed'].shape[-1]
+            smaps_degre_uncompressed = (
+                f['smaps_degre_uncompressed'][()] if 'smaps_degre_uncompressed' in f else None
+            )
         if not has_degre:
             print(f'  Backfilling deGRE-grid smaps/emap into {fn_smaps}...')
             smaps_degre = process_smaps(
@@ -529,10 +514,6 @@ def load_smaps(
             with h5py.File(fn_smaps, 'a') as f:
                 f.create_dataset('smaps_degre', data=smaps_degre)
                 f.create_dataset('emap_degre', data=emap_degre)
-        if not has_uncompressed:
-            smaps_degre_uncompressed = _backfill_uncompressed_smaps(
-                fn_smaps, fn_gre, fov_degre, n_target_degre, cfg,
-            )
         if not os.path.exists(fn_smaps_nifti):
             # Backfill: cache was written before the NIfTI export existed.
             save_recon_nifti(
@@ -542,18 +523,33 @@ def load_smaps(
         return smaps, smaps_degre, emap_degre, nvcoils, smaps_degre_uncompressed
 
     if os.path.exists(fn_smaps):
-        print(f'Cached sensitivity maps at {fn_smaps} have stale Nvcoils -- re-estimating.')
+        print(f'Cached sensitivity maps at {fn_smaps} have stale Nvcoils/Ncoils -- re-estimating.')
     print('Sensitivity maps not found. Estimating via sigpy ESPIRiT...')
-    with h5py.File(fn_gre, 'r') as f:
-        ksp_gre = f['ksp_gre'][()]
-        ksp_gre_uncompressed = (
-            f['ksp_gre_uncompressed'][()] if 'ksp_gre_uncompressed' in f else None
+
+    if use_projection:
+        with h5py.File(fn_gre, 'r') as f:
+            ksp_gre_uncompressed = f['ksp_gre_uncompressed'][()]
+            cc_matrix = f['cc_matrix'][()]
+        nvcoils = cc_matrix.shape[0]
+        smaps_raw_uncompressed, smaps_raw, emap = _calibrate_and_compress(
+            ksp_gre_uncompressed, cc_matrix, cfg.crop,
         )
-    nvcoils = ksp_gre.shape[-1]
-    smaps_raw, emap = estimate_smaps(ksp_gre, crop=cfg.crop)
+    else:
+        print(
+            f"  WARNING: '{fn_gre}' has no 'cc_matrix'/'ksp_gre_uncompressed' "
+            '(written by a pre-uncompressed-smaps preprocess() run) -- '
+            'falling back to an independent calibration on the compressed '
+            "'ksp_gre'; re-run preprocess() to get the faster single-"
+            'calibration path and the uncompressed-coil smaps set.'
+        )
+        with h5py.File(fn_gre, 'r') as f:
+            ksp_gre = f['ksp_gre'][()]
+        nvcoils = ksp_gre.shape[-1]
+        smaps_raw, emap = estimate_smaps(ksp_gre, crop=cfg.crop)
+        smaps_raw_uncompressed = None
+
     smaps = process_smaps(
-        smaps_raw, emap, fov_degre, tuple(seq_params.fov),
-        (seq_params.Nx, seq_params.Ny, seq_params.Nz), cfg.crop,
+        smaps_raw, emap, fov_degre, fov_epi, n_target_epi, cfg.crop,
         smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
     )
     smaps_degre = process_smaps(
@@ -561,18 +557,13 @@ def load_smaps(
         smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
     )
     emap_degre = resize_to_epi_grid(emap, fov_degre, fov_degre, n_target_degre, order=3)
-
-    if ksp_gre_uncompressed is not None:
-        smaps_raw_unc, emap_unc, smaps_degre_uncompressed = _estimate_uncompressed_smaps(
-            ksp_gre_uncompressed, fov_degre, n_target_degre, cfg,
+    if smaps_raw_uncompressed is not None:
+        smaps_degre_uncompressed = process_smaps(
+            smaps_raw_uncompressed, emap, fov_degre, fov_degre, n_target_degre, cfg.crop,
+            smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
         )
     else:
-        print(
-            f"  WARNING: '{fn_gre}' has no 'ksp_gre_uncompressed' dataset "
-            '(written by a pre-uncompressed-smaps preprocess() run) -- '
-            'skipping uncompressed-coil smaps; re-run preprocess() to populate it.'
-        )
-        smaps_raw_unc = emap_unc = smaps_degre_uncompressed = None
+        smaps_degre_uncompressed = None
 
     with h5py.File(fn_smaps, 'w') as f:
         f.create_dataset('smaps_raw', data=smaps_raw)
@@ -580,11 +571,10 @@ def load_smaps(
         f.create_dataset('smaps', data=smaps)
         f.create_dataset('smaps_degre', data=smaps_degre)
         f.create_dataset('emap_degre', data=emap_degre)
-        if smaps_degre_uncompressed is not None:
-            f.create_dataset('smaps_raw_uncompressed', data=smaps_raw_unc)
-            f.create_dataset('emap_uncompressed', data=emap_unc)
+        if smaps_raw_uncompressed is not None:
+            f.create_dataset('smaps_raw_uncompressed', data=smaps_raw_uncompressed)
             f.create_dataset('smaps_degre_uncompressed', data=smaps_degre_uncompressed)
-            f.attrs['Ncoils'] = ksp_gre_uncompressed.shape[-1]
+            f.attrs['Ncoils'] = smaps_raw_uncompressed.shape[-1]
         f.attrs['Nvcoils'] = nvcoils
     # Coil axis stands in for save_recon_nifti's "frames" axis -- FSLeyes'
     # volume slider then scrolls through per-coil maps, magnitude-only

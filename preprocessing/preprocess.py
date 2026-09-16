@@ -329,10 +329,23 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
         # [Nx_degre, Ny_degre, Nz_degre, Ncoils] -- cfg.gre_echo_idx only,
         # whitened, *not* PCA-compressed (Ncoils = the physical receive
         # coil count, e.g. 32, not Nvcoils). See smaps.py's load_smaps for
-        # the consumer: a true per-physical-coil ESPIRiT calibration that
-        # PCA-compressed smaps can't be recovered into after the fact
-        # (cc_matrix is rank-reducing).
+        # the consumer: a single ESPIRiT calibration on this, projected
+        # through `cc_matrix` below for the Nvcoils-compressed set, rather
+        # than a second independent calibration on `ksp_gre`.
         f.create_dataset('ksp_gre_uncompressed', data=ksp_gre_uncompressed)
+        # [Nvcoils, Ncoils] -- the exact PCA compression matrix applied
+        # above, so load_smaps can linearly project an ESPIRiT calibration
+        # run on `ksp_gre_uncompressed` into the Nvcoils-compressed maps
+        # this pipeline's SENSE reconstruction uses, instead of spending a
+        # second full ESPIRiT calibration on `ksp_gre`. Mathematically
+        # exact under the ideal SENSE model, not an approximation: for a
+        # fixed object rho(r), img_c(r) = s_c(r)*rho(r) for every coil c,
+        # so for any linear per-sample coil combination M (coil
+        # compression is exactly this), img'_v(r) = sum_c M[v,c] img_c(r)
+        # = [sum_c M[v,c] s_c(r)] * rho(r) -- the virtual-coil sensitivity
+        # is that same linear combination of the true per-coil
+        # sensitivities. See smaps.py's load_smaps for the consumer.
+        f.create_dataset('cc_matrix', data=cc_matrix)
         if seq_params.TE_degre is not None:
             f.attrs['TE_degre'] = np.asarray(seq_params.TE_degre)
 
