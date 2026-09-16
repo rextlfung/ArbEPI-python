@@ -66,6 +66,7 @@ def resize_to_epi_grid(
     fov: tuple[float, float, float],
     n_target: tuple[int, int, int],
     order: int = 3,
+    zero_pad_z: bool = False,
 ) -> np.ndarray:
     """vol: [Nx_src, Ny_src, Nz_src, ...] -- any trailing axes (e.g. coils)
     pass through unresized. fov_src, fov: (fx, fy, fz) in meters, x/y assumed
@@ -77,6 +78,20 @@ def resize_to_epi_grid(
     process_smaps has always made for coil maps). Pass order=0 (nearest) for
     a boolean/label volume, e.g. a validity mask, so no fractional values are
     invented at the resample.
+
+    zero_pad_z: when the *target* z-FOV exceeds the source's (the case this
+    function otherwise raises on -- see below), setting this True resizes
+    onto only the inner target-grid slices that fall within the source's
+    real coverage and zero-fills the rest, instead of raising. Use only
+    when a real, already-acquired dataset has this mismatch (this function
+    cannot retroactively acquire the missing coverage) and the caller has
+    made a deliberate call that a zero (not fabricated) sensitivity/field
+    value at those edge slices is acceptable -- see
+    docs/review-findings.md item 196 for the real case this was added for
+    (deGRE's fixed z-FOV slightly smaller than one EPI resolution variant's
+    own, rounding-driven z-FOV) and why zero, not edge-replication, is the
+    right fill value (no real coil-sensitivity data exists there to
+    replicate from).
     """
     Nx_src, Ny_src, Nz_src = vol.shape[:3]
     Nx, Ny, Nz = n_target
@@ -87,10 +102,12 @@ def resize_to_epi_grid(
             f'x/y must already agree.'
         )
     if fov_src[2] < fov[2]:
-        raise ValueError(
-            f'resize_to_epi_grid: target z-FOV ({fov[2]:.4f} m) exceeds '
-            f'source z-FOV ({fov_src[2]:.4f} m).'
-        )
+        if not zero_pad_z:
+            raise ValueError(
+                f'resize_to_epi_grid: target z-FOV ({fov[2]:.4f} m) exceeds '
+                f'source z-FOV ({fov_src[2]:.4f} m).'
+            )
+        return _resize_with_zero_pad_z(vol, fov_src, fov, n_target, order)
 
     # z_frac*Nz_src is always in [0, Nz_src/2) given the FOV check above, so
     # plain floor(x+0.5) rounding suffices.
@@ -104,12 +121,52 @@ def resize_to_epi_grid(
         )
     vol = vol[:, :, z_start:z_end, ...]
 
+    return _zoom_grid_aligned(vol, (Nx, Ny, Nz), order)
+
+
+def _zoom_grid_aligned(vol: np.ndarray, n_target: tuple[int, int, int], order: int) -> np.ndarray:
+    """The shared grid_mode=True/mode='nearest' zoom step -- see module
+    docstring for why this convention, not scipy's default, is correct for
+    two grids covering the same physical FOV."""
+    Nx, Ny, Nz = n_target
     zoom = (Nx / vol.shape[0], Ny / vol.shape[1], Nz / vol.shape[2]) + (1.0,) * (vol.ndim - 3)
-    # grid_mode=True + mode='nearest': FOV/edge-aligned, matching the z-crop
-    # above's own convention -- see module docstring for why grid_mode=False
-    # (scipy's default) is wrong for two grids covering the same FOV.
     zoom_kwargs = dict(order=order, grid_mode=True, mode='nearest')
     if np.iscomplexobj(vol):
         return (ndimage.zoom(vol.real, zoom, **zoom_kwargs)
                 + 1j * ndimage.zoom(vol.imag, zoom, **zoom_kwargs))
     return ndimage.zoom(vol.astype(np.float64), zoom, **zoom_kwargs)
+
+
+def _resize_with_zero_pad_z(
+    vol: np.ndarray,
+    fov_src: tuple[float, float, float],
+    fov: tuple[float, float, float],
+    n_target: tuple[int, int, int],
+    order: int,
+) -> np.ndarray:
+    """zero_pad_z=True path of resize_to_epi_grid (fov_src[2] < fov[2]):
+    resize the source (no z-crop needed -- it's already <= the target FOV)
+    onto only the inner target-grid z-slices that fall within the source's
+    own real coverage, then embed that into a full-size zero array. The
+    inner range is computed conservatively (ceil the inner start, floor the
+    inner end) so a boundary slice straddling real/fake coverage is zeroed
+    entirely rather than credited with partial real data.
+    """
+    Nx_src, Ny_src, Nz_src = vol.shape[:3]
+    Nx, Ny, Nz = n_target
+
+    # Fraction of the TARGET z-extent, per side, that lies outside the
+    # source's real coverage.
+    z_frac = (fov[2] - fov_src[2]) / fov[2] / 2
+    z_start = int(np.ceil(z_frac * Nz - 1e-9))
+    z_end = int(np.floor(Nz - z_frac * Nz + 1e-9))
+    if z_start < 0 or z_end > Nz or z_start >= z_end:
+        raise ValueError(
+            f'resize_to_epi_grid: zero-pad inner target range [{z_start}, {z_end}) '
+            f'is out of range [0, {Nz}).'
+        )
+
+    inner = _zoom_grid_aligned(vol, (Nx, Ny, z_end - z_start), order)
+    out = np.zeros((Nx, Ny, Nz) + vol.shape[3:], dtype=inner.dtype)
+    out[:, :, z_start:z_end, ...] = inner
+    return out

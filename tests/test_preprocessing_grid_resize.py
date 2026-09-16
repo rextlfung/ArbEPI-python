@@ -101,3 +101,47 @@ def test_resize_to_epi_grid_rejects_epi_fov_larger_than_source():
     vol = np.zeros((8, 8, 8))
     with pytest.raises(ValueError):
         resize_to_epi_grid(vol, (0.1, 0.1, 0.1), (0.1, 0.1, 0.2), (4, 4, 4))
+
+
+def test_resize_to_epi_grid_zero_pad_z_fills_outer_slices_with_zero():
+    """docs/review-findings.md item 196: when the target z-FOV exceeds the
+    source's, zero_pad_z=True must zero-fill the outer target-grid slices
+    the source has no real coverage for, rather than raising (the
+    zero_pad_z=False default's behavior, still covered by the test above).
+    """
+    Nx_src, Ny_src, Nz_src = 8, 8, 20
+    fov_src = (0.1, 0.1, 0.1)  # 10cm z, dz=5mm
+    # Target z-FOV 12cm -> 1cm (2 x 5mm dz) of unreal coverage total, 1
+    # target slice zeroed per side at Nz=20 (dz_target=6mm; 0.5cm/side /
+    # 6mm rounds up to 1 whole slice zeroed per side, matching the
+    # conservative ceil/floor policy).
+    fov = (0.1, 0.1, 0.12)
+    n_target = (Nx_src, Ny_src, 20)
+
+    vol = np.full((Nx_src, Ny_src, Nz_src), 3.0)
+    out = resize_to_epi_grid(vol, fov_src, fov, n_target, order=1, zero_pad_z=True)
+
+    assert out.shape == n_target
+    np.testing.assert_array_equal(out[:, :, 0], 0.0)
+    np.testing.assert_array_equal(out[:, :, -1], 0.0)
+    # Interior: real data, close to the constant source value (order=1
+    # linear interpolation of a constant field reproduces it exactly away
+    # from the zero boundary).
+    np.testing.assert_allclose(out[:, :, 2:-2], 3.0, atol=1e-9)
+
+
+def test_resize_to_epi_grid_zero_pad_z_matches_real_5p4mm_config():
+    """Pins the exact inner/outer split for this session's real case:
+    deGRE's fixed 144mm z-FOV (72 @ 2mm) vs. the 5.4mm-resolution EPI
+    variant's own 145.8mm z-FOV (27 @ 5.4mm) -- 1 slice zeroed per side out
+    of 27, matching the value used to build that dataset's smaps cache."""
+    fov_gre = (0.216, 0.216, 0.144)
+    fov_epi = (0.216, 0.216, 0.1458)
+    n_target = (40, 40, 27)
+
+    vol = np.ones((108, 108, 72))
+    out = resize_to_epi_grid(vol, fov_gre, fov_epi, n_target, order=3, zero_pad_z=True)
+
+    assert out.shape == n_target
+    zero_slices = [z for z in range(27) if not np.any(out[:, :, z])]
+    assert zero_slices == [0, 26]

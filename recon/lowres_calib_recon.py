@@ -64,8 +64,11 @@ and the same FOV-preserving resize (`grid_resize.resize_to_epi_grid`) the
 rest of this pipeline already uses to move smaps between grids of the same
 FOV at different resolutions.
 
-Usage (from repo root, .venv-preprocessing):
-    .venv-preprocessing/bin/python -m preprocessing.lowres_calib_recon <datdir> [seqname]
+Usage (from repo root, .venv-preprocessing -- this module needs sigpy/h5py/
+matplotlib, not torch/mirtorch, despite living under recon/ alongside the
+torch-based MSLR pipeline; see CLAUDE.md's recon/ section for the venv
+split rationale):
+    .venv-preprocessing/bin/python -m recon.lowres_calib_recon <datdir> [seqname]
 """
 
 import argparse
@@ -75,7 +78,7 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 
-from preprocessing.config import load_config, load_seq_params, set_seq_paths
+from preprocessing.config import PreprocessingConfig, load_config, load_seq_params, set_seq_paths
 from preprocessing.grid_resize import resize_to_epi_grid
 from preprocessing.nifti_io import save_recon_nifti
 
@@ -170,8 +173,8 @@ def lowres_calib_recon(
     return img, grid
 
 
-def main(datdir: str, seqname: str = 'ArbEPI') -> None:
-    cfg = load_config(datdir=datdir, seqnames=[seqname])
+def _recon_one(cfg: PreprocessingConfig, seqname: str) -> None:
+    datdir = cfg.datdir
     paths = set_seq_paths(cfg, seqname)
     seq_params = load_seq_params(paths)
 
@@ -232,12 +235,39 @@ def main(datdir: str, seqname: str = 'ArbEPI') -> None:
     plt.tight_layout()
     fn_png = os.path.join(out_dir, f'{seqname}_recon_lowres_calib_z{iz}.png')
     plt.savefig(fn_png, dpi=130)
+    plt.close(fig)
     print(f'Wrote {fn_png}')
+
+
+def run_lowres_calib_recon(cfg: PreprocessingConfig) -> None:
+    """Batch driver, mirroring run_rss.py/run_preprocessing.py's per-sequence
+    try/except pattern -- runs _recon_one for every cfg.seqnames, continuing
+    past a single sequence's failure rather than aborting the batch."""
+    print(f'Batch: {len(cfg.seqnames)} sequence(s) in {cfg.datdir}')
+    for i, seqname in enumerate(cfg.seqnames, start=1):
+        print(f'\n[{i}/{len(cfg.seqnames)}] {seqname}')
+        try:
+            _recon_one(cfg, seqname)
+        except Exception as e:  # noqa: BLE001 -- mirrors run_rss.py's per-sequence try/catch
+            print(f"ERROR [{seqname}]: {e}\nSkipping...")
+    print('\nBatch complete.')
+
+
+def main(datdir: str, seqname: str = 'ArbEPI') -> None:
+    """Single-sequence convenience wrapper (unchanged CLI) around
+    run_lowres_calib_recon -- lets a single-dataset failure raise directly
+    instead of being caught-and-printed, useful for interactive/ad hoc use."""
+    cfg = load_config(datdir=datdir, seqnames=[seqname])
+    _recon_one(cfg, seqname)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('datdir')
-    parser.add_argument('seqname', nargs='?', default='ArbEPI')
+    parser.add_argument('seqname', nargs='*', default=['ArbEPI'],
+                         help='one or more seqnames to batch (default: ArbEPI)')
     args = parser.parse_args()
-    main(args.datdir, args.seqname)
+    if len(args.seqname) == 1:
+        main(args.datdir, args.seqname[0])
+    else:
+        run_lowres_calib_recon(load_config(datdir=args.datdir, seqnames=args.seqname))

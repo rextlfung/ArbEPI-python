@@ -12,7 +12,7 @@ rather than the B0-corrected recon operator (recon/operators_b0.py). This
 means the input `<seqname>_b0map.h5` must have been produced by
 run_b0map.py's full driver, not merely by running b0map.jl directly.
 
-Imports _ift3 from preprocessing/run_rss.py rather than keeping its own
+Imports _ift3 from recon/run_rss.py rather than keeping its own
 copy (fftshift(ifftn(fftshift(.))) per axis -- see that function's own
 docstring for the magnitude-/difference-safety caveat on odd axes), the
 same convention b0map.jl's own image-space conversion uses in Julia (see
@@ -31,7 +31,7 @@ import numpy as np
 
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
 from preprocessing.nifti_io import save_recon_nifti
-from preprocessing.run_rss import _ift3
+from recon.run_rss import _ift3
 
 
 def main(datdir: str, seqname: str) -> None:

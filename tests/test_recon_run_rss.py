@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("sigpy")
 pytest.importorskip("nibabel")
 
-from preprocessing.run_rss import _ift3, _rss_recon  # noqa: E402
+from recon.run_rss import _ift3, _rss_recon  # noqa: E402
 
 
 def test_ift3_inverts_centered_forward_fft():
