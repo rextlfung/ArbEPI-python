@@ -314,31 +314,85 @@ live tree (not just trusted from each subagent's report) and are recorded
 as items 196-202 below; the `recon/` subagent's pass over the rewritten
 B0/R2* code found it consistent with CLAUDE.md's documented sign
 convention and end-to-end parameter threading, so no new findings were
-recorded there despite the size of that rewrite.
+recorded there despite the size of that rewrite. Items 204-212 are new
+findings from a later, automated pass (2026-09-17, against `ad2fdc4`) that
+also re-verified every item 107-203 against the current tree: `git diff
+27fcac5 HEAD --stat` shows `CLAUDE.md`, `preprocessing/gre_diagnostics.py`,
+`preprocessing/grid_resize.py`, `preprocessing/preprocess.py`,
+`preprocessing/run_b0map.py`, `preprocessing/smaps.py` (substantially
+rewritten again -- `load_smaps` now derives compressed smaps by projecting
+a single uncompressed-coil ESPIRiT calibration through `cc_matrix` instead
+of two independent calibrations), a brand-new file (`recon/cg_sense_b0.py`,
+232 lines, "add B0-informed CG-SENSE reconstruction"), six files moved from
+`preprocessing/` into `recon/` (`recon_frames.py`, `run_cg_sense.py`,
+`run_rss.py`, `run_recon_sigpy.py`, `recon_sigpy.py`,
+`lowres_calib_recon.py`), and several test files changed/added in that
+span, alongside this doc itself (items 196-202, added in the prior commit).
+`ge/`, `lib/`, `sequences/`, `sampling/`, `plotting/`, `params.py`,
+`main.py`, and `scanners.py` are confirmed byte-identical to the tree the
+previous pass reviewed (`git diff de3d535 HEAD --stat -- ge/ lib/
+sequences/ params.py main.py scanners.py` produces no output), so every
+item citing only those files needed no re-verification beyond a
+representative spot check. This pass split its budget across four parallel
+subagents with the same scope as the previous several passes
+(`sampling/`+`plotting/`; `ge/`+`lib/`+`sequences/`+`params.py`/`main.py`/
+`scanners.py`; `preprocessing/`, briefed to give the `smaps.py`/
+`grid_resize.py` rewrite the heaviest scrutiny; `recon/`, briefed to give
+the brand-new `cg_sense_b0.py` the heaviest scrutiny), each re-verifying
+its assigned open items against the live tree before hunting for anything
+new. Nine findings survived independent verification and are recorded as
+items 204-212 below. Item 136(a) (the `crop_corner=True` exact-fill-leak
+hypothesis) was substantially strengthened, not just re-verified: a third
+reproduction attempt succeeded via direct instrumentation on small grids
+(<=40x30) at both extreme and realistic acceleration factors -- see that
+item's updated text. Item 199's claim that both `recon/lowres_calib_recon.py`
+and `preprocessing/r2star_map.py` share the same live-risk `_ift3` copy was
+narrowed: `r2star_map.py`'s copy is safe by construction (its result is
+always `np.abs()`'d before use), only `lowres_calib_recon.py`'s is a live
+risk. Items 110, 117, 128, 132, 133, 140, 141, 161, 167, 174, 175, 178, 182,
+186, 188, 189, 190, 192, 199, 200, and 202 needed citation-only updates
+(line numbers shifted by the `smaps.py`/`preprocess.py` rewrite and/or a
+path-prefix change from the `preprocessing/` -> `recon/` file moves,
+substance unchanged in every case); items 114, 118, 160, and 166 needed
+citation-only updates from unrelated README/`params.py`/`ArbEPI.py`
+line drift. `uv run ruff check .` now reports **32 errors** (31 `E501` + 1
+new `I001`), up from 29 (all `E501`) -- entirely attributable to the new
+`recon/cg_sense_b0.py` (unsorted imports plus two new over-length lines),
+not a regression anywhere else in the tree.
 
-## Current baseline (2026-09-16, against `de3d535`)
+## Current baseline (2026-09-17, against `ad2fdc4`)
 
-- `uv run ruff check .` (after `uv sync --extra test --extra lint`): **29
-  errors**, all `E501` -- unchanged from the previous pass.
+- `uv run ruff check .` (after `uv sync --extra test --extra lint`): **32
+  errors** -- **31 `E501` + 1 `I001`** (unsorted imports), up from 29 (all
+  `E501`). The new `I001` and two of the new `E501`s are all in the
+  brand-new `recon/cg_sense_b0.py` (line 32's import block, plus two
+  over-length lines at 155/163); every file in scope of the last pass's
+  16-`E501` in-scope subset (`ge/`, `lib/`, `sequences/`, `params.py`,
+  `main.py`, `scanners.py`) is unchanged. Not fixed this pass (only this
+  file may be modified).
 - `uv run pytest` (plain main venv, fresh `.venv`, `rm -rf output` first):
-  **147 passed, 15 skipped** (up from 143/15 -- `sampling/pd_sample.py`'s
-  item 194/195 fixes added new test cases), same skip composition (**9**
-  `sigpy`/`nibabel`-gated `preprocessing` files, **6** `could not import
-  'torch'` `recon` files). With `--extra preprocessing --extra recon` also
-  synced: **216 passed, 5 skipped** (up from 209/5), all five `julia
-  executable not found on PATH` (`tests/test_preprocessing_run_b0map.py`),
-  **zero** GERecon-gated -- confirming every `preprocessing`/`recon`-gated
-  skip from the plain-venv run is addressable by syncing extras, none is a
-  real failure. `tests/test_recon_*.py` alone: **37 passed**, 0 failed (up
-  from 34 -- `test_recon_operators_b0.py`'s r2star-generalization tests).
+  **149 passed, 17 skipped** (up from 147/15 -- two new/moved test files
+  added their own skip-gate: `tests/test_preprocessing_load_smaps.py`
+  (sigpy-gated, new) and `tests/test_recon_cg_sense_b0.py` (torch-gated,
+  new); the three Stage-2-driver test files that moved from
+  `preprocessing/` to `recon/` kept their existing sigpy gate). Skip
+  composition: **7** `sigpy`/`nibabel`-gated files still under
+  `preprocessing/`, **10** `could not import 'torch'`/`'sigpy'` files now
+  under `recon/` (7 torch-gated MSLR/B0 files + 3 sigpy-gated Stage-2
+  drivers). With `--extra preprocessing --extra recon` also synced: **226
+  passed, 5 skipped** (up from 216/5), all five still `julia executable not
+  found on PATH` (`tests/test_preprocessing_run_b0map.py`), **zero**
+  GERecon-gated -- confirming every skip from the plain-venv run remains
+  addressable by syncing extras. `tests/test_recon_*.py` alone (now
+  includes the three moved Stage-2 driver tests plus the new
+  `cg_sense_b0` tests): **47 passed**, 0 failed (up from 37).
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build) -- all four sequences `.ok`, freshly measured this
-  pass (`rm -rf output` first). **Numbers below are a new baseline, not
-  comparable to prior passes**: `params.py`'s default protocol changed
-  from the old 240x240x45/R=9/GE_MR750/TE=34.9ms config to "ABCD" (2.4mm
-  isotropic, `N=[90,90,60]`, R=6, TE=30ms, commit `0b9c25f`) since the last
-  baseline. No `calc_te_tr_delays` TE-feasibility warning fires anywhere
-  in the build log under the new defaults (see item 169's closure above):
+  pass (`rm -rf output` first). **Numbers are unchanged from the previous
+  pass** (`ge/`, `lib/`, `sequences/`, `params.py` are byte-identical to
+  what that pass measured): no `calc_te_tr_delays` TE-feasibility warning
+  fires anywhere in the build log under the "ABCD" default protocol (see
+  item 169's closure above):
 
   | sequence | peak PNS | acoustics | max grad | max slew |
   |---|---|---|---|---|
@@ -659,7 +713,10 @@ recorded there despite the size of that rewrite.
   convention.
 - [ ] **110. `preprocessing/preprocess.py`'s `n_frames_discard` is
   computed and written but has no reader anywhere in the repo.** [verify;
-  citation updated 2026-09-15 against `b701489` -- the write site shifted
+  citation updated 2026-09-17 against `ad2fdc4` -- write site shifted again
+  from `:416` to `:450` (unrelated `smaps.py`/`preprocess.py` edits added
+  lines above it; substance unchanged); citation updated 2026-09-15 against
+  `b701489` -- the write site shifted
   from `:414` to `:416` after `b701489` added `compression='gzip',
   compression_opts=4` (2 lines) to the `ksp_epi_zf` dataset creation just
   above it; substance unchanged] `preprocess.py:274`
@@ -949,8 +1006,11 @@ recorded there despite the size of that rewrite.
   `p_k`, and add a test with `patch_sizes` exceeding the image on at
   least one axis, asserting `_reg_weights`'s implied `p_k` matches what
   `patchSVST` actually used.
-- [ ] **132. `preprocessing/recon_frames.py`'s per-frame failure message
-  never says which frame failed.** [measured; citations updated 2026-09-12
+- [ ] **132. `recon/recon_frames.py`'s per-frame failure message
+  never says which frame failed.** [measured; citation updated 2026-09-17
+  against `ad2fdc4` -- file moved from `preprocessing/recon_frames.py` to
+  `recon/recon_frames.py` (commit `8f90cd7`, pure `git mv`, line numbers
+  below unchanged); citations updated 2026-09-12
   against `ecb8f2f` -- these had already drifted before the previous
   (2026-09-11) baseline was cut, from commit `c4d1794`'s
   `_worker_state`/`_init_worker`/`_recon_one_frame_worker` insertion; not
@@ -987,42 +1047,56 @@ recorded there despite the size of that rewrite.
   same commit range, which independently introduced a different
   corner-stripping bug under `crop_corner=True` -- see item 196.
 - [ ] **136(a). `sampling/pd_sample.py`'s exact-count fill step is
-  unguarded against `crop_corner=True`'s ellipse, but no reproduction of a
-  routine leak has succeeded across two independent passes.** [\[verify\],
-  unconfirmed -- re-verified 2026-09-16 against `de3d535`, still
-  unconfirmed] Originally two distinct, compounding mechanisms were
-  reported under one item number; mechanism (b) above is now fixed, this
-  sub-item (a) remains open and unconfirmed:
+  unguarded against `crop_corner=True`'s ellipse -- now directly confirmed
+  reachable via instrumented reproduction, at small (not production-scale)
+  grids.** [measured -- upgraded from `[verify]`/unconfirmed 2026-09-17
+  against `ad2fdc4`, after a third reproduction attempt succeeded where two
+  prior passes failed] Originally two distinct, compounding mechanisms were
+  reported under one item number; mechanism (b) above is fixed, this
+  sub-item (a) is now a confirmed, mechanism-traced code-level bug, just
+  not reachable at this repo's actual production grid sizes:
 
   The exact-count enforcement step (`pd_sample.py`'s fill branch) fills any
   shortfall between the binary-search mask and `target_samples` from
   `np.flatnonzero(~mask)` -- every currently-unsampled pixel in the full
   rectangular `(ny, nx)` grid, with **no** `rho <= 1` filter -- even though
   `crop_corner=True`'s earlier step (`mask = mask * (rho <= 1)`) is
-  supposed to confine every sample to the centered inscribed region. This
-  code path is real and still genuinely unguarded as described. But the
-  claim that it leaks on "every single run" (originally: 5 seeded runs at
-  `Ny=240, Nz=45, R=9, decay=1.4, calib_frac=0`, each landing 20-28/1200
-  (~2%) samples outside the ellipse) has now failed to reproduce across
-  two independent passes: the 2026-09-14 pass got 0/100 across a 5x20
-  sweep, and this pass (2026-09-16, against `de3d535`, using the doc's own
-  sweep methodology across 5 diverse configs) got **0 leaks** across 300+200
-  further seeds. Root cause of the original claim not holding (per the
-  2026-09-14 pass): the binary search's `accel_search = accel * 0.95`
-  biases toward a *higher*-density target than requested, so the post-crop
-  sample count tends to converge from the **overshoot** side, which routes
-  into the *prune* branch (`mask & ~calib_mask`, already filtered to
-  inside the region, safe) rather than the unguarded *fill* branch this
-  item depends on. Whether an undershoot (and hence this leak) is ever
-  reachable in practice still needs a fresh, explicit repro before being
-  cited as measured again -- until then, treat this as a real but
-  unconfirmed code-level gap, not a reproduced leak. Fix direction (still
-  worth doing defensively even unconfirmed, since mechanism (b) above used
-  to fall through to this same unguarded path as a fallback of last
-  resort): restrict the exact-count fill step's candidate pool to
+  supposed to confine every sample to the centered inscribed region.
+
+  **This pass's reproduction** (a broad sweep across 7 diverse configs x 300
+  seeds = 2100 runs, followed by targeted ablation and direct instrumented
+  confirmation) succeeded where the two prior passes' sweeps did not: at
+  `shape=(30,20), accel=1.5, calib_frac=0.3`, **79/300 seeds leaked**, some
+  with 20+ points landing outside the ellipse. Ablating parameters (100
+  seeds each) showed `accel` is the dominant driver, not `calib_frac`:
+  `accel=1.5` leaks 73-84/100 across every `calib_frac` tested (0.05-0.3);
+  `accel>=2` on the same 30x20 grid drops to 0-1/100. Critically, even at
+  *realistic, production-like* `accel` values (6, 9 -- this repo's actual
+  shipped `R`s) on a small 30x20 grid, rare leaks (1/100) still occur, and
+  on a grid shape matching an *existing test's own parameters* (`(40,30)`,
+  `accel=4`, `calib_frac=0.2` -- `tests/test_pd_sample_exact_count`'s exact
+  config, which only checks `mask.shape`/`mask.sum()`, not ellipse
+  containment) a sweep of 500 seeds found 1 leak. Direct mechanism
+  confirmation: an instrumented copy of `pd_sample.py` (a debug print at the
+  `elif current_samples < target_samples:` branch) rerun on the
+  `accel=9, calib_frac=0.05, seed=17` leaking case printed
+  `DEBUG undershoot: current_samples=65 target=66 num_to_add=1` immediately
+  followed by `n_outside final: 1` -- an exact, direct confirmation of the
+  mechanism this item already hypothesized (binary-search undershoot ->
+  unguarded `np.flatnonzero(~mask)` fill -> a corner cell gets added).
+
+  **But** on this repo's actual production-scale grids (`(90,60)` @
+  accel=6/calib_frac=0.1, the current "ABCD" default, and `(240,45)` @
+  accel=9/calib_frac=0.05, the older default -- 300 seeds each) -- **zero
+  leaks**, matching both prior passes' 0/300 results at that scale. So the
+  leak is real and directly reproduced, but only on small grids (roughly
+  <=40x30); it remains unconfirmed at this repo's actual shipped matrix
+  sizes. Fix direction unchanged, now backed by a concrete repro rather
+  than a hypothesis: restrict the exact-count fill step's candidate pool to
   `np.flatnonzero(~mask & (rho <= 1))` when `crop_corner=True`, and add a
-  regression test with `calib_frac > 0`/`crop_corner=True` covering both an
-  overshoot and (if a repro is ever found) an undershoot seed.
+  regression test using the `(30,20), accel=1.5, calib_frac=0.3, seed`-based
+  repro above (or the simpler `accel=9, calib_frac=0.05, seed=17` case) as
+  a direct, reliable trigger.
 - [ ] **137. `ge/blocks.py`'s `get_block_type` reads a nonexistent `.trig`
   attribute instead of pypulseq's real `.trigger` dict, so physio-trigger
   blocks are never detected.** [measured] `ge/blocks.py:38-39`:
@@ -1300,7 +1374,12 @@ recorded there despite the size of that rewrite.
   tuple, not a bare scalar.
 - [ ] **166. `plotting/compare_readout_pns.py`'s `_overlay_figure` centers its
   "gx zoom" panel ~8ms (about 7.5 echo spacings) away from the actual
-  nominal-TE echo, because it mixes two different time origins.** [measured]
+  nominal-TE echo, because it mixes two different time origins.** [measured;
+  citation updated 2026-09-17 against `ad2fdc4` -- `compare_readout_pns.py`'s
+  own citations (`:68`,`:81`,`:92`) confirmed still exactly accurate; the
+  supporting `sequences/ArbEPI.py` line refs shifted from `:189-190`/`:199`
+  to `:222-227`/`:236` (commit `8448ff3`'s per-shot spoiler-cycle
+  randomization inserted lines above this section); substance unchanged]
   `_build` (`compare_readout_pns.py:68`) reads `te_realized` from
   `scan_info.mat`'s `schedules[..., 2]`, which CLAUDE.md's ".mat file
   format" section defines as "echo time in seconds since RF excitation" --
@@ -1308,8 +1387,8 @@ recorded there despite the size of that rewrite.
   `_overlay_figure` (`:81`) instead samples gradients via
   `sample_gradients_tesla_per_m(v['seq'], time_range=(0.0, p.TR))`, whose
   `t=0` is the absolute start of shot 0's block sequence -- which begins
-  with a fat-sat pulse and spoiler block (`sequences/ArbEPI.py:189-190`)
-  *before* the excitation RF (`:199`), not the RF itself. Line 92,
+  with a fat-sat pulse and spoiler block (`sequences/ArbEPI.py:222-227`)
+  *before* the excitation RF (`:236`), not the RF itself. Line 92,
   `t_c = v['te_realized']`, uses the RF-relative value directly as an
   index into the absolute-time-sampled array, with no correction for the
   fat-sat/spoiler lead-in. Reproduced directly against this repo's shipped
@@ -1338,22 +1417,34 @@ recorded there despite the size of that rewrite.
   absolute RF start time (e.g. `seq.calculate_kspace()[2][0]`) inside
   `_build` and use `t_c = t_excitation0 + te_realized` in
   `_overlay_figure`.
-- [ ] **167. `preprocessing/recon_frames.py`'s `recon_frames()` unconditionally
+- [ ] **167. `recon/recon_frames.py`'s `recon_frames()` unconditionally
   calls `load_smaps()` even when `recon_fn` doesn't use sensitivity maps at
   all -- crashing RSS-only reconstruction whenever no GRE/smaps cache
-  exists.** [measured; citation updated 2026-09-16 against `de3d535` --
+  exists.** [measured; citation updated 2026-09-17 against `ad2fdc4` -- file
+  moved from `preprocessing/recon_frames.py` to `recon/recon_frames.py`
+  (commit `8f90cd7`, pure `git mv`, `:76`'s call unchanged); `load_smaps`
+  now returns a **5-tuple**, not 4 (`smaps, _smaps_degre, _emap_degre,
+  nvcoils, _smaps_degre_unc = load_smaps(...)`, the `dd77792` rewrite added
+  a trailing uncompressed-coil-set return value); the fresh-estimation open
+  moved from `smaps.py:424` to `smaps.py:554`, now inside an `else` branch
+  of a new `use_projection` check (`smaps.py:468` guards on
+  `os.path.exists(fn_gre)`) -- substance unchanged: with neither cache
+  present, `use_projection` is `False` and execution still falls through to
+  the same unconditional `h5py.File(fn_gre, 'r')` open and the same
+  `FileNotFoundError`] [citation updated 2026-09-16 against `de3d535` --
   fresh-estimation write site shifted from `smaps.py:204` to `:424`; also
   narrowed since last verified: `load_smaps` now trusts an existing stale
   smaps cache rather than crashing when only the GRE cache is missing, so
   this still crashes only on a true first-run with neither cache present]
   `recon_frames()` (`recon_frames.py:76`) opens with
-  `smaps, _smaps_degre, _emap_degre, nvcoils = load_smaps(cfg, paths,
+  `smaps, _smaps_degre, _emap_degre, nvcoils, _smaps_degre_unc =
+  load_smaps(cfg, paths,
   seq_params)`, unconditional on what `recon_fn` actually needs. But
   `run_rss.py`'s own module docstring states this driver is "root-sum-of-
   squares reconstruction (**no smaps, no BART**)", and its `_rss_recon(data,
   _smaps)` (`run_rss.py:30-31`) explicitly discards its `smaps` argument
   (underscore-prefixed, never read). `load_smaps`'s fresh-estimation branch
-  (`smaps.py:424`) unconditionally opens `<datdir>/recon/<seqname>_gre.h5`
+  (`smaps.py:554`) unconditionally opens `<datdir>/recon/<seqname>_gre.h5`
   (`with h5py.File(fn_gre, 'r') as f:`) on a true first run, which raises
   `FileNotFoundError` if that file doesn't exist. Reproduced directly: a
   minimal `ksp_epi_zf.h5`
@@ -1369,8 +1460,10 @@ recorded there despite the size of that rewrite.
   `estimate_smaps` docstring documents elsewhere in this codebase (a
   full-resolution GRE volume "thrashed 14GB+ of memory and never completed
   in over an hour" before the `cal_size` fix). Confirmed intentional-looking,
-  not a typo: `tests/test_preprocessing_recon_frames.py::test_recon_frames_
-  estimates_smaps_when_no_cache` already exercises (and expects) this eager
+  not a typo: `tests/test_recon_recon_frames.py::test_recon_frames_
+  estimates_smaps_when_no_cache` (renamed from
+  `tests/test_preprocessing_recon_frames.py` alongside the file move)
+  already exercises (and expects) this eager
   smaps estimation, so this is a real design gap in `recon_frames()`'s API
   (no way to opt out of smaps loading), not an accidental leftover. Fix
   direction: thread whether `recon_fn` needs smaps into `recon_frames()`
@@ -1651,9 +1744,12 @@ recorded there despite the size of that rewrite.
   rise time for `adc.delay`), and add a regression test building
   `generate_degre` at a non-default `crt` (e.g. `20e-6`) asserting
   `adc.delay == gx.delay + gx.rise_time`.
-- [ ] **182. `preprocessing/recon_frames.py`'s `use_parfor=True` path drains
+- [ ] **182. `recon/recon_frames.py`'s `use_parfor=True` path drains
   its own memory-bounding frame generator eagerly, defeating the design its
-  own comment describes.** [measured] `recon_frames()` builds
+  own comment describes.** [measured; citation updated 2026-09-17 against
+  `ad2fdc4` -- file moved from `preprocessing/recon_frames.py` to
+  `recon/recon_frames.py` (commit `8f90cd7`, pure `git mv`, line numbers
+  below unchanged); substance unchanged] `recon_frames()` builds
   `frame_data = (f['ksp_epi_zf'][:, :, :, :, frame] for frame in
   range(nframes))` specifically, per the adjacent comment (`recon_frames.py:89-92`),
   "to bound memory" for a full-res acquisition that can otherwise exceed
@@ -1816,18 +1912,35 @@ recorded there despite the size of that rewrite.
   a dedicated exception type for the triangular-lobe/coverage-bump cases,
   or check the relevant condition directly before calling), and let
   unrelated assertions propagate with their real message.
-- [ ] **199. `preprocessing/lowres_calib_recon.py`/`preprocessing/
+- [ ] **199. `recon/lowres_calib_recon.py`/`preprocessing/
   r2star_map.py` each paste an undocumented copy of `run_rss.py`'s `_ift3`,
   losing the odd-axis complex-value warning its own source carries --
-  and, unlike prior copies of this bug, both new files return the
-  complex, not just magnitude, image.** [measured; found 2026-09-16
-  against `de3d535`, commit `42edeb3`] `run_rss.py:17-32`'s `_ift3`
+  but only `lowres_calib_recon.py`'s copy is a live risk, not both, as
+  originally claimed (narrowed 2026-09-17).** [measured; narrowed and
+  citation updated 2026-09-17 against `ad2fdc4` -- `lowres_calib_recon.py`
+  moved from `preprocessing/` to `recon/lowres_calib_recon.py:86-88` (was
+  `:83-85`, commit `8f90cd7`, pure `git mv` + 3 unrelated lines above it;
+  its `img`-returning-complex claim re-confirmed at `recon/
+  lowres_calib_recon.py:149,168-173`, still returns `img` directly, still
+  documented as complex in its own docstring); `r2star_map.py:52-54`
+  unchanged (stays in `preprocessing/`, never moved) -- **but its severity
+  is downgraded**: unlike `lowres_calib_recon.py`, `r2star_map.py`'s one
+  caller of its `_ift3` copy (`_rss_echo_images`, `r2star_map.py:57-68`)
+  always wraps the result in `np.abs()` before ever combining or returning
+  it -- a plain real RSS magnitude that never lets a complex value escape
+  the function, the same "safe by construction" pattern as every other
+  historically-inert copy of this bug (items 44/64/91/108/120), not the
+  newly-escalated "returns complex" class this item originally claimed
+  applied to both new files. So this item is really a fifth occurrence
+  (`lowres_calib_recon.py`, live risk) plus a sixth, lower-severity
+  documentation-only occurrence (`r2star_map.py`, inert but still worth
+  deduplicating for consistency)] `run_rss.py:17-32`'s `_ift3`
   docstring explicitly warns its `fftshift`-in/`fftshift`-out pairing (not
   the canonical `ifftshift`-in) is "NOT shift-equivalent on an odd-length
   axis... safe here only because every consumer... takes a magnitude... a
   future complex-valued consumer would inherit it silently."
   `gre_diagnostics.py` correctly imports this shared function (item 91's
-  fix). `lowres_calib_recon.py:83-85` and `r2star_map.py:52-54` instead
+  fix). `recon/lowres_calib_recon.py:86-88` and `r2star_map.py:52-54` instead
   paste an undocumented copy each. `lowres_calib_recon()`'s own module
   docstring cites a real measured example where the calibration-region
   crop is `49 x 10` (`Ny_eff=49`, and `Nx_eff = round(Ny_eff*fov_x/fov_y)
@@ -1843,10 +1956,113 @@ recorded there despite the size of that rewrite.
   docstring warned about, but that trap is now invisible to a reader of
   either new file, and a future caller reading `img` directly (not
   `np.abs(img)`) would inherit it silently. Same bug class as items
-  44/64/91/108/120, now a fifth and sixth occurrence. Fix: delete both
-  local copies and `from preprocessing.run_rss import _ift3` in both
-  files (as `gre_diagnostics.py` already does), so the warning travels
-  with the function.
+  44/64/91/108/120, now a fifth (live) and sixth (inert) occurrence. Fix:
+  delete both
+  local copies and import the shared `_ift3` from `recon.run_rss` (its new
+  home after the `preprocessing/` -> `recon/` move) in both
+  files, the way `gre_diagnostics.py` already imports it -- note this now
+  means `preprocessing/r2star_map.py` importing from `recon/` at all,
+  the same cross-package coupling item 200's own note flags as the reason
+  its analogous chunked-read duplication wasn't simply merged either;
+  consider factoring `_ift3` itself into a small shared, dependency-free
+  module (e.g. alongside `preprocessing/matio.py`) both packages can import
+  without coupling to each other's optional-extra dependency sets.
+- [ ] **205. `preprocessing/smaps.py`'s `load_smaps()` (and
+  `preprocessing/preprocess.py`'s STEP 3) never forward item 203's new
+  `zero_pad_z` parameter, so the real 5.4mm-resolution dataset item 203's
+  closure was written for cannot have its EPI-grid smaps rebuilt through
+  any real pipeline entry point -- undercutting that closure's own claim.**
+  [measured; found 2026-09-17 against `ad2fdc4`] Item 203 (closed) added an
+  opt-in `zero_pad_z: bool` parameter to `preprocessing/grid_resize.py`'s
+  `resize_to_epi_grid`, and `preprocessing/smaps.py`'s `process_smaps`
+  forwards it correctly through both of its own `resize_to_epi_grid` calls
+  (`smaps.py:229,260,281,318`). But `load_smaps()` -- the function
+  `recon/recon_frames.py`, `preprocessing/run_b0map.py`, and
+  `preprocessing/preprocess.py`'s STEP-3-adjacent code path all actually
+  use in a real pipeline run -- has **no `zero_pad_z` parameter at all**,
+  and neither of its two `process_smaps(..., fov_epi, ...)` calls
+  (`smaps.py:560-563` fresh-estimate branch, and the equivalent inline call
+  in `preprocess.py:372-376`) passes `zero_pad_z=True`.
+  `PreprocessingConfig` has no such field either -- a repo-wide
+  `grep -rn zero_pad_z` finds it only in `grid_resize.py`, `smaps.py`'s
+  `process_smaps` signature/body, `run_b0map.py`'s own field-map driver,
+  and `tests/test_preprocessing_grid_resize.py`, never in `load_smaps` or
+  `preprocess.py`. Reproduced directly:
+  ```
+  $ uv run python -c "
+  from preprocessing.smaps import process_smaps
+  import numpy as np
+  fov_gre = (0.216, 0.216, 0.144); fov_epi = (0.216, 0.216, 0.1458)
+  smaps_raw = np.ones((24,24,24,4), dtype=complex); emap = np.ones((24,24,24))
+  process_smaps(smaps_raw, emap, fov_gre, fov_epi, (40,40,27), crop=0.95)
+  "
+  ValueError: resize_to_epi_grid: target z-FOV (0.1458 m) exceeds source z-FOV (0.1440 m).
+  ```
+  -- exactly the code path `load_smaps()`'s fresh-estimation branch and
+  `preprocess.py`'s STEP 3 both call, with no way to opt into
+  `zero_pad_z`. Consequences: `preprocess()`'s STEP 3 has no surrounding
+  try/except, so a fresh/invalidated-cache run on this dataset would
+  **crash Stage 1 entirely**; `run_b0map()`'s call to `load_smaps()`
+  (`run_b0map.py:102`) is wrapped in a broad `except Exception`, so it
+  would instead **silently fall back to no `smap`** (losing the
+  matched-filter field-map benefit item 183 already documents as
+  important). This directly undercuts item 203's own closure text
+  ("Threaded through as an opt-in parameter on `process_smaps` and
+  `run_b0map`... both of which now exist and were consumed successfully by
+  downstream RSS and B0-informed CG-SENSE reconstructions of real data")
+  -- that claim holds for `run_b0map()`'s own field-map resize, but not for
+  the smaps side at all; whatever produced the real
+  `smaps_1_1x_5.4mm_sigpy.h5` cache item 203 cites must have called
+  `process_smaps` directly (bypassing `load_smaps`), not through any
+  shipped driver. Fix: add a `zero_pad_z` parameter to `load_smaps()` (and
+  thread it from `preprocess.py`'s STEP 3 the same way `run_b0map()`
+  threads its own -- likely via a new `PreprocessingConfig` field, since
+  this is a per-dataset condition a config value can carry the same way
+  item 203 chose for `run_b0map`), so the smaps side has the same opt-in
+  the field-map side already has.
+- [ ] **206. `preprocessing/preprocess.py`'s STEP 3 guarantees a wasted
+  full ESPIRiT re-run on every fresh pipeline execution today, not just an
+  occasional legacy-cache transition -- sharpens items 117/141.** [measured
+  by code tracing plus an existing passing test; a live standalone
+  reproduction of this exact mechanism could not be completed this pass due
+  to heavy concurrent CPU contention in the review container, see below;
+  found 2026-09-17 against `ad2fdc4`] `smaps.py`'s new `Ncoils`-based
+  cache-invalidation logic (`smaps.py:483-494`) is commented as "a one-time
+  opportunistic upgrade... costs one extra ESPIRiT run exactly once per
+  acquisition, the first time `load_smaps` runs after its GRE cache gains
+  projection support" -- phrasing that implies a rare, historical
+  transition. But `preprocess.py`'s STEP 3 (`preprocess.py:352-388`)
+  *always* uses the old, independent-calibration design
+  (`estimate_smaps(ksp_gre, ...)` directly, never the new
+  `_calibrate_and_compress` projection helper) and writes a cache with
+  **no `Ncoils` attr at all** -- even though, moments earlier in that exact
+  same `preprocess()` call, STEP 2 already wrote `cc_matrix`/
+  `ksp_gre_uncompressed` unconditionally (`preprocess.py:319-350`) into the
+  very same `<seqname>_gre.h5`. So the very next call to `load_smaps()` --
+  made by `recon/recon_frames.py` or by `run_b0map.py`
+  (`run_b0map.py:102`), both documented to run immediately after Stage 1
+  completes -- will always find `use_projection=True` (from the fresh GRE
+  cache) but `cached_ncoils=None` (from STEP 3's cache), forcing
+  `smaps_cache_valid=False` and a **full second ESPIRiT calibration**,
+  unconditionally, on every real pipeline run today, not an occasional
+  legacy-transition cost. Traced precisely via code reading of
+  `preprocess.py`'s STEP 3 and `smaps.py`'s `load_smaps` cache-validity
+  guard (`smaps.py:495-502`); the existing unit test
+  `test_load_smaps_recomputes_everything_via_projection_when_gre_cache_gains_support`
+  (`tests/test_preprocessing_load_smaps.py:140-187`) already reproduces the
+  exact mechanism (an old-format cache + a projection-capable `gre.h5` ->
+  full recompute, confirmed by its own
+  `assert not np.allclose(smaps, placeholder)`) -- a live rerun of this
+  test, and of a standalone STEP-3-then-`load_smaps()` reproduction script,
+  both stalled under this review pass's own heavy concurrent subagent CPU
+  load and were killed rather than left running indefinitely, so this
+  finding rests on direct code tracing plus that already-in-tree, already
+  passing test rather than a fresh live measurement -- re-run both under
+  normal load before treating the numbers as re-confirmed, though the
+  code-level trace itself doesn't depend on timing. Fix: same as items
+  117/141 already suggest -- have `preprocess.py`'s STEP 3 call
+  `load_smaps()` directly (or the new `_calibrate_and_compress` projection
+  helper) instead of its own narrower, non-`Ncoils`-tagged copy.
 
 ## Consistency & documentation
 
@@ -2098,7 +2314,10 @@ recorded there despite the size of that rewrite.
   resolves, or replace the four source-code citations with a description
   of the fix in prose instead of a dangling item number.
 - [ ] **114. `README.md`'s `--plot` file list is missing `PNS_one_tr.png`.**
-  [measured] `README.md:48` (Getting Started step 3) says `--plot` writes
+  [measured; citation updated 2026-09-17 against `ad2fdc4` -- shifted from
+  `README.md:48` to `:57` (Getting Started step 4 now, after the
+  custom-mask-flow/config-table reorg), substance unchanged]
+  `README.md:57` says `--plot` writes
   "diagnostic plots (`mask.png`, `psf.png`, `trajectory.png`,
   `one_tr.png`)" -- four files. But `plotting/plot_last_run.py:27-58`
   (which `main.py --plot` calls) writes a fifth: `PNS_one_tr.png`, from
@@ -2151,10 +2370,16 @@ recorded there despite the size of that rewrite.
   referenced the old broadcast, but neither touched this specific sentence.
   Fix: reword `reconstruct.py:169-171` to match `_load_echo_times`'s/
   `build_encoding_operator_b0`'s accurate phrasing.
-- [ ] **128. `preprocessing/recon_frames.py`'s module docstring claims a
+- [ ] **128. `recon/recon_frames.py`'s module docstring claims a
   smaps-cache legacy-format branch is unreachable, but that branch is the
   normal path on every first pipeline run and is already exercised by this
-  repo's own tests.** [measured] The docstring (`recon_frames.py:14-17`)
+  repo's own tests.** [measured; citation updated 2026-09-17 against
+  `ad2fdc4` -- the file moved from `preprocessing/recon_frames.py` to
+  `recon/recon_frames.py` (commit `8f90cd7`, a pure `git mv`, no content
+  change -- docstring lines `:14-17` and the `load_smaps()` call at `:76`
+  are byte-identical at the new path); `smaps.py:179` shifted to `:508`
+  and `preprocess.py:343-344` shifted to `:378-380` after the `dd77792`
+  smaps.py rewrite; substance unchanged] The docstring (`recon_frames.py:14-17`)
   says: "The smaps-cache legacy-format fallback (`recon_frames.m`'s 'cache
   file has smaps_raw/emaps but no smaps yet' branch) isn't ported either --
   `preprocess.py`, this port's only writer, always writes the full format,
@@ -2165,9 +2390,9 @@ recorded there despite the size of that rewrite.
   (`smaps.py:207-215`) -- so `preprocess.py` is not "this port's only
   writer"; this docstring predates `load_smaps` being factored out of
   `recon_frames.py` into `smaps.py` (per `smaps.py`'s own docstring). (b)
-  `preprocess.py`'s STEP 3 cache write (`preprocess.py:343-344`) writes
+  `preprocess.py`'s STEP 3 cache write (`preprocess.py:378-380`) writes
   only `smaps_raw`/`emap` (plus `smaps`, written just above) -- three
-  keys, never `smaps_degre`/`emap_degre` -- which `smaps.py:179`'s
+  keys, never `smaps_degre`/`emap_degre` -- which `smaps.py:508`'s
   `has_degre = 'smaps_degre' in f and 'emap_degre' in f` check treats as
   part of the "full" format. Since `preprocess.py`'s STEP 3 always runs
   before `recon_frames.py` in the documented pipeline order, the cache
@@ -2176,8 +2401,10 @@ recorded there despite the size of that rewrite.
   unreachable is the routine case, handled by `smaps.py:184-192`'s own
   backfill block (which the `smaps.py` docstring correctly documents as
   real). Confirmed live, not hypothetical:
-  `tests/test_preprocessing_recon_frames.py`'s `_make_fixture`
-  (`:25-44`) writes a cache with exactly these 3 keys and no `fn_gre`,
+  `tests/test_recon_recon_frames.py`'s `_make_fixture`
+  (`:25-44`, renamed from `tests/test_preprocessing_recon_frames.py`
+  alongside the file move, same line range) writes a cache with exactly
+  these 3 keys and no `fn_gre`,
   so `test_recon_frames_uses_cached_smaps_and_reconstructs_all_frames`/
   `test_recon_frames_caps_at_cfg_nframes` already exercise the backfill
   path on every run, without either the fixture or the assertions calling
@@ -2192,24 +2419,39 @@ recorded there despite the size of that rewrite.
   are hand-built with the identical f-string independently in many
   separate files instead of being `SeqPaths` fields, and the count of
   independent call sites keeps growing.** [measured; citations updated
+  2026-09-17 against `ad2fdc4` -- `smaps.py`'s two sites shifted again from
+  `:376`/`:374` to `:451`/`:453` (the `dd77792` single-calibration
+  rewrite); `run_b0map.py`'s GRE-cache site shifted from `:76` to `:78`
+  and its smaps-cache site to `:100`; `preprocessing/lowres_calib_recon.py`
+  moved to `recon/lowres_calib_recon.py:182` (commit `8f90cd7`, pure
+  `git mv`, +3 lines from an unrelated docstring edit); `preprocess.py`/
+  `gre_diagnostics.py` unchanged. **New sites found this pass** (not
+  previously counted): `recon/cg_sense_b0.py:129-130` independently
+  re-derives both the GRE-cache and smaps-cache path patterns (a 10th and
+  4th site respectively), and also re-derives the `<seqname>_epi_zf.h5`
+  path already tracked by item 165 despite `preprocessing/config.py`'s
+  `SeqPaths.recon` already holding it -- see item 165's own update below]
+  [measured; citations updated
   2026-09-16 against `de3d535` -- `smaps.py`'s two sites shifted from
   `:234`/`:232` to `:376`/`:374` by the crop/mask/GPU/smoothing rewrite;
   `run_b0map.py`'s site is now `:76`; `preprocess.py`/`gre_diagnostics.py`
   unchanged] `<datdir>/recon/<seqname>_gre.h5`'s
   path is independently constructed via `os.path.join(cfg.datdir, 'recon',
   f'{paths.seqname}_gre.h5')` (or the equivalent with a bare `seqname`) in
-  `preprocess.py:310`, `smaps.py:376`, `run_b0map.py:76`, and
-  `gre_diagnostics.py:39`; `<datdir>/recon/smaps_<seqname>_sigpy.h5`'s path
-  independently in `preprocess.py:324`, `smaps.py:374`, and
-  `run_b0map.py:91`. `SeqPaths`
+  `preprocess.py:319`, `smaps.py:451`, `run_b0map.py:78`,
+  `gre_diagnostics.py:39`, and `recon/cg_sense_b0.py:130`;
+  `<datdir>/recon/smaps_<seqname>_sigpy.h5`'s path
+  independently in `preprocess.py:358`, `smaps.py:453`,
+  `run_b0map.py:100`, and `recon/cg_sense_b0.py:128`. `SeqPaths`
   (`preprocessing/config.py`) already centralizes every *other*
   per-sequence path (`scan_info`, `cal`, `noise`, `epi`, `recon`) for
-  exactly this reason, but conspicuously omits these two. Two brand-new
-  files added by commit `42edeb3` compound this further, rather than
-  reusing `SeqPaths`: `preprocessing/lowres_calib_recon.py:179`
-  independently re-derives the sigpy smaps path (an 8th site), and
+  exactly this reason, but conspicuously omits these two. Two files added
+  by commit `42edeb3` compound this further, rather than
+  reusing `SeqPaths`: `recon/lowres_calib_recon.py:182`
+  independently re-derives the sigpy smaps path (now an 11th site, counting
+  `cg_sense_b0.py` above), and
   `preprocessing/r2star_map.py:81-82` independently re-derives *both* the
-  GRE cache path (a 9th site) and the `<seqname>_b0map.h5` path (a 3rd
+  GRE cache path (now a 12th site) and the `<seqname>_b0map.h5` path (a 3rd
   site for item 188's separate cache-path pattern). Currently harmless --
   confirmed every site still uses the identical format string -- so this
   remains a latent-drift risk, not a live bug: distinct from item 130 (the
@@ -2221,13 +2463,17 @@ recorded there despite the size of that rewrite.
   `preprocess.py` no longer writes to) with no error until a downstream
   stage fails to find its input. Fix: add `gre_cache`/`smaps_cache` fields
   to `SeqPaths` (computed once in `set_seq_paths`, the same place the
-  other five paths are built) and update all 9 call sites (plus item
-  165's `recon/` pair, and item 188's `b0map_cache` sites) to read them
+  other five paths are built) and update all 12+ call sites (plus item
+  165's `recon/` trio, and item 188's `b0map_cache` sites) to read them
   instead of re-deriving the filename.
 - [ ] **140. `preprocessing/nifti_io.py`'s module docstring caller list is
-  stale on two counts: it names a module that no longer calls
-  `save_recon_nifti`, and omits one that does and contradicts its
-  "always the EPI grid" claim.** [measured; citations updated 2026-09-12
+  stale on three counts now (was two): it names a module that no longer
+  calls `save_recon_nifti`, and omits several that do and contradict its
+  "always the EPI grid" claim.** [measured; citation updated 2026-09-17
+  against `ad2fdc4` -- `smaps.py`'s two calls shifted again from
+  `:415,448` to `:528,591` (the `dd77792` single-calibration rewrite); the
+  caller list is now additionally stale beyond what was previously
+  tracked, see below] [measured; citations updated 2026-09-12
   against `ecb8f2f`] `nifti_io.py:2-9` names
   callers as "run_rss.py/run_cg_sense.py/run_recon_sigpy.py ...
   preprocess.py/recon_frames.py (sensitivity maps ...), and
@@ -2238,38 +2484,47 @@ recorded there despite the size of that rewrite.
   A repo-wide grep of
   `save_recon_nifti(` calls shows: (a) `recon_frames.py` never calls
   `save_recon_nifti` -- that responsibility moved to `smaps.py`
-  (`smaps.py:415,448`) per `smaps.py`'s own docstring ("was
+  (`smaps.py:528,591`) per `smaps.py`'s own docstring ("was
   `recon_frames.py`'s private `_load_smaps` -- moved here"), so the
   docstring names the wrong module; (b) `gre_diagnostics.py:75` also
   calls `save_recon_nifti` and isn't mentioned at all -- and it passes
   `fov=sp.fov_degre` (`gre_diagnostics.py:76`, the deGRE grid), directly
   contradicting the same sentence's blanket claim that every NIfTI this
-  pipeline writes is "on the EPI grid". Severity is low (documentation
+  pipeline writes is "on the EPI grid". (c) **New this pass**: the caller
+  list also predates the `preprocessing/` -> `recon/` file move (the four
+  named `run_*.py` drivers all now live under `recon/`, still unqualified
+  bare names in the docstring) and three more real callers that didn't
+  exist when this docstring was last touched -- `recon/save_result.py`,
+  `recon/lowres_calib_recon.py`, and `recon/cg_sense_b0.py` (confirmed via
+  `grep -rn "save_recon_nifti(" preprocessing/ recon/`: 11 real call sites
+  today vs. the 4 modules the docstring names). Severity is low (documentation
   only) -- this is the same docstring item 67 already touched for a
   different sentence in the same file. Fix: replace "recon_frames.py"
-  with "smaps.py" in the caller list and add `gre_diagnostics.py`
-  (deGRE-grid GRE-echo images), noting it as the one caller not on the
-  EPI grid.
+  with "smaps.py" in the caller list, prefix every driver name with
+  `recon/`, and add `gre_diagnostics.py` (deGRE-grid GRE-echo images,
+  the one caller not on the EPI grid), `save_result.py`,
+  `lowres_calib_recon.py`, and `cg_sense_b0.py`.
 - [ ] **141. Addendum to item 117: `preprocess.py`'s STEP 3 never writes
   `smaps_degre`/`emap_degre`, so `smaps.py`'s "legacy cache" backfill
   branch fires on every fresh full-pipeline run, not just an occasional
-  older cache.** [measured; citations updated 2026-09-15 against `b701489`,
+  older cache.** [measured; citation updated 2026-09-17 against `ad2fdc4`
+  -- STEP 3's fresh-estimation branch shifted again from `:335-347` to
+  `:369-381` and `smaps.py`'s canonical `load_smaps` from `:427-444`/
+  `:370-372` to `:395-450`/`:423-437` (the `dd77792` single-calibration
+  rewrite); substance and liveness confirmed unchanged -- see item 206
+  below for a related, sharper finding from the same pass] [measured; citations updated 2026-09-15 against `b701489`,
   substance and liveness confirmed unchanged] Item 117 (still open)
   already flags that
   `preprocess.py`'s STEP 3 hand-rolls a narrower copy of `smaps.py`'s
   `load_smaps()` caching logic instead of calling it directly. A
   concrete, previously-undocumented consequence of that narrowness:
-  STEP 3's fresh-estimation branch (`preprocess.py:335-347`, unchanged by
-  `b701489` -- that commit's gzip-compression addition lands later in the
-  same function) writes only
+  STEP 3's fresh-estimation branch (`preprocess.py:369-381`) writes only
   `smaps_raw`/`emap`/`smaps` + `Nvcoils` -- it never computes or writes
   `smaps_degre`/`emap_degre`. `smaps.py`'s canonical `load_smaps`
-  (`smaps.py:427-444`, was `:286-303` -- `smaps.py` was substantially
-  rewritten by `b701489`'s crop/mask/GPU/smoothing changes) always
+  (`smaps.py:395-450`) always
   computes and writes both
   alongside a fresh
-  estimate, and its own docstring (now `smaps.py:370-372`, was `:225-227`)
-  describes the
+  estimate, and its own docstring (`smaps.py:423-437`) describes the
   no-`smaps_degre` case as "an older cache written before these existed"
   that gets "backfilled in place" -- language implying an occasional,
   legacy case. Reproduced directly: writing a cache with exactly STEP 3's
@@ -2334,21 +2589,32 @@ recorded there despite the size of that rewrite.
   fields.
 - [ ] **160. `sampling/caipi_sample.py`'s `balanced_factors` docstring (and
   `tests/test_caipi_sample.py`'s matching comment) mislabels a hypothetical
-  example as "this repo's default."** [measured, low severity] Both
+  example as "this repo's default."** [measured, low severity; substance
+  updated 2026-09-17 against `ad2fdc4` -- the comparison baseline below is
+  itself now stale: commit `0b9c25f` switched the default protocol to
+  "ABCD" (`params.py`: `res = [2.4, 2.4, 2.4]` mm, `N = [90, 90, 60]`,
+  `R = 6`), so the repo's actual shipped default is now `(Ny, Nz, R) =
+  (90, 60, 6)`, not `(240, 45, 9)` -- the core finding is unaffected (if
+  anything reinforced: neither `(240, 60, 4)` nor `(240, 45, 9)` nor
+  `(90, 60, 6)` line up), but whoever fixes this item should use the
+  current `(90, 60, 6)` figure, not the `(240, 45, 9)` one below, when
+  rewording] Both
   `sampling/caipi_sample.py:36-37` and `tests/test_caipi_sample.py:35` say
   "At (Ny, Nz, R) = (240, 60, 4) (this repo's default `res`)...". The
-  repo's actual shipped default is `(Ny, Nz, R) = (240, 45, 9)`
+  repo's actual shipped default at the time this item was written was
+  `(Ny, Nz, R) = (240, 45, 9)`
   (`params.py`: `N = [240, 240, 45]`, `R = 9`) -- `(240, 60, 4)` appears
   nowhere else in the codebase; it's a synthetic example chosen, per item
   147's own resolution note, specifically because it "does survive the
   restriction and still demonstrates non-square reweighting" (unlike the
   real `(240, 45, 9)`, which collapses to the less-illustrative `(3, 3)`).
   The parenthetical "(this repo's default `res`)" is presumably meant to
-  say only the voxel resolution constant (0.9mm, which does inform the
+  say only the voxel resolution constant (0.9mm at the time, now 2.4mm,
+  which does inform the
   FOV-weighting math the example demonstrates) matches the shipped
   default, but as written it reads as claiming the whole `(Ny, Nz, R)`
   tuple is the shipped default, which is false and could mislead a future
-  reader into thinking `Nz=45`/`R=9` isn't the real config. Fix: reword to
+  reader into thinking the real `Nz`/`R` aren't the shipped config. Fix: reword to
   something unambiguous, e.g. "(at this repo's default 0.9mm `res`, with a
   hypothetical Nz/R chosen to survive the restriction)", in both
   `caipi_sample.py` and the test file's matching comment.
@@ -2392,10 +2658,13 @@ recorded there despite the size of that rewrite.
   handling, inconsistent with `preprocessing/grid_resize.py`'s documented
   `mode='nearest'` convention for the same pipeline -- confirmed to have
   no live effect, but undocumented.** [verified, very low severity;
-  citation updated 2026-09-15 against `b701489` -- `_masked_gaussian_smooth`
+  citation updated 2026-09-17 against `ad2fdc4` -- shifted by one line
+  again to `smaps.py:195-218`/`:211,215-216` (the `dd77792`
+  single-calibration rewrite); substance unchanged] [citation updated
+  2026-09-15 against `b701489` -- `_masked_gaussian_smooth`
   moved to `smaps.py:194-217` and its three unset-`mode` calls to
   `smaps.py:210,214-215` after the surrounding crop/mask redesign;
-  substance unchanged] `smaps.py:210,214-215` (originally added by
+  substance unchanged] `smaps.py:211,215-216` (originally added by
   `0e4e86e`) call
   `ndimage.gaussian_filter(weight, sigma_vox)` and the matching call on
   the numerator array with no explicit `mode=`, so reflect-padding applies
@@ -2414,18 +2683,24 @@ recorded there despite the size of that rewrite.
 - [ ] **192. `preprocessing/smaps.py`'s `process_smaps` now has a single
   orphaned `# 4. Normalize` comment with no `1`/`2`/`3` anywhere above it
   -- the successor to item 177, left behind by the same crop/mask redesign
-  that closed it.** [measured, very low severity] `b701489`'s rewrite of
-  `process_smaps` (`smaps.py:220-342`) removed the pre-resize masking step
+  that closed it.** [measured, very low severity; citation updated
+  2026-09-17 against `ad2fdc4` -- `process_smaps` shifted again from
+  `:220-342` to `:221-352`, module docstring from `:229` to `:231`, and
+  the orphaned `# 4. Normalize` comment from `:337` to `:347` (the
+  `dd77792` single-calibration rewrite added lines above this function
+  without touching its internals); substance unchanged, still confirmed
+  by direct reading] `b701489`'s rewrite of
+  `process_smaps` (`smaps.py:221-352`) removed the pre-resize masking step
   item 177's `# 1. Eigenvalue support mask...` comment used to label
-  (replaced by an unnumbered explanatory comment at `smaps.py:259-266`
-  about why that step is no longer needed) and left the z-crop/resize
-  comment (`smaps.py:268-270`, was `# 2+3. Crop z...interpolate...`)
-  unnumbered too -- but `# 4. Normalize...` (`smaps.py:337`) survived
+  (replaced by an unnumbered explanatory comment further down about why
+  that step is no longer needed) and left the z-crop/resize
+  comment (`was # 2+3. Crop z...interpolate...`)
+  unnumbered too -- but `# 4. Normalize...` (`smaps.py:347`) survived
   verbatim, still carrying its old number. The module docstring
-  (`smaps.py:229`) still advertises five stages ("Mask, z-crop, resize,
+  (`smaps.py:231`) still advertises five stages ("Mask, z-crop, resize,
   smooth, and RSS-normalize"), and the two stages between resize and
-  normalize -- the post-resize re-mask (`smaps.py:308-310`) and the
-  Gaussian-smoothing block (`smaps.py:331-335`) -- are both unlabeled, same
+  normalize -- the post-resize re-mask and the
+  Gaussian-smoothing block -- are both unlabeled, same
   as item 177 already found. What's new: a lone "4." with nothing before
   it reads as though three steps were deleted by mistake (or that there
   are only 4 steps total), which is a more actively misleading signal than
@@ -2498,7 +2773,13 @@ recorded there despite the size of that rewrite.
   singles out `plot_one_tr`.
 - [ ] **188. `<seqname>_b0map.h5`'s cache path is hand-built independently in
   two files -- a third, previously-untracked instance of item 133's already-
-  documented pattern.** [measured] `preprocessing/run_b0map.py:76`
+  documented pattern.** [measured; citation updated 2026-09-17 against
+  `ad2fdc4` -- `run_b0map.py`'s site shifted from `:76` to `:85`;
+  `gre_diagnostics.py:40` unchanged; substance unchanged. `preprocessing/
+  r2star_map.py:81-82` is a third site for this same pattern (already
+  cross-referenced from item 133's own text above, but not yet folded into
+  this item's own citation list -- worth doing together with item 133's
+  fix)] `preprocessing/run_b0map.py:85`
   (`output_path = os.path.join(cfg.datdir, 'recon', f'{seqname}_b0map.h5')`)
   and `preprocessing/gre_diagnostics.py:40` (`fn_b0map = os.path.join(
   recon_dir, f"{seqname}_b0map.h5")`) each independently construct the same
@@ -2520,8 +2801,10 @@ recorded there despite the size of that rewrite.
 - [ ] **190. `preprocessing/preprocess.py`'s new gzip compression on
   `ksp_epi_zf` carries no in-code rationale, and the sibling module that
   documents this exact dataset's read performance now silently describes
-  data from before the change.** [measured, low-medium severity]
-  `preprocess.py:411-412` (`compression='gzip', compression_opts=4`, added
+  data from before the change.** [measured, low-medium severity; citation
+  updated 2026-09-17 against `ad2fdc4` -- shifted from `:411-412` to
+  `:445-446`, substance unchanged]
+  `preprocess.py:445-446` (`compression='gzip', compression_opts=4`, added
   by `b701489` to the `ksp_epi_zf` dataset's `create_dataset` call) carries
   no comment at all -- but the commit that added it states a concrete,
   measured justification ("a real 210GB file compresses ~117x with gzip
@@ -2541,7 +2824,7 @@ recorded there despite the size of that rewrite.
   invisible to anyone reading the source. `tests/test_recon_reconstruct.py`'s
   fixtures also write `ksp_epi_zf` uncompressed and unchunked, so
   `_load_array`'s chunk-by-chunk read path is untested against real
-  gzip-compressed data. Fix: add a short comment at `preprocess.py:409-412`
+  gzip-compressed data. Fix: add a short comment at `preprocess.py:443-446`
   carrying the ~117x/231MB->2MB measurement (or a pointer to `b701489`),
   and a one-line caveat in `recon/reconstruct.py`'s `_load_array`
   docstring noting the dataset is now gzip-compressed and that the cited
@@ -2581,6 +2864,95 @@ recorded there despite the size of that rewrite.
   'lowres_calib_recon_b0complex.py'` returns nothing). Very low severity,
   documentation-only. Fix: add the same "(unmerged, exploratory branch)"
   qualifier used everywhere else.
+- [ ] **204. `params.py`'s PNS-slew-tuning comment documents the superseded
+  pre-`0b9c25f` default protocol's measured numbers, not the currently
+  shipped default's -- the same staleness CLAUDE.md's "PNS finding
+  history" already carries, but a separate, not-yet-cited location.**
+  [measured; found 2026-09-17 against `ad2fdc4`] `params.py:299-325` (the
+  comment block directly above `slew_derate = 100.0`/`ro_slew_rise =
+  100.0`/`ro_slew_fall = 120.0`/`blip_slew = 105.0`) states, as measured
+  fact: "the full seed=0 build measures 79.8% peak PNS at min TE 34.86
+  ms... `blip_slew = 105` is a deliberate ride-the-line choice... only
+  ~0.2% margin to the 80% line... re-verify... after ANY change to
+  seed/mask/R/ETL/resolution." Confirmed via `git show 0b9c25f~1:params.py`
+  that these numbers describe the *pre-protocol-switch* default
+  (`res=[0.9,0.9,0.9]mm`, `N=[240,240,45]`, `TE=34.9e-3`), exactly matching
+  CLAUDE.md's documented old-protocol sweep. Commit `0b9c25f` ("switch
+  default protocol to ABCD [2.4mm iso, 90x90x60, R=6, TE=30ms]") changed
+  `res`/`N`/`R`/`TE` but left this comment untouched. Freshly reproduced
+  the *current* default's real numbers (`uv run python main.py --ge`, full
+  rebuild): `ArbEPI.seq` -- `OK peak PNS: 69.3% (within normal mode)`, no
+  TE-feasibility warning anywhere in the build log -- a **10.7-percentage-
+  point margin to the 80% line**, not "~0.2%," and the realized TE matches
+  the prescribed 30 ms, not "34.86 ms." Same underlying staleness the
+  "Current baseline" section's closing paragraph already flags for
+  CLAUDE.md's own "PNS finding history" section ("carried forward for the
+  next pass that touches CLAUDE.md"), but that note names only CLAUDE.md,
+  not this separate, source-level comment in `params.py` itself -- the
+  file a user actually edits when configuring a scan, and the one whose
+  comment explicitly instructs a reader to "re-verify... after ANY change
+  to... resolution," ironically the exact change that made it stale. Fix:
+  replace the specific old-protocol numbers with either (a) a pointer to
+  this file's "Current baseline" table (so it can't re-drift), or (b)
+  fresh numbers for the current default (69.3% peak PNS / TE=30ms
+  achievable / ~10.7pp margin), while keeping the *qualitative* tuning
+  rationale (why `ro_slew_rise`!=`ro_slew_fall`!=`blip_slew`, the
+  RSS-hotspot mechanism, etc.), which remains valid design reasoning
+  independent of the specific protocol -- fix alongside CLAUDE.md's own
+  copy the next time either file is touched, so the two don't keep
+  drifting apart independently.
+- [ ] **207. README.md's Architecture file tree is stale on both directions
+  of the `preprocessing/` -> `recon/` Stage-2 file move (commit `8f90cd7`),
+  and never gained an entry for the new `recon/cg_sense_b0.py`.**
+  [measured; found 2026-09-17 against `ad2fdc4`] `README.md`'s
+  `preprocessing/` tree (lines ~222-244) still lists `recon_sigpy.py`
+  (`:232`), `recon_frames.py` (`:236`), and "`run_preprocessing.py /
+  run_cg_sense.py / run_rss.py / run_recon_sigpy.py`" (`:237`, mixing the
+  one file that legitimately stays in `preprocessing/`,
+  `run_preprocessing.py`, with three files that moved to `recon/` in the
+  same breath) as if they still lived in `preprocessing/` -- `ls
+  preprocessing/*.py` confirms none of `recon_sigpy.py`/`recon_frames.py`/
+  `run_cg_sense.py`/`run_rss.py`/`run_recon_sigpy.py` exist there any more.
+  Meanwhile README's `recon/` tree (lines ~250-264) lists only the
+  pre-existing MSLR files (`operators.py` through `validate_against_mslr.py`)
+  and is missing all six moved files (also including
+  `lowres_calib_recon.py`) *and* the brand-new `cg_sense_b0.py` -- `ls
+  recon/*.py` confirms all seven are real files with no README entry. Same
+  class of doc-drift item 128/133 already track for other files, but on
+  README's own architecture diagram, previously untouched by any pass. Fix:
+  move the six file-description lines from the `preprocessing/` block to
+  the `recon/` block, and add a `cg_sense_b0.py` line (literal
+  conjugate-gradient SENSE using the B0-corrected operator, see item 208).
+- [ ] **208. CLAUDE.md's own introduction of `recon/cg_sense_b0.py` promises
+  detail "see below" that doesn't exist anywhere in the file.** [measured;
+  found 2026-09-17 against `ad2fdc4`] `CLAUDE.md:1066-1067`: "`recon/
+  cg_sense_b0.py` (literal conjugate-gradient SENSE -- see below -- using
+  the B0-corrected operator) is the one Stage-2-shaped file that genuinely
+  needs `.venv-recon`..." -- a repo-wide grep for `cg_sense_b0` in
+  CLAUDE.md shows this is the *only* occurrence. No paragraph in the "B0
+  off-resonance correction" section (which covers `b0_correction.py`,
+  `operators_b0.py`, `save_result.py`, `run_b0_recon.py` in detail) or
+  anywhere else mentions `cg_sense_b0.py`'s algorithm, its relationship to
+  `reconstruct.py`'s POGM solve, or why a literal-CG alternative exists at
+  all -- a reader following "see below" finds nothing. Fix: either add a
+  short paragraph (the module's own docstring already has the content: the
+  CG-vs-POGM tradeoff, no `sigma1A` needed, whole-volume-not-per-frame
+  solve) or drop "see below."
+- [ ] **209. CLAUDE.md's `preprocessing/`/`grid_resize.py` discussion has no
+  mention of the new `zero_pad_z` resize feature (item 203) at all.**
+  [measured; found 2026-09-17 against `ad2fdc4`] A `grep -n "zero_pad\|item
+  196\|item 203\|grid_resize" CLAUDE.md` finds only the pre-existing,
+  unrelated `grid_mode=True` alignment-fix paragraph -- nothing about the
+  z-padding capability `912bffe` added and item 203 closed with a
+  substantial design writeup in this backlog. Given CLAUDE.md's own stated
+  role (architecture/design-decision context, consulted by default) and
+  the amount of reasoning already captured in item 203's closed entry, this
+  is a real documentation gap -- doubly relevant given item 205 above (the
+  feature as actually wired doesn't do what item 203's closure claims).
+  Fix: add a short paragraph to CLAUDE.md's `preprocessing/`/
+  `grid_resize.py` discussion once item 205 is resolved (documenting both
+  the real capability and, if left unfixed, the `load_smaps`/`process_smaps`
+  gap item 205 describes).
 
 ## Test & tooling health
 
@@ -2850,7 +3222,10 @@ recorded there despite the size of that rewrite.
 - [ ] **161. `preprocessing/run_b0map.py`'s item-151 fix (widening the
   per-sequence try/except to wrap the whole batch-driver body, not just
   the julia subprocess call) has no regression test, despite the pattern
-  now being testable without either Julia or GERecon.** [measured] All 5
+  now being testable without either Julia or GERecon.** [measured; citation
+  updated 2026-09-17 against `ad2fdc4` -- the try/except now spans
+  `run_b0map.py:114-173`, was `:105-162` (unrelated edits above it added
+  lines); substance unchanged] All 5
   tests in `tests/test_preprocessing_run_b0map.py` carry a module-level
   `pytestmark = pytest.mark.skipif(shutil.which('julia') is None, ...)`,
   and none exercises a *post*-subprocess failure (e.g. `resize_to_epi_grid`
@@ -2858,7 +3233,7 @@ recorded there despite the size of that rewrite.
   and continues to the next sequence, rather than crashing the whole batch
   -- exactly the behavior item 151 changed (previously only
   `subprocess.CalledProcessError` was caught around the julia call itself;
-  now the entire per-sequence body is, `run_b0map.py:105-162`). Verified
+  now the entire per-sequence body is, `run_b0map.py:114-173`). Verified
   directly with a Julia-independent reproduction (mocking
   `shutil.which`/`subprocess.run`/`resize_to_epi_grid`/`load_smaps`, no
   real Julia or GERecon needed): `run_b0map()` prints `ERROR [seq1]:
@@ -2985,11 +3360,13 @@ recorded there despite the size of that rewrite.
   to route a new subprocess call through `_ssh_env()`.
 - [ ] **174. `preprocessing/preprocess.py`'s STEP 3 smaps branch --
   including the new `smooth_sigma_mm` threading added by `0e4e86e` -- has
-  no dedicated test.** [measured, low severity] A repo-wide grep confirms
+  no dedicated test.** [measured, low severity; citation updated
+  2026-09-17 against `ad2fdc4` -- write site shifted from `:341` to
+  `:375`, substance unchanged] A repo-wide grep confirms
   `tests/test_preprocessing_preprocess.py` has zero references to
   `smaps`/`process_smaps`/`estimate_smaps` -- STEP 3's cache-validity
   check, its `process_smaps` call (now including
-  `smooth_sigma_mm=cfg.smaps_smooth_sigma_mm`, `preprocess.py:341`), and
+  `smooth_sigma_mm=cfg.smaps_smooth_sigma_mm`, `preprocess.py:375`), and
   its narrower write (see item 117's sharpened entry above) are entirely
   untested in isolation; they only run implicitly whenever `preprocess()`
   itself is exercised end-to-end (GERecon-gated, so effectively never in
@@ -3001,14 +3378,18 @@ recorded there despite the size of that rewrite.
 - [ ] **175. `preprocessing/smaps.py`'s two new Gaussian-smoothing tests
   don't exercise an anisotropic target grid, the one shape of bug the
   physical-mm sigma conversion could plausibly hide.** [measured, low-
-  medium severity; citation updated 2026-09-15 against `b701489` -- the
+  medium severity; citation updated 2026-09-17 against `ad2fdc4` -- the
+  `vox_mm`/`sigma_vox` lines shifted again from `:332-333` to `:342-343`
+  (the `dd77792` single-calibration rewrite); test file citations
+  unchanged, still exactly `:104-142`/`:145-196`; substance unchanged]
+  [citation updated 2026-09-15 against `b701489` -- the
   two tests moved to `tests/test_preprocessing_smaps.py:104-142`/`:145-196`
   (was `:100-133`/`:136-187`) and the `vox_mm`/`sigma_vox` lines moved to
   `smaps.py:332-333` (was `:190-191`) after the surrounding crop/mask
   redesign; substance unchanged] Both new tests (`tests/test_preprocessing_smaps.py:104-142`,
   `:145-196`, added by `0e4e86e`) use isotropic `fov`/`n_target`
   (`(0.2,0.2,0.2)`/`(40,40,40)` and `(0.18,0.18,0.18)`/`(91,91,91)`).
-  `smaps.py:332-333`'s `vox_mm = np.array(fov) / np.array(n_target) *
+  `smaps.py:342-343`'s `vox_mm = np.array(fov) / np.array(n_target) *
   1000; sigma_vox = smooth_sigma_mm / vox_mm` is only meaningfully tested
   when x/y/z voxel size is identical -- a per-axis mix-up (e.g. swapping
   `fov`/`n_target` order, or using the wrong tuple) would silently pass
@@ -3046,8 +3427,10 @@ recorded there despite the size of that rewrite.
   sample count, and that the default `rand_gaussian_sigma=None` path
   doesn't crash).
 - [ ] **189. `preprocessing/smaps.py`'s new `_default_device()` GPU/CPU
-  auto-selection has zero test coverage.** [measured, low severity]
-  `_default_device()` (`smaps.py:31-45`, added by `b701489`) decides
+  auto-selection has zero test coverage.** [measured, low severity;
+  citation updated 2026-09-17 against `ad2fdc4` -- shifted by one line to
+  `smaps.py:32-46`, substance unchanged]
+  `_default_device()` (`smaps.py:32-46`, added by `b701489`) decides
   GPU-vs-CPU dispatch for every real ESPIRiT calibration call via
   `sp.config.cupy_enabled` + `cupy.cuda.runtime.getDeviceCount()`, and is
   now the implicit default (`estimate_smaps(..., device=None)`) for the
@@ -3088,10 +3471,13 @@ recorded there despite the size of that rewrite.
   `_ESP_BANDS_US`) where the first feasible dwell's `gro` duration falls
   inside a forbidden band, asserting `find_min_feasible_dwell` returns the
   next dwell instead.
-- [ ] **202. `preprocessing/lowres_calib_recon.py`/`preprocessing/
-  r2star_map.py` have zero test coverage.** [measured; found 2026-09-16
+- [ ] **202. `recon/lowres_calib_recon.py`/`preprocessing/
+  r2star_map.py` have zero test coverage.** [measured; citation updated
+  2026-09-17 against `ad2fdc4` -- `lowres_calib_recon.py` moved from
+  `preprocessing/` to `recon/` (commit `8f90cd7`); substance (still zero
+  coverage for either file) unchanged; found 2026-09-16
   against `de3d535`, commit `42edeb3`] No
-  `tests/test_preprocessing_lowres_calib_recon.py`/
+  `tests/test_recon_lowres_calib_recon.py`/
   `test_preprocessing_r2star_map.py` exists, and no other test imports
   either module (confirmed by grep). Same "no regression test for
   just-added real behavior" pattern items 161/162/174/175/178/189/198
@@ -3099,6 +3485,35 @@ recorded there despite the size of that rewrite.
   a test on an odd-sized synthetic grid asserting `lowres_calib_recon()`'s
   magnitude output is correct (and ideally regression-locking that fix)
   would be the highest-value addition.
+- [ ] **210. `preprocessing/smaps.py`'s `process_smaps`'s own `zero_pad_z`
+  parameter (item 203) has no direct test.** [measured, low severity;
+  found 2026-09-17 against `ad2fdc4`] `tests/test_preprocessing_smaps.py`
+  has no test exercising `process_smaps(..., zero_pad_z=True)` directly --
+  only the lower-level `resize_to_epi_grid`'s `zero_pad_z` is tested, in
+  `tests/test_preprocessing_grid_resize.py` (confirmed via `grep -rn
+  zero_pad_z tests/`). Same "no regression test for a just-added real
+  behavior in this file" pattern items 161/174/175/178/189 already
+  document for `smaps.py`. Low priority on its own, but directly relevant
+  to item 205: a test calling `process_smaps(..., zero_pad_z=True)` at the
+  EPI-grid target would have surfaced that `load_smaps()` never exposes
+  this knob at all. Fix: add such a test, ideally alongside item 205's fix.
+- [ ] **212. `recon/cg_sense_b0.py`'s `run_cgsense_b0` (the orchestration
+  function, not the tested `cg_sense_solve` solver) has zero test
+  coverage, matching the established items 129/135 pattern exactly.**
+  [measured; found 2026-09-17 against `ad2fdc4`]
+  `tests/test_recon_cg_sense_b0.py`'s two tests both call `cg_sense_solve`
+  directly with hand-built operators/k-space; nothing calls
+  `run_cgsense_b0` itself (`grep -rn "run_cgsense_b0" tests/` finds no
+  hits outside `cg_sense_b0.py`'s own `if __name__` block). Untested: the
+  `use_b0`/`fn_b0map=''` branching, the `b0map_hz.shape == (Nx,Ny,Nz)`
+  assert, the `assert not r2star` guard, the r2star-map wiring, and the
+  `.h5`/`.nii.gz`/`.json` write triplet (mirroring `save_result.py`'s own
+  untested write pattern, item 129) -- a future refactor could silently
+  break any of these with nothing to catch it. Fix: extend
+  `tests/test_recon_cg_sense_b0.py` with a small synthetic-fixture test of
+  `run_cgsense_b0` itself (small `ksp_epi_zf.h5`/`smaps_...h5`/
+  `scan_info.mat`/optional `b0map.h5`), the same style item 135's
+  suggested fix proposes for `reconstruct.py`'s `fn_b0map` branch.
 
 ## Conciseness & performance
 
@@ -3250,10 +3665,16 @@ recorded there despite the size of that rewrite.
 - [ ] **117. `preprocessing/preprocess.py`'s STEP 3 duplicates
   `smaps.py`'s `load_smaps()` caching logic instead of calling it, and the
   duplicate is already narrower and drifting.** [verify; citation updated
+  2026-09-17 against `ad2fdc4` -- STEP 3 shifted from `:323-353` to
+  `:352-388` and its `Nvcoils` check from `:330` to `:364` after the
+  `dd77792` smaps.py rewrite (single-calibration projection design);
+  substance unchanged, sharpened further by item 206 (Correctness section
+  above), found the same
+  pass] [verify; citation updated
   2026-09-15 against `b701489` -- item 41's `Nvcoils` check moved to
   `smaps.py:386-392` (was `:244-250`) after the crop/mask/GPU/smoothing
   redesign; substance unchanged] `preprocess()`'s
-  STEP 3 (`preprocess.py:323-353`) hand-rolls the same "check cached
+  STEP 3 (`preprocess.py:352-388`) hand-rolls the same "check cached
   `Nvcoils` attr, load-or-estimate-and-cache" pattern
   `smaps.load_smaps()` (used by `recon_frames.py:76`) already implements
   -- but narrower: it never computes/writes `smaps_degre`/`emap_degre`
@@ -3263,7 +3684,7 @@ recorded there despite the size of that rewrite.
   today (the backfill path is real and tested), but it's duplicated
   cache-validity logic in two places that can already drift: item 41's
   fix made `smaps.py:386-392` compare `int(f.attrs['Nvcoils'])`
-  against a freshly-read `ksp_gre.shape[-1]`, while `preprocess.py:330`
+  against a freshly-read `ksp_gre.shape[-1]`, while `preprocess.py:364`
   still compares `f.attrs.get('Nvcoils') == Nvcoils` -- similar but not the
   same check, with no test pinning them to identical behavior. Since
   `paths.recon`'s GRE cache (read by `load_smaps`) is the very file STEP 2
@@ -3293,7 +3714,8 @@ recorded there despite the size of that rewrite.
   miss either -- see item 174.
 - [ ] **118. `sampling/pd_sample.py`'s `dtype` parameter
   (`'logical'`/`'double'`/`'complex'`) is dead in production and
-  untested.** [measured] `pd_sample`'s `dtype` branch (`:295-300`) is only
+  untested.** [measured; citation updated 2026-09-17 against `ad2fdc4` --
+  shifted from `:295-300` to `:389-394`, substance unchanged] `pd_sample`'s `dtype` branch (`:389-394`) is only
   ever called with the default `'logical'` throughout the codebase
   (`gen_sampling_masks.py` never passes `dtype=`), and
   `tests/test_pd_sample.py` never exercises the `'double'`/`'complex'`
@@ -3384,7 +3806,17 @@ recorded there despite the size of that rewrite.
   itself is unchanged).
 - [ ] **165. `recon/run_b0_recon.py`'s `ArbEPI_epi_zf.h5`/
   `smaps_ArbEPI_sigpy.h5` cache-path construction is duplicated verbatim in
-  `recon/validate_against_mslr.py`.** [measured, low severity]
+  `recon/validate_against_mslr.py` -- now a third, freshly-found site,
+  `recon/cg_sense_b0.py`, joins the pair.** [measured, low severity;
+  citation updated 2026-09-17 against `ad2fdc4` -- the brand-new
+  `recon/cg_sense_b0.py:129` (`fn_ksp = os.path.join(recon_dir,
+  f'{seqname}_epi_zf.h5')`) re-derives this exact path pattern too, despite
+  it already being centralized as `SeqPaths.recon`
+  (`preprocessing/config.py:149`) and despite `cg_sense_b0.py` itself
+  calling `set_seq_paths(cfg, seqname)` two lines later without using
+  `paths.recon` -- the same unnecessary redundancy `run_b0_recon.py:101`
+  already carries against the same existing field, per item 133's own
+  "new sites" update above]
   `run_b0_recon.py:72-73` and `validate_against_mslr.py:132-133` each
   independently build `os.path.join(recon_dir, "ArbEPI_epi_zf.h5")` /
   `os.path.join(recon_dir, "smaps_ArbEPI_sigpy.h5")` from a
@@ -3397,20 +3829,34 @@ recorded there despite the size of that rewrite.
   of any automated pipeline), and the two copies are currently
   byte-for-byte consistent -- but a future rename of either cache file's
   naming convention (the same risk item 133 already documents for its own
-  seven call sites) would need remembering to update this pair too. Fix:
-  fold into item 133's fix if `SeqPaths` grows `gre_cache`/`smaps_cache`
-  fields, or otherwise factor the two literals into one shared constant/
-  helper these two scripts both import.
+  call sites) would need remembering to update this trio too. Unlike items
+  133/188 (which need a *new* `SeqPaths` field added first), this one is
+  the simpler case: `SeqPaths.recon` already holds exactly this path --
+  `run_b0_recon.py`/`cg_sense_b0.py` just aren't reading it. Fix:
+  have all three call sites read `paths.recon` (already computed by
+  `set_seq_paths`, which both already call) instead of re-deriving the
+  filename, and separately fold the `ArbEPI_epi_zf.h5` case into item
+  133's fix if `SeqPaths` grows `gre_cache`/`smaps_cache` fields for the
+  other two patterns.
 - [ ] **186. `recon/run_b0_recon.py` carries its own independent copy of
   `_load_omega` instead of importing `recon/reconstruct.py`'s, inconsistent
   with the sibling helpers items 90/94 already deduplicated the same way.**
   [measured, low severity -- not a live bug, item 74 already fixed the
-  correctness issue in both copies] `run_b0_recon.py:36` already imports
+  correctness issue in both copies; citation updated 2026-09-17 against
+  `ad2fdc4` -- import line shifted from `:36` to `:51`, `_load_omega`'s own
+  def from `:41-66` to `:56-80` (drift already present since `1b4704a`'s
+  r2star/complex-field commit, never previously corrected); substance
+  unchanged. **New corroborating evidence this pass**: the brand-new
+  `recon/cg_sense_b0.py` does this the *right* way -- it imports
+  `_load_omega` directly from `recon.reconstruct` rather than pasting its
+  own copy -- confirming the duplication is a `run_b0_recon.py`-only
+  regression from item 74's fix, not a systemic pattern in newer code]
+  `run_b0_recon.py:51` already imports
   `_load_array, _load_echo_times, _load_normalized_smaps, run_recon` from
   `recon.reconstruct` -- three helpers items 90 and 94 each added "next to
   `_load_omega`" specifically so both driver scripts would share one
   implementation. But `_load_omega` itself is not among the imports;
-  `run_b0_recon.py:41-66` instead defines its own separate function whose
+  `run_b0_recon.py:56-80` instead defines its own separate function whose
   own docstring says "Mirrors `recon/reconstruct.py`'s own `_load_omega`" --
   one returns a `torch.Tensor` already on-device (`reconstruct.py:69-103`),
   the other a `numpy.ndarray` (`run_b0_recon.py`, converted to a tensor by
@@ -3524,22 +3970,40 @@ recorded there despite the size of that rewrite.
   passed) and this session's four resolution variants (5.4mm R=1,
   2.4mm R=6, 1.6mm R~14.5, 0.8mm R~93.5) all regenerated clean after the
   fix.
-- [ ] **200. `preprocessing/lowres_calib_recon.py`'s `_load_chunked`
-  duplicates `recon/reconstruct.py`'s `_load_array` chunking algorithm.**
-  [measured, low severity; found 2026-09-16 against `de3d535`, commit
+- [ ] **200. `recon/lowres_calib_recon.py`'s `_load_chunked`
+  duplicates `recon/reconstruct.py`'s `_load_array` chunking algorithm --
+  **the original cross-package-coupling objection to fixing this no longer
+  applies**, since both functions now live in the same `recon/` package.**
+  [measured, low severity; citation and framing updated 2026-09-17 against
+  `ad2fdc4` -- `lowres_calib_recon.py` moved from `preprocessing/` to
+  `recon/lowres_calib_recon.py:91-104` (was `:88-101`, commit `8f90cd7`,
+  +3 lines from an unrelated docstring edit); this move is a substantive
+  change to this item, not just a citation shift: the fix direction below
+  originally rejected a direct import specifically because
+  "`preprocessing/` pulling in `recon/` as a dependency would be an
+  unwanted new coupling between the two optional-extra packages" -- that
+  objection is now moot, since `lowres_calib_recon.py` itself is `recon/`
+  code calling `recon/reconstruct.py`'s `_load_array`, both already
+  requiring the same `.venv-recon`-shaped dependency set (`sigpy`/`h5py`,
+  per CLAUDE.md's "`recon/` is not a single-venv package" paragraph -- this
+  file specifically doesn't need `torch`, but it's still fine for it to
+  import from `reconstruct.py`, a `torch`-importing module, since Python
+  only pays that cost if the function actually used is torch-free, which
+  `_load_array` is). The remaining obstacle (`lowres_calib_recon.py`'s
+  `_load_chunked` takes an already-open `h5py.File`, `_load_array` takes a
+  path) is now the *only* one left, and is a small body-only refactor, not
+  a package-boundary one; found 2026-09-16 against `de3d535`, commit
   `42edeb3`] Both implement identical "read chunk-by-chunk along the last
   axis when `d.chunks[-1] < d.shape[-1]`" logic to avoid the documented
   HDF5 chunk-cache pathology (`recon/reconstruct.py`'s own docstring
   describes measuring ~7 MB/s vs. ~500 MB/s for this exact fix).
-  `lowres_calib_recon.py:88-101` takes an already-open `h5py.File` rather
-  than a path, so a straight import isn't possible (and `preprocessing/`
-  pulling in `recon/` as a dependency would be an unwanted new coupling
-  between the two optional-extra packages) -- a body-only refactor into a
-  small shared helper would be needed instead. Correctly implemented on
-  both sides, just cross-package duplication of a fix that was
-  non-trivial to discover once. Fix direction: factor the chunked-read
-  loop into a tiny shared module (e.g. `preprocessing/matio.py`, imported
-  by both packages) both `preprocessing/` and `recon/` can call.
+  Correctly implemented on
+  both sides, just duplication of a fix that was
+  non-trivial to discover once, now within a single package. Fix direction: factor the chunked-read
+  loop into a small shared helper inside `recon/` (e.g. `recon/reconstruct.py`
+  itself, or a new tiny `recon/_io.py`) that both `_load_array` and
+  `lowres_calib_recon.py`'s `_load_chunked` call, accepting either a path or
+  an already-open file/group.
 - [x] **203.** Resolved 2026-09-16: `preprocessing/grid_resize.py`'s
   `resize_to_epi_grid` (used by both `smaps.py`'s `process_smaps` and
   `run_b0map.py`'s field-map resize) unconditionally raised whenever the
@@ -3580,3 +4044,48 @@ recorded there despite the size of that rewrite.
   RSS and B0-informed CG-SENSE reconstructions of real data, not just
   unit-tested in isolation. 2 new tests total; full suite (149 passed)
   unaffected.
+- [ ] **211. `recon/cg_sense_b0.py`'s `run_cgsense_b0` duplicates several
+  substantial, previously-shared chunks of `recon/reconstruct.py`'s
+  `run_recon` and `recon/run_b0_recon.py`'s `main`, rather than reusing
+  them -- a broader and more concrete instance of the pattern items
+  130/165/133/188 already track piecemeal.** [measured; found 2026-09-17
+  against `ad2fdc4`] Four separate near/exact-verbatim copies, none
+  previously recorded:
+  1. **`_nominal_te_s`** (`cg_sense_b0.py:101-106`) is a byte-for-byte-
+     identical reimplementation of `run_b0_recon.py:84-92`'s function of
+     the same name -- its own docstring even says "Same as
+     `recon/run_b0_recon.py`'s own helper," i.e. the duplication is
+     self-acknowledged in the source rather than accidental.
+  2. **The r2star_map/t_ref_s wiring block** (`cg_sense_b0.py:160-166`) is
+     functionally identical to `run_b0_recon.py:126-135`'s block (differing
+     only in string formatting and the `"ArbEPI"`-vs-`seqname` argument).
+  3. **The B0-map-loading preamble** (`cg_sense_b0.py:154-159`: the print,
+     `_load_array(fn_b0map, 'b0map_hz')` call, `b0map_hz.shape ==
+     (Nx,Ny,Nz)` assert, `_load_echo_times` call) is near-identical to
+     `reconstruct.py:214-219`'s equivalent block inside `run_recon`.
+  4. **`R = (Nx*Ny*Nz)/omega[:,:,:,0].sum().item()` plus its print**
+     (`cg_sense_b0.py:149-150`) is a verbatim copy of
+     `reconstruct.py:207-208`.
+
+  On top of this, `fn_ksp = os.path.join(recon_dir, f'{seqname}_epi_zf.h5')`
+  (`cg_sense_b0.py:129`) re-derives a path that's already centralized as
+  `SeqPaths.recon` (`preprocessing/config.py:149`, the identical f-string)
+  -- and `cg_sense_b0.py` even calls `set_seq_paths(cfg, seqname)` two
+  lines later (`:133`) without using `paths.recon` (`run_b0_recon.py:101`
+  has the identical unnecessary redundancy against the same already-
+  existing field). `fn_b0map`/`fn_smaps` construction (`:128,130`) also
+  adds new sites to items 188's and 133's already-tracked
+  `<seqname>_b0map.h5`/`smaps_<seqname>_sigpy.h5` cache-path duplication,
+  and item 165 above now tracks the third `<seqname>_epi_zf.h5` site.
+  This is distinct from item 130 (the `cfg.seqnames`-batch-driver
+  skeleton) -- `cg_sense_b0.py` is a single-dataset CLI script
+  (`datdir, seqname` args, no per-sequence loop/try-except), structurally
+  like `run_b0_recon.py`, not like the batch drivers item 130 describes --
+  so it doesn't extend that item, it's a new duplication class of its own.
+  Fix direction: factor a shared helper (or several smaller ones --
+  path-construction via `SeqPaths`, `_nominal_te_s` moved to
+  `recon/reconstruct.py` next to its siblings, the r2star wiring as its
+  own function) that all three of `reconstruct.py`, `run_b0_recon.py`, and
+  `cg_sense_b0.py` call; this would resolve items 133/165/186/188's
+  `recon/`-side instances in one pass, not just `cg_sense_b0.py`'s new
+  copies.
