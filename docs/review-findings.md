@@ -4371,3 +4371,81 @@ new B0-corrected siblings).
   to match `lowres_calib_recon.py`, or adding it to `lowres_calib_recon.py`
   too for defensive consistency with the rest of `recon/`'s established
   convention, with a one-line comment either way explaining the choice.
+- [ ] **218. `recon/lowres_calib_recon_b0complex.py`'s driver function
+  duplicates essentially all of `recon/lowres_calib_recon_b0.py`'s sibling
+  driver, not just the operator-building helper its own docstring already
+  discusses.** [measured; found 2026-09-17 against `33d44a4`, the commit
+  that added this file] The module docstring is explicit about *not*
+  reusing `build_encoding_operator_b0` and about *not* copying the
+  exploratory branch's operator-construction call verbatim -- but says
+  nothing about the surrounding driver, which is a near-verbatim copy of
+  `lowres_calib_recon_b0.py`'s `run_b0_corrected_calib_recon`
+  (`lowres_calib_recon_b0.py:175-282`) inside the new file's
+  `run_b0complex_corrected_calib_recon` (`lowres_calib_recon_b0complex.py:
+  195-353`): identical smaps-loading + RSS-normalization block, identical
+  B0-map load + shape assert, identical omegas/echo_times load +
+  `compute_calib_mask`/`n_calib`/empty-region-check block, identical
+  `native_calib_grid` + `voxel_mm` computation, identical
+  `resize_to_epi_grid` calls for `smaps_native`/`b0map_hz_native`, identical
+  `idx_full` cross-frame-consistency assertion loop, identical
+  `read_frames_cropped` + `gather_calib_ksp` + adjoint-only reconstruction
+  block. The two `main()` functions (`lowres_calib_recon_b0.py:285-307`,
+  `lowres_calib_recon_b0complex.py:356-379`) are the same pattern again:
+  identical `out_dir`/`os.makedirs` construction, differing only in the
+  output filename suffix (`_b0` vs `_b0complex`), the `note=` string, and
+  the b0complex version's extra `te_nominal_s` kwarg. The *only* genuinely
+  new logic in the b0complex driver is R2* loading/estimation, TE-shifting
+  `echo_times`, and the anti-aliased R2* resize -- a few dozen lines
+  threaded into an otherwise-identical copy of the sibling's ~110-line
+  body. This is the same duplication class item 211 just flagged for
+  `cg_sense_b0.py` against `reconstruct.py`/`run_b0_recon.py`, now with a
+  third sibling in the `lowres_calib_recon_b0*` family alongside the
+  `compute_calib_mask`/`native_calib_grid`/`gather_calib_ksp` trio that
+  `lowres_calib_recon_b0complex.py` already does import from
+  `lowres_calib_recon_b0.py` rather than re-copying (so the file's author
+  clearly knows the import-not-copy pattern; it just wasn't applied to the
+  larger orchestration function). Fix direction: factor a shared
+  `_load_calib_recon_inputs(datdir, seqname, device)` (or similar) covering
+  everything through the `idx_full`/k-space-gather steps, parameterized by
+  an operator-builder callback (`_build_calib_operator_b0` vs.
+  `_build_calib_operator_b0_complex`) and an optional R2*/TE-shift hook,
+  with `main()` similarly factored to take just the output-filename suffix
+  and `note=` string as the two per-variant knobs.
+- [ ] **219. `recon/reconstruct.py`'s `run_recon` already implements the
+  exact power-iteration sigma1A estimate `recon/run_mslr_local.py` was
+  forced to duplicate, gated behind a restriction whose stated rationale
+  doesn't hold.** [measured; found 2026-09-17 against the untracked
+  `recon/run_mslr_local.py`] `reconstruct.py:228-235` raises
+  `ValueError` whenever `sigma1A is None` and `fn_b0map is None`, with the
+  message "the plain SENSE operator's spectral norm has no cheap
+  closed-form estimate wired up here, so auto-estimation only covers the
+  B0-corrected path." That's not actually true of the code two lines below
+  it (`reconstruct.py:236-240`): `estimate_spectral_norm(A, x0)` is a
+  generic power iteration over any mirtorch `LinearMap`/`BlockDiagonal`
+  (its own docstring, `operators_b0.py:366`: "A: any mirtorch
+  LinearMap/BlockDiagonal") -- nothing about it is B0-specific, and `A` has
+  already been built via the plain `build_encoding_operator` branch
+  (`reconstruct.py:226`) by the time the gate is checked. `run_mslr_local.py`
+  confirms this directly: it calls the *same* `estimate_spectral_norm` on
+  the *same* `build_encoding_operator` output successfully
+  (`run_mslr_local.py:84-88`), because it has no Julia-derived reference
+  sigma1A to pass in (its own docstring: "No Julia reference exists for
+  this patch config on this dataset"). Every existing plain-operator
+  (`fn_b0map=None`) caller of `run_recon` -- `validate_against_mslr.py:76`
+  (`sigma1A=float(ref["sigma1A"])`, a Julia reference value) and both
+  `tests/test_recon_reconstruct.py` smoke tests (`sigma1A=1.0`, explicitly
+  commented as a safe over-estimate) -- happens to already have a
+  known-good value in hand and was never exercising the auto-estimate path
+  for the plain operator, so the gate was never tested against a caller
+  that actually needed it; `run_mslr_local.py` is the first one that does,
+  and it had to reimplement `reconstruct.py:237-240`'s
+  `x0 = torch.randn(...); sigma1A = estimate_spectral_norm(A, x0); print(...)`
+  plus the `del`/`torch.cuda.empty_cache()` cleanup
+  (`reconstruct.py:243-245`) verbatim at `run_mslr_local.py:83-92` instead
+  of just calling `run_recon` with `sigma1A=None`. Fix direction: drop the
+  `fn_b0map is None` half of the guard (the power iteration doesn't care
+  which branch built `A`) and let `run_mslr_local.py` call `run_recon`
+  directly without pre-measuring sigma1A itself -- likely eliminating the
+  file's `estimate_spectral_norm`/`build_encoding_operator` imports and the
+  `smaps`/`omega`-loading preamble entirely, since `run_recon` already
+  loads both internally.
