@@ -3524,22 +3524,20 @@ recorded there despite the size of that rewrite.
   passed) and this session's four resolution variants (5.4mm R=1,
   2.4mm R=6, 1.6mm R~14.5, 0.8mm R~93.5) all regenerated clean after the
   fix.
-- [ ] **200. `preprocessing/lowres_calib_recon.py`'s `_load_chunked`
-  duplicates `recon/reconstruct.py`'s `_load_array` chunking algorithm.**
-  [measured, low severity; found 2026-09-16 against `de3d535`, commit
-  `42edeb3`] Both implement identical "read chunk-by-chunk along the last
-  axis when `d.chunks[-1] < d.shape[-1]`" logic to avoid the documented
-  HDF5 chunk-cache pathology (`recon/reconstruct.py`'s own docstring
-  describes measuring ~7 MB/s vs. ~500 MB/s for this exact fix).
-  `lowres_calib_recon.py:88-101` takes an already-open `h5py.File` rather
-  than a path, so a straight import isn't possible (and `preprocessing/`
-  pulling in `recon/` as a dependency would be an unwanted new coupling
-  between the two optional-extra packages) -- a body-only refactor into a
-  small shared helper would be needed instead. Correctly implemented on
-  both sides, just cross-package duplication of a fix that was
-  non-trivial to discover once. Fix direction: factor the chunked-read
-  loop into a tiny shared module (e.g. `preprocessing/matio.py`, imported
-  by both packages) both `preprocessing/` and `recon/` can call.
+- [x] **200.** Resolved 2026-09-16 (as part of item 204's fix):
+  `preprocessing/lowres_calib_recon.py`'s `_load_chunked` duplicated
+  `recon/reconstruct.py`'s `_load_array` chunking algorithm. [measured,
+  low severity; found 2026-09-16 against `de3d535`, commit `42edeb3`] Both
+  implemented identical "read chunk-by-chunk along the last axis when
+  `d.chunks[-1] < d.shape[-1]`" logic to avoid the documented HDF5
+  chunk-cache pathology (`recon/reconstruct.py`'s own docstring describes
+  measuring ~7 MB/s vs. ~500 MB/s for this exact fix). The file has since
+  moved to `recon/lowres_calib_recon.py` (see the file-move entry above),
+  putting both copies in the same package, and item 204's new shared
+  `recon/hdf5_chunked_io.py` module (no torch/mirtorch import, so both
+  `.venv-preprocessing`-only and `.venv-recon`-only consumers can import
+  it) replaces both `_load_chunked` and `_load_array`'s own copies of the
+  loop with one implementation.
 - [x] **203.** Resolved 2026-09-16: `preprocessing/grid_resize.py`'s
   `resize_to_epi_grid` (used by both `smaps.py`'s `process_smaps` and
   `run_b0map.py`'s field-map resize) unconditionally raised whenever the
@@ -3580,3 +3578,76 @@ recorded there despite the size of that rewrite.
   RSS and B0-informed CG-SENSE reconstructions of real data, not just
   unit-tested in isolation. 2 new tests total; full suite (149 passed)
   unaffected.
+- [x] **204.** Resolved 2026-09-16: `recon/reconstruct.py`'s `_load_array`
+  and `recon/lowres_calib_recon.py`'s `_load_chunked` (see item 200) both
+  read the *entire* dense `[Nx, Ny, Nz, Nc, Nt]` zero-filled k-space array
+  into memory before any cropping/gathering happened, regardless of how
+  sparse the actually-needed region was -- chunk-by-chunk reads (the fix
+  for a separate, earlier HDF5-chunk-cache-throughput bug, see item 200)
+  only avoided a ~7 MB/s I/O pathology; they didn't reduce peak memory,
+  since the chunk-by-chunk loop still accumulated every frame into one
+  full-size output array. This matters most for the calibration-region-only
+  consumers (`recon/lowres_calib_recon.py`/`recon/lowres_calib_recon_b0.py`),
+  which only ever need a few hundred (ky, kz) samples out of the full
+  volume: measured directly on this session's real 0.8mm/R~93.5 dataset
+  (`ksp_epi_zf` shape `(270, 270, 180, 32, 60)` complex64), loading the
+  full array costs ~201GB, while the calibration region reconstructs onto
+  a native grid of just `(13, 13, 9)` voxels -- on a shared 8-user, 750GB
+  lab server with its own documented history of other users' MATLAB/Julia
+  processes spiking to 47-200GB+ RSS unpredictably, a single-process
+  ~201GB allocation was judged too risky to run without checking free
+  memory and asking first (this session held off running the 0.8mm
+  B0-corrected calibration recon for exactly this reason, running only
+  the 5.4mm/2.4mm/1.6mm variants).
+
+  Root cause once traced: `ksp_epi_zf` is chunked one full frame
+  (`(Nx, Ny, Nz, Nc, 1)`) per HDF5 chunk, so *reading* any calibration-
+  region sample still requires decompressing that frame's entire chunk --
+  chunk granularity can't be avoided -- but nothing required *keeping*
+  every frame's full decompressed volume in memory *simultaneously*. Fix:
+  new `recon/hdf5_chunked_io.py` (no torch/mirtorch import, so it's
+  importable from both `.venv-preprocessing`-only
+  `recon/lowres_calib_recon.py` and `.venv-recon`-only
+  `recon/lowres_calib_recon_b0.py`/`recon/reconstruct.py` without either
+  picking up the other's dependency -- see item 200) exposes
+  `read_frames_cropped(fn, key, spatial_slices=None)`, which crops each
+  frame down to `spatial_slices` immediately after decompressing it,
+  before moving to the next frame, when a crop is given -- `_load_array`
+  itself now delegates to it with `spatial_slices=None` (full array,
+  unchanged behavior, since `run_recon` genuinely processes every frame).
+  Both calibration-region consumers were reordered to compute
+  `native_calib_grid`'s bounding box *before* reading k-space (from
+  `omegas`/`echo_times`, already loaded first) so the crop can be passed
+  into the read itself rather than applied after loading the full array;
+  `lowres_calib_recon.py`'s `lowres_calib_recon()` function signature
+  changed to accept the already-cropped k-space array and a precomputed
+  `grid` dict instead of the full array (no external callers on `main`
+  depend on the old signature -- the only other callers are in the
+  unmerged, exploratory `worktree-lowres-calib-recon` branch, not kept in
+  sync, same as `GatheredSenseB0`'s signature divergence documented
+  elsewhere in this file).
+
+  Verified end to end on the real 0.8mm/R~93.5 dataset this was measured
+  against: `recon/lowres_calib_recon_b0.py` now runs to completion with a
+  peak RSS of ~18.6GB (`ps` polling every 3s during the run, so a lower
+  bound on the true peak, not a HWM read -- still, more than 10x under the
+  previous ~201GB, and comfortably within this server's several-hundred-GB
+  free headroom regardless of other users' activity), writing a correct
+  `4_93.5x_0.8mm_recon_lowres_calib_b0.nii.gz` (native grid `(13, 13, 9)`,
+  matching the 117/48600-sample calibration region printed at construction
+  time). The residual gap between that measurement and the ~3.4GB
+  theoretical minimum (one frame's decompressed chunk, `270*270*180*32*8`
+  bytes) wasn't tracked down further -- likely gzip inflate buffers and/or
+  allocator fragmentation from repeatedly allocating and freeing
+  same-sized multi-GB buffers -- since the fix already resolves the
+  practical problem (0.8mm is no longer a special, riskier case to launch
+  on shared infrastructure). 5 new tests
+  (`tests/test_recon_hdf5_chunked_io.py`, a location-encoding synthetic
+  dataset in the same style as `scatter_frame`'s in
+  `test_preprocessing_preprocess.py`, covering both the chunked/cropped
+  and unchunked/full-array code paths) plus the existing `test_recon_
+  reconstruct.py` suite (4 passed) and full suites in both venvs (154
+  passed/16 skipped in the base env, 195 passed/7 skipped in `.venv-recon`
+  excluding one pre-existing, unrelated sigpy-import collection error in
+  `test_preprocessing_run_b0map.py`) all pass; ruff clean on every touched
+  file.

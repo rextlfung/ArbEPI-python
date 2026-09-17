@@ -81,27 +81,12 @@ import numpy as np
 from preprocessing.config import PreprocessingConfig, load_config, load_seq_params, set_seq_paths
 from preprocessing.grid_resize import resize_to_epi_grid
 from preprocessing.nifti_io import save_recon_nifti
+from recon.hdf5_chunked_io import read_frames_cropped
 
 
 def _ift3(d: np.ndarray) -> np.ndarray:
     axes = (0, 1, 2)
     return np.fft.fftshift(np.fft.ifftn(np.fft.fftshift(d, axes=axes), axes=axes), axes=axes)
-
-
-def _load_chunked(f: h5py.File, key: str) -> np.ndarray:
-    """Read a dataset chunk-by-chunk along its last axis when chunked there.
-    A whole-dataset `d[()]` call on this repo's own ksp_epi_zf (chunked one
-    frame per chunk) was measured at ~7 MB/s -- an h5py/HDF5 chunk-cache
-    pathology, not a disk-speed limit -- versus ~500 MB/s reading one chunk
-    at a time; see recon/reconstruct.py's `_load_array`, which this mirrors."""
-    d = f[key]
-    if d.chunks is not None and d.chunks[-1] < d.shape[-1]:
-        out = np.empty(d.shape, dtype=d.dtype)
-        step = d.chunks[-1]
-        for start in range(0, d.shape[-1], step):
-            out[..., start : start + step] = d[..., start : start + step]
-        return out
-    return np.asarray(d[()])
 
 
 def compute_calib_mask(omegas: np.ndarray) -> np.ndarray:
@@ -139,24 +124,27 @@ def native_calib_grid(
 
 
 def lowres_calib_recon(
-    ksp_epi_zf: np.ndarray, calib_mask: np.ndarray, smaps: np.ndarray,
+    ksp_crop: np.ndarray, calib_mask: np.ndarray, grid: dict, smaps: np.ndarray,
     fov: tuple[float, float, float],
-) -> tuple[np.ndarray, dict]:
-    """ksp_epi_zf: [Nx, Ny, Nz, Nvcoils, Nframes]. calib_mask: [Ny, Nz] bool.
-    smaps: [Nx, Ny, Nz, Nvcoils] complex, sum_c|s_c|^2 <= 1 normalized, on
-    the same (Nx, Ny, Nz) grid as ksp_epi_zf. fov: (fx, fy, fz) m.
+) -> np.ndarray:
+    """ksp_crop: [Nx_eff, Ny_eff, Nz_eff, Nvcoils, Nframes] -- already
+    cropped to `grid`'s slices. Callers compute `grid` (via
+    native_calib_grid) from `calib_mask` *before* reading k-space, so the
+    HDF5 read itself can crop to this bounding box (recon/hdf5_chunked_io.py's
+    read_frames_cropped) instead of loading the full dense array and
+    cropping after -- see docs/review-findings.md item 204 for why that
+    matters (the full array is ~201GB at this pipeline's real 0.8mm/R~93.5
+    scale, vs. a few hundred calibration-region samples actually needed).
+    calib_mask: [Ny, Nz] bool, full-grid shape (cropped internally via
+    grid's y/z slices). smaps: [Nx, Ny, Nz, Nvcoils] complex, sum_c|s_c|^2
+    <= 1 normalized, full grid. fov: (fx, fy, fz) m.
 
-    Returns (img, grid): img is [Nx_eff, Ny_eff, Nz_eff, Nframes] complex --
-    per-frame, sensitivity-map-weighted coil combination of the
-    calibration-region-only image, reconstructed at native resolution (see
-    module docstring) rather than zero-padded to the full grid. grid is
-    native_calib_grid's return value.
+    Returns img: [Nx_eff, Ny_eff, Nz_eff, Nframes] complex -- per-frame,
+    sensitivity-map-weighted coil combination of the calibration-region-only
+    image, reconstructed at native resolution (see module docstring) rather
+    than zero-padded to the full grid.
     """
-    Nx_full = ksp_epi_zf.shape[0]
-    grid = native_calib_grid(calib_mask, fov, Nx_full)
-    xs, ys, zs = grid['x_slice'], grid['y_slice'], grid['z_slice']
-
-    ksp_crop = ksp_epi_zf[xs, ys, zs, :, :]  # [Nx_eff, Ny_eff, Nz_eff, Nvcoils, Nframes]
+    ys, zs = grid['y_slice'], grid['z_slice']
     # [Ny_eff, Nz_eff] -- calib_mask's own shape within its bounding box. A
     # no-op for a rectangular calib_mask (its bounding box is itself, fully
     # true), but real masking for e.g. an older ellipse-shaped one, whose
@@ -170,7 +158,7 @@ def lowres_calib_recon(
     n_target = (grid['Nx_eff'], grid['Ny_eff'], grid['Nz_eff'])
     smaps_native = resize_to_epi_grid(smaps, fov, fov, n_target, order=3)
     img = np.sum(np.conj(smaps_native)[..., None] * img_coils, axis=3)
-    return img, grid
+    return img
 
 
 def _recon_one(cfg: PreprocessingConfig, seqname: str) -> None:
@@ -181,10 +169,10 @@ def _recon_one(cfg: PreprocessingConfig, seqname: str) -> None:
     fn_epi_zf = paths.recon
     fn_smaps = os.path.join(datdir, 'recon', f'smaps_{seqname}_sigpy.h5')
 
-    print(f'Loading {fn_epi_zf}...')
+    print(f'Loading sampling mask ({fn_epi_zf})...')
     with h5py.File(fn_epi_zf, 'r') as f:
-        ksp_epi_zf = _load_chunked(f, 'ksp_epi_zf')  # [Nx, Ny, Nz, Nvcoils, Nframes]
         omegas = f['omegas'][()]  # [Ny, Nz, Nframes]
+        Nx_full = f['ksp_epi_zf'].shape[0]
 
     calib_mask = compute_calib_mask(omegas)
     n_calib = int(calib_mask.sum())
@@ -196,13 +184,24 @@ def _recon_one(cfg: PreprocessingConfig, seqname: str) -> None:
             'k-space center?'
         )
 
+    # Computed before the k-space load (not after, as an earlier version of
+    # this function did internally) so the HDF5 read itself can crop to
+    # this bounding box -- see docs/review-findings.md item 204.
+    grid = native_calib_grid(calib_mask, seq_params.fov, Nx_full)
+    xs, ys, zs = grid['x_slice'], grid['y_slice'], grid['z_slice']
+
+    print(f'Loading {fn_epi_zf} (cropped to the calibration-region bounding box)...')
+    ksp_crop = read_frames_cropped(
+        fn_epi_zf, 'ksp_epi_zf', spatial_slices=(xs, ys, zs)
+    )  # [Nx_eff, Ny_eff, Nz_eff, Nvcoils, Nframes]
+
     print(f'Loading {fn_smaps}...')
     with h5py.File(fn_smaps, 'r') as f:
         smaps = f['smaps'][()]  # [Nx, Ny, Nz, Nvcoils]
 
     print('Reconstructing at native (resolution-matched) grid size...')
-    img, grid = lowres_calib_recon(
-        ksp_epi_zf, calib_mask, smaps, seq_params.fov
+    img = lowres_calib_recon(
+        ksp_crop, calib_mask, grid, smaps, seq_params.fov
     )  # [Nx_eff, Ny_eff, Nz_eff, Nframes]
     voxel_mm = [1000 * seq_params.fov[a] / img.shape[a] for a in range(3)]
     print(f'  Native grid: {img.shape[:3]}  (voxel size {voxel_mm[0]:.3f} x '

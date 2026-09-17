@@ -19,6 +19,7 @@ import h5py
 import numpy as np
 import torch
 
+from recon.hdf5_chunked_io import read_frames_cropped
 from recon.lowrank import img2patches, patch_nucnorm, patchSVST
 from recon.operators import build_encoding_operator, gather_ksp
 from recon.operators_b0 import build_encoding_operator_b0, estimate_spectral_norm
@@ -47,23 +48,13 @@ def _load_array(fn: str, key: str) -> np.ndarray:
     output, or mslr-recon's sigpy-export input path) -- no axis correction
     needed, unlike hdf5storage-written .mat files (see preprocessing/matio.py).
 
-    Reads chunk-by-chunk along the last axis when the dataset is chunked
-    there (this repo's own preprocessing/ writes ksp_epi_zf chunked one
-    frame per chunk). A single whole-dataset `d[()]` call was measured at
-    ~7 MB/s on real ArbEPI_epi_zf.h5 data (838M+ read syscalls for 7.5GB --
-    an h5py/HDF5 pathology when the chunk cache doesn't fit even one chunk),
-    versus ~500 MB/s reading one same-sized chunk slice at a time -- a
-    two-orders-of-magnitude difference on an 11GB file that otherwise made
-    this unusable."""
-    with h5py.File(fn, "r") as f:
-        d = f[key]
-        if d.chunks is not None and d.chunks[-1] < d.shape[-1]:
-            out = np.empty(d.shape, dtype=d.dtype)
-            step = d.chunks[-1]
-            for start in range(0, d.shape[-1], step):
-                out[..., start : start + step] = d[..., start : start + step]
-            return out
-        return np.asarray(d[()])
+    Thin wrapper around recon/hdf5_chunked_io.py's read_frames_cropped
+    (shared with recon/lowres_calib_recon.py, which needs the same
+    chunk-by-chunk-along-the-last-axis logic without pulling in this
+    module's torch/mirtorch imports -- see docs/review-findings.md item
+    200) -- returns the full array, since run_recon processes every frame
+    and has no crop to apply here."""
+    return read_frames_cropped(fn, key)
 
 
 def _load_omega(
