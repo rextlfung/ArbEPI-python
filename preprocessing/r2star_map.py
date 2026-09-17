@@ -115,13 +115,20 @@ def estimate_r2star_map_degre_grid(
 def estimate_r2star_map_epi_grid(
     datdir: str, seqname: str, fov_degre: tuple[float, float, float],
     fov: tuple[float, float, float], n_target: tuple[int, int, int],
+    zero_pad_z: bool = False,
 ) -> np.ndarray:
     """Same mask-then-resize recipe run_b0map.py uses for b0map_hz (order=3
     cubic spline, masked before resizing so interpolation doesn't blend in
     a background fill value at the mask boundary) -- see that module for
-    the original. Returns (Nx,Ny,Nz) float32, 1/s, on the EPI grid."""
+    the original. Returns (Nx,Ny,Nz) float32, 1/s, on the EPI grid.
+
+    zero_pad_z: forwarded to resize_to_epi_grid -- see smaps.py's
+    process_smaps/run_b0map.py's run_b0map for the same parameter on the
+    same deGRE-grid-to-EPI-grid resize pattern (docs/review-findings.md
+    item 203): needed whenever the target EPI z-FOV exceeds deGRE's fixed
+    z-FOV (e.g. this session's 5.4mm variant, 145.8mm vs. 144mm)."""
     r2star_degre, mask_degre = estimate_r2star_map_degre_grid(datdir, seqname)
     r2star = resize_to_epi_grid(
-        r2star_degre * mask_degre, fov_degre, fov, n_target, order=3,
+        r2star_degre * mask_degre, fov_degre, fov, n_target, order=3, zero_pad_z=zero_pad_z,
     ).astype(np.float32)
     return np.clip(r2star, 0.0, None)  # cubic-spline overshoot can dip slightly negative
