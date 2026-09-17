@@ -824,6 +824,68 @@ Both are plain numpy-order HDF5 (see the `.h5`-vs-`.mat` convention note
 above) -- a consumer needs only `h5py`/`HDF5.jl`, never GERecon or the raw
 ScanArchive.
 
+**STEP 2 also writes `ksp_gre_uncompressed` and `cc_matrix`** --
+`ksp_gre_uncompressed` (`[Nx_degre, Ny_degre, Nz_degre, Ncoils]`, the same
+`cfg.gre_echo_idx` echo as `ksp_gre`, whitened but captured *before* PCA
+coil compression -- `Ncoils` is the real physical receive-coil count,
+e.g. 32, not `Nvcoils`) and `cc_matrix` (`[Nvcoils, Ncoils]`, the exact
+PCA compression matrix STEP 2 applies to `ksp_gre_all`/`ksp_gre`) are the
+two inputs `smaps.py`'s `load_smaps` needs to calibrate ESPIRiT **once**,
+on the full-coil data, and derive the Nvcoils-compressed set by linear
+projection rather than a second, independent calibration on separately-
+compressed k-space (see below). A `<seqname>_gre.h5` written before these
+fields existed has no way to backfill them (the raw ScanArchive isn't
+available to `load_smaps`, only the raw-archive-reading `preprocess()`
+itself, which needs GERecon) -- `load_smaps` falls back to the original
+independent-calibration design for the compressed set alone, rather than
+raising, see below.
+
+**`smaps.py`'s `load_smaps` now returns a fifth value,
+`smaps_degre_uncompressed`** -- ESPIRiT sensitivity maps at the deGRE
+grid/FOV, for a true per-physical-coil (e.g. 32-channel) profile rather
+than a PCA-compressed subspace. Both it and the existing Nvcoils-
+compressed `smaps`/`smaps_degre` now come from **one** ESPIRiT
+calibration on `ksp_gre_uncompressed`: the compressed set is a linear
+projection of that single calibration through `cc_matrix`
+(`preprocessing/coils.py`'s `apply_coil_compression`), not a second
+calibration on `ksp_gre`. This is mathematically exact under the ideal
+SENSE signal model, not an approximation of convenience: for a fixed
+object rho(r), `img_c(r) = s_c(r) * rho(r)` for every physical coil `c`,
+and coil compression is a linear combination of channels applied
+identically at every k-space sample (`y'_v = sum_c M[v,c] y_c`), so
+`img'_v(r) = sum_c M[v,c] img_c(r) = [sum_c M[v,c] s_c(r)] * rho(r)` --
+the virtual-coil sensitivity is that same linear combination of the true
+per-coil sensitivities. A side effect: the projected compressed maps
+automatically inherit `process_smaps`' exact-zero-background invariant
+(any linear combination of an all-zero coil vector is still zero), and
+both coil counts share one `emap`/`emap_degre` (no separate
+`emap_uncompressed`) since they're the same calibration. Cached alongside
+the existing Nvcoils set as `smaps_raw_uncompressed`/
+`smaps_degre_uncompressed` in `smaps_<seqname>_sigpy.h5`, under its own
+`Ncoils` attr (independent of `Nvcoils`: a coil-compression-setting
+change moves `Nvcoils` without touching `Ncoils`, and vice versa for a
+different physical coil array or a re-run archive -- either mismatch
+invalidates the whole cache, since both coil counts derive from the same
+calibration and can't be partially reused). `smaps_degre_uncompressed` is
+`None` only when `<seqname>_gre.h5` predates `cc_matrix`/
+`ksp_gre_uncompressed` -- the only field in `load_smaps`' return tuple
+that can come back `None`; both of its current callers
+(`recon_frames.py`, `run_b0map.py`) already discard this return value, so
+nothing downstream consumes it yet -- it exists for a future full-coil-
+domain consumer. `preprocessing/preprocess.py`'s own inline STEP 3 (used
+only for the NIfTI/console-output side effect during `preprocess()`
+itself) still computes only the Nvcoils-compressed set directly, via the
+original independent-calibration design on `ksp_gre`. `ksp_gre` itself is
+still written by every `preprocess()` run (unchanged) purely as the
+fallback input for a `<seqname>_gre.h5` written by an *older*
+`preprocess()` that predates `cc_matrix`/`ksp_gre_uncompressed` -- for a
+freshly-written cache (which always has `cc_matrix`), `load_smaps` never
+reads it, so it's dead weight there, kept anyway since it's small and
+this is the one place a plain compressed single-echo k-space snapshot
+lives. `smaps_degre`/`emap_degre`/`smaps_degre_uncompressed` all continue
+to be computed lazily by `load_smaps` the first time something needs
+them.
+
 **B0 field map estimation is implemented, via
 [MRIFieldmaps.jl](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl)
 (Lin & Fessler, "Efficient Regularized Field Map Estimation in 3D MRI",
