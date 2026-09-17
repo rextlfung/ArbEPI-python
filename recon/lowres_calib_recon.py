@@ -208,7 +208,7 @@ def _recon_one(cfg: PreprocessingConfig, seqname: str) -> None:
     print(f'  Native grid: {img.shape[:3]}  (voxel size {voxel_mm[0]:.3f} x '
           f'{voxel_mm[1]:.3f} x {voxel_mm[2]:.3f} mm)')
 
-    out_dir = os.path.join(datdir, 'recon', 'basic')
+    out_dir = os.path.join(datdir, 'recon', 'lowres_calib')
     os.makedirs(out_dir, exist_ok=True)
     fn_out = os.path.join(out_dir, f'{seqname}_recon_lowres_calib')
     save_recon_nifti(
