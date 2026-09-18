@@ -393,7 +393,8 @@ def _calibrate_and_compress(
 
 
 def load_smaps(
-    cfg: PreprocessingConfig, paths: SeqPaths, seq_params: SeqParams
+    cfg: PreprocessingConfig, paths: SeqPaths, seq_params: SeqParams,
+    zero_pad_z: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, np.ndarray | None]:
     """(smaps, smaps_degre, emap_degre, nvcoils, smaps_degre_uncompressed):
     sensitivity maps on the EPI grid (the SENSE encoding operator's own
@@ -447,6 +448,20 @@ def load_smaps(
     before `smaps_degre`/`emap_degre` existed is backfilled in place
     rather than re-estimating from scratch (`smaps_raw`/`emap` are
     already cached).
+
+    zero_pad_z: forwarded to the EPI-grid `process_smaps` call only (the
+    deGRE-grid call always has fov_src == fov, so it never needs this) --
+    set True when this seqname's own EPI z-FOV exceeds the shared deGRE
+    acquisition's z-FOV (e.g. an Nz that rounds up past deGRE's fixed
+    z-FOV slab). `run_b0map.py`'s own `zero_pad_z` parameter needs the
+    identical setting for the same seqname. Only matters the first time
+    this seqname's smaps are estimated (there's no existing cache yet to
+    check against): once cached, the EPI-grid `smaps` array already has
+    the padding baked in (recorded via a `zero_pad_z` attr and a human-
+    readable `note`, for provenance) and is reused as-is regardless of
+    what a later call passes here -- so prime the cache with the correct
+    setting (e.g. via run_b0map's zero_pad_z) before any call that can't
+    tolerate a raised ValueError from a bare first estimate.
     """
     fn_smaps = os.path.join(cfg.datdir, 'recon', f'smaps_{paths.seqname}_sigpy.h5')
     fn_smaps_nifti = fn_smaps[: -len('.h5')] + '.nii.gz'
@@ -559,7 +574,7 @@ def load_smaps(
 
     smaps = process_smaps(
         smaps_raw, emap, fov_degre, fov_epi, n_target_epi, cfg.crop,
-        smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
+        smooth_sigma_mm=cfg.smaps_smooth_sigma_mm, zero_pad_z=zero_pad_z,
     )
     smaps_degre = process_smaps(
         smaps_raw, emap, fov_degre, fov_degre, n_target_degre, cfg.crop,
@@ -585,6 +600,12 @@ def load_smaps(
             f.create_dataset('smaps_degre_uncompressed', data=smaps_degre_uncompressed)
             f.attrs['Ncoils'] = smaps_raw_uncompressed.shape[-1]
         f.attrs['Nvcoils'] = nvcoils
+        f.attrs['zero_pad_z'] = zero_pad_z
+        if zero_pad_z:
+            f.attrs['note'] = (
+                f'EPI z-FOV ({fov_epi[2] * 1000:.4g}mm) exceeds deGRE z-FOV '
+                f'({fov_degre[2] * 1000:.4g}mm); outer slice per side zero-filled'
+            )
     # Coil axis stands in for save_recon_nifti's "frames" axis -- FSLeyes'
     # volume slider then scrolls through per-coil maps, magnitude-only
     # (NIfTI has no complex dtype; see nifti_io module docstring).

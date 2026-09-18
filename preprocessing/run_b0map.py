@@ -99,7 +99,7 @@ def run_b0map(cfg: PreprocessingConfig, zero_pad_z: bool = False) -> None:
         # whole field-map estimation over a missing/failed optional input.
         smaps_path = os.path.join(cfg.datdir, 'recon', f'smaps_{seqname}_sigpy.h5')
         try:
-            load_smaps(cfg, paths, seq_params)
+            load_smaps(cfg, paths, seq_params, zero_pad_z=zero_pad_z)
         except Exception as e:  # optional input, degrade gracefully
             print(f'WARNING [{seqname}]: could not load/estimate sensitivity maps ({e}) -- '
                   'falling back to no smap.')
