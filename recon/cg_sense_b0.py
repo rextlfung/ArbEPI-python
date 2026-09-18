@@ -25,6 +25,21 @@ mathematically identical to solving each frame's CG independently, just
 one Python-level loop instead of Nt, and matches recon/reconstruct.py's own
 convention of treating the whole (Nx,Ny,Nz,Nt) tensor as one state array.
 
+`num_iter` defaults to 150, not 20 -- the original default converged well at
+R=1 (residual 8.6e-4 by iteration 20) but left real undersampled data
+nowhere near converged: R=6 residual was still 3.3e-3 at iteration 20 (CG's
+per-iteration residual decay rate is measurably slower at higher R, exactly
+as SENSE-CG conditioning theory predicts -- Pruessmann et al. 2001).
+Verified directly on 2_6x_2.4mm real data (2026-09-18): 150 iterations
+brings the residual to 9.95e-4 (vs 3.3e-3 at 20) and the recovered image's
+median/peak intensity rise substantially (median +24%, peak +7x) -- the
+missing signal at 20 iterations was under-convergence, not a model defect
+(see the same day's operator round-trip investigation). 150 is a compromise
+across this repo's R=1-93.5 sweep: cheap for R=1 (converges in ~20 anyway)
+while getting R=6 most of the way to full convergence; higher-R acquisitions
+in the same sweep may still need more -- check the saved `residuals` array
+and raise --num-iter if the tail hasn't flattened.
+
 Usage (from repo root, .venv-recon):
     .venv-recon/bin/python -m recon.cg_sense_b0 <datdir> <seqname>
 """
@@ -109,7 +124,7 @@ def _nominal_te_s(scan_info_path: str, etl: int) -> float:
 def run_cgsense_b0(
     datdir: str,
     seqname: str,
-    num_iter: int = 20,
+    num_iter: int = 150,
     tol: float = 1e-6,
     L_b0: int = 32,
     nbins_b0: int = 128,
@@ -217,7 +232,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('datdir')
     parser.add_argument('seqname')
-    parser.add_argument('--num-iter', type=int, default=20)
+    parser.add_argument('--num-iter', type=int, default=150)
     parser.add_argument('--tol', type=float, default=1e-6)
     parser.add_argument('--L-b0', type=int, default=32)
     parser.add_argument('--nbins-b0', type=int, default=128)
