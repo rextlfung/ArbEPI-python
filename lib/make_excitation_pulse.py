@@ -39,6 +39,25 @@ def make_excitation_pulse(
         return_gz=True,
     )
     gz_ss = trap4ge(gz_ss, crt, sys)
+    # trap4ge always resets gz_ss.delay to 0 (it rebuilds the trapezoid from
+    # scratch via pp.make_trapezoid regardless of whether raster-rounding
+    # changed anything), so this resync is needed every time, not just when
+    # crt actually perturbs the timing -- see this module's own git history/
+    # docs/review-findings.md item 63. rf.delay is fixed at pulse-construction
+    # time (effectively max(pre-trap4ge gz.rise_time, sys.rf_dead_time)); if a
+    # future crt/RF-timing change ever makes trap4ge's rounded-up
+    # gz_ss.rise_time exceed that margin, the subtraction goes negative and
+    # pypulseq's own seq.check_timing() would only report it downstream as an
+    # opaque NEGATIVE_DELAY error with no indication of the actual cause --
+    # fail loudly and specifically here instead (docs/review-findings.md item
+    # 168).
+    assert gz_ss.rise_time <= rf.delay, (
+        f'make_excitation_pulse: trap4ge-rounded gz_ss.rise_time ({gz_ss.rise_time * 1e6:.2f} us) '
+        f'exceeds rf.delay ({rf.delay * 1e6:.2f} us) -- the RF/slice-select resync '
+        f'(gz_ss.delay = rf.delay - gz_ss.rise_time) would go negative. This means crt '
+        f'({crt * 1e6:.2f} us) is rounding the slice-select ramp up further than rf.delay\'s '
+        f'margin can absorb -- reduce crt or otherwise shorten gz_ss.rise_time.'
+    )
     gz_ss.delay = rf.delay - gz_ss.rise_time  # sync RF onset with slice-select gradient
     gz_ssr = trap4ge(gz_ssr, crt, sys)
     return rf, gz_ss, gz_ssr

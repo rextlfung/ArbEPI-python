@@ -873,7 +873,7 @@ new B0-corrected siblings).
   and parametrize `tests/test_preprocessing_epi_gridding.py` over an odd
   `nx` the way item 44's fix parametrized
   `test_epiphasecorrect_removes_odd_even_mismatch` over `[64, 63]`.
-- [ ] **121. `plotting/plotting.py`'s `plot_pns_one_tr` loses gradient
+- [x] **121. `plotting/plotting.py`'s `plot_pns_one_tr` loses gradient
   history before the window start, contradicting its own docstring's claim
   of exact parity with `check_seq_feasibility`'s PNS number for any
   `shot_index > 0`.** [verify] `plot_pns_one_tr(seq, params, shot_index)`
@@ -907,6 +907,25 @@ new B0-corrected siblings).
   full history into `pns()` (windowing only the plotted/reported region
   afterward), or make the docstring explicit that `shot_index > 0` is an
   approximation that omits inter-shot PNS memory.
+
+  Resolved 2026-09-18, direction (a): `plot_pns_one_tr` now calls
+  `sample_gradients_tesla_per_m(seq, time_range=(0.0, t0 + params.TR))`
+  (full history from t=0) and runs `pns()` over that whole array, then
+  slices the result down to `[idx0:]` (`idx0 = round(t0/dt)`) for plotting
+  -- `gw_tm`/`pt`/`p` are all sliced the same way before the rest of the
+  function (unchanged) computes `t_ms`/draws the figure. Docstring updated
+  to state the mechanism and cite this item. Verified two ways on the real
+  default-params sequence (seed=0, `Nshots=15`): (1) no crash and a
+  plausible, `shot_index`-dependent peak for `shot_index` in `{0, 3}`; (2)
+  a direct before/after comparison of the PNS waveform showed the fix is a
+  numerical no-op on this particular schedule (max diff ~1e-11, floating-
+  point noise) -- this TR (66.7 ms) leaves gradients at exactly zero for
+  longer than `20*chronaxie` before every shot boundary (TR padding), so
+  there's genuinely no history being lost here either, the same reason
+  `shot_index=0` was already unaffected -- but the fix is still correct in
+  general (a denser schedule/shorter TR would show a real difference) and
+  costs nothing extra for `shot_index=0`. Full test suite (154 passed, 17
+  skipped) and a fresh `main.py --ge` build unaffected.
 - [ ] **122. `ge/seq2ceq.py`'s two loops item 107 flags also use a
   stricter outer `while` bound than the two already-correct loops, a
   distinct root cause item 107's own proposed fix doesn't address.**
@@ -929,7 +948,7 @@ new B0-corrected siblings).
   bug, and item 107's own stated fix direction would leave it unfixed --
   worth changing both outer bounds to `<=` in the same pass as item 107's
   fix.
-- [ ] **125. `sequences/deGRE.py` excites with the EPI sequence's flip angle
+- [x] **125. `sequences/deGRE.py` excites with the EPI sequence's flip angle
   and RF duration instead of the deGRE-specific values `params.py` computes
   for exactly this purpose and that are never read anywhere.** [measured]
   `deGRE.py:72-74` calls
@@ -971,6 +990,22 @@ new B0-corrected siblings).
   budget, not break it) and re-check
   `test_degre_excitation_is_centered`/the PNS and timing regression tests
   after the change.
+
+  Resolved 2026-09-18, per explicit user instruction: `deGRE.py`'s
+  excitation now calls `pp.make_sinc_pulse(params.alpha_degre / 180 *
+  math.pi, duration=params.rf_dur_degre, ...)` instead of `params.fa`/
+  `params.rf_dur`. Verified on a fresh build with the repo's real shipped
+  defaults (`alpha_degre=6.35°`, `rf_dur_degre=0.4 ms`, `TR_degre=8 ms`,
+  `TE_degre=[3.04, 5.27] ms`): `seq.check_timing()` passes, neither the
+  `te_min`/`TE_degre` nor `tr_min`/`TR_degre` `ValueError` guards fire (the
+  much shorter RF pulse shrinks the timing budget rather than breaking
+  it, as expected), and `ge.check.check_seq_feasibility` reports
+  `deGRE.seq` fully `OK` (max grad 49.76/50.00 mT/m, max slew 174.3/200
+  T/m/s, max B1 0.058/0.25 G, peak PNS 77.4%, acoustics 0.256/0.3) --
+  matching a fresh full `main.py --ge` build's own summary line for
+  `deGRE.seq`. `test_degre_excitation_is_centered`/
+  `test_degre_raises_actionable_error_below_minimum_tr` both still pass,
+  and the full suite (154 passed, 17 skipped) is unaffected.
 - [ ] **126. `ge/writeceq.py`'s sliding-window gradient/RF heating-check
   block count undercounts by exactly one segment instance's block count
   whenever a segment's block count evenly divides
@@ -1194,7 +1229,7 @@ new B0-corrected siblings).
   `get_block_type`/`get_dynamics`/`seq2ceq` -- the same untested-bug
   pattern item 134 already flags for `write_ceq`/`read_pge`, one level up
   the pipeline.
-- [ ] **138. `sequences/ArbEPI.py`'s post-readout spoiler scaling has a
+- [x] **138. `sequences/ArbEPI.py`'s post-readout spoiler scaling has a
   quantifiable off-by-one against this repo's 0-based indexing
   convention, already flagged in an inline comment but untracked in this
   backlog.** [measured, low severity; re-verified/updated 2026-09-12
@@ -1260,6 +1295,33 @@ new B0-corrected siblings).
   the comment instead), then re-verify against
   `tests/test_trajectory_matches_schedule.py`'s existing k-space coverage
   checks.
+
+  Resolved 2026-09-18, per explicit user instruction ("fix it so that the
+  spoilers achieve exactly ncycles_spoil cycles... dropping the +1"):
+  `sequences/ArbEPI.py`'s y/z spoiler rewind terms now read
+  `(y_locs[-1] - Ny / 2) * rg.deltak[1]` / `(z_locs[-1] - Nz / 2) *
+  rg.deltak[2]`, matching the prephaser's own 0-based convention. Verified
+  both algebraically and numerically (not just by re-running the existing
+  test suite) that this actually delivers the stated goal, not just drops
+  the literal `+1`: using the real built `gy_pre`/`gy_spoil` objects at
+  shipped defaults, confirmed `gy_pre.area == -(Ny/2)*deltak[1]` exactly
+  (the identity the prephaser's scale formula depends on), then computed
+  the *total* accumulated y-gradient moment since shot start (prephase +
+  blips + spoiler block) for a representative `(y_locs[0], y_locs[-1])`
+  pair -- the old `+1` formula left the total moment short of the intended
+  `y_scale * gy_spoil.area` target by exactly `deltak[1] = 4.6296`
+  (matching this item's own previously-measured shortfall precisely), the
+  fixed formula lands on the target with **zero** residual (`0.0` to
+  float precision). I.e. the spoiler now delivers exactly the drawn
+  cycles/voxel value with no schedule-dependent admixture, not just
+  "closer." `x` was already correct and untouched (`gx_residual` isn't
+  schedule-index-based, per this item's own text). Verified no
+  regression: full test suite (154 passed, 17 skipped) and a fresh
+  `main.py --ge` build (all four sequences `OK`, PNS/acoustics essentially
+  unchanged from before the fix, as expected for a sub-1%-of-spoiler-area
+  correction) both pass; the two touched lines were also reflowed to stay
+  under ruff's line-length limit (no new lint errors beyond this file's
+  pre-existing, unrelated `E501`s at `:119`/`:143`).
 - [ ] **139. `preprocessing/config.py`'s `load_seq_params` reads
   `scan_info.mat` via a bare `h5py.File`, not `matio.read_mat`,
   contradicting `matio.py`'s own unconditional stated rule.** [verify,
@@ -1525,7 +1587,7 @@ new B0-corrected siblings).
   passing `False`), deriving `nvcoils` from `f['ksp_epi_zf'].shape[3]`
   instead of `load_smaps`'s return value when smaps aren't needed, skipping
   `load_smaps()` entirely on that path.
-- [ ] **168. `lib/make_excitation_pulse.py`'s (and `sequences/deGRE.py`'s
+- [x] **168. `lib/make_excitation_pulse.py`'s (and `sequences/deGRE.py`'s
   identical inline copy) post-`trap4ge` RF/slice-select resync has no guard
   against producing a negative gradient delay.** [measured, not live today]
   `make_excitation_pulse.py:42` (and `deGRE.py:82`, an intentional inline
@@ -1564,6 +1626,16 @@ new B0-corrected siblings).
   `assert gz_ss.rise_time <= rf.delay` with a message naming the `crt`/
   `rf.delay` relationship, in both `make_excitation_pulse.py` and
   `deGRE.py`.
+
+  Resolved 2026-09-18, per explicit user instruction (direction (b), hard
+  assert): added `assert gz_ss.rise_time <= rf.delay` immediately before
+  the resync line in both `make_excitation_pulse.py` and `deGRE.py`'s
+  inline duplicate, each with a message naming the actual `gz_ss.rise_time`/
+  `rf.delay`/`crt` values so a future trip point straight to the cause
+  instead of surfacing as an opaque downstream `NEGATIVE_DELAY` from
+  `seq.check_timing()`. Verified the assert doesn't fire at the shipped
+  default `crt=4e-6` (full test suite: 154 passed, 17 skipped; fresh
+  `main.py --ge` build succeeds with all four sequences `OK`).
 - [x] **169.** Closed as no longer live 2026-09-16 (against `de3d535`) --
   not a code fix, a config change. `params.py`'s default protocol was
   switched from the old 240x240x45/R=9/TE=34.9ms config to "ABCD"
@@ -2679,7 +2751,7 @@ new B0-corrected siblings).
   something unambiguous, e.g. "(at this repo's default 0.9mm `res`, with a
   hypothetical Nz/R chosen to survive the restriction)", in both
   `caipi_sample.py` and the test file's matching comment.
-- [ ] **176. `sequences/ArbEPI.py` and `sequences/EPIcal.py` both seed their
+- [x] **176. `sequences/ArbEPI.py` and `sequences/EPIcal.py` both seed their
   per-shot spoiler-randomization RNG with the identical literal `0`,
   undocumented as to whether the sharing is intentional.** [verified, low
   severity, design-choice rather than clearly a bug] Commit `8448ff3`
@@ -2702,6 +2774,27 @@ new B0-corrected siblings).
   np.random.default_rng(0)` line (or in `params.py`'s
   `spoil_cycles_min`/`max` docstring) stating explicitly that sharing seed
   0 across the two generators is intentional and why.
+
+  Resolved 2026-09-18, differently than either fix direction above: per
+  explicit user request ("would it be possible to only seed the sampling
+  patterns but not the spoiler cycles?"), both `spoil_rng`s are now
+  unseeded (`np.random.default_rng()`, fresh entropy every run) rather
+  than documented as intentionally sharing seed 0. This was already
+  trivially possible -- `spoil_rng` was never coupled to `params.seed`
+  (the sampling-mask RNG) in the first place, they're two fully
+  independent `Generator` instances -- so the fix is a one-line change per
+  file plus a comment explaining *why* reproducibility isn't wanted here
+  (no test or downstream consumer depends on a specific spoiler draw, and
+  a fixed seed only invites accidentally relying on one) while
+  `params.seed` continues to make the sampling mask itself fully
+  reproducible as before. Verified: `tests/test_ge_check.py`'s peak-PNS
+  regression test only asserts a threshold (`< 80%`), not an exact value,
+  so it isn't sensitive to run-to-run spoiler variation; confirmed by
+  running a fresh `main.py --ge` build twice back to back --
+  `ArbEPI.seq`'s peak PNS varied by about 1 percentage point between runs
+  (e.g. 70.3% vs 70.1%) while `deGRE.seq`'s stayed bit-identical (it has no
+  per-shot spoiler randomization to begin with), both runs comfortably
+  `OK`. Full test suite (154 passed) unaffected.
 - [x] **177.** Closed as superseded, 2026-09-15 against `b701489`: the
   code this item cited no longer exists in that form.
   `preprocessing/smaps.py`'s `crop`/mask redesign (`b701489`) removed the
@@ -2931,7 +3024,7 @@ new B0-corrected siblings).
   in a different way, since a file of that exact path now exists in this
   tree too, with different (corrected-sign) behavior from the branch file
   they're describing. See item 214 for that broader, still-open problem.
-- [ ] **204. `params.py`'s PNS-slew-tuning comment documents the superseded
+- [x] **204. `params.py`'s PNS-slew-tuning comment documents the superseded
   pre-`0b9c25f` default protocol's measured numbers, not the currently
   shipped default's -- the same staleness CLAUDE.md's "PNS finding
   history" already carries, but a separate, not-yet-cited location.**
@@ -2968,6 +3061,27 @@ new B0-corrected siblings).
   independent of the specific protocol -- fix alongside CLAUDE.md's own
   copy the next time either file is touched, so the two don't keep
   drifting apart independently.
+
+  Resolved 2026-09-18, neither (a) nor (b) as originally framed but the
+  same underlying instinct as (a): per explicit user instruction ("remove
+  the specific numbers in that comment as these change all the time
+  depending on sequence"), the comment no longer quotes ANY measured
+  percentage/TE/margin, current or historical -- not even the fresh 69.3%/
+  30ms/10.7pp numbers option (b) proposed, since those would just as
+  surely go stale on the next protocol change and reintroduce this exact
+  item. It now points a reader at two things that can't drift independently
+  of the code: docs/review-findings.md's "Current baseline" table (refreshed
+  each review pass) and `tests/test_ge_check.py`'s
+  `test_arbepi_default_params_peak_pns_under_normal_mode_limit` (which
+  regression-guards the actual <80% property on every test run regardless
+  of protocol). The qualitative tuning rationale (why rise < fall, why
+  `blip_slew` is swept as its own axis rather than matched to rise/fall,
+  the RSS-hotspot mechanism from the y/z blips landing on the POPE fall
+  ramp's end) is kept, framed explicitly as "true regardless of protocol"
+  language rather than tied to specific numbers. CLAUDE.md's own "PNS
+  finding history" section still carries the old-protocol numbers as
+  historical record (that section is explicitly framed as history, unlike
+  this source comment) -- out of scope here, not touched.
 - [ ] **207. README.md's Architecture file tree is stale on both directions
   of the `preprocessing/` -> `recon/` Stage-2 file move (commit `8f90cd7`),
   and never gained an entry for the new `recon/cg_sense_b0.py`.**
@@ -4371,3 +4485,81 @@ new B0-corrected siblings).
   to match `lowres_calib_recon.py`, or adding it to `lowres_calib_recon.py`
   too for defensive consistency with the rest of `recon/`'s established
   convention, with a one-line comment either way explaining the choice.
+- [ ] **218. `recon/lowres_calib_recon_b0complex.py`'s driver function
+  duplicates essentially all of `recon/lowres_calib_recon_b0.py`'s sibling
+  driver, not just the operator-building helper its own docstring already
+  discusses.** [measured; found 2026-09-17 against `33d44a4`, the commit
+  that added this file] The module docstring is explicit about *not*
+  reusing `build_encoding_operator_b0` and about *not* copying the
+  exploratory branch's operator-construction call verbatim -- but says
+  nothing about the surrounding driver, which is a near-verbatim copy of
+  `lowres_calib_recon_b0.py`'s `run_b0_corrected_calib_recon`
+  (`lowres_calib_recon_b0.py:175-282`) inside the new file's
+  `run_b0complex_corrected_calib_recon` (`lowres_calib_recon_b0complex.py:
+  195-353`): identical smaps-loading + RSS-normalization block, identical
+  B0-map load + shape assert, identical omegas/echo_times load +
+  `compute_calib_mask`/`n_calib`/empty-region-check block, identical
+  `native_calib_grid` + `voxel_mm` computation, identical
+  `resize_to_epi_grid` calls for `smaps_native`/`b0map_hz_native`, identical
+  `idx_full` cross-frame-consistency assertion loop, identical
+  `read_frames_cropped` + `gather_calib_ksp` + adjoint-only reconstruction
+  block. The two `main()` functions (`lowres_calib_recon_b0.py:285-307`,
+  `lowres_calib_recon_b0complex.py:356-379`) are the same pattern again:
+  identical `out_dir`/`os.makedirs` construction, differing only in the
+  output filename suffix (`_b0` vs `_b0complex`), the `note=` string, and
+  the b0complex version's extra `te_nominal_s` kwarg. The *only* genuinely
+  new logic in the b0complex driver is R2* loading/estimation, TE-shifting
+  `echo_times`, and the anti-aliased R2* resize -- a few dozen lines
+  threaded into an otherwise-identical copy of the sibling's ~110-line
+  body. This is the same duplication class item 211 just flagged for
+  `cg_sense_b0.py` against `reconstruct.py`/`run_b0_recon.py`, now with a
+  third sibling in the `lowres_calib_recon_b0*` family alongside the
+  `compute_calib_mask`/`native_calib_grid`/`gather_calib_ksp` trio that
+  `lowres_calib_recon_b0complex.py` already does import from
+  `lowres_calib_recon_b0.py` rather than re-copying (so the file's author
+  clearly knows the import-not-copy pattern; it just wasn't applied to the
+  larger orchestration function). Fix direction: factor a shared
+  `_load_calib_recon_inputs(datdir, seqname, device)` (or similar) covering
+  everything through the `idx_full`/k-space-gather steps, parameterized by
+  an operator-builder callback (`_build_calib_operator_b0` vs.
+  `_build_calib_operator_b0_complex`) and an optional R2*/TE-shift hook,
+  with `main()` similarly factored to take just the output-filename suffix
+  and `note=` string as the two per-variant knobs.
+- [ ] **219. `recon/reconstruct.py`'s `run_recon` already implements the
+  exact power-iteration sigma1A estimate `recon/run_mslr_local.py` was
+  forced to duplicate, gated behind a restriction whose stated rationale
+  doesn't hold.** [measured; found 2026-09-17 against the untracked
+  `recon/run_mslr_local.py`] `reconstruct.py:228-235` raises
+  `ValueError` whenever `sigma1A is None` and `fn_b0map is None`, with the
+  message "the plain SENSE operator's spectral norm has no cheap
+  closed-form estimate wired up here, so auto-estimation only covers the
+  B0-corrected path." That's not actually true of the code two lines below
+  it (`reconstruct.py:236-240`): `estimate_spectral_norm(A, x0)` is a
+  generic power iteration over any mirtorch `LinearMap`/`BlockDiagonal`
+  (its own docstring, `operators_b0.py:366`: "A: any mirtorch
+  LinearMap/BlockDiagonal") -- nothing about it is B0-specific, and `A` has
+  already been built via the plain `build_encoding_operator` branch
+  (`reconstruct.py:226`) by the time the gate is checked. `run_mslr_local.py`
+  confirms this directly: it calls the *same* `estimate_spectral_norm` on
+  the *same* `build_encoding_operator` output successfully
+  (`run_mslr_local.py:84-88`), because it has no Julia-derived reference
+  sigma1A to pass in (its own docstring: "No Julia reference exists for
+  this patch config on this dataset"). Every existing plain-operator
+  (`fn_b0map=None`) caller of `run_recon` -- `validate_against_mslr.py:76`
+  (`sigma1A=float(ref["sigma1A"])`, a Julia reference value) and both
+  `tests/test_recon_reconstruct.py` smoke tests (`sigma1A=1.0`, explicitly
+  commented as a safe over-estimate) -- happens to already have a
+  known-good value in hand and was never exercising the auto-estimate path
+  for the plain operator, so the gate was never tested against a caller
+  that actually needed it; `run_mslr_local.py` is the first one that does,
+  and it had to reimplement `reconstruct.py:237-240`'s
+  `x0 = torch.randn(...); sigma1A = estimate_spectral_norm(A, x0); print(...)`
+  plus the `del`/`torch.cuda.empty_cache()` cleanup
+  (`reconstruct.py:243-245`) verbatim at `run_mslr_local.py:83-92` instead
+  of just calling `run_recon` with `sigma1A=None`. Fix direction: drop the
+  `fn_b0map is None` half of the guard (the power iteration doesn't care
+  which branch built `A`) and let `run_mslr_local.py` call `run_recon`
+  directly without pre-measuring sigma1A itself -- likely eliminating the
+  file's `estimate_spectral_norm`/`build_encoding_operator` imports and the
+  `smaps`/`omega`-loading preamble entirely, since `run_recon` already
+  loads both internally.

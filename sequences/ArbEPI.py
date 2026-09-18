@@ -202,10 +202,16 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
 
     rf_count = 1
     Ny, Nz = params.Ny, params.Nz
-    # Seeded (reproducible) per-shot spoiler cycles/voxel draws -- see
-    # params.py's spoil_cycles_min/max comment for why this varies rather
-    # than staying constant.
-    spoil_rng = np.random.default_rng(0)
+    # Deliberately unseeded (fresh entropy every run/process, independent of
+    # params.seed): per-shot spoiler cycles/voxel draws only need to break a
+    # residual coherence pathway within this sequence's own repeated TR
+    # structure (see params.py's spoil_cycles_min/max comment for why this
+    # varies rather than staying constant), not to be reproducible run-to-run
+    # like the sampling mask (params.seed) is -- unlike the mask, no test or
+    # downstream consumer depends on a specific spoiler draw sequence, and
+    # reproducibility here would only make it easier to accidentally rely on
+    # one (docs/review-findings.md item 176).
+    spoil_rng = np.random.default_rng()
 
     for frame in tqdm(range(params.Nframes), desc='Writing frames'):
 
@@ -267,25 +273,35 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
 
             # Spoilers: this shot's randomly-drawn x/y/z cycles/voxel
             # (x_scale/y_scale/z_scale, see per-shot draw above) plus each
-            # axis's own mandatory rewind-to-center term -- x rewinds the
-            # fixed net kx moment left by gx_pre+readout (gx_residual,
-            # computed once above; same for every shot since it doesn't
-            # depend on the schedule), y/z rewind the residual ky/kz
-            # blip-train moment for *this* shot. The y/z 1-based-offset
-            # formula is ported literally from ArbEPI.m (substituting
-            # 0-based y_locs[-1]+1 for y_locs(end)) rather than re-derived,
-            # since it's unclear whether the missing "-1" relative to the
-            # prephaser's k-offset formula is intentional (this is a
-            # spoiler, so a 1-index residual is likely inconsequential).
+            # axis's own mandatory rewind-to-center term, so the *total*
+            # accumulated gradient moment since the start of the shot (blips
+            # + this rewind + the spoiler's own contribution) comes out to
+            # exactly the intended x_scale/y_scale/z_scale * gx_spoil.area
+            # cycles/voxel of dephasing -- not that plus a leftover
+            # admixture of whatever residual moment the echo train happened
+            # to leave behind. x rewinds the fixed net kx moment left by
+            # gx_pre+readout (gx_residual, computed once above; same for
+            # every shot since it doesn't depend on the schedule); y/z rewind
+            # the residual ky/kz blip-train moment for *this* shot,
+            # `(y_locs[-1] - Ny/2) * deltak[1]`, using the same 0-based
+            # k-offset convention the prephaser above already uses for
+            # `y_locs[0]` -- an earlier version of this line read
+            # `y_locs[-1] + 1 - Ny/2`, a literal, un-re-derived port of
+            # ArbEPI.m's 1-based `y_locs(end)` (docs/review-findings.md item
+            # 138) that overshot the rewind by exactly one deltak step,
+            # leaving ~0.5-0.7% of the intended spoiler moment as residual
+            # encoding instead of dephasing.
             seq.add_block(
                 pp.scale_grad(gx_spoil, (x_scale * gx_spoil.area - gx_residual) / gx_spoil.area),
                 pp.scale_grad(
                     gy_spoil,
-                    (y_scale * gy_spoil.area - (y_locs[-1] + 1 - Ny / 2) * rg.deltak[1]) / gy_spoil.area,
+                    (y_scale * gy_spoil.area - (y_locs[-1] - Ny / 2) * rg.deltak[1])
+                    / gy_spoil.area,
                 ),
                 pp.scale_grad(
                     gz_spoil,
-                    (z_scale * gz_spoil.area - (z_locs[-1] + 1 - Nz / 2) * rg.deltak[2]) / gz_spoil.area,
+                    (z_scale * gz_spoil.area - (z_locs[-1] - Nz / 2) * rg.deltak[2])
+                    / gz_spoil.area,
                 ),
             )
 

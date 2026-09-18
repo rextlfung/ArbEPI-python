@@ -68,10 +68,16 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
 
     seq = pp.Sequence(system=sys)
 
-    # Slab-selective excitation (same pulse as EPI)
+    # Slab-selective excitation (same slice/slab geometry as EPI, but its
+    # own Ernst-angle flip/RF duration for this sequence's much shorter
+    # TR_degre -- see params.py's alpha_degre/rf_dur_degre, computed for
+    # exactly this purpose (docs/review-findings.md item 125: this used to
+    # excite with the EPI sequence's fa/rf_dur instead, a >3x error in both
+    # that over-saturated deGRE's steady state and ate far more of
+    # TR_degre's budget than necessary).
     rf, gz_ss, gz_ssr = pp.make_sinc_pulse(
-        params.fa / 180 * math.pi,
-        duration=params.rf_dur,
+        params.alpha_degre / 180 * math.pi,
+        duration=params.rf_dur_degre,
         slice_thickness=0.9 * params.fov[2],
         time_bw_product=params.rf_tb,
         system=sys,
@@ -79,6 +85,19 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         return_gz=True,
     )
     gz_ss = trap4ge(gz_ss, crt, sys)
+    # See lib/make_excitation_pulse.py's identical assert for why this is
+    # needed (docs/review-findings.md item 168): trap4ge always resets
+    # gz_ss.delay to 0, and if a future crt/RF-timing change ever makes its
+    # rounded-up gz_ss.rise_time exceed rf.delay's margin, this resync would
+    # go negative -- fail loudly here rather than downstream as an opaque
+    # NEGATIVE_DELAY error from seq.check_timing().
+    assert gz_ss.rise_time <= rf.delay, (
+        f'generate_degre: trap4ge-rounded gz_ss.rise_time ({gz_ss.rise_time * 1e6:.2f} us) '
+        f'exceeds rf.delay ({rf.delay * 1e6:.2f} us) -- the RF/slice-select resync '
+        f'(gz_ss.delay = rf.delay - gz_ss.rise_time) would go negative. This means crt '
+        f'({crt * 1e6:.2f} us) is rounding the slice-select ramp up further than rf.delay\'s '
+        f'margin can absorb -- reduce crt or otherwise shorten gz_ss.rise_time.'
+    )
     gz_ss.delay = rf.delay - gz_ss.rise_time  # sync RF onset with slice-select gradient
     gz_ssr = trap4ge(gz_ssr, crt, sys)
 
