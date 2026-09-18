@@ -1229,7 +1229,7 @@ new B0-corrected siblings).
   `get_block_type`/`get_dynamics`/`seq2ceq` -- the same untested-bug
   pattern item 134 already flags for `write_ceq`/`read_pge`, one level up
   the pipeline.
-- [ ] **138. `sequences/ArbEPI.py`'s post-readout spoiler scaling has a
+- [x] **138. `sequences/ArbEPI.py`'s post-readout spoiler scaling has a
   quantifiable off-by-one against this repo's 0-based indexing
   convention, already flagged in an inline comment but untracked in this
   backlog.** [measured, low severity; re-verified/updated 2026-09-12
@@ -1295,6 +1295,33 @@ new B0-corrected siblings).
   the comment instead), then re-verify against
   `tests/test_trajectory_matches_schedule.py`'s existing k-space coverage
   checks.
+
+  Resolved 2026-09-18, per explicit user instruction ("fix it so that the
+  spoilers achieve exactly ncycles_spoil cycles... dropping the +1"):
+  `sequences/ArbEPI.py`'s y/z spoiler rewind terms now read
+  `(y_locs[-1] - Ny / 2) * rg.deltak[1]` / `(z_locs[-1] - Nz / 2) *
+  rg.deltak[2]`, matching the prephaser's own 0-based convention. Verified
+  both algebraically and numerically (not just by re-running the existing
+  test suite) that this actually delivers the stated goal, not just drops
+  the literal `+1`: using the real built `gy_pre`/`gy_spoil` objects at
+  shipped defaults, confirmed `gy_pre.area == -(Ny/2)*deltak[1]` exactly
+  (the identity the prephaser's scale formula depends on), then computed
+  the *total* accumulated y-gradient moment since shot start (prephase +
+  blips + spoiler block) for a representative `(y_locs[0], y_locs[-1])`
+  pair -- the old `+1` formula left the total moment short of the intended
+  `y_scale * gy_spoil.area` target by exactly `deltak[1] = 4.6296`
+  (matching this item's own previously-measured shortfall precisely), the
+  fixed formula lands on the target with **zero** residual (`0.0` to
+  float precision). I.e. the spoiler now delivers exactly the drawn
+  cycles/voxel value with no schedule-dependent admixture, not just
+  "closer." `x` was already correct and untouched (`gx_residual` isn't
+  schedule-index-based, per this item's own text). Verified no
+  regression: full test suite (154 passed, 17 skipped) and a fresh
+  `main.py --ge` build (all four sequences `OK`, PNS/acoustics essentially
+  unchanged from before the fix, as expected for a sub-1%-of-spoiler-area
+  correction) both pass; the two touched lines were also reflowed to stay
+  under ruff's line-length limit (no new lint errors beyond this file's
+  pre-existing, unrelated `E501`s at `:119`/`:143`).
 - [ ] **139. `preprocessing/config.py`'s `load_seq_params` reads
   `scan_info.mat` via a bare `h5py.File`, not `matio.read_mat`,
   contradicting `matio.py`'s own unconditional stated rule.** [verify,
