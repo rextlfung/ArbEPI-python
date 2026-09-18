@@ -51,6 +51,10 @@ recon = [
     "mirtorch>=0.3.1",
     "h5py>=3.10",
     "nibabel>=5.0",
+    # Not for GPU-array interop (no cupy here -- see recon/sigpy_torch_bridge.py's
+    # module docstring) -- just its Wavelet/FiniteDifference/prox/PDHG machinery,
+    # reused via a numpy<->torch bridge rather than reimplemented.
+    "sigpy>=0.1.26",
 ]
 
 [tool.setuptools]

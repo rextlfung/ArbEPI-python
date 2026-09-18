@@ -5,6 +5,7 @@ stage -- reused directly here (not reimplemented) so both stages are held to
 the exact same ground truth."""
 
 import math
+import warnings
 
 import pytest
 
@@ -16,6 +17,7 @@ from mirtorch.linear.mri import mri_exp_approx  # noqa: E402
 from recon.operators_b0 import (  # noqa: E402
     GatheredSenseB0,
     build_encoding_operator_b0,
+    check_operator_unitary,
     estimate_spectral_norm,
 )
 from tests.test_recon_b0_correction import DEVICE, _complex_randn, _setup  # noqa: E402
@@ -409,3 +411,46 @@ def test_estimate_spectral_norm_matches_full_sampling_unity_case():
     x0 = _complex_randn(Nx, Ny, Nz, seed=61)
     sigma1 = estimate_spectral_norm(A, x0, niter=30)
     assert abs(sigma1 - 1.0) < 1e-3
+
+
+def test_check_operator_unitary_silent_for_trivial_l1_case():
+    """The L=1/unit-weights case above is genuinely unitary -- no warning."""
+    Nx, Ny, Nz, Nc = 8, 8, 6, 4
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=62)
+    smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-8)
+    full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
+    b_weights = torch.ones(Nx * Ny * Nz, 1, dtype=torch.complex64, device=DEVICE)
+    pos = torch.arange(Nx * Ny * Nz, device=DEVICE)
+    c_phasors = torch.ones(1, Nx, Ny, Nz, dtype=torch.complex64, device=DEVICE)
+    A = GatheredSenseB0(smaps, full_mask, pos, b_weights, c_phasors)
+
+    x0 = _complex_randn(Nx, Ny, Nz, seed=63)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        sigma1 = check_operator_unitary(A, x0, niter=30)
+    assert abs(sigma1 - 1.0) < 1e-3
+
+
+def test_check_operator_unitary_warns_for_real_b0_correction():
+    """A genuine (L>1, real field map) B0-corrected operator is not
+    guaranteed unitary -- regression guard for the 2026-09-18 finding that
+    real GatheredSenseB0 operators measure sigma1 ~= 1.3, not ~1.0 (see
+    operators_b0.py's check_operator_unitary docstring for the real-data
+    debugging session this documents). Doesn't hardcode that exact value
+    (a different seed/field map would give a different number), just that
+    it's measurably away from 1.0 and that check_operator_unitary catches
+    it -- a future change that made this operator closer to unitary would
+    be fine; one that made it silently *worse* without a warning would not."""
+    Nx, Ny, Nz, Nc, L = 8, 8, 6, 4, 6
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=70)
+    smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-8)
+    full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
+    b0map_hz = _complex_randn(Nx, Ny, Nz, seed=71).real * 200  # real-scale-ish field map, Hz
+    t_frame = _complex_randn(Nx, Ny, Nz, seed=72).real.abs() * 0.05 + 0.01  # seconds
+
+    A = _build_b0_operator(smaps, full_mask, b0map_hz, t_frame, L=L, nbins=40)
+    x0 = _complex_randn(Nx, Ny, Nz, seed=73)
+
+    with pytest.warns(UserWarning, match="not unitary"):
+        sigma1 = check_operator_unitary(A, x0, niter=100)
+    assert abs(sigma1 - 1.0) > 0.05

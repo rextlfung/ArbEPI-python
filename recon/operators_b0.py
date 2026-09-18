@@ -366,3 +366,55 @@ def estimate_spectral_norm(A, x0: torch.Tensor, niter: int = 200, tol: float = 1
     A: any mirtorch LinearMap/BlockDiagonal (.apply/.adjoint). x0: any
     nonzero starting tensor matching A's size_in (dtype/device included)."""
     return poweriter(A.apply, A.adjoint, x0, niter=niter, tol=tol)
+
+
+def check_operator_unitary(
+    A, x0: torch.Tensor, name: str = 'A', tol: float = 0.05, niter: int = 200,
+    poweriter_tol: float = 1e-6,
+) -> float:
+    """Measures sigma1(A) (via estimate_spectral_norm) and warns if it's not
+    close to 1.0 -- added 2026-09-18 after a real debugging session where
+    exactly this gap (GatheredSenseB0's sigma1 = 1.29, not ~1.0 like the
+    plain GatheredSense's 0.9998) went undiagnosed for a while: sigpy's
+    recon_sigpy.py-style L1-wavelet+TV regularization (lamb_l1/lamb_tv,
+    tuned against a genuinely unitary sigpy.mri.linop.Sense) silently needed
+    a ~100x larger lambda once the same pattern was reused with
+    recon/sigpy_torch_bridge.py wrapping a non-unitary operator -- a fixed
+    lambda's *effective* regularization strength (relative to the data
+    term) shifts with the operator's own norm, both because sigpy's PDHG
+    step-size calibration (tau ~ 1/||A||^2 with sigma held fixed, see
+    sigpy/app.py's LinearLeastSquares._get_PrimalDualHybridGradient) slows
+    convergence of both the data and regularization terms together at a
+    fixed iteration budget, and because POGM's own Lipschitz constant
+    (recon/reconstruct.py's run_recon: `L = Nscales * sigma1A**2`) is
+    directly sigma1(A)-dependent.
+
+    Call this once when building a *new* encoding operator (or composing
+    an existing one into a new solver/regularization scheme) rather than
+    assuming unitarity -- a plain Cartesian-FFT + RSS-normalized-smaps
+    operator (GatheredSense) genuinely is unitary (sigma1 ~= 1.0, tight
+    tolerance -- see tests/test_recon_operators.py) and should warn if it
+    ever isn't (a real regression). A time-segmented B0-corrected operator
+    (GatheredSenseB0) is *not* guaranteed unitary by construction --
+    mri_exp_approx's segmentation weights are a least-squares fit, not an
+    orthogonal/unit-norm decomposition (see estimate_spectral_norm's own
+    docstring) -- so a warning there is expected, not necessarily a bug;
+    it's a reminder to re-tune (or explicitly account for) lambda/step-size
+    choices made under a unitary-operator assumption, not an error to
+    silence.
+
+    Returns the measured sigma1(A) either way, so callers can reuse it
+    (e.g. as POGM's sigma1A) instead of measuring twice.
+    """
+    sigma1 = estimate_spectral_norm(A, x0, niter=niter, tol=poweriter_tol)
+    if abs(sigma1 - 1.0) > tol:
+        warnings.warn(
+            f"check_operator_unitary: {name}'s sigma1(A) = {sigma1:.4f}, not close to 1.0 "
+            f"(tol={tol}) -- this operator is not unitary. Any regularization weight "
+            "(lambda_l1/lambda_tv/lambda_global/...) or step size tuned assuming a unitary "
+            "operator (e.g. recon_sigpy.py's lamb_l1=lamb_tv=0.005 default, tuned against a "
+            "genuinely unitary sigpy.mri.linop.Sense) will not transfer directly -- expect to "
+            "re-tune, or explicitly normalize the operator/data by sigma1(A) first.",
+            stacklevel=2,
+        )
+    return sigma1
