@@ -298,13 +298,24 @@ def plot_pns_one_tr(seq: pp.Sequence, params: Params, shot_index: int = 0) -> ma
     feasibility check, `ge.ge_export.check_ge_feasibility`), driven by
     `params.spec` (rheobase/alpha/chronaxie) and `params.PNSwt` -- this is
     a decomposition of the same peak number that function reports, not an
-    independent estimate."""
+    independent estimate, for any `shot_index` (not just `shot_index=0`):
+    `pns()`'s convolution needs the gradient history before the window
+    too (ge/pns.py's impulse response reaches back ~20*chronaxie), so
+    gradients are sampled from t=0 through the window's end and only the
+    requested [shot_index*TR, (shot_index+1)*TR) slice of the resulting
+    PNS waveform is plotted -- windowing the *sample_gradients_tesla_per_m*
+    call itself (as an earlier version of this function did) would silently
+    drop the prior shot's trailing slew activity and under-report PNS near
+    the window's start (docs/review-findings.md item 121)."""
     t0 = shot_index * params.TR
-    gw_tm, dt = sample_gradients_tesla_per_m(seq, time_range=(t0, t0 + params.TR))
-    t_ms = (np.arange(gw_tm.shape[1]) + 0.5) * dt * 1e3
+    gw_tm_full, dt = sample_gradients_tesla_per_m(seq, time_range=(0.0, t0 + params.TR))
+    idx0 = int(round(t0 / dt))
 
     s_min = params.spec.rheobase / params.spec.alpha
-    pt, p = pns(s_min, params.spec.chronaxie, gw_tm, dt, wt=tuple(params.PNSwt))
+    pt_full, p_full = pns(s_min, params.spec.chronaxie, gw_tm_full, dt, wt=tuple(params.PNSwt))
+
+    gw_tm, pt, p = gw_tm_full[:, idx0:], pt_full[idx0:], p_full[:, idx0:]
+    t_ms = (np.arange(gw_tm.shape[1]) + 0.5) * dt * 1e3
 
     fig = matplotlib.figure.Figure(figsize=(20, 10))  # match plot_one_tr's 2:1 aspect ratio
     ax_grad, ax_slew, ax_pns = fig.subplots(3, 1, sharex=True)

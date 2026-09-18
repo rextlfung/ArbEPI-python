@@ -873,7 +873,7 @@ new B0-corrected siblings).
   and parametrize `tests/test_preprocessing_epi_gridding.py` over an odd
   `nx` the way item 44's fix parametrized
   `test_epiphasecorrect_removes_odd_even_mismatch` over `[64, 63]`.
-- [ ] **121. `plotting/plotting.py`'s `plot_pns_one_tr` loses gradient
+- [x] **121. `plotting/plotting.py`'s `plot_pns_one_tr` loses gradient
   history before the window start, contradicting its own docstring's claim
   of exact parity with `check_seq_feasibility`'s PNS number for any
   `shot_index > 0`.** [verify] `plot_pns_one_tr(seq, params, shot_index)`
@@ -907,6 +907,25 @@ new B0-corrected siblings).
   full history into `pns()` (windowing only the plotted/reported region
   afterward), or make the docstring explicit that `shot_index > 0` is an
   approximation that omits inter-shot PNS memory.
+
+  Resolved 2026-09-18, direction (a): `plot_pns_one_tr` now calls
+  `sample_gradients_tesla_per_m(seq, time_range=(0.0, t0 + params.TR))`
+  (full history from t=0) and runs `pns()` over that whole array, then
+  slices the result down to `[idx0:]` (`idx0 = round(t0/dt)`) for plotting
+  -- `gw_tm`/`pt`/`p` are all sliced the same way before the rest of the
+  function (unchanged) computes `t_ms`/draws the figure. Docstring updated
+  to state the mechanism and cite this item. Verified two ways on the real
+  default-params sequence (seed=0, `Nshots=15`): (1) no crash and a
+  plausible, `shot_index`-dependent peak for `shot_index` in `{0, 3}`; (2)
+  a direct before/after comparison of the PNS waveform showed the fix is a
+  numerical no-op on this particular schedule (max diff ~1e-11, floating-
+  point noise) -- this TR (66.7 ms) leaves gradients at exactly zero for
+  longer than `20*chronaxie` before every shot boundary (TR padding), so
+  there's genuinely no history being lost here either, the same reason
+  `shot_index=0` was already unaffected -- but the fix is still correct in
+  general (a denser schedule/shorter TR would show a real difference) and
+  costs nothing extra for `shot_index=0`. Full test suite (154 passed, 17
+  skipped) and a fresh `main.py --ge` build unaffected.
 - [ ] **122. `ge/seq2ceq.py`'s two loops item 107 flags also use a
   stricter outer `while` bound than the two already-correct loops, a
   distinct root cause item 107's own proposed fix doesn't address.**
@@ -929,7 +948,7 @@ new B0-corrected siblings).
   bug, and item 107's own stated fix direction would leave it unfixed --
   worth changing both outer bounds to `<=` in the same pass as item 107's
   fix.
-- [ ] **125. `sequences/deGRE.py` excites with the EPI sequence's flip angle
+- [x] **125. `sequences/deGRE.py` excites with the EPI sequence's flip angle
   and RF duration instead of the deGRE-specific values `params.py` computes
   for exactly this purpose and that are never read anywhere.** [measured]
   `deGRE.py:72-74` calls
@@ -971,6 +990,22 @@ new B0-corrected siblings).
   budget, not break it) and re-check
   `test_degre_excitation_is_centered`/the PNS and timing regression tests
   after the change.
+
+  Resolved 2026-09-18, per explicit user instruction: `deGRE.py`'s
+  excitation now calls `pp.make_sinc_pulse(params.alpha_degre / 180 *
+  math.pi, duration=params.rf_dur_degre, ...)` instead of `params.fa`/
+  `params.rf_dur`. Verified on a fresh build with the repo's real shipped
+  defaults (`alpha_degre=6.35°`, `rf_dur_degre=0.4 ms`, `TR_degre=8 ms`,
+  `TE_degre=[3.04, 5.27] ms`): `seq.check_timing()` passes, neither the
+  `te_min`/`TE_degre` nor `tr_min`/`TR_degre` `ValueError` guards fire (the
+  much shorter RF pulse shrinks the timing budget rather than breaking
+  it, as expected), and `ge.check.check_seq_feasibility` reports
+  `deGRE.seq` fully `OK` (max grad 49.76/50.00 mT/m, max slew 174.3/200
+  T/m/s, max B1 0.058/0.25 G, peak PNS 77.4%, acoustics 0.256/0.3) --
+  matching a fresh full `main.py --ge` build's own summary line for
+  `deGRE.seq`. `test_degre_excitation_is_centered`/
+  `test_degre_raises_actionable_error_below_minimum_tr` both still pass,
+  and the full suite (154 passed, 17 skipped) is unaffected.
 - [ ] **126. `ge/writeceq.py`'s sliding-window gradient/RF heating-check
   block count undercounts by exactly one segment instance's block count
   whenever a segment's block count evenly divides

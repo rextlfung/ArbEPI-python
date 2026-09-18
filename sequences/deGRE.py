@@ -68,10 +68,16 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
 
     seq = pp.Sequence(system=sys)
 
-    # Slab-selective excitation (same pulse as EPI)
+    # Slab-selective excitation (same slice/slab geometry as EPI, but its
+    # own Ernst-angle flip/RF duration for this sequence's much shorter
+    # TR_degre -- see params.py's alpha_degre/rf_dur_degre, computed for
+    # exactly this purpose (docs/review-findings.md item 125: this used to
+    # excite with the EPI sequence's fa/rf_dur instead, a >3x error in both
+    # that over-saturated deGRE's steady state and ate far more of
+    # TR_degre's budget than necessary).
     rf, gz_ss, gz_ssr = pp.make_sinc_pulse(
-        params.fa / 180 * math.pi,
-        duration=params.rf_dur,
+        params.alpha_degre / 180 * math.pi,
+        duration=params.rf_dur_degre,
         slice_thickness=0.9 * params.fov[2],
         time_bw_product=params.rf_tb,
         system=sys,
