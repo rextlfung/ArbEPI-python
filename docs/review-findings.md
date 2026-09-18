@@ -1560,7 +1560,7 @@ new B0-corrected siblings).
   passing `False`), deriving `nvcoils` from `f['ksp_epi_zf'].shape[3]`
   instead of `load_smaps`'s return value when smaps aren't needed, skipping
   `load_smaps()` entirely on that path.
-- [ ] **168. `lib/make_excitation_pulse.py`'s (and `sequences/deGRE.py`'s
+- [x] **168. `lib/make_excitation_pulse.py`'s (and `sequences/deGRE.py`'s
   identical inline copy) post-`trap4ge` RF/slice-select resync has no guard
   against producing a negative gradient delay.** [measured, not live today]
   `make_excitation_pulse.py:42` (and `deGRE.py:82`, an intentional inline
@@ -1599,6 +1599,16 @@ new B0-corrected siblings).
   `assert gz_ss.rise_time <= rf.delay` with a message naming the `crt`/
   `rf.delay` relationship, in both `make_excitation_pulse.py` and
   `deGRE.py`.
+
+  Resolved 2026-09-18, per explicit user instruction (direction (b), hard
+  assert): added `assert gz_ss.rise_time <= rf.delay` immediately before
+  the resync line in both `make_excitation_pulse.py` and `deGRE.py`'s
+  inline duplicate, each with a message naming the actual `gz_ss.rise_time`/
+  `rf.delay`/`crt` values so a future trip point straight to the cause
+  instead of surfacing as an opaque downstream `NEGATIVE_DELAY` from
+  `seq.check_timing()`. Verified the assert doesn't fire at the shipped
+  default `crt=4e-6` (full test suite: 154 passed, 17 skipped; fresh
+  `main.py --ge` build succeeds with all four sequences `OK`).
 - [x] **169.** Closed as no longer live 2026-09-16 (against `de3d535`) --
   not a code fix, a config change. `params.py`'s default protocol was
   switched from the old 240x240x45/R=9/TE=34.9ms config to "ABCD"
@@ -2714,7 +2724,7 @@ new B0-corrected siblings).
   something unambiguous, e.g. "(at this repo's default 0.9mm `res`, with a
   hypothetical Nz/R chosen to survive the restriction)", in both
   `caipi_sample.py` and the test file's matching comment.
-- [ ] **176. `sequences/ArbEPI.py` and `sequences/EPIcal.py` both seed their
+- [x] **176. `sequences/ArbEPI.py` and `sequences/EPIcal.py` both seed their
   per-shot spoiler-randomization RNG with the identical literal `0`,
   undocumented as to whether the sharing is intentional.** [verified, low
   severity, design-choice rather than clearly a bug] Commit `8448ff3`
@@ -2737,6 +2747,27 @@ new B0-corrected siblings).
   np.random.default_rng(0)` line (or in `params.py`'s
   `spoil_cycles_min`/`max` docstring) stating explicitly that sharing seed
   0 across the two generators is intentional and why.
+
+  Resolved 2026-09-18, differently than either fix direction above: per
+  explicit user request ("would it be possible to only seed the sampling
+  patterns but not the spoiler cycles?"), both `spoil_rng`s are now
+  unseeded (`np.random.default_rng()`, fresh entropy every run) rather
+  than documented as intentionally sharing seed 0. This was already
+  trivially possible -- `spoil_rng` was never coupled to `params.seed`
+  (the sampling-mask RNG) in the first place, they're two fully
+  independent `Generator` instances -- so the fix is a one-line change per
+  file plus a comment explaining *why* reproducibility isn't wanted here
+  (no test or downstream consumer depends on a specific spoiler draw, and
+  a fixed seed only invites accidentally relying on one) while
+  `params.seed` continues to make the sampling mask itself fully
+  reproducible as before. Verified: `tests/test_ge_check.py`'s peak-PNS
+  regression test only asserts a threshold (`< 80%`), not an exact value,
+  so it isn't sensitive to run-to-run spoiler variation; confirmed by
+  running a fresh `main.py --ge` build twice back to back --
+  `ArbEPI.seq`'s peak PNS varied by about 1 percentage point between runs
+  (e.g. 70.3% vs 70.1%) while `deGRE.seq`'s stayed bit-identical (it has no
+  per-shot spoiler randomization to begin with), both runs comfortably
+  `OK`. Full test suite (154 passed) unaffected.
 - [x] **177.** Closed as superseded, 2026-09-15 against `b701489`: the
   code this item cited no longer exists in that form.
   `preprocessing/smaps.py`'s `crop`/mask redesign (`b701489`) removed the
@@ -2966,7 +2997,7 @@ new B0-corrected siblings).
   in a different way, since a file of that exact path now exists in this
   tree too, with different (corrected-sign) behavior from the branch file
   they're describing. See item 214 for that broader, still-open problem.
-- [ ] **204. `params.py`'s PNS-slew-tuning comment documents the superseded
+- [x] **204. `params.py`'s PNS-slew-tuning comment documents the superseded
   pre-`0b9c25f` default protocol's measured numbers, not the currently
   shipped default's -- the same staleness CLAUDE.md's "PNS finding
   history" already carries, but a separate, not-yet-cited location.**
@@ -3003,6 +3034,27 @@ new B0-corrected siblings).
   independent of the specific protocol -- fix alongside CLAUDE.md's own
   copy the next time either file is touched, so the two don't keep
   drifting apart independently.
+
+  Resolved 2026-09-18, neither (a) nor (b) as originally framed but the
+  same underlying instinct as (a): per explicit user instruction ("remove
+  the specific numbers in that comment as these change all the time
+  depending on sequence"), the comment no longer quotes ANY measured
+  percentage/TE/margin, current or historical -- not even the fresh 69.3%/
+  30ms/10.7pp numbers option (b) proposed, since those would just as
+  surely go stale on the next protocol change and reintroduce this exact
+  item. It now points a reader at two things that can't drift independently
+  of the code: docs/review-findings.md's "Current baseline" table (refreshed
+  each review pass) and `tests/test_ge_check.py`'s
+  `test_arbepi_default_params_peak_pns_under_normal_mode_limit` (which
+  regression-guards the actual <80% property on every test run regardless
+  of protocol). The qualitative tuning rationale (why rise < fall, why
+  `blip_slew` is swept as its own axis rather than matched to rise/fall,
+  the RSS-hotspot mechanism from the y/z blips landing on the POPE fall
+  ramp's end) is kept, framed explicitly as "true regardless of protocol"
+  language rather than tied to specific numbers. CLAUDE.md's own "PNS
+  finding history" section still carries the old-protocol numbers as
+  historical record (that section is explicitly framed as history, unlike
+  this source comment) -- out of scope here, not touched.
 - [ ] **207. README.md's Architecture file tree is stale on both directions
   of the `preprocessing/` -> `recon/` Stage-2 file move (commit `8f90cd7`),
   and never gained an entry for the new `recon/cg_sense_b0.py`.**

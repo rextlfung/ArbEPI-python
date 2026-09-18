@@ -202,10 +202,16 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
 
     rf_count = 1
     Ny, Nz = params.Ny, params.Nz
-    # Seeded (reproducible) per-shot spoiler cycles/voxel draws -- see
-    # params.py's spoil_cycles_min/max comment for why this varies rather
-    # than staying constant.
-    spoil_rng = np.random.default_rng(0)
+    # Deliberately unseeded (fresh entropy every run/process, independent of
+    # params.seed): per-shot spoiler cycles/voxel draws only need to break a
+    # residual coherence pathway within this sequence's own repeated TR
+    # structure (see params.py's spoil_cycles_min/max comment for why this
+    # varies rather than staying constant), not to be reproducible run-to-run
+    # like the sampling mask (params.seed) is -- unlike the mask, no test or
+    # downstream consumer depends on a specific spoiler draw sequence, and
+    # reproducibility here would only make it easier to accidentally rely on
+    # one (docs/review-findings.md item 176).
+    spoil_rng = np.random.default_rng()
 
     for frame in tqdm(range(params.Nframes), desc='Writing frames'):
 
