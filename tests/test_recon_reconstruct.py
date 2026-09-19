@@ -14,7 +14,7 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("mirtorch")
 
 from recon.operators import build_encoding_operator  # noqa: E402
-from recon.reconstruct import _load_omega, run_recon  # noqa: E402
+from recon.reconstruct import _load_omega, estimate_noise_std, run_recon  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -189,3 +189,70 @@ def test_run_recon_recovers_signal_without_regularization(tmp_path):
 
     rel_err = (result.X_recon - x_true).norm().item() / x_true.norm().item()
     assert rel_err < 0.05
+
+
+def test_estimate_noise_std_recovers_known_scale():
+    """A large bright 'object' region embedded in a much bigger 'background'
+    of known-std noise -- estimate_noise_std's bottom-bg_frac magnitude
+    selection should recover that known std, not be pulled toward the
+    object's much larger scale."""
+    known_std = 37.5
+    X = known_std * _complex_randn(24, 24, 24, seed=99)
+    X[8:16, 8:16, 8:16] += 5000.0  # object: far above the noise floor, small fraction of volume
+
+    measured = estimate_noise_std(X, bg_frac=0.5)
+    assert abs(measured - known_std) / known_std < 0.15
+
+
+def test_run_recon_normalize_noise_round_trip_preserves_recovery(tmp_path):
+    """normalize_noise=True internally rescales ksp/X0 by 1/estimate_noise_std
+    and undoes it on the returned X/X_recon -- with real-scale (not O(1))
+    synthetic data, recovery should still match the same ground truth
+    within the same tolerance as the unregularized-recovery test above,
+    confirming the scale round-trip doesn't introduce a bias."""
+    Nx, Ny, Nz, Nc, Nt = 10, 10, 6, 4, 4
+    torch.manual_seed(43)
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=20)
+    smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-8)
+    x_true = 5000.0 * _complex_randn(Nx, Ny, Nz, Nt, seed=21)  # real-scanner-unit-like scale
+    omega = torch.stack(
+        [torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.3 for _ in range(Nt)], dim=-1
+    )
+    counts = omega.sum(dim=(0, 1, 2))
+    k = counts.min().item()
+    omega = omega & (torch.cumsum(omega.reshape(-1, Nt), dim=0) <= k).reshape(Nx, Ny, Nz, Nt)
+
+    A = build_encoding_operator(smaps, omega)
+    ksp_gathered = A.apply(x_true)
+    ksp_dense = torch.zeros(Nx, Ny, Nz, Nc, Nt, dtype=torch.complex64, device=DEVICE)
+    ksp_dense_flat = ksp_dense.reshape(-1, Nc, Nt)
+    for it in range(Nt):
+        ksp_dense_flat[A.A[it].idx, :, it] = ksp_gathered[:, :, it]
+    ksp_np = ksp_dense.cpu().numpy()
+    smaps_np = smaps.permute(1, 2, 3, 0).contiguous().cpu().numpy()
+
+    fn_ksp = tmp_path / "ksp3.h5"
+    fn_smaps = tmp_path / "smaps3.h5"
+    with h5py.File(fn_ksp, "w") as f:
+        f.create_dataset("ksp_epi_zf", data=ksp_np)
+    with h5py.File(fn_smaps, "w") as f:
+        f.create_dataset("smaps", data=smaps_np)
+
+    result = run_recon(
+        fn_ksp=str(fn_ksp),
+        fn_smaps=str(fn_smaps),
+        patch_sizes=[(1, 1, 1)],
+        strides=[(1, 1, 1)],
+        niters=300,
+        sigma1A=1.0,
+        device=DEVICE,
+        mom="pogm",
+        conv_tol=0.0,
+        lambda_global=0.0,
+        normalize_noise=True,
+    )
+
+    rel_err = (result.X_recon - x_true).norm().item() / x_true.norm().item()
+    assert rel_err < 0.05
+    assert result.meta["normalize_noise"] is True
+    assert result.meta["noise_std"] > 1.0  # real-scanner-unit-like scale, not already ~1

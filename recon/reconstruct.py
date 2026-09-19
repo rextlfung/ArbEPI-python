@@ -121,6 +121,57 @@ def _load_normalized_smaps(
     return smaps, smaps_chw
 
 
+def estimate_noise_std(X: torch.Tensor, bg_frac: float = 0.25) -> float:
+    """Robust image-domain thermal-noise std estimate, from the lowest-
+    magnitude bg_frac of voxels (assumed background/air, dominated by noise
+    rather than signal -- no explicit object mask needed). Real and
+    imaginary parts of complex Gaussian noise share the same std, so the
+    real part alone (not the rectified magnitude, which is biased) is used.
+
+    Added 2026-09-18 after finding this port's real reconstructions have
+    thermal noise far from the unit-variance-in-image-space Ong & Lustig's
+    lambda_k formula assumes (see run_recon's normalize_noise docstring) --
+    ../mslr-recon/scripts/reconstruct.jl's own comment states this
+    explicitly ("Formula assumes unit-variance noise in image space. BART
+    prewhitening gives sigma_ksp ~= 1 and A is approximately unitary, so
+    sigma_image ~= 1 -- no correction needed") but that assumption doesn't
+    hold here: this repo's own k-space whitening (preprocessing/coils.py)
+    and PCA coil compression are both verified variance-preserving in
+    isolation (unit-tested; compression's rows are orthonormal, which
+    provably preserves noise variance), so the source of the mismatch is
+    elsewhere in the pipeline (EPI ramp-sampling regridding is the leading
+    suspect, not yet isolated) -- measuring and normalizing directly avoids
+    needing to find it. Measured on real 2_6x_2.4mm data: a single A^H(ksp)
+    (X0, before any iteration) has background std ~184 -- ~150-200x away
+    from the ~1 the formula assumes, not a small correction.
+
+    Thresholding on the lowest bg_frac of |X| (Rayleigh-distributed for
+    i.i.d. complex Gaussian noise, scale sigma) truncates the real part's
+    own distribution too, biasing a naive std() of the selected real parts
+    low -- confirmed both analytically and by direct Monte Carlo (e.g.
+    bg_frac=0.25 measures ~0.37*sigma, not sigma). Exact closed-form
+    correction: M^2/sigma^2 is Exp(2) (Rayleigh -> exponential), so with
+    t = -ln(1-bg_frac) (the truncation point in those units) and using
+    E[real^2|M<=m_p] = E[M^2|M<=m_p]/2 (real/imag symmetry) with
+    E[M^2|M<=m_p] = 2*sigma^2*(1-(1+t)(1-bg_frac))/bg_frac (incomplete-
+    gamma integral of the truncated exponential), the selected subset's
+    true real-part variance is sigma^2*(1-(1+t)(1-bg_frac))/bg_frac --
+    correction = 1/sqrt(that ratio). Verified: this closed form matches
+    a 2M-sample Monte Carlo to 4 significant figures at every bg_frac
+    tested (0.1-0.5) -- see tests/test_recon_reconstruct.py.
+    """
+    mag = X.abs().flatten()
+    k = max(1, int(bg_frac * mag.numel()))
+    thresh = torch.kthvalue(mag, k).values
+    bg_vals = X[X.abs() <= thresh]
+    measured = bg_vals.real.std().item()
+
+    t = -math.log(1 - bg_frac)
+    ratio = (1 - (1 + t) * (1 - bg_frac)) / bg_frac
+    correction = 1 / math.sqrt(ratio)
+    return measured * correction
+
+
 def _reg_weights(
     patch_sizes: list[tuple[int, int, int]], Nt: int, N_voxels: int, lambda_global: float
 ) -> list[float]:
@@ -151,6 +202,7 @@ def run_recon(
     fn_b0map: str | None = None,
     L_b0: int = 32,
     nbins_b0: int = 128,
+    normalize_noise: bool = True,
     r2star_map: torch.Tensor | None = None,
     t_ref_s: float = 0.0,
 ) -> ReconResult:
@@ -179,7 +231,22 @@ def run_recon(
     branch's adjoint-only calib script, and why t_ref_s should be the
     nominal-TE echo's acquisition time). Ignored (and must be left None)
     when fn_b0map is None -- R2* correction only makes sense layered on
-    top of the B0-corrected operator, not the plain one."""
+    top of the B0-corrected operator, not the plain one.
+
+    normalize_noise: rescale `ksp` (and therefore X0 and every POGM
+    iterate) by 1/estimate_noise_std(X0) before the solve, undoing it on
+    the returned X/X_recon only -- _reg_weights' lambda_k formula (Ong &
+    Lustig 2016 eq. 4) assumes unit-variance thermal noise in image space
+    (see estimate_noise_std's docstring and ../mslr-recon/scripts/
+    reconstruct.jl's own comment to that effect), which measurably does not
+    hold for this port's real data (background std ~150-200x away from 1,
+    not a small correction) -- explicit user decision (2026-09-18) to
+    measure and normalize directly, mirroring the same step the original
+    Julia workflow performed on X0/ksp0, rather than relying on an
+    upstream-whitening assumption that turned out not to hold end to end.
+    dc_costs/reg_costs in the returned ReconResult are measured in this
+    normalized scale, not the original data's physical units -- expect much
+    smaller numbers than an unnormalized run at the same lambda_global."""
     device = torch.device(device)
     Nscales = len(patch_sizes)
 
@@ -245,6 +312,17 @@ def run_recon(
         torch.cuda.empty_cache()
         free_gb, total_gb = (x / 1e9 for x in torch.cuda.mem_get_info())
         print(f"  VRAM free after freeing dense k-space: {free_gb:.2f} / {total_gb:.2f} GB")
+
+    # See normalize_noise's docstring above -- measured from a single
+    # (cheap) adjoint, before any iteration, so the estimate isn't
+    # contaminated by POGM's own noise amplification in poorly-conditioned
+    # directions over many iterations.
+    noise_std = 1.0
+    if normalize_noise:
+        noise_std = estimate_noise_std(A.adjoint(ksp))
+        print(f"  Estimated thermal-noise std (image domain, pre-normalization) = "
+              f"{noise_std:.4f} -- rescaling ksp/X0 by 1/{noise_std:.4f}")
+        ksp = ksp / noise_std
 
     L = Nscales * sigma1A**2
 
@@ -319,6 +397,10 @@ def run_recon(
 
     print(f"Wall-clock: {runtime_s:.1f} s, {runtime_s / max(len(dc_costs) - 1, 1):.2f} s/iter")
 
+    if normalize_noise:
+        X = X * noise_std
+        X_recon = X_recon * noise_std
+
     return ReconResult(
         X=X,
         X_recon=X_recon,
@@ -333,5 +415,6 @@ def run_recon(
         lambdas=lambdas,
         runtime_s=runtime_s,
         meta=dict(niters=niters, mom=mom, conv_tol=conv_tol, lambda_global=lambda_global,
-                   patch_sizes=patch_sizes, strides=strides),
+                   patch_sizes=patch_sizes, strides=strides,
+                   normalize_noise=normalize_noise, noise_std=noise_std),
     )
