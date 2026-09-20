@@ -437,73 +437,90 @@ The fixes for items 121, 125, 138, 168, 176, and 204 (landed in this same
 span) were each individually re-verified against their write-ups and found
 fully correct, with no gaps or partial fixes.
 
-## Current baseline (2026-09-19, against `d515cd0`)
+Item 222 is a new finding from a later, automated pass (2026-09-20, against
+`d620951`). No source file changed between `d515cd0` and `d620951` -- the
+only commit in between is `d620951` itself, this doc's own previous
+automated-pass commit -- so this pass's re-verification of every item open
+at its start (107-135, 137-142, 144, 160-167, 170-175, 178-192, 196-199,
+202, 205-212, 214-221) rested on the fact that the code they describe is
+byte-for-byte the tree the immediately preceding pass already re-verified
+against, not a fresh independent re-read of all 83 open items line by line; two
+parallel subagents (one covering `ge/`+`lib/`+`sequences/`+`params.py`/
+`scanners.py`/`main.py`+`sampling/`+`plotting/`, one covering
+`preprocessing/`+`recon/`) each spot-checked a representative sample of
+their scope's open items against current source (12 and 5 items
+respectively, all confirmed still open and substantively unchanged) and
+hunted for new findings across their full scope. The `ge/`+`lib/`+
+`sequences/` subagent found no new findings after a full line-by-line pass
+(every candidate issue it traced led back to an existing item). The
+`preprocessing/`+`recon/` subagent's hunt produced one new finding, item
+222 (`run_b0map.py`/`r2star_map.py` never re-masking after a cubic-spline
+grid resize, unlike the identical, already-fixed case in `smaps.py`'s
+`process_smaps`), independently re-verified against the live tree
+(including a standalone reproduction of the spline-leakage magnitude via
+`resize_to_epi_grid` itself, and confirming `recon/operators_b0.py`
+applies no masking of its own) before being recorded here, not just
+trusted from the subagent's report. `uv run ruff check .` (33 errors) and
+all three `pytest` configurations (154/17, 192/12, 231/5) reproduced
+exactly the previous pass's counts with no drift, and the whole-sequence
+feasibility table was re-measured and found within the same run-to-run
+noise band as the previous pass (see below) -- consistent with no code
+having changed since the last pass.
+
+## Current baseline (2026-09-20, against `d620951`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **33
   errors** -- **32 `E501` + 1 `I001`** (unsorted imports, still
-  `recon/cg_sense_b0.py`), down from 35 (34 `E501` + 1 `I001`). The net -2
-  `E501` comes from incidental line-length changes in the six files item
-  121/125/138/168/176/204's fixes touched (`params.py`,
-  `sequences/ArbEPI.py`, etc.) -- not a deliberate lint cleanup, since only
-  this file may be modified this pass. Full current list (unchanged file
-  set otherwise): `ge/check.py`, `ge/validate_against_matlab.py` (x2),
-  `ge/writeceq.py`, `lib/calc_te_tr_delays.py` (x2),
-  `lib/make_readout_grads.py` (x2), `params.py`, `plotting/plotting.py`
-  (x2), `preprocessing/gre_diagnostics.py` (x2),
-  `recon/benchmark_b0_cost.py` (x4), `recon/cg_sense_b0.py` (`I001` + x2
-  `E501`), `recon/lowres_temporal_stability.py` (x3),
+  `recon/cg_sense_b0.py`) -- identical count and file set to the previous
+  pass (unsurprising: no source file changed between `d515cd0` and
+  `d620951`). Full current list: `ge/check.py`,
+  `ge/validate_against_matlab.py` (x2), `ge/writeceq.py`,
+  `lib/calc_te_tr_delays.py` (x2), `lib/make_readout_grads.py` (x2),
+  `params.py`, `plotting/plotting.py` (x2),
+  `preprocessing/gre_diagnostics.py` (x2), `recon/benchmark_b0_cost.py`
+  (x4), `recon/cg_sense_b0.py` (`I001` + x2 `E501`),
+  `recon/lowres_temporal_stability.py` (x3),
   `recon/sweep_time_segments.py` (x3), `sampling/pd_sample.py`,
   `sequences/ArbEPI.py` (x2), `sequences/EPIcal.py` (x2),
   `sequences/noise.py`, `tests/test_gen_gaussian_pdf.py`.
 - `uv run pytest` (plain main venv, fresh `.venv`, `rm -rf output` first):
-  **154 passed, 17 skipped** -- unchanged from the previous pass (no new
-  test files landed in the base-venv-visible set since `33d44a4`; the
-  fix commits for items 121/125/138/168/176/204 only touched existing
-  test-covered code paths). With `--extra preprocessing` only synced
-  (fresh `.venv-preprocessing`): **192 passed, 12 skipped**. With
-  `--extra preprocessing --extra recon` both synced (fresh `.venv-recon`):
-  **231 passed, 5 skipped**, matching the previous pass's number exactly
-  (231/5) -- confirming no regression from the intervening fix commits.
-  All five remaining skips are still `julia executable not found on PATH`
-  (`tests/test_preprocessing_run_b0map.py`), **zero** GERecon-gated. One
-  pre-existing, unrelated `sigpy`-import collection error in
-  `tests/test_preprocessing_run_b0map.py` still reproduces when `recon`
-  extras are installed without `preprocessing` extras in the same venv (a
-  venv-composition artifact, not a code bug -- see item 213's own note on
-  this) -- excluded via `--ignore` when measuring the `.venv-recon`-only
-  number above, and not present at all once both extras share one venv.
+  **154 passed, 17 skipped** -- unchanged from the previous pass. With
+  `--extra preprocessing` only synced (fresh `.venv-preprocessing`,
+  Python 3.10): **192 passed, 12 skipped** -- unchanged. With
+  `--extra preprocessing --extra recon` both synced (fresh
+  `.venv-recon`, Python 3.10): **231 passed, 5 skipped** -- unchanged.
+  All three counts reproduce the previous pass's numbers exactly, as
+  expected with no intervening source-file changes. All five remaining
+  skips are still `julia executable not found on PATH`
+  (`tests/test_preprocessing_run_b0map.py`), **zero** GERecon-gated.
   Item 216's previously-flagged flaky unseeded-RNG test
   (`test_build_encoding_operator_b0_matches_manual_per_frame_construction`)
-  did not reproduce in this pass's runs (still open regardless -- see that
-  item's own re-verification note above; a single quiet run is not
-  evidence the underlying unseeded `torch.rand()` calls were fixed, since
-  they weren't).
+  again did not reproduce in this pass's single run (still open
+  regardless -- a quiet run is not evidence the underlying unseeded
+  `torch.rand()` calls were fixed, since they weren't); this pass's run
+  did surface the `_check_b_weight_row_sums` ill-conditioning warning
+  item 164 already documents (`b_weights` row sums as low as 0.217 in
+  `test_recon_operators_b0.py`'s small synthetic fixture), consistent
+  with that item's existing description.
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
-  default-params build): **re-measured this pass** (the previous pass's
-  carry-forward no longer applies -- `lib/make_excitation_pulse.py`,
-  `params.py`, `sequences/ArbEPI.py`, `sequences/EPIcal.py`, and
-  `sequences/deGRE.py` all changed since `33d44a4` via the item
-  121/125/138/168/176/204 fixes). No `calc_te_tr_delays` TE-feasibility
-  warning fired:
+  default-params build, Python 3.10 with `preprocessing`+`recon` extras
+  synced): **re-measured this pass**. No `calc_te_tr_delays`
+  TE-feasibility warning fired:
 
   | sequence | peak PNS | acoustics | max grad | max slew |
   |---|---|---|---|---|
-  | `ArbEPI.seq` | 69.5% | 0.0231 | 28.82 mT/m | 119.2 T/m/s |
-  | `EPIcal.seq` | 64.7% | 0.0231 | 28.63 mT/m | 119.2 T/m/s |
+  | `ArbEPI.seq` | 69.8% | 0.0231 | 28.83 mT/m | 119.2 T/m/s |
+  | `EPIcal.seq` | 64.7% | 0.0231 | 28.53 mT/m | 119.2 T/m/s |
   | `deGRE.seq` | 77.4% | 0.2556 | 49.76 mT/m | 174.3 T/m/s |
   | `noise.seq` | 0.0% | 0.0000 | 0.00 mT/m | 0.0 T/m/s |
 
   All four numbers are within measurement noise of the previous pass's
-  table (`ArbEPI.seq` peak PNS 69.3%->69.5%, `EPIcal.seq` max grad
-  28.71->28.63 mT/m, everything else identical to the last significant
-  digit shown) -- consistent with this span's fixes being small, targeted
-  corrections (a spoiler-rewind off-by-one, an unseeded RNG, a
-  flip-angle/RF-duration fix scoped to `deGRE.seq` only) rather than a
-  systematic redesign; `deGRE.seq`'s own numbers are exactly unchanged
-  since its item-125 fix only affects which flip angle/RF duration get
-  used, not the resulting PNS/acoustics/grad/slew figures at the shipped
-  default. Item 123's finding (`ge/check.py`'s docstring still quoting the
-  stale 0.2456 instead of 0.2556) remains open and unchanged.
+  table (`ArbEPI.seq` peak PNS 69.5%->69.8%, `EPIcal.seq` max grad
+  28.63->28.53 mT/m, everything else identical to the last significant
+  digit shown) -- expected run-to-run variation from the sampling mask's
+  own randomization, not a code change (no source file differs from the
+  previous pass). Item 123's finding (`ge/check.py`'s docstring still
+  quoting the stale 0.2456 instead of 0.2556) remains open and unchanged.
 
 ## Correctness
 
@@ -2238,6 +2255,57 @@ fully correct, with no gaps or partial fixes.
   117/141 already suggest -- have `preprocess.py`'s STEP 3 call
   `load_smaps()` directly (or the new `_calibrate_and_compress` projection
   helper) instead of its own narrower, non-`Ncoils`-tagged copy.
+- [ ] **222. `run_b0map.py`/`r2star_map.py` cubic-spline-resize `b0map_hz`/
+  `r2star` onto the EPI grid but never re-apply the resized mask afterward
+  -- unlike the identical, already-fixed case in `smaps.py`'s
+  `process_smaps`.** [measured; found 2026-09-20 against `d620951`]
+  `preprocessing/run_b0map.py:140-147` builds the EPI-grid field map via
+  `resize_to_epi_grid(b0map_hz_degre * mask_degre, ..., order=3, ...)` and
+  separately resizes `mask_degre` (`order=0`, nearest) into `mask` -- but
+  `b0map_hz` is never multiplied by that resized `mask` before being
+  written to `<seqname>_b0map.h5` (`:158-161`).
+  `preprocessing/r2star_map.py:131-134` (`estimate_r2star_map_epi_grid`)
+  has the identical pattern: `resize_to_epi_grid(r2star_degre *
+  mask_degre, ..., order=3, ...)` followed only by `np.clip(r2star, 0.0,
+  None)` -- no re-mask, and a positive-valued spline-overshoot voxel
+  survives that clip untouched. Contrast with
+  `preprocessing/smaps.py:281,319-320` (`process_smaps`), which explicitly
+  re-masks after the same cubic-spline resize (`smaps = smaps *
+  target_mask[..., None]`), with its own comment explaining exactly why:
+  "cubic spline's prefilter is a global (IIR) operation" that "leaks small
+  ... nonzero values into a halo just outside the object" -- that fix was
+  never carried over to `b0map_hz`/`r2star_map`. Reproduced the mechanism
+  directly with `resize_to_epi_grid` itself (same function, same
+  masked-then-cubic-resize pattern): for a synthetic field ranging ~+-71 Hz
+  inside a spherical mask, resizing to a 2x finer grid left up to 33 Hz of
+  leaked/overshoot signal in voxels *outside* the resized mask (mean ~0.31
+  Hz, ~6.6% of outside voxels > 1 Hz) -- comparable in scale to the field's
+  own real variation, not the ~1e-6-1e-9 far-field leakage
+  `process_smaps`' own docstring describes for its case. Downstream impact:
+  `recon/operators_b0.py`'s `build_encoding_operator_b0`/`GatheredSenseB0`
+  reads `b0map_hz` (and, with `--r2star`, `r2star_map`) at every voxel of
+  the full grid with no masking of its own (confirmed: no `mask` reference
+  anywhere in `recon/operators_b0.py`) -- the only thing zeroing a
+  background voxel's contribution is `smaps` being exactly zero there.
+  `smaps`' EPI-grid object mask is a direct cal_size->EPI cubic resize of
+  `emap`, computed via a completely different path than `b0map`'s own
+  EPI-grid `mask` (deGRE-grid magnitude+eigenvalue mask from `b0map.jl`,
+  nearest-neighbor-resized) -- nothing guarantees the two agree, and
+  CLAUDE.md's own `gre_diagnostics.py`/B0-correction discussion documents
+  this pipeline's real test phantom has regions (air-bubble signal voids)
+  where such disagreement is plausible. Any voxel where `smaps` says "real
+  signal" but `b0map`'s own mask says "excluded" would pick up an
+  unmasked, spline-leaked value as if it were a real off-resonance/decay
+  measurement. No test catches this:
+  `tests/test_preprocessing_run_b0map.py`'s
+  `test_run_b0map_resizes_field_map_to_epi_grid` (`:207-247`) only checks
+  a coarse overall-magnitude bound, never boundary/mask consistency, and
+  there is no test file for `r2star_map.py` at all. Severity: medium
+  (verified mechanism and magnitude; downstream image-domain impact
+  plausible but not directly measured against a real reconstruction in
+  this pass). Fix: re-multiply `b0map_hz`/`r2star` by their own resized
+  boolean mask after the cubic-spline resize, mirroring
+  `process_smaps`'s pattern exactly.
 
 ## Consistency & documentation
 
