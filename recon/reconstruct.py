@@ -1,7 +1,7 @@
 """Multi-scale Locally Low-Rank (MSLR) fMRI reconstruction via decomposition.
 Port of ../mslr-recon/scripts/reconstruct.jl (Ong & Lustig 2016), built on
-mirtorch instead of MIRT.jl/LinearMapsAA -- see recon/operators.py,
-recon/solvers.py, recon/solvers.py for the individual pieces.
+mirtorch instead of MIRT.jl/LinearMapsAA -- see recon/operators.py and
+recon/solvers.py for the individual pieces.
 
     X_final = X[...,0] + X[...,1] + ... + X[...,Nscales-1]
 
@@ -111,7 +111,7 @@ def _load_omega(
 def _load_echo_times(fn_ksp: str, device: torch.device) -> torch.Tensor:
     """(Ny,Nz,Nt) echo-time array (seconds since RF excitation), moved to
     device at its native shape -- shared by both B0-recon call sites
-    (run_recon here and run_recon.py) so neither has to duplicate the
+    (run_recon here and recon/run_recon.py's mslr-ref) so neither has to duplicate the
     broadcast-to-(Nx,Ny,Nz,Nt) pattern build_encoding_operator_b0 no
     longer needs (see its docstring and docs/review-findings.md item 90)."""
     return torch.from_numpy(_load_array(fn_ksp, "echo_times").astype(np.float32)).to(device)
