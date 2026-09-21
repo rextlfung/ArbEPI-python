@@ -44,11 +44,17 @@ def main(
     lamb_l1: float = 0.005, lamb_tv: float = 0.005, num_iter: int = 100,
     wave_name: str = 'db4', max_power_iter: int = 30,
     L_b0: int = 32, nbins_b0: int = 128, device: str = 'cuda',
-    frames: list[int] | None = None,
+    frames: list[int] | None = None, normalize_operator: bool = True,
 ) -> None:
     """frames: reconstruct only these frame indices (for quick validation on
     real data before committing to a full multi-hour batch); None
-    reconstructs every frame."""
+    reconstructs every frame.
+
+    normalize_operator: rescale each frame's operator by 1/sigma1(A) before
+    solving (see the code below for the derivation) so lamb_l1/lamb_tv=0.005
+    -- recon_sigpy.py's own defaults -- carry their original meaning; pass
+    False to use the raw (non-unitary) operator instead, e.g. to reproduce
+    an earlier un-normalized run for comparison."""
     device_t = torch.device(device)
     recon_dir = os.path.join(datdir, 'recon')
     fn_ksp = os.path.join(recon_dir, f'{seqname}_epi_zf.h5')
@@ -90,6 +96,20 @@ def main(
     print(f'  sigma1(A) = {sigma1:.4f} (1.0 = unitary; see warning above if not)')
     del x0
 
+    # Rescale every frame's operator by 1/sigma1 so it's ~unitary (mirtorch's
+    # `Multiply`, i.e. `a * A`, scales forward and adjoint by the same real
+    # scalar -- (a*A)(x) = a*A(x), (a*A)^H(y) = a*A^H(y) for real a -- so this
+    # is exactly A/sigma1, not a hack). Restores the assumption
+    # recon_sigpy.py's lamb_l1/lamb_tv defaults were tuned/validated under
+    # (a genuinely unitary sigpy.mri.linop.Sense) -- see
+    # check_operator_unitary's docstring for why a non-unitary operator
+    # otherwise needs a much larger lambda for the same effective
+    # regularization strength. Since A_new = A_orig/sigma1 while `y` is
+    # unchanged, wavelet_tv_recon_b0's own output solves for sigma1*x_true
+    # (it already un-does its internal O(1) y-rescaling) -- divide by sigma1
+    # once more here to recover the correctly-scaled image.
+    normalize = sigma1 if normalize_operator else 1.0
+
     ksp = gather_ksp(ksp0, A_full)  # (K,Nc,Nt)
     del ksp0
     if device_t.type == 'cuda':
@@ -99,16 +119,18 @@ def main(
     img = np.zeros((Nx, Ny, Nz, len(frame_idxs)), dtype=np.complex64)
 
     print(f'\nReconstructing {len(frame_idxs)}/{Nt} frame(s) '
-          f'(lamb_l1={lamb_l1}, lamb_tv={lamb_tv}, num_iter={num_iter})...')
+          f'(lamb_l1={lamb_l1}, lamb_tv={lamb_tv}, num_iter={num_iter}, '
+          f'operator normalized by 1/{normalize:.4f})...')
     t_start = time.time()
     for out_i, it in enumerate(frame_idxs):
         t_frame = time.time()
-        A_sigpy = TorchLinopBridge(A_full.A[it], device_t)
+        A_torch = (1.0 / normalize) * A_full.A[it] if normalize_operator else A_full.A[it]
+        A_sigpy = TorchLinopBridge(A_torch, device_t)
         y = ksp[:, :, it].detach().cpu().numpy()
         img[..., out_i] = wavelet_tv_recon_b0(
             A_sigpy, y, lamb_l1, lamb_tv, num_iter,
             wave_name=wave_name, max_power_iter=max_power_iter,
-        )
+        ) / normalize
         print(f'  frame {it} ({out_i + 1}/{len(frame_idxs)}) done in {time.time() - t_frame:.1f}s')
     runtime_s = time.time() - t_start
     print(f'Wall-clock: {runtime_s:.1f}s ({runtime_s / len(frame_idxs):.1f}s/frame)')
@@ -149,10 +171,15 @@ if __name__ == '__main__':
         '--frames', default=None,
         help='comma-separated frame indices to reconstruct (default: all frames)',
     )
+    parser.add_argument(
+        '--no-normalize', action='store_true',
+        help='use the raw (non-unitary) operator instead of rescaling by 1/sigma1(A)',
+    )
     args = parser.parse_args()
     frames = [int(x) for x in args.frames.split(',')] if args.frames else None
     main(
         args.datdir, args.seqname, lamb_l1=args.lamb_l1, lamb_tv=args.lamb_tv,
         num_iter=args.num_iter, wave_name=args.wave_name, max_power_iter=args.max_power_iter,
         L_b0=args.L_b0, nbins_b0=args.nbins_b0, device=args.device, frames=frames,
+        normalize_operator=not args.no_normalize,
     )
