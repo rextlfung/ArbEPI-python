@@ -1,4 +1,4 @@
-"""Algorithm-invariant tests for recon/lowrank.py, mirroring the cases in
+"""Algorithm-invariant tests for recon/solvers.py, mirroring the cases in
 ../mslr-recon/tests/kernel_tests.jl (patch round-trip, SVST shrinkage,
 unit-patch fast path). No golden Julia output is compared here -- see
 tests/test_recon_reconstruct.py / scratchpad validation for that; these
@@ -9,7 +9,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from recon.lowrank import SVST, img2patches, patch_nucnorm, patches2img, patchSVST  # noqa: E402
+from recon.solvers import SVST, img2patches, patch_nucnorm, patches2img, patchSVST  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

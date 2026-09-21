@@ -114,7 +114,7 @@ def epiphasecorrect(d: np.ndarray, a: np.ndarray) -> np.ndarray:
     this spelling there, so no behavior change at this repo's current
     Nx=240; a real, not just cosmetic, difference for an odd `nx`). Same
     convention question as preprocess.py's compute_oephase and
-    run_rss.py's _ift3 -- see docs/review-findings.md item 44.
+    sigpy_recon.py's _ift3 -- see docs/review-findings.md item 44.
     """
     nx, etl = d.shape[0], d.shape[1]
     d_shape = d.shape

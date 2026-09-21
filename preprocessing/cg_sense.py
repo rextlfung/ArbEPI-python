@@ -56,7 +56,7 @@ def cg_sense(
     # PCA coil compression concentrates signal in the dominant virtual
     # coils), which would otherwise silently mark real samples as
     # unsampled and drive CG's first step to a 0/0 NaN. Matches
-    # recon_sigpy.py's `sp.rss(ksp_cf, axes=(0,)) > 0` mask, coil axis
+    # sigpy_recon.py's `sp.rss(ksp_cf, axes=(0,)) > 0` mask, coil axis
     # adjusted for this module's [*spatial, Ncoils] layout.
     mask = np.sqrt(np.sum(np.abs(kdata_zf) ** 2, axis=coil_dim, keepdims=True)) > 0
 

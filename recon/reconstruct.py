@@ -1,12 +1,12 @@
 """Multi-scale Locally Low-Rank (MSLR) fMRI reconstruction via decomposition.
 Port of ../mslr-recon/scripts/reconstruct.jl (Ong & Lustig 2016), built on
 mirtorch instead of MIRT.jl/LinearMapsAA -- see recon/operators.py,
-recon/lowrank.py, recon/solvers.py for the individual pieces.
+recon/solvers.py, recon/solvers.py for the individual pieces.
 
     X_final = X[...,0] + X[...,1] + ... + X[...,Nscales-1]
 
 Each component X[...,k] is independently constrained to be locally low-rank
-at its own patch scale (recon/lowrank.py's patchSVST); data consistency is
+at its own patch scale (recon/solvers.py's patchSVST); data consistency is
 enforced on the sum. lambda_k set by the Ong & Lustig (2016) closed-form
 formula (see _reg_weights below) -- no tuning needed beyond lambda_global.
 
@@ -31,10 +31,13 @@ import torch
 
 from preprocessing.nifti_io import save_recon_nifti
 from recon.hdf5_chunked_io import read_frames_cropped
-from recon.lowrank import img2patches, patch_nucnorm, patchSVST
-from recon.operators import build_encoding_operator, gather_ksp
-from recon.operators_b0 import build_encoding_operator_b0, estimate_spectral_norm
-from recon.solvers import pogm_restart
+from recon.operators import (
+    build_encoding_operator,
+    build_encoding_operator_b0,
+    estimate_spectral_norm,
+    gather_ksp,
+)
+from recon.solvers import img2patches, patch_nucnorm, patchSVST, pogm_restart
 
 
 @dataclass
@@ -60,7 +63,7 @@ def _load_array(fn: str, key: str) -> np.ndarray:
     needed, unlike hdf5storage-written .mat files (see preprocessing/matio.py).
 
     Thin wrapper around recon/hdf5_chunked_io.py's read_frames_cropped
-    (shared with recon/lowres_calib/lowres_calib_recon.py, which needs the same
+    (shared with recon/lowres_calib.py, which needs the same
     chunk-by-chunk-along-the-last-axis logic without pulling in this
     module's torch/mirtorch imports -- see docs/review-findings.md item
     200) -- returns the full array, since run_recon processes every frame
@@ -108,7 +111,7 @@ def _load_omega(
 def _load_echo_times(fn_ksp: str, device: torch.device) -> torch.Tensor:
     """(Ny,Nz,Nt) echo-time array (seconds since RF excitation), moved to
     device at its native shape -- shared by both B0-recon call sites
-    (run_recon here and run_b0_recon.py) so neither has to duplicate the
+    (run_recon here and run_recon.py) so neither has to duplicate the
     broadcast-to-(Nx,Ny,Nz,Nt) pattern build_encoding_operator_b0 no
     longer needs (see its docstring and docs/review-findings.md item 90)."""
     return torch.from_numpy(_load_array(fn_ksp, "echo_times").astype(np.float32)).to(device)
@@ -121,7 +124,7 @@ def _load_normalized_smaps(
     smaps is (Nx,Ny,Nz,Nc) complex64, each voxel's coil vector scaled to
     unit RSS; smaps_chw is (Nc,Nx,Ny,Nz), the layout
     build_encoding_operator{,_b0} expect. Shared by run_recon (here) and
-    run_b0_recon.py, which used to duplicate this verbatim -- a real
+    run_recon.py, which used to duplicate this verbatim -- a real
     desync risk since run_b0_recon's whole purpose is measuring sigma1A
     for the operator run_recon builds moments later (see
     docs/review-findings.md item 94)."""
@@ -324,12 +327,12 @@ def run_recon(
     """fn_b0map: optional path to a run_b0map.py output (<seqname>_b0map.h5,
     'b0map_hz' on the EPI grid -- see preprocessing/run_b0map.py). When
     given, builds the encoding operator with time-segmented B0 off-
-    resonance correction (recon/operators_b0.py) instead of the plain
+    resonance correction (recon/operators.py) instead of the plain
     encoding operator -- reads per-sample acquisition time from fn_ksp's
     'echo_times' dataset (preprocessing/preprocess.py's _build_echo_times;
     (Ny,Nz,Nt), broadcast across Nx here since kx doesn't affect echo
     time). L_b0/nbins_b0 are mri_exp_approx's segment count/histogram bins
-    (see operators_b0.py's module docstring for the real-scale sweep that
+    (see operators.py's module docstring for the real-scale sweep that
     settled L_b0=32). sigma1A defaults to None, in which case it
     is measured here via power iteration (operators_b0.estimate_spectral_
     norm) on the operator actually built -- required when fn_b0map is set,

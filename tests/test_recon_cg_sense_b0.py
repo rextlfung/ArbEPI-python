@@ -1,4 +1,4 @@
-"""Correctness check for recon/cg_sense_b0.py's cg_sense_solve: CG on a
+"""Correctness check for recon/run_recon.py's cg_sense_solve: CG on a
 small, fully-sampled (no acceleration) synthetic SENSE problem should
 recover the true image to high precision in a handful of iterations,
 independent of which operator (plain or B0-corrected) it's handed -- the
@@ -9,8 +9,8 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("mirtorch")
 
-from recon.cg_sense_b0 import cg_sense_solve  # noqa: E402
 from recon.operators import build_encoding_operator, gather_ksp  # noqa: E402
+from recon.run_recon import cg_sense_solve  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

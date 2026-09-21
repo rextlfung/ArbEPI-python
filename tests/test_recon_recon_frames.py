@@ -4,14 +4,14 @@ import h5py
 import numpy as np
 import pytest
 
-# recon_frames.py imports smaps.py (sigpy) and nifti_io.py (nibabel) at
+# sigpy_recon.py imports smaps.py (sigpy) and nifti_io.py (nibabel) at
 # module scope -- not used by these tests directly, but the whole module
 # fails to import without both.
 pytest.importorskip("sigpy")
 pytest.importorskip("nibabel")
 
 from preprocessing.config import SeqParams, load_config, set_seq_paths  # noqa: E402
-from recon.basic.recon_frames import recon_frames  # noqa: E402
+from recon.sigpy_recon import recon_frames  # noqa: E402
 
 
 def _sum_coils(data, smaps):

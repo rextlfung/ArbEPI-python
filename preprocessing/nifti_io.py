@@ -1,6 +1,6 @@
 """Write image-like volumes as NIfTI, for viewing in ITK-SNAP/FSLeyes/3D
 Slicer/etc. instead of scrolling through raw HDF5 in Python. Callers:
-run_rss.py/run_cg_sense.py/run_recon_sigpy.py (final reconstructed images),
+recon/sigpy_recon.py's drivers (final reconstructed images),
 preprocess.py/recon_frames.py (sensitivity maps -- the coil axis stands in
 for the frames axis here, so a NIfTI viewer's volume/time slider scrolls
 through per-coil maps), and run_b0map.py (the field map itself, b0map_hz --
