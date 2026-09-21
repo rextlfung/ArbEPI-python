@@ -41,6 +41,7 @@ recon = [
     { name = "h5py" },
     { name = "mirtorch" },
     { name = "nibabel" },
+    { name = "sigpy" },
     { name = "torch" },
 ]
 test = [
@@ -64,6 +65,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.10" },
     { name = "scipy", marker = "extra == 'preprocessing'", specifier = ">=1.10" },
     { name = "sigpy", marker = "extra == 'preprocessing'", specifier = ">=0.1.26" },
+    { name = "sigpy", marker = "extra == 'recon'", specifier = ">=0.1.26" },
     { name = "torch", marker = "extra == 'recon'", specifier = ">=2.2" },
     { name = "tqdm", specifier = ">=4.66" },
 ]

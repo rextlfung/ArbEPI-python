@@ -241,16 +241,24 @@ def estimate_operator_noise_factor(
 def estimate_kspace_noise_std(
     ksp_frame: torch.Tensor, idx: torch.Tensor, N: tuple[int, int, int], outer_frac: float = 0.1,
 ) -> float:
-    """Real per-sample thermal-noise std, measured directly in k-space from
-    the outer_frac highest-radius (ky,kz) shell of one frame's gathered
-    samples -- real anatomical signal energy concentrates at low spatial
-    frequency, so the k-space periphery is noise-dominated with no masking/
-    signal-contamination issue at all (unlike any image-domain background
-    estimate on this pipeline's real, tightly-masked data -- see
-    estimate_noise_std's docstring). radius is computed in (ky,kz) only
-    (idx unraveled against N=(Nx,Ny,Nz)) -- kx is always fully sampled per
-    shot (whole readout line), so it doesn't discriminate high vs low
-    spatial frequency content the way undersampled ky,kz do.
+    """Empirical per-sample std, measured directly in k-space from the
+    outer_frac highest-radius (ky,kz) shell of one frame's gathered
+    samples. Despite the name, this is NOT a reliable measure of thermal
+    noise alone on real acquired data, and is no longer used by run_recon's
+    normalize_noise path (removed 2026-09-22, see that docstring) -- real
+    k-space at high (ky,kz) can carry substantial structured, non-Gaussian
+    content (shot-to-shot inconsistency across a multi-shot echo train,
+    sharp-edge signal for a fully-sampled acquisition) that pre-whitening
+    was never meant to remove, and this estimator has no way to separate
+    that from the i.i.d. Gaussian thermal-noise floor. Kept as a
+    diagnostic for exactly that real-vs-Gaussian question (large values
+    here indicate real structured high-k content, not necessarily a
+    bug) and because it correctly recovers a *known, injected* noise std
+    on synthetic data with no structured content -- see this module's
+    tests. radius is computed in (ky,kz) only (idx unraveled against
+    N=(Nx,Ny,Nz)) -- kx is always fully sampled per shot (whole readout
+    line), so it doesn't discriminate high vs low spatial frequency
+    content the way undersampled ky,kz do.
 
     ksp_frame: (K,Nc) complex, this frame's gathered k-space (recon/
     operators.py's gather_ksp convention). idx: (K,) int64, that same
@@ -330,26 +338,45 @@ def run_recon(
     top of the B0-corrected operator, not the plain one.
 
     normalize_noise: rescale `ksp` (and therefore X0 and every POGM
-    iterate) by 1/(estimate_operator_noise_factor * estimate_kspace_noise_std)
-    before the solve, undoing it on the returned X/X_recon only --
-    _reg_weights' lambda_k formula (Ong & Lustig 2016 eq. 4) assumes
-    unit-variance thermal noise in image space (see ../mslr-recon/scripts/
-    reconstruct.jl's own comment to that effect), which measurably does not
-    hold for this port's real data -- explicit user decision (2026-09-18)
-    to measure and normalize directly, mirroring the same step the original
-    Julia workflow performed on X0/ksp0, rather than relying on an
-    upstream-whitening assumption that turned out not to hold end to end.
-    The normalization factor is computed as two clean, signal-free
-    measurements (operator noise-propagation x real k-space noise std),
-    not from real reconstructed-image background statistics -- an earlier
-    2026-09-18 attempt at the latter (estimate_noise_std, still here for
-    other uses but no longer called from this function) measured a hard
-    0.0 on real data (this pipeline's smaps are ~50-60% exact-zero-masked,
-    leaving no reliable noise-only population in image space) and silently
-    propagated inf/NaN through ~2.5 GPU-hours before surfacing as an
-    unrelated SVD failure deep in POGM -- see estimate_kspace_noise_std's
-    docstring for the fix. dc_costs/reg_costs in the returned ReconResult
-    are measured in this
+    iterate) by 1/estimate_operator_noise_factor before the solve, undoing
+    it on the returned X/X_recon only -- _reg_weights' lambda_k formula
+    (Ong & Lustig 2016 eq. 4) assumes unit-variance thermal noise in image
+    space (see ../mslr-recon/scripts/reconstruct.jl's own comment to that
+    effect, and arXiv:1507.08751 Section II-A/IV for the underlying i.i.d.
+    Gaussian noise model the formula is calibrated against).
+
+    The k-space-side factor is NOT measured empirically from real acquired
+    data (a real per-dataset outer-(ky,kz)-shell std, formerly via
+    estimate_kspace_noise_std, was tried and removed 2026-09-22): real
+    k-space is `Y = sum_i X_i + X_Z` (same eq. as the paper above), and an
+    outer-shell std estimator has no way to separate the i.i.d. Gaussian
+    X_Z pre-whitening is meant to normalize from real structured,
+    non-Gaussian content that also lands at high (ky,kz) -- shot-to-shot
+    inconsistency across a multi-shot echo train (T1/steady-state drift,
+    eddy currents, off-resonance accrual), or genuine sharp-edge signal
+    for a fully-sampled (R~1) acquisition. Measured directly on real
+    20260918ball data: a real-noise-scan-derived whitening matrix, real
+    coil-compression matrix, and real k-space trajectory, run end to end
+    through preprocessing/preprocess.py's actual whitening -> coil
+    compression -> regridding -> scatter chain on REAL noise-scan samples
+    (not synthetic, so the true coil covariance is preserved) reproduces
+    unit variance to within ~1-3% (0.997 on 1_1x_5.4mm, 0.973 on
+    2_6x_2.4mm) -- i.e. the pipeline provably preserves thermal-noise
+    variance by construction. Meanwhile the *same* real dataset's actual
+    acquired-data outer-shell std reads ~72-101 (1_1x_5.4mm, R~1) and ~73
+    pre-epi_gridding-fix / ~7.7 predicted post-fix (2_6x_2.4mm, R~6) --
+    proving that gap is real structured k-space content, not a
+    normalization bug, and that the outer-shell estimator was never a
+    valid proxy for the paper's X_Z term to begin with. A hard
+    `[0.1, 10]`-band guardrail built on that estimator (2026-09-21) is
+    removed for the same reason: it would (and did) block correctly-
+    processed, fully-sampled acquisitions no differently than a genuine
+    absolute-scale bug, and passing it for an undersampled acquisition was
+    coincidental, not a validation. estimate_kspace_noise_std itself is
+    kept (still independently tested) as a diagnostic for exactly this
+    real-vs-Gaussian-noise question, just no longer called from here.
+
+    dc_costs/reg_costs in the returned ReconResult are measured in this
     normalized scale, not the original data's physical units -- expect much
     smaller numbers than an unnormalized run at the same lambda_global."""
     device = torch.device(device)
@@ -418,55 +445,17 @@ def run_recon(
         free_gb, total_gb = (x / 1e9 for x in torch.cuda.mem_get_info())
         print(f"  VRAM free after freeing dense k-space: {free_gb:.2f} / {total_gb:.2f} GB")
 
-    # See normalize_noise's docstring above. Two clean, signal-free
-    # measurements (see estimate_operator_noise_factor/
-    # estimate_kspace_noise_std docstrings for why an image-domain
-    # background estimate -- e.g. estimate_noise_std on real X0 -- is NOT
-    # used here despite being the obvious first attempt: this pipeline's
-    # real smaps are ~50-60% exact-zero-masked background, leaving no
-    # reliable noise-only population to sample from in image space; a
-    # 2026-09-19 attempt at that measured a hard 0.0 on real 2_6x_2.4mm
-    # data, silently propagating inf/NaN through ~2.5 GPU-hours before
-    # surfacing as an unrelated-looking SVD failure deep in POGM):
-    #   (1) the operator's own noise-propagation factor, from synthetic
-    #       unit-variance k-space noise -- no real data, no masking issue.
-    #   (2) the real per-sample k-space noise std, from the outer (high
-    #       ky,kz radius) shell of the actual sampled data -- real
-    #       anatomical signal concentrates at low spatial frequency, so
-    #       this shell is noise-dominated with no masking issue either.
+    # See normalize_noise's docstring above: the k-space-side factor is not
+    # measured from real (structured-content-contaminated) acquired data --
+    # the pipeline's own whitening + coil-compression + regridding chain is
+    # verified (real-noise-through-pipeline test, see docstring) to preserve
+    # unit-variance thermal noise by construction, so only the operator's
+    # own noise-propagation factor needs measuring here.
     noise_std = 1.0
     if normalize_noise:
         op_factor = estimate_operator_noise_factor(A, tuple(ksp.shape), ksp.dtype, device)
-        kspace_std = estimate_kspace_noise_std(ksp[:, :, 0], A.A[0].idx, (Nx, Ny, Nz))
-        print(f"  Operator noise-propagation factor = {op_factor:.4f}, "
-              f"k-space noise std (outer shell) = {kspace_std:.4f}")
-        # Guardrail (2026-09-21): preprocessing/coils.py's whitening (STEP 1)
-        # guarantees unit-variance thermal noise per k-space sample -- after
-        # preprocessing/epi_gridding.py's absolute-scale fix, kspace_std
-        # measured here should land close to that guarantee (real data:
-        # expect within roughly an order of magnitude, not the ~70-800x gap
-        # this guard exists to catch). A large deviation now most likely
-        # means a *new* absolute-scale bug somewhere in preprocessing
-        # (epi_gridding.py's regridding is the historically-proven suspect,
-        # but not the only possible one), not this pipeline's real behavior
-        # -- raise loudly here, before the expensive iterative solve, rather
-        # than silently reconstructing with a miscalibrated regularization
-        # strength for niters*several-seconds-per-iteration first.
-        if not (0.1 < kspace_std < 10):
-            raise ValueError(
-                f"run_recon: measured k-space noise std = {kspace_std:.4f}, outside the "
-                "[0.1, 10] band expected once preprocessing/coils.py's whitening guarantee "
-                "(unit-variance thermal noise per k-space sample) holds end to end. This "
-                "much deviation most likely indicates an absolute-scale bug upstream in "
-                "preprocessing (preprocessing/epi_gridding.py's NUFFT/FFT regridding "
-                "normalization is the historically-confirmed suspect -- see its module "
-                "docstring's 'Absolute-scale fix' -- but re-verify rather than assume it's "
-                "the same bug again) -- refusing to proceed into the expensive solve with "
-                "this potentially-miscalibrated regularization strength. Pass "
-                "normalize_noise=False to bypass this check if you have already confirmed "
-                "the deviation is expected for this specific dataset."
-            )
-        noise_std = op_factor * kspace_std
+        print(f"  Operator noise-propagation factor = {op_factor:.4f}")
+        noise_std = op_factor
         print(f"  Estimated thermal-noise std (image domain, pre-normalization) = "
               f"{noise_std:.4f} -- rescaling ksp/X0 by 1/{noise_std:.4f}")
         if not (math.isfinite(noise_std) and 1e-6 < noise_std < 1e9):
