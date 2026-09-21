@@ -1227,7 +1227,7 @@ Not yet ported from `../mslr-recon`: `src/activation.jl` (a standalone
 GLM task-activation module, not wired into the main pipeline even in the
 original) and `src/metrics.jl`/`scripts/report.jl` (tSNR maps and
 convergence-plot reporting) -- both are QA/visualization, not required for
-a working reconstruction path. `recon/reconstruct.py` now does write
+a working reconstruction path. `recon/reconstruct.py`'s `save_result` now does write
 `ReconResult` to disk (`.h5` full-precision complex + solver trace,
 `.nii.gz`+`.json` magnitude image + metadata, reusing
 `preprocessing/nifti_io.py`'s `save_recon_nifti`) -- `recon/run_b0_recon.py`
@@ -1288,7 +1288,7 @@ output directory so a `--r2star` run never collides with a plain
 B0-only run at the same `L`).
 
 **Sign convention diverges deliberately from the (unmerged, exploratory)
-`worktree-lowres-calib-recon` branch's `recon/lowres_calib/lowres_calib_recon_b0complex.py`
+`worktree-lowres-calib-recon` branch's `recon/lowres_calib_recon_b0complex.py` (its path on that branch)
 -- do not "fix" one to match the other.** That branch script is
 adjoint-only (a fast, non-iterative reconstruction of just the
 calibration region -- it never calls `.apply()`) and deliberately flips

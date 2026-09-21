@@ -1,7 +1,7 @@
 """Time-segmented B0 off-resonance correction for recon/'s Cartesian
 encoding operator -- the fuller, min-max-style stage of a staged plan for
 adding B0 correction to GatheredSense (recon/operators.py).
-recon/operators_b0.py implements a cheaper static single-segment stage
+demodulate_smaps (below) implements a cheaper static single-segment stage
 first; see its section below (and CLAUDE.md's recon/ section) for why static
 alone measured far too weak at this repo's real echo-train length /
 field-map range (~5% error reduction, vs ~98% in an idealized small-
@@ -20,8 +20,8 @@ own NUFFT-based Gmri/GmriGram, without needing torchkbnufft at all.
 Sign convention: mri_exp_approx fits exp(-2j*pi*b0*t) (see its own
 docstring); passing it -b0map_hz (matching mirtorch's own demo notebook's
 `Gmri(..., zmap=-b0, ...)` call) composes to the physically-correct
-exp(+2j*pi*b0map_hz*t) demodulation -- see recon/operators_b0.py's
-docstring for the full derivation and the reference (Sutton, Noll, Fessler,
+exp(+2j*pi*b0map_hz*t) demodulation -- see the static-stage section
+below for the full derivation and the reference (Sutton, Noll, Fessler,
 IEEE TMI 2003) this is cross-checked against.
 
 L (segment count) defaults to 32 here, not mirtorch's own Gmri default of
@@ -42,7 +42,7 @@ encoding operator is built, at zero added per-iteration cost. This corrects
 the dominant geometric-shift component of EPI off-resonance distortion; it
 does not correct the residual blur/ghosting from differential phase accrual
 across the echo train -- that needs the full time-segmented correction
-stage (recon/operators_b0.py's GatheredSenseB0), and this module was
+stage (GatheredSenseB0, below), and this static stage was
 deliberately implemented first: cheap enough to validate the field map's
 sign/scale conventions in isolation before building the more expensive
 machinery on top of them.
