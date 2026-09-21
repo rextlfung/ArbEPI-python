@@ -395,7 +395,7 @@ def build_encoding_operator_b0(
     existed, and t_ref_s is ignored.
 
     IMPORTANT, and NOT the sign convention used by
-    recon/lowres_calib_b0.py on the (unmerged)
+    recon/lowres_calib.py on the (unmerged)
     worktree-lowres-calib-recon branch: this operator is bidirectional
     (recon/mslr.py's run_recon calls both .apply() and .adjoint()
     through POGM, and estimate_spectral_norm's power iteration needs both
@@ -434,7 +434,7 @@ def build_encoding_operator_b0(
     preprocessing/r2star_map.py's caller for how to read it) so decay
     factors straddle 1 and the reconstruction target is "the image as it
     would appear at the prescribed TE" -- matches
-    recon/lowres_calib_b0.py's own TE-referencing for the
+    recon/lowres_calib.py's own TE-referencing for the
     same reason (unlike the sign, this part of its design *is* reused
     as-is). The phase-only path (r2star_map=None) needs no such shift: a
     global time-reference change to Δf alone only rescales the image by a

@@ -1072,7 +1072,7 @@ importing a torch module from a torch-free venv would break it:
   `reconstruct.py`), `run_recon.py`
   (`mslr-ref`/`mslr-local`/`cg` subcommands, formerly `run_b0_recon.py`/
   `run_mslr_local.py`/`cg_sense_b0.py`), `sigpy_b0.py` (torch operator
-  bridged into sigpy's solver), `lowres_calib_b0.py` (`b0`/`b0complex`
+  bridged into sigpy's solver), `lowres_calib.py` (`b0`/`b0complex`
   subcommands), `analysis.py` (`sweep`/`benchmark`/`validate`
   subcommands).
 - **`.venv-preprocessing`** (sigpy/h5py/matplotlib/nibabel, no torch):

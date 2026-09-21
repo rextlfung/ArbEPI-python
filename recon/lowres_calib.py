@@ -1,9 +1,26 @@
-"""Low-resolution reconstruction of the fully sampled calibration region and its
-temporal-stability check (.venv-preprocessing; no torch). Subcommands:
+"""Low-resolution reconstruction of the fully sampled k-space calibration region,
+with optional B0-informed correction, and its temporal-stability check.
+Subcommands:
 
-    .venv-preprocessing/bin/python -m recon.lowres_calib {calib,stability} ...
+    calib      reconstruct the calibration region (plain by default)
+    stability  temporal-stability analysis of `calib`'s output
 
-The sections below are the original module docstrings, kept verbatim.
+`calib` is a plain IFFT + smaps-weighted coil combine unless a B0 field map is
+provided: `--b0` (uses <datdir>/recon/<seqname>_b0map.h5) or `--b0map PATH`
+switch to the time-segmented, adjoint-only B0-corrected reconstruction, and
+`--r2star` (with either) additionally corrects T2* amplitude decay via the
+complex-field variant. torch/mirtorch are imported lazily, only on the B0
+paths, so the plain path runs in .venv-preprocessing (no torch) while the B0
+paths need .venv-recon:
+
+    .venv-preprocessing/bin/python -m recon.lowres_calib calib <datdir> [seqname ...]
+    .venv-recon/bin/python -m recon.lowres_calib calib <datdir> [seqname] --b0 [--r2star] [--L 32] [--nbins 128] [--device cuda]
+    .venv-preprocessing/bin/python -m recon.lowres_calib stability <datdir> [<datdir> ...] [--variant {,b0,b0complex}]
+
+The sections below are the original module docstrings, kept verbatim (the two
+B0 sections' `python -m recon.lowres_calib {b0,b0complex}` usage is now
+`calib --b0` / `calib --b0 --r2star`; their note that compute_calib_mask/
+native_calib_grid are duplicated no longer applies -- there is one copy).
 
 Formerly recon/lowres_calib/lowres_calib_recon.py
 -------------------------------------------------
@@ -96,32 +113,198 @@ fluctuation + linear drift from a per-frame ROI-mean signal curve, plus a
 per-voxel tSNR map) is used to quantify that directly.
 
 variant='' reads recon/lowres_calib.py's plain output;
-variant='b0' reads recon/lowres_calib_b0.py's B0-corrected output --
+variant='b0' reads recon/lowres_calib.py's B0-corrected output --
 see that module's docstring for why per-frame B0-induced phase, not just
 system drift/noise, is expected to show up here as apparent instability
 for a static object.
 
 Usage (from repo root, .venv-preprocessing -- matplotlib/nibabel, not
-torch/mirtorch, despite comparing recon/lowres_calib_b0.py's
+torch/mirtorch, despite comparing recon/lowres_calib.py's
 .venv-recon-only output; see CLAUDE.md's recon/ section "not a
 single-venv package" note):
     .venv-preprocessing/bin/python -m recon.lowres_calib stability <datdir> [--seqname ArbEPI] [--variant b0]
+
+
+Formerly recon/lowres_calib/lowres_calib_recon_b0.py
+----------------------------------------------------
+B0-corrected variant of recon/lowres_calib.py: same fully-sampled
+(ky, kz) calibration region, same "no iteration, no regularization"
+philosophy (`img = sum_c conj(smap_c) * ifft(ksp_c)`), but through
+recon/operators.py's GatheredSenseB0 adjoint instead of a plain 3D
+IFFT, so time-segmented conjugate-phase (Sutton/Noll/Fessler) B0
+demodulation is included.
+
+Motivation: even though every frame samples the exact same (ky, kz)
+calibration locations (see lowres_calib.py's module docstring), the
+*order* in which a given frame's shots visit them differs, so a given
+(ky, kz) location is acquired at a different echo time (time since RF
+excitation) in different frames -- confirmed against this repo's own
+`echo_times` array: per-echo timing is frame-invariant as a *set*
+(sequences/ArbEPI.py), but which (ky,kz) location maps to which echo
+index varies per frame, exactly like the full acquisition. Off-resonance
+phase accrues with that time, so the same k-space location carries a
+different B0-induced phase from frame to frame -- for a genuinely static
+object (a phantom), that is a source of *apparent* temporal instability
+that has nothing to do with real signal change.
+
+Does NOT reuse recon.operators.build_encoding_operator_b0 directly:
+that function's shared time-segmentation fit is built from frame 0's
+distinct echo times alone, on the (correct, for its own use case)
+assumption that a frame's full ETL-worth of samples covers every echo
+time the fit could ever need. That doesn't hold for the small calibration
+region alone -- a given frame's calibration-region samples can miss some
+of the echo times other frames' calibration samples use -- so
+`_build_calib_operator_b0` below takes the union of echo times across
+every frame's calibration-region samples instead of frame 0's alone.
+Otherwise mirrors build_encoding_operator_b0's current construction
+exactly, including GatheredSenseB0's (smaps, samp, pos, b_by_echo,
+c_phasors) contract (b_by_echo shared across frames as one (n_unique_t,L)
+table, each frame supplies only its own row-index vector `pos` -- not a
+per-frame pre-gathered (K,L) copy).
+
+L defaults to 32 here (not operators.py's own L=6 default) -- see
+CLAUDE.md's recon/ "B0 off-resonance correction" section: a real-scale
+sweep (recon/analysis.py) found L=6 badly under-resolves this
+pipeline's real ETL=60 bandwidth-time product, while L=32 is the smallest
+value that gets relative forward-model error under 1%.
+
+Reconstructs at native (resolution-matched) grid size, not zero-padded to
+the full (Nx,Ny,Nz) acquisition grid -- see lowres_calib.py's module
+docstring for the FOV/N resolution derivation. compute_calib_mask/
+native_calib_grid are duplicated from there rather than imported, to keep
+this .venv-recon-only module off that file's module-level matplotlib
+import (not part of the `recon` pyproject extra -- see CLAUDE.md's recon/
+section "not a single-venv package" note).
+
+Sign convention: this reconstruction only ever calls `.adjoint()`, never
+`.apply()`. For the phase-only field this module builds (no R2* term),
+that needs no special handling -- `c_phasors` here is a pure rotation
+(|exp(i*theta)| = 1), so its conjugate *is* its own multiplicative
+inverse, and GatheredSenseB0._apply_adjoint's existing `.conj()` already
+does the right thing. (A complex field generalizing this to also correct
+T2*/T1 decay, as recon/operators.py's r2star_map parameter supports for
+the bidirectional/iterative path, needs a different, deliberately-flipped
+sign for an adjoint-only reconstruction -- see
+build_encoding_operator_b0's own docstring for why -- and isn't
+implemented here.)
+
+Usage (from repo root, .venv-recon):
+    .venv-recon/bin/python -m recon.lowres_calib calib --b0 <datdir> \
+        [--seqname ArbEPI] [--device cuda]
+
+
+Formerly recon/lowres_calib/lowres_calib_recon_b0complex.py
+-----------------------------------------------------------
+Generalized-complex-field-map variant of recon/lowres_calib.py:
+same fully-sampled calibration region, same adjoint-only philosophy, but
+the time-segmented correction now accounts for a COMPLEX field combining
+off-resonance and T2* decay, generalizing the real-only Δf(r) (Hz) that
+recon/operators.py's mri_exp_approx wraps (mirtorch's own source raises
+TypeError on a complex b0 input, so this generalization can't be done by
+just passing it a complex array -- it needs its own spatial-basis
+construction, below).
+
+The *physical* forward-model exponent is psi(r) = i*2*pi*Δf(r) - R2*(r)
+(signal decays as time since excitation increases). The array this module
+actually builds and feeds to GatheredSenseB0, psi_recon = i*2*pi*Δf(r) +
+R2*(r) (plus sign), is deliberately NOT that -- see
+_build_calib_operator_b0_complex's inline comment for why: this
+reconstruction only ever calls .adjoint(), never .apply(), and
+GatheredSenseB0._apply_adjoint always conjugates c_phasors. Conjugating a
+real quantity is a no-op, so building c_phasors from the physical -R2*
+would make the adjoint apply the same decay a second time instead of
+undoing it (confirmed empirically in the exploratory branch this was
+ported from -- a version with the physical sign measured tSNR getting
+monotonically *worse* through uncorrected -> phase-only -> this
+complex-field version, the opposite of the expected direction). The true
+multiplicative inverse of exp(psi*t) is exp(-psi*t), which only equals
+exp(conj(psi)*t) when Re(psi)=0 (pure rotation, the phase-only case
+lowres_calib.py already validated) -- psi_recon is chosen so
+that conjugating it reproduces that true inverse instead.
+
+Does NOT reuse recon.operators.build_encoding_operator_b0 directly, for
+the same reason lowres_calib.py doesn't -- see that module's
+docstring. Also does NOT copy the worktree exploratory branch's
+GatheredSenseB0 call verbatim: that branch predates the current
+(smaps, samp, pos, b_by_echo, c_phasors) contract (docs/review-findings.md
+item 75) and passed a pre-gathered per-frame `b` instead -- adapted here to
+build `pos` (a row-index vector into the shared `b_by_echo` table) exactly
+like lowres_calib.py's `_build_calib_operator_b0` does.
+
+Motivation (see CLAUDE.md's recon/ "B0 off-resonance correction" section
+for the full derivation): lowres_calib.py's phase-only correction
+demodulates off-resonance but leaves T2*/T1 amplitude decay uncorrected --
+a given (ky,kz) calibration location is acquired at a different echo
+index, hence a different amount of decay, in different frames, exactly
+the same TE-scrambling mechanism that motivates the phase correction.
+Generalizing Δf(r) to psi(r) corrects both simultaneously with the same
+L-segment machinery.
+
+Reference time = TE_nominal, not t=0 (excitation): both the magnitude
+(R2*) and phase (Δf) corrections are the real and imaginary parts of the
+SAME complex exponent exp(psi(r)*t), so they share one time reference by
+construction -- shifting the per-sample times fed into the segmentation
+fit by -TE_nominal makes the reconstruction target "the image as it would
+appear at the prescribed TE" (the standard GRE/EPI T2*-weighted
+convention) rather than "the undecayed image at the moment of excitation,"
+which is neither standard nor numerically favorable (voxels with short
+T2* would need very large amplification factors relative to t=0's much
+earlier lead-in interval). TE_nominal is read directly from scan_info.mat's
+schedules[...,2] at echo index (ETL-1)//2 -- the nominal-TE echo,
+frame/shot-invariant by construction (see CLAUDE.md's mask2epi_radial
+paragraph) -- not re-derived from the calibration region's own (possibly
+incomplete) echo-time coverage.
+
+Segmentation strategy: reuses mri_exp_approx's existing, already-tuned
+(L=32) temporal interpolation weights (b_by_echo) and segment-placement
+times (tl) UNCHANGED -- computed from Δf(r) alone, exactly as the
+phase-only version does, just against TE-shifted times. Only the SPATIAL
+basis functions are regeneralized: instead of mri_exp_approx's own
+phase-only exp(i*2*pi*Δf(r)*tl[l]), this builds exp(psi(r)*tl[l]) directly
+from the full, continuous per-voxel complex field (not the histogram-
+binned reference values mri_exp_approx uses internally only to fit
+b_by_echo). This is deliberately not a from-scratch joint (Δf, R2*)
+segmentation fit: Δf's bandwidth-time product is what drove L=32 (see
+CLAUDE.md's sweep finding, ~27 at this pipeline's real ETL=60/72ms scale);
+R2*'s own decay-time product (R2*_typical * echo-train duration) is
+printed by this script's main() specifically to check that it's small by
+comparison, which is what justifies reusing Δf-only-tuned interpolation
+weights for R2* too rather than re-deriving a joint fit.
+
+R2*(r) comes from preprocessing/r2star_map.py's two-point estimate on the
+same dual-echo deGRE data already used for Δf(r) -- see that module's
+docstring.
+
+Usage (from repo root, .venv-recon):
+    .venv-recon/bin/python -m recon.lowres_calib calib --b0 --r2star <datdir> \
+        [--seqname ArbEPI] [--device cuda]
 """
+
+from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
+from typing import TYPE_CHECKING
 
 import h5py
 import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
+from scipy.ndimage import gaussian_filter
 
 from preprocessing.config import PreprocessingConfig, load_config, load_seq_params, set_seq_paths
 from preprocessing.grid_resize import resize_to_epi_grid
+from preprocessing.matio import read_mat
 from preprocessing.nifti_io import save_recon_nifti
+from preprocessing.r2star_map import estimate_r2star_map_epi_grid
 from recon.hdf5_chunked_io import read_frames_cropped
+
+if TYPE_CHECKING:
+    import torch
+    from mirtorch.linear import BlockDiagonal
 
 
 def _ift3(d: np.ndarray) -> np.ndarray:
@@ -292,29 +475,529 @@ def run_lowres_calib_recon(cfg: PreprocessingConfig) -> None:
     print('\nBatch complete.')
 
 
-def main_calib(datdir: str, seqname: str = 'ArbEPI') -> None:
-    """Single-sequence convenience wrapper (unchanged CLI) around
-    run_lowres_calib_recon -- lets a single-dataset failure raise directly
-    instead of being caught-and-printed, useful for interactive/ad hoc use."""
-    cfg = load_config(datdir=datdir, seqnames=[seqname])
-    _recon_one(cfg, seqname)
+def _build_calib_operator_b0(
+    smaps_chw: torch.Tensor,
+    calib_omega: torch.Tensor,
+    b0map_hz: torch.Tensor,
+    echo_times_s: torch.Tensor,
+    L: int = 32,
+    nbins: int = 128,
+) -> BlockDiagonal:
+    """Same construction as recon.operators.build_encoding_operator_b0's
+    current (post item-75) contract -- GatheredSenseB0(smaps, samp, pos,
+    b_by_echo, c_phasors), b_by_echo shared across frames -- except the
+    shared time-segmentation fit (mri_exp_approx) is built from the union
+    of echo times across every frame's calibration-region samples, not
+    frame 0's alone. See module docstring for why frame 0 alone isn't a
+    superset here."""
+    import torch
+    from mirtorch.linear import BlockDiagonal
+    from mirtorch.linear.mri import mri_exp_approx
 
-def _cli_calib() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument('datdir')
-    parser.add_argument('seqname', nargs='*', default=['ArbEPI'],
-                         help='one or more seqnames to batch (default: ArbEPI)')
-    args = parser.parse_args()
-    if len(args.seqname) == 1:
-        main_calib(args.datdir, args.seqname[0])
+    from recon.operators import GatheredSenseB0, _check_b_weight_row_sums
+
+    Nt = calib_omega.shape[-1]
+    N = tuple(smaps_chw.shape[1:])
+    b0_neg = (-b0map_hz).to(torch.float32)
+
+    idx_list, t_ms_list = [], []
+    for it in range(Nt):
+        samp = calib_omega[..., it]
+        idx = torch.nonzero(samp.reshape(-1), as_tuple=False).squeeze(-1)
+        t_ms = (echo_times_s[..., it].reshape(-1)[idx] * 1000).to(torch.float32)
+        idx_list.append(idx)
+        t_ms_list.append(t_ms)
+    unique_t_ms = torch.unique(torch.cat(t_ms_list), sorted=True)
+
+    b_by_echo, c, _tl = mri_exp_approx(b0_neg, nbins, L, unique_t_ms)
+    _check_b_weight_row_sums(b_by_echo, 'shared (union of calib-region echo times)')
+    b_by_echo = b_by_echo.to(smaps_chw.dtype)  # (n_unique_t, L)
+    c_phasors = c.transpose(0, 1).reshape((L,) + N).to(smaps_chw.dtype)
+
+    frames = []
+    for it in range(Nt):
+        samp = calib_omega[..., it]
+        t_ms = t_ms_list[it]
+        pos = torch.searchsorted(unique_t_ms, t_ms).clamp(max=unique_t_ms.numel() - 1)
+        assert torch.allclose(unique_t_ms[pos], t_ms, atol=1e-4), (
+            f"_build_calib_operator_b0: frame {it}'s sample echo times aren't in the "
+            "union of every frame's calib-region echo times -- shouldn't be reachable "
+            'by construction.'
+        )
+        frames.append(GatheredSenseB0(smaps_chw, samp, pos, b_by_echo, c_phasors))
+    return BlockDiagonal(frames)
+
+
+def gather_calib_ksp(ksp_epi_zf: np.ndarray, idx_full: np.ndarray) -> np.ndarray:
+    """ksp_epi_zf: [Nx, Ny, Nz, Nc, Nt] numpy (plain, not torch -- kept off
+    the GPU/out of any torch tensor since it can be many GB and only a
+    small fraction of it is the calibration region). idx_full: flat
+    C-order spatial indices into (Nx*Ny*Nz), identical for every frame
+    (the calibration region is frame-invariant). Returns [K, Nc, Nt]
+    complex64, matching GatheredSenseB0's forward/adjoint (K, Nc)
+    per-frame convention -- see recon/operators.py's gather_ksp, which
+    this mirrors but keeps ksp_epi_zf as plain numpy."""
+    Nc, Nt = ksp_epi_zf.shape[3], ksp_epi_zf.shape[4]
+    out = np.empty((idx_full.size, Nc, Nt), dtype=ksp_epi_zf.dtype)
+    for it in range(Nt):
+        flat = ksp_epi_zf[..., it].reshape(-1, Nc)
+        out[:, :, it] = flat[idx_full, :]
+    return out
+
+
+def run_b0_corrected_calib_recon(
+    datdir: str, seqname: str, L: int = 32, nbins: int = 128, device: str = 'cuda',
+    fn_b0map: str | None = None,
+) -> dict:
+    """Core computation shared by main_b0() (writes the nifti) and any other
+    consumer wanting the B0-corrected calibration-region reconstruction
+    directly. fn_b0map: field-map .h5 (default <datdir>/recon/<seqname>_b0map.h5). Returns a dict: img_np [Nx_eff,Ny_eff,Nz_eff,Nt] complex64,
+    fov, grid (native_calib_grid's return value), voxel_mm, n_calib,
+    calib_mask, L, nbins."""
+    import torch
+
+    device_t = torch.device(device if (device != 'cuda' or torch.cuda.is_available()) else 'cpu')
+    recon_dir = os.path.join(datdir, 'recon')
+    fn_ksp = os.path.join(recon_dir, f'{seqname}_epi_zf.h5')
+    fn_smaps = os.path.join(recon_dir, f'smaps_{seqname}_sigpy.h5')
+    if fn_b0map is None:
+        fn_b0map = os.path.join(recon_dir, f'{seqname}_b0map.h5')
+
+    cfg = load_config(datdir=datdir, seqnames=[seqname])
+    paths = set_seq_paths(cfg, seqname)
+    seq_params = load_seq_params(paths)
+    fov = seq_params.fov
+
+    print(f'Loading smaps ({fn_smaps})...')
+    smaps_raw = torch.from_numpy(read_frames_cropped(fn_smaps, 'smaps').astype(np.complex64))
+    smaps_rss = smaps_raw.abs().pow(2).sum(dim=-1, keepdim=True).sqrt()
+    smaps = smaps_raw / (smaps_rss + torch.finfo(torch.float32).eps)  # (Nx,Ny,Nz,Nc), CPU
+    Nx, Ny, Nz, _Nvc = smaps.shape
+
+    print(f'Loading B0 field map ({fn_b0map})...')
+    b0map_hz = torch.from_numpy(read_frames_cropped(fn_b0map, 'b0map_hz').astype(np.float32))
+    assert tuple(b0map_hz.shape) == (Nx, Ny, Nz), (
+        f'b0map_hz shape {tuple(b0map_hz.shape)} != smaps grid ({Nx},{Ny},{Nz})'
+    )
+
+    print(f'Loading echo times / sampling mask ({fn_ksp})...')
+    echo_times_2d = read_frames_cropped(fn_ksp, 'echo_times').astype(np.float32)  # (Ny,Nz,Nt), numpy
+    with h5py.File(fn_ksp, 'r') as f:
+        omegas = f['omegas'][()]  # (Ny, Nz, Nt)
+    Nt = omegas.shape[-1]
+    calib_mask = compute_calib_mask(omegas)  # (Ny, Nz)
+    n_calib = int(calib_mask.sum())
+    print(f'Calibration region: {n_calib} / {calib_mask.size} (ky, kz) locations')
+    if n_calib == 0:
+        raise RuntimeError(
+            'run_b0_corrected_calib_recon: empty calibration region (no (ky, kz) '
+            'location is sampled in every frame) -- is this dataset fully sampled '
+            'at k-space center?'
+        )
+
+    grid = native_calib_grid(calib_mask, fov, Nx)
+    xs, ys, zs = grid['x_slice'], grid['y_slice'], grid['z_slice']
+    Nx_eff, Ny_eff, Nz_eff = grid['Nx_eff'], grid['Ny_eff'], grid['Nz_eff']
+    voxel_mm = [1000 * fov[a] / n for a, n in enumerate((Nx_eff, Ny_eff, Nz_eff))]
+    print(f'  Native grid: ({Nx_eff}, {Ny_eff}, {Nz_eff})  '
+          f'(voxel size {voxel_mm[0]:.3f} x {voxel_mm[1]:.3f} x {voxel_mm[2]:.3f} mm)')
+
+    # smaps/b0map_hz are smooth, low-spatial-frequency quantities -- resize
+    # in image space (same FOV-preserving resample the rest of this
+    # pipeline uses between grids of different resolution) rather than
+    # cropping k-space, which they were never sampled on in the first place.
+    n_target = (Nx_eff, Ny_eff, Nz_eff)
+    smaps_native = torch.from_numpy(
+        resize_to_epi_grid(smaps.numpy(), fov, fov, n_target, order=3).astype(np.complex64)
+    ).to(device_t)
+    smaps_chw = smaps_native.permute(3, 0, 1, 2).contiguous()  # (Nc,Nx_eff,Ny_eff,Nz_eff)
+    b0map_hz_native = torch.from_numpy(
+        resize_to_epi_grid(b0map_hz.numpy(), fov, fov, n_target, order=3).astype(np.float32)
+    ).to(device_t)
+
+    # echo_times is a k-space-indexed array (acquisition time per sampled
+    # (ky,kz) location), not an image -- crop it the same way k-space
+    # itself is cropped below, not resized.
+    echo_times_crop = echo_times_2d[ys, zs, :]  # (Ny_eff, Nz_eff, Nt)
+    echo_times_s = torch.from_numpy(echo_times_crop).to(device_t)
+    echo_times_s = echo_times_s.unsqueeze(0).expand(Nx_eff, -1, -1, -1).contiguous()
+
+    calib_mask_crop = calib_mask[ys, zs]  # (Ny_eff, Nz_eff)
+    calib_mask_t = torch.from_numpy(calib_mask_crop).to(device_t)
+    calib_omega = calib_mask_t[None, :, :, None].expand(Nx_eff, Ny_eff, Nz_eff, Nt)
+
+    print(f'Building B0-corrected operator (L={L}, nbins={nbins})...')
+    A = _build_calib_operator_b0(
+        smaps_chw, calib_omega, b0map_hz_native, echo_times_s, L=L, nbins=nbins
+    )
+    idx_full = A.A[0].idx.cpu().numpy()
+    for it in range(1, Nt):
+        assert np.array_equal(A.A[it].idx.cpu().numpy(), idx_full), (
+            'calibration-region sample indices differ across frames -- unexpected'
+        )
+
+    print(f'Loading k-space ({fn_ksp}), cropped to the calibration-region bounding box, '
+          'and gathering calibration-region samples...')
+    # Cropped during the HDF5 read itself (recon/hdf5_chunked_io.py's
+    # read_frames_cropped), not after loading the full dense array -- see
+    # docs/review-findings.md item 204 (the full array is ~201GB at this
+    # pipeline's real 0.8mm/R~93.5 scale, vs. a few hundred calibration-
+    # region samples actually needed).
+    ksp_epi_zf_crop = read_frames_cropped(
+        fn_ksp, 'ksp_epi_zf', spatial_slices=(xs, ys, zs)
+    ).astype(np.complex64)  # [Nx_eff,Ny_eff,Nz_eff,Nc,Nt]
+    ksp_gathered = gather_calib_ksp(ksp_epi_zf_crop, idx_full)  # [K, Nc, Nt]
+    ksp_calib = torch.from_numpy(ksp_gathered).to(device_t)
+
+    print('Reconstructing (adjoint only -- no iteration, no regularization)...')
+    img = A.adjoint(ksp_calib)  # (Nx_eff, Ny_eff, Nz_eff, Nt) complex64
+    img_np = img.detach().cpu().numpy()
+
+    return dict(
+        img_np=img_np, fov=fov, grid=grid, voxel_mm=voxel_mm,
+        n_calib=n_calib, calib_mask=calib_mask, L=L, nbins=nbins,
+    )
+
+
+def main_b0(
+    datdir: str, seqname: str, L: int = 32, nbins: int = 128, device: str = 'cuda',
+    fn_b0map: str | None = None,
+) -> None:
+    result = run_b0_corrected_calib_recon(datdir, seqname, L, nbins, device, fn_b0map)
+    img_np, fov = result['img_np'], result['fov']
+    grid, voxel_mm = result['grid'], result['voxel_mm']
+    n_calib, calib_mask = result['n_calib'], result['calib_mask']
+    Nx_eff, Ny_eff, Nz_eff = grid['Nx_eff'], grid['Ny_eff'], grid['Nz_eff']
+
+    out_dir = os.path.join(datdir, 'recon', 'lowres_calib')
+    os.makedirs(out_dir, exist_ok=True)
+    fn_out = os.path.join(out_dir, f'{seqname}_recon_lowres_calib_b0')
+
+    save_recon_nifti(
+        fn_out, img_np, fov=fov, seqname=seqname,
+        n_calib_samples=n_calib, n_ky_kz=int(calib_mask.size), L=L, nbins=nbins,
+        native_grid=[Nx_eff, Ny_eff, Nz_eff], native_voxel_mm=voxel_mm,
+        note='B0-corrected (time-segmented conjugate-phase, adjoint only, no '
+             'iteration/regularization) IFFT + smaps combine of the fully-sampled '
+             'k-space center only, reconstructed at native (resolution-matched) grid '
+             'size, not zero-padded',
+    )
+    print(f'Wrote {fn_out}.nii.gz + .json')
+
+
+def nominal_te_s(scan_info_path: str, etl: int) -> float:
+    """The prescribed-TE echo's acquisition time (seconds since RF
+    excitation), frame/shot-invariant by construction -- see module
+    docstring. Read directly from scan_info.mat rather than derived from
+    the calibration region's own echo-time coverage, which can be an
+    incomplete subset of the full ETL (see lowres_calib.py's
+    _build_calib_operator_b0 docstring)."""
+    raw = read_mat(scan_info_path, ['schedules'])['schedules']  # (Nframes,Nshots,ETL,3)
+    return float(raw[0, 0, (etl - 1) // 2, 2])
+
+
+def _build_calib_operator_b0_complex(
+    smaps_chw: torch.Tensor,
+    calib_omega: torch.Tensor,
+    b0map_hz: torch.Tensor,
+    r2star_map: torch.Tensor,
+    echo_times_s_shifted: torch.Tensor,
+    L: int = 32,
+    nbins: int = 128,
+) -> BlockDiagonal:
+    """Same construction as lowres_calib.py's
+    _build_calib_operator_b0, generalized to a complex field -- see module
+    docstring for what changes (spatial basis only) and what doesn't
+    (temporal interpolation weights, segment placement, both still fit
+    from Δf(r) alone via an unmodified mri_exp_approx call)."""
+    import torch
+    from mirtorch.linear import BlockDiagonal
+    from mirtorch.linear.mri import mri_exp_approx
+
+    from recon.operators import GatheredSenseB0, _check_b_weight_row_sums
+
+    Nt = calib_omega.shape[-1]
+    device = smaps_chw.device
+    b0_neg = (-b0map_hz).to(torch.float32)
+
+    idx_list, t_ms_list = [], []
+    for it in range(Nt):
+        samp = calib_omega[..., it]
+        idx = torch.nonzero(samp.reshape(-1), as_tuple=False).squeeze(-1)
+        t_ms = (echo_times_s_shifted[..., it].reshape(-1)[idx] * 1000).to(torch.float32)
+        idx_list.append(idx)
+        t_ms_list.append(t_ms)
+    unique_t_ms = torch.unique(torch.cat(t_ms_list), sorted=True)
+
+    b_by_echo, _c_phase_only, tl = mri_exp_approx(b0_neg, nbins, L, unique_t_ms)
+    _check_b_weight_row_sums(
+        b_by_echo, 'shared complex-field fit (union of calib-region echo times, TE-referenced)'
+    )
+    b_by_echo = b_by_echo.to(smaps_chw.dtype)  # (n_unique_t, L)
+
+    # Generalized complex spatial basis -- see module docstring. Reduces
+    # exactly to mri_exp_approx's own phase-only c_phasors when
+    # r2star_map == 0 (matches recon/operators.py's confirmed sign
+    # convention: exp(i*2*pi*b0map_hz(r)*tl[l])).
+    #
+    # Sign note (+R2*, not -R2*): GatheredSenseB0._apply_adjoint always
+    # applies c_phasors[l].conj() -- the correct *inverse* of a pure
+    # rotation (|exp(i*theta)|=1, so conj == 1/(.)), which is why the
+    # phase-only version works via adjoint alone. Conjugating a REAL
+    # quantity is a no-op, though, so a naive exp(i*2*pi*Δf*t - R2**t)
+    # here would have the adjoint apply the SAME decay attenuation a
+    # second time instead of undoing it (see module docstring). The true
+    # multiplicative inverse of exp(psi*t) is exp(-psi*t), not
+    # exp(conj(psi)*t) -- those only coincide when Re(psi)=0. Feeding
+    # GatheredSenseB0 a c_phasors built from psi_recon = i*2*pi*Δf + R2*
+    # (note the sign flip on R2* relative to the physical forward-model
+    # exponent) makes ITS conjugate equal exp(-psi_physical*t), the actual
+    # decay-compensating inverse -- at the cost of this array no longer
+    # being a physically faithful forward operator if .apply() were ever
+    # called on it (it isn't, here: this reconstruction only ever calls
+    # .adjoint()).
+    psi_recon = (
+        1j * 2 * math.pi * b0map_hz.to(torch.complex64)
+        + r2star_map.to(torch.complex64)
+    )  # (*N) complex
+    tl_c = tl.to(torch.complex64).to(device)
+    c_phasors = torch.exp(tl_c[:, None, None, None] * psi_recon[None, ...])  # (L,*N)
+    c_phasors = c_phasors.to(smaps_chw.dtype)
+
+    frames = []
+    for it in range(Nt):
+        samp = calib_omega[..., it]
+        t_ms = t_ms_list[it]
+        pos = torch.searchsorted(unique_t_ms, t_ms).clamp(max=unique_t_ms.numel() - 1)
+        assert torch.allclose(unique_t_ms[pos], t_ms, atol=1e-4), (
+            f"_build_calib_operator_b0_complex: frame {it}'s sample echo times aren't in "
+            "the union of every frame's calib-region echo times -- shouldn't be reachable "
+            'by construction.'
+        )
+        frames.append(GatheredSenseB0(smaps_chw, samp, pos, b_by_echo, c_phasors))
+    return BlockDiagonal(frames)
+
+
+def run_b0complex_corrected_calib_recon(
+    datdir: str, seqname: str, L: int = 32, nbins: int = 128, device: str = 'cuda',
+    zero_pad_z: bool = False, fn_b0map: str | None = None,
+) -> dict:
+    """Core computation shared by main_b0complex() and any other consumer wanting
+    the complex-field-corrected calibration-region reconstruction
+    directly. Returns a dict: img_np [Nx_eff,Ny_eff,Nz_eff,Nt] complex64,
+    fov, grid (native_calib_grid's return value), voxel_mm, n_calib,
+    calib_mask, L, nbins, te_nominal_s.
+
+    zero_pad_z: forwarded to estimate_r2star_map_epi_grid's deGRE-grid ->
+    EPI-grid resize -- see that function's docstring (docs/review-findings.md
+    item 203). Needed for this session's 5.4mm variant, whose EPI z-FOV
+    (145.8mm) exceeds deGRE's fixed 144mm slab -- the same condition
+    smaps.py/run_b0map.py already need it for, since R2* estimation reads
+    from the same deGRE acquisition."""
+    import torch
+
+    device_t = torch.device(device if (device != 'cuda' or torch.cuda.is_available()) else 'cpu')
+    recon_dir = os.path.join(datdir, 'recon')
+    fn_ksp = os.path.join(recon_dir, f'{seqname}_epi_zf.h5')
+    fn_smaps = os.path.join(recon_dir, f'smaps_{seqname}_sigpy.h5')
+    if fn_b0map is None:
+        fn_b0map = os.path.join(recon_dir, f'{seqname}_b0map.h5')
+
+    cfg = load_config(datdir=datdir, seqnames=[seqname])
+    paths = set_seq_paths(cfg, seqname)
+    seq_params = load_seq_params(paths)
+    fov, fov_degre = seq_params.fov, seq_params.fov_degre
+
+    print(f'Loading smaps ({fn_smaps})...')
+    smaps_raw = torch.from_numpy(read_frames_cropped(fn_smaps, 'smaps').astype(np.complex64))
+    smaps_rss = smaps_raw.abs().pow(2).sum(dim=-1, keepdim=True).sqrt()
+    smaps = smaps_raw / (smaps_rss + torch.finfo(torch.float32).eps)  # (Nx,Ny,Nz,Nc), CPU
+    Nx, Ny, Nz, _Nvc = smaps.shape
+
+    print(f'Loading B0 field map ({fn_b0map})...')
+    b0map_hz = torch.from_numpy(read_frames_cropped(fn_b0map, 'b0map_hz').astype(np.float32))
+    assert tuple(b0map_hz.shape) == (Nx, Ny, Nz), (
+        f'b0map_hz shape {tuple(b0map_hz.shape)} != smaps grid ({Nx},{Ny},{Nz})'
+    )
+
+    print('Estimating R2* map from dual-echo deGRE data...')
+    r2star_hz = torch.from_numpy(
+        estimate_r2star_map_epi_grid(
+            datdir, seqname, fov_degre, fov, (Nx, Ny, Nz), zero_pad_z=zero_pad_z,
+        )
+    )
+
+    print(f'Loading echo times / sampling mask ({fn_ksp})...')
+    echo_times_2d = read_frames_cropped(fn_ksp, 'echo_times').astype(np.float32)  # (Ny,Nz,Nt), numpy
+    with h5py.File(fn_ksp, 'r') as f:
+        omegas = f['omegas'][()]  # (Ny, Nz, Nt)
+    Nt = omegas.shape[-1]
+    calib_mask = compute_calib_mask(omegas)  # (Ny, Nz)
+    n_calib = int(calib_mask.sum())
+    print(f'Calibration region: {n_calib} / {calib_mask.size} (ky, kz) locations')
+    if n_calib == 0:
+        raise RuntimeError(
+            'run_b0complex_corrected_calib_recon: empty calibration region (no (ky, kz) '
+            'location is sampled in every frame) -- is this dataset fully sampled '
+            'at k-space center?'
+        )
+
+    te_nominal_s = nominal_te_s(paths.scan_info, seq_params.ETL)
+    print(f'  TE_nominal = {te_nominal_s * 1000:.3f} ms '
+          f'(echo index {(seq_params.ETL - 1) // 2} of {seq_params.ETL})')
+
+    grid = native_calib_grid(calib_mask, fov, Nx)
+    xs, ys, zs = grid['x_slice'], grid['y_slice'], grid['z_slice']
+    Nx_eff, Ny_eff, Nz_eff = grid['Nx_eff'], grid['Ny_eff'], grid['Nz_eff']
+    voxel_mm = [1000 * fov[a] / n for a, n in enumerate((Nx_eff, Ny_eff, Nz_eff))]
+    print(f'  Native grid: ({Nx_eff}, {Ny_eff}, {Nz_eff})  '
+          f'(voxel size {voxel_mm[0]:.3f} x {voxel_mm[1]:.3f} x {voxel_mm[2]:.3f} mm)')
+
+    # smaps/b0map_hz are smooth, low-spatial-frequency quantities -- resize
+    # in image space (same FOV-preserving resample the rest of this
+    # pipeline uses between grids of different resolution) rather than
+    # cropping k-space, which they were never sampled on in the first place.
+    n_target = (Nx_eff, Ny_eff, Nz_eff)
+    smaps_native = torch.from_numpy(
+        resize_to_epi_grid(smaps.numpy(), fov, fov, n_target, order=3).astype(np.complex64)
+    ).to(device_t)
+    smaps_chw = smaps_native.permute(3, 0, 1, 2).contiguous()  # (Nc,Nx_eff,Ny_eff,Nz_eff)
+    b0map_hz_native = torch.from_numpy(
+        resize_to_epi_grid(b0map_hz.numpy(), fov, fov, n_target, order=3).astype(np.float32)
+    ).to(device_t)
+    # R2* has much sharper local structure than smaps/b0map_hz (this
+    # phantom's real air bubbles show up as T2* down to ~6ms in places),
+    # and resize_to_epi_grid's cubic-spline zoom has no anti-aliasing
+    # prefilter -- harmless for the smooth quantities above, but a real
+    # ~5x EPI-grid -> native-grid downsample ratio here can alias by
+    # ~23-25% locally in the T2* correction factor at typical echo-time
+    # offsets from TE_nominal if left unfiltered. Gaussian-prefilter
+    # before the zoom (standard decimation anti-aliasing, sigma set from
+    # the actual per-axis downsample ratio) rather than touching
+    # grid_resize.py itself, which smaps/b0map_hz both already use safely
+    # without one.
+    r2star_src = r2star_hz.numpy()
+    ratios = [s / t for s, t in zip(r2star_src.shape, n_target)]
+    sigmas = [max(r / 2, 0.0) for r in ratios]  # 0 where upsampling (ratio<1)
+    r2star_prefiltered = gaussian_filter(r2star_src, sigma=sigmas)
+    r2star_resized = resize_to_epi_grid(r2star_prefiltered, fov, fov, n_target, order=3)
+    r2star_native = torch.from_numpy(
+        np.clip(r2star_resized, 0.0, None).astype(np.float32)
+    ).to(device_t)
+
+    # echo_times is a k-space-indexed array (acquisition time per sampled
+    # (ky,kz) location), not an image -- crop it the same way k-space
+    # itself is cropped below, not resized.
+    echo_times_crop_raw = echo_times_2d[ys, zs, :]  # (Ny_eff, Nz_eff, Nt), pre-shift
+    calib_mask_crop = calib_mask[ys, zs]  # (Ny_eff, Nz_eff)
+
+    # Bandwidth-time-product sanity check (see module docstring): confirms
+    # R2*'s decay-time product is small relative to Δf's, which is what
+    # justifies reusing Δf-only-tuned interpolation weights for R2* too.
+    te_calib = echo_times_crop_raw[calib_mask_crop, :]
+    t_span_s = te_calib.max() - te_calib.min()
+    df_range_hz = float(b0map_hz_native.max() - b0map_hz_native.min())
+    r2_p95 = float(np.percentile(r2star_native.cpu().numpy(), 95))
+    print(f'  bandwidth-time check: Δf range x echo-train span = {df_range_hz * t_span_s:.2f} '
+          "(dimensionless, ~27 at this pipeline's real ETL=60 scale per CLAUDE.md)")
+    print(f'                        R2*(95th pct) x echo-train span = {r2_p95 * t_span_s:.4f} '
+          '(dimensionless -- should be << the Δf figure above for the '
+          'shared-weights reuse to be valid)')
+
+    echo_times_crop = echo_times_crop_raw - te_nominal_s  # TE-referenced, both magnitude and phase
+    echo_times_s = torch.from_numpy(echo_times_crop).to(device_t)
+    echo_times_s = echo_times_s.unsqueeze(0).expand(Nx_eff, -1, -1, -1).contiguous()
+
+    calib_mask_t = torch.from_numpy(calib_mask_crop).to(device_t)
+    calib_omega = calib_mask_t[None, :, :, None].expand(Nx_eff, Ny_eff, Nz_eff, Nt)
+
+    print(f'Building complex-field-corrected operator (L={L}, nbins={nbins})...')
+    A = _build_calib_operator_b0_complex(
+        smaps_chw, calib_omega, b0map_hz_native, r2star_native, echo_times_s, L=L, nbins=nbins,
+    )
+    idx_full = A.A[0].idx.cpu().numpy()
+    for it in range(1, Nt):
+        assert np.array_equal(A.A[it].idx.cpu().numpy(), idx_full), (
+            'calibration-region sample indices differ across frames -- unexpected'
+        )
+
+    print(f'Loading k-space ({fn_ksp}), cropped to the calibration-region bounding box, '
+          'and gathering calibration-region samples...')
+    # Cropped during the HDF5 read itself (recon/hdf5_chunked_io.py's
+    # read_frames_cropped), not after loading the full dense array -- see
+    # docs/review-findings.md item 213.
+    ksp_epi_zf_crop = read_frames_cropped(
+        fn_ksp, 'ksp_epi_zf', spatial_slices=(xs, ys, zs)
+    ).astype(np.complex64)  # [Nx_eff,Ny_eff,Nz_eff,Nc,Nt]
+    ksp_gathered = gather_calib_ksp(ksp_epi_zf_crop, idx_full)  # [K, Nc, Nt]
+    ksp_calib = torch.from_numpy(ksp_gathered).to(device_t)
+
+    print('Reconstructing (adjoint only -- no iteration, no regularization)...')
+    img = A.adjoint(ksp_calib)  # (Nx_eff, Ny_eff, Nz_eff, Nt) complex64
+    img_np = img.detach().cpu().numpy()
+
+    return dict(
+        img_np=img_np, fov=fov, grid=grid, voxel_mm=voxel_mm,
+        n_calib=n_calib, calib_mask=calib_mask, L=L, nbins=nbins, te_nominal_s=te_nominal_s,
+    )
+
+
+def main_b0complex(
+    datdir: str, seqname: str, L: int = 32, nbins: int = 128, device: str = 'cuda',
+    zero_pad_z: bool = False, fn_b0map: str | None = None,
+) -> None:
+    result = run_b0complex_corrected_calib_recon(
+        datdir, seqname, L, nbins, device, zero_pad_z, fn_b0map,
+    )
+    img_np, fov = result['img_np'], result['fov']
+    grid, voxel_mm = result['grid'], result['voxel_mm']
+    n_calib, calib_mask = result['n_calib'], result['calib_mask']
+    Nx_eff, Ny_eff, Nz_eff = grid['Nx_eff'], grid['Ny_eff'], grid['Nz_eff']
+
+    out_dir = os.path.join(datdir, 'recon', 'lowres_calib')
+    os.makedirs(out_dir, exist_ok=True)
+    fn_out = os.path.join(out_dir, f'{seqname}_recon_lowres_calib_b0complex')
+
+    save_recon_nifti(
+        fn_out, img_np, fov=fov, seqname=seqname,
+        n_calib_samples=n_calib, n_ky_kz=int(calib_mask.size), L=L, nbins=nbins,
+        te_nominal_s=result['te_nominal_s'],
+        native_grid=[Nx_eff, Ny_eff, Nz_eff], native_voxel_mm=voxel_mm,
+        note='Complex-field (off-resonance + T2*) corrected, TE-referenced, adjoint-only '
+             '(no iteration/regularization) reconstruction of the fully-sampled k-space '
+             'center only, at native (resolution-matched) grid size, not zero-padded',
+    )
+    print(f'Wrote {fn_out}.nii.gz + .json')
+
+
+def main_calib(
+    datdir: str, seqname: str = 'ArbEPI', b0: bool = False, fn_b0map: str | None = None,
+    r2star: bool = False, L: int = 32, nbins: int = 128, device: str = 'cuda',
+    zero_pad_z: bool = False,
+) -> None:
+    """Single-sequence entry point. Plain IFFT + smaps combine by default
+    (numpy only); with b0=True (or an explicit fn_b0map, which implies it)
+    the time-segmented B0-corrected adjoint reconstruction, and with
+    r2star=True additionally the complex-field (off-resonance + T2*)
+    variant -- both need torch/mirtorch (.venv-recon), imported lazily.
+    A single-dataset failure raises directly instead of being
+    caught-and-printed, useful for interactive/ad hoc use."""
+    b0 = b0 or fn_b0map is not None
+    if r2star and not b0:
+        raise ValueError('main_calib: r2star correction requires a B0 map (b0=True or fn_b0map)')
+    if not b0:
+        _recon_one(load_config(datdir=datdir, seqnames=[seqname]), seqname)
+    elif r2star:
+        main_b0complex(datdir, seqname, L, nbins, device, zero_pad_z, fn_b0map)
     else:
-        run_lowres_calib_recon(load_config(datdir=args.datdir, seqnames=args.seqname))
+        main_b0(datdir, seqname, L, nbins, device, fn_b0map)
+
 
 def load_lowres_calib_recon(
     datdir: str, seqname: str = 'ArbEPI', variant: str = ''
 ) -> tuple[np.ndarray, dict]:
     """variant: '' for the plain (uncorrected) recon, 'b0' for
-    recon/lowres_calib_b0.py's B0-corrected output."""
+    recon/lowres_calib.py's B0-corrected output."""
     suffix = f'_{variant}' if variant else ''
     fn_base = os.path.join(datdir, 'recon', 'lowres_calib', f'{seqname}_recon_lowres_calib{suffix}')
     img = np.asarray(nib.load(f'{fn_base}.nii.gz').dataobj)  # [Nx, Ny, Nz, Nframes], magnitude
@@ -460,6 +1143,44 @@ def main_stability(
     plt.tight_layout()
     _save_fig('last_minus_first')
 
+
+def _cli_calib() -> None:
+    parser = argparse.ArgumentParser(
+        description="Low-res calibration-region reconstruction (plain, or B0-informed with --b0/--b0map)."
+    )
+    parser.add_argument('datdir')
+    parser.add_argument('seqname', nargs='*', default=['ArbEPI'],
+                        help='one or more seqnames to batch (default: ArbEPI)')
+    parser.add_argument('--b0', action='store_true',
+                        help='apply B0-informed correction using <datdir>/recon/<seqname>_b0map.h5 (needs torch)')
+    parser.add_argument('--b0map', default=None,
+                        help='B0 field map .h5 to use instead of the default (implies --b0; single seqname only)')
+    parser.add_argument('--r2star', action='store_true',
+                        help='with B0 correction, also correct T2* amplitude decay (complex field)')
+    parser.add_argument('--L', type=int, default=32)
+    parser.add_argument('--nbins', type=int, default=128)
+    parser.add_argument('--device', default='cuda')
+    parser.add_argument(
+        '--zero-pad-z', action='store_true',
+        help='(with --r2star) zero-pad the deGRE-grid R2* estimate where the EPI z-FOV exceeds '
+             "deGRE's fixed z-FOV, instead of raising (see docs/review-findings.md item 203)",
+    )
+    args = parser.parse_args()
+    b0 = args.b0 or args.b0map is not None
+    if args.r2star and not b0:
+        parser.error('--r2star requires --b0 or --b0map')
+    if args.b0map is not None and len(args.seqname) != 1:
+        parser.error('--b0map PATH requires exactly one seqname')
+    if len(args.seqname) > 1 and not b0:
+        run_lowres_calib_recon(load_config(datdir=args.datdir, seqnames=args.seqname))
+        return
+    for seqname in args.seqname:
+        main_calib(
+            args.datdir, seqname, b0=b0, fn_b0map=args.b0map, r2star=args.r2star,
+            L=args.L, nbins=args.nbins, device=args.device, zero_pad_z=args.zero_pad_z,
+        )
+
+
 def _cli_stability() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('datdirs', nargs='+')
@@ -471,7 +1192,7 @@ def _cli_stability() -> None:
     )
     parser.add_argument(
         '--variant', default='',
-        help="'' for the plain recon, 'b0' for recon/lowres_calib_b0.py's output",
+        help="'' for the plain recon, 'b0' or 'b0complex' for the B0-corrected outputs of `calib`",
     )
     args = parser.parse_args()
     main_stability(args.datdirs, args.seqname, args.tr, args.skip_frames, args.variant)

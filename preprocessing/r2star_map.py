@@ -1,6 +1,6 @@
 """Estimates a T2*/R2* map from the same dual-echo deGRE data already used
 for B0 field-map estimation (run_b0map.py), for the generalized complex
-field-map correction in recon/lowres_calib_b0.py.
+field-map correction in recon/lowres_calib.py.
 
 Motivation: recon/operators.py's time-segmented correction only
 demodulates *phase* (off-resonance) -- it leaves T2*/T1 amplitude decay

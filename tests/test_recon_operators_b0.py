@@ -276,7 +276,7 @@ def test_r2star_zero_map_matches_phase_only_operator():
 def test_r2star_generalization_adjoint_is_self_consistent():
     """The check that discriminates this module's PHYSICAL sign
     (psi = i*2*pi*Δf(r) - R2*(r), decaying in the forward direction) from
-    recon/lowres_calib_b0.py's flipped sign on the
+    recon/lowres_calib.py's flipped sign on the
     (unmerged) worktree-lowres-calib-recon branch (psi_recon =
     i*2*pi*Δf(r) + R2*(r)): the true adjoint identity <Ax,y> == <x,A^H y>
     holds for ANY complex c_phasors under GatheredSenseB0's `.conj()`
@@ -327,7 +327,7 @@ def test_r2star_forward_model_decays_away_from_reference_time():
     echo, not growth -- an earlier version of this test wrongly asserted
     |c_phasors|<=1 everywhere and failed on exactly this). What the sign
     must never do is flip that direction: a flipped sign
-    (recon/lowres_calib_b0.py's branch convention) would make
+    (recon/lowres_calib.py's branch convention) would make
     |c_phasors| INCREASE with tl[l] instead of decrease (see the module
     docstring's measured tSNR-gets-worse regression).
 

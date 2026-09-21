@@ -30,7 +30,7 @@ estimated from the same dual-echo deGRE data already used for the B0 map
 (preprocessing/r2star_map.py's two-point log-ratio) and referenced to the
 nominal-TE echo's acquisition time (scan_info.mat's
 schedules[0,0,(ETL-1)//2,2] -- the same value
-recon/lowres_calib_b0.py reads, read the same way here rather
+recon/lowres_calib.py reads, read the same way here rather
 than re-derived). Output moves to <datdir>/recon/mslr_b0complex/G+L_L<L_b0>/
 so a --r2star run never collides with a plain B0-only run at the same L.
 
@@ -222,7 +222,7 @@ def _nominal_te_s(scan_info_path: str, etl: int) -> float:
     excitation), frame/shot-invariant by construction (see CLAUDE.md's
     mask2epi_radial paragraph) -- read directly from scan_info.mat rather
     than re-derived, matching
-    recon/lowres_calib_b0.py's own nominal_te_s on the
+    recon/lowres_calib.py's own nominal_te_s on the
     worktree-lowres-calib-recon branch."""
     schedules = read_mat(scan_info_path, ["schedules"])["schedules"]  # (Nframes,Nshots,ETL,3)
     return float(schedules[0, 0, (etl - 1) // 2, 2])
