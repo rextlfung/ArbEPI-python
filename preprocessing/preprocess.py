@@ -2,7 +2,7 @@
 Stage 2 iterative reconstruction. Ports preprocess.m.
 
 Validated end to end against real acquired data, not just its individual
-building blocks: preprocess.py -> sigpy_recon.py was run on a real acquisition
+building blocks: preprocess.py -> the removed recon/sigpy_recon.py was run on a real acquisition
 (wb_2.4mm, GE_UHP hardware) and compared against a real MATLAB/BART
 reference reconstruction (wb_2.4mm_recon_rss.mat) -- 0.19% relative L2
 error, Pearson r = 0.999997 (after fitting a single overall scale factor,

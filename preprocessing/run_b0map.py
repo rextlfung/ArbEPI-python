@@ -1,6 +1,6 @@
 """Stage 1.5 batch driver: B0 field map estimation via MRIFieldmaps.jl.
 
-Unlike recon/sigpy_recon.py's drivers (pure-Python Stage 2
+Unlike the removed recon/sigpy_recon.py's drivers (pure-Python Stage 2
 drivers), this shells out to Julia -- MRIFieldmaps.jl
 (https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl) has no Python
 port, and CLAUDE.md's preprocessing/ section previously described B0
@@ -17,14 +17,14 @@ Depends on preprocess()'s STEP 2 output (`<seqname>_gre.h5`, whitened +
 coil-compressed dual-echo GRE k-space + TE_degre), so run_preprocessing()
 must have already completed for each seqname before this.
 
-Also computes (or loads, if already cached by a prior sigpy_recon.py run)
+Also computes (or loads, if already cached by a prior run of the removed recon/sigpy_recon.py)
 sensitivity maps on the deGRE grid via smaps.load_smaps, and passes them to
 b0map.jl as a `smap` argument -- see b0map.jl's own module docstring for
 why this replaces MRIFieldmaps' phase-contrast coil-combine fallback (a
 true matched-filter combine, expected to reduce field-map noise in this
 pipeline's real low-per-coil-SNR object-center regions). This means
 run_b0map() can now trigger ESPIRiT sensitivity-map estimation itself, not
-only sigpy_recon.py -- both share the same
+only the removed recon/sigpy_recon.py -- both share the same
 `<datdir>/recon/smaps_<seqname>_sigpy.h5` cache, so whichever stage runs
 first pays the (one-time) ESPIRiT cost.
 
@@ -106,7 +106,7 @@ def run_b0map(cfg: PreprocessingConfig, zero_pad_z: bool = False) -> None:
             smaps_path = ''
 
         # Whole per-sequence body wrapped in one try/except, matching the
-        # sibling Stage-2 drivers (recon/sigpy_recon.py): a failure -- in the julia subprocess itself
+        # sibling Stage-2 drivers (the removed recon/sigpy_recon.py): a failure -- in the julia subprocess itself
         # or in the post-processing below (resize/h5-write/NIfTI-export) --
         # must not abort field-map estimation for the *remaining* sequences
         # in a multi-sequence batch (docs/review-findings.md item 151).

@@ -1,4 +1,4 @@
-"""Convergence sanity checks for recon/solvers.py's pogm_restart, on a
+"""Convergence sanity checks for recon/mslr.py's pogm_restart, on a
 trivial least-squares problem (A=I) with a known closed-form solution,
 across all three momentum variants."""
 
@@ -6,7 +6,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from recon.solvers import pogm_restart  # noqa: E402
+from recon.mslr import pogm_restart  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

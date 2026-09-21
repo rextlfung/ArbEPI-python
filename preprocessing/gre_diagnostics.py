@@ -12,11 +12,10 @@ rather than the B0-corrected recon operator (recon/operators.py). This
 means the input `<seqname>_b0map.h5` must have been produced by
 run_b0map.py's full driver, not merely by running b0map.jl directly.
 
-Imports _ift3 from recon/sigpy_recon.py rather than keeping its own
-copy (fftshift(ifftn(fftshift(.))) per axis -- see that function's own
-docstring for the magnitude-/difference-safety caveat on odd axes), the
-same convention b0map.jl's own image-space conversion uses in Julia (see
-its module docstring in CLAUDE.md).
+Defines _ift3 (fftshift(ifftn(fftshift(.))) per axis -- see its docstring for
+the magnitude-/difference-safety caveat on odd axes), the same convention
+b0map.jl's own image-space conversion uses in Julia (see its module
+docstring in CLAUDE.md). It used to live in recon/sigpy_recon.py's RSS driver.
 
 Usage (from repo root, .venv-preprocessing):
     .venv-preprocessing/bin/python -m preprocessing.gre_diagnostics <datdir> <seqname>
@@ -31,7 +30,24 @@ import numpy as np
 
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
 from preprocessing.nifti_io import save_recon_nifti
-from recon.sigpy_recon import _ift3
+
+
+def _ift3(d: np.ndarray) -> np.ndarray:
+    """Centered inverse 3D FFT, batched over the trailing (coil) axis.
+    Ports toppe.utils.ift3.m's sub_ift3: fftshift(ifftn(fftshift(D))) per
+    coil -- note this is fftshift on *both* sides, not the more common
+    ifftshift-before/fftshift-after pairing, replicated literally rather
+    than switched to the conventional spelling. These are NOT shift-
+    equivalent on an odd-length axis (a one-sample circular shift of the
+    k-space input, i.e. a pure linear phase ramp in image space) --
+    params.py's N_degre has Nz_degre=21 (odd), so this does bite on that
+    grid. Safe here only because every consumer of this function takes a
+    magnitude (the removed RSS driver) or a difference of two same-grid transforms
+    (preprocessing/julia/b0map.jl's mirror of this convention), both of
+    which cancel the ramp -- a future complex-valued consumer would
+    inherit it silently."""
+    axes = (0, 1, 2)
+    return np.fft.fftshift(np.fft.ifftn(np.fft.fftshift(d, axes=axes), axes=axes), axes=axes)
 
 
 def main(datdir: str, seqname: str) -> None:

@@ -85,7 +85,7 @@ FOV_y)`, which on these two datasets (FOV_x == FOV_y) works out to exactly
 at matched resolution rather than leaving `kx` at full resolution while
 `ky`/`kz` are calibration-limited.
 
-Same centered-IFFT convention as sigpy_recon.py's/gre_diagnostics.py's _ift3,
+Same centered-IFFT convention as preprocessing/gre_diagnostics.py's _ift3,
 and the same FOV-preserving resize (`grid_resize.resize_to_epi_grid`) the
 rest of this pipeline already uses to move smaps between grids of the same
 FOV at different resolutions.
@@ -462,7 +462,7 @@ def _recon_one(cfg: PreprocessingConfig, seqname: str) -> None:
 
 
 def run_lowres_calib_recon(cfg: PreprocessingConfig) -> None:
-    """Batch driver, mirroring sigpy_recon.py/run_preprocessing.py's per-sequence
+    """Batch driver, mirroring preprocessing/run_preprocessing.py's per-sequence
     try/except pattern -- runs _recon_one for every cfg.seqnames, continuing
     past a single sequence's failure rather than aborting the batch."""
     print(f'Batch: {len(cfg.seqnames)} sequence(s) in {cfg.datdir}')
@@ -470,7 +470,7 @@ def run_lowres_calib_recon(cfg: PreprocessingConfig) -> None:
         print(f'\n[{i}/{len(cfg.seqnames)}] {seqname}')
         try:
             _recon_one(cfg, seqname)
-        except Exception as e:  # noqa: BLE001 -- mirrors sigpy_recon.py's per-sequence try/catch
+        except Exception as e:  # noqa: BLE001 -- mirrors run_preprocessing.py's per-sequence try/catch
             print(f"ERROR [{seqname}]: {e}\nSkipping...")
     print('\nBatch complete.')
 

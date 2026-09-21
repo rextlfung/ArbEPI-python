@@ -1,9 +1,26 @@
-"""B0-corrected combined L1-wavelet + TV reconstruction: the torch B0 encoding
-operator bridged into sigpy's solver (.venv-recon, which has both). Contains
-TorchLinopBridge, wavelet_tv_recon_b0 and the batch driver; run as
-`.venv-recon/bin/python -m recon.sigpy_b0 <datdir> <seqname> ...`.
+"""L1-wavelet + TV regularized, B0-informed SENSE reconstruction (.venv-recon; needs
+both torch/mirtorch for the B0 operator and sigpy for the solver). This is the
+only thing this module does: the time-segmented B0-corrected encoding operator
+(recon/operators.py's GatheredSenseB0) is bridged into sigpy
+(TorchLinopBridge), and each frame is solved with combined L1-wavelet + TV
+regularization via PrimalDualHybridGradient (wavelet_tv_recon_b0), driven per
+sequence by main_run.
 
-The sections below are the original module docstrings, kept verbatim.
+    .venv-recon/bin/python -m recon.L1-wavelet_TV_B0_SENSE <datdir> <seqname> \\
+        [--lamb-l1 0.005] [--lamb-tv 0.005] [--num-iter 100] [--frames 0,1,2]
+
+(The file name has a hyphen, so it cannot be used in an `import` statement;
+`python -m` and importlib.import_module("recon.L1-wavelet_TV_B0_SENSE") both
+work.)
+
+This file replaces recon/sigpy_b0.py and recon/sigpy_recon.py. The latter's
+other contents -- the plain (uncorrected) `wavelet_tv_recon`, its shared
+per-frame loop `recon_frames`, and the `rss`/`cg-sense`/`l1-tv` batch drivers --
+were removed; they live in git history. Its solver-rationale docstring (the O(1)
+data rescaling, measured on real data) is kept below, since wavelet_tv_recon_b0
+relies on the same reasoning; the other sections' mentions of `sigpy_recon.py`'s
+plain-operator solver refer to that removed code. The sections below are the
+original module docstrings, kept verbatim.
 
 Formerly recon/sigpy_b0/sigpy_torch_bridge.py
 ---------------------------------------------
@@ -44,7 +61,7 @@ B0-corrected -- sigpy_recon.py's exact regularization/solver pattern
 (Wavelet + FiniteDifference stacked, prox.Stack of two L1Regs, solved via
 PrimalDualHybridGradient), with sigpy_recon.py's plain sigpy.mri.linop.Sense
 replaced by recon/operators.py's time-segmented GatheredSenseB0, bridged
-into sigpy via recon/sigpy_b0.py.
+into sigpy via recon/L1-wavelet_TV_B0_SENSE.py.
 
 Motivation: run_recon.py's unregularized CG-SENSE shows real semi-
 convergence at this repo's undersampling factors (R=6+) -- the well-posed
@@ -81,7 +98,7 @@ against; its oshape must match y's shape exactly.
 Formerly recon/sigpy_b0/run_recon_sigpy_b0.py
 ---------------------------------------------
 Stage 2 batch driver: B0-corrected combined L1-wavelet + TV regularized
-reconstruction (recon/sigpy_b0.py), for this repo's own
+reconstruction (recon/L1-wavelet_TV_B0_SENSE.py), for this repo's own
 <seqname>_epi_zf.h5 / smaps_<seqname>_sigpy.h5 naming convention -- the
 regularized-recovery counterpart to recon/run_recon.py (unregularized) and
 recon/run_recon.py (nuclear-norm regularized), all three sharing the
@@ -91,7 +108,7 @@ same B0-corrected GatheredSenseB0 encoding operator but differing in how
 Unlike sigpy_recon.py's other Stage-2 drivers (sigpy_recon.py, sigpy_recon.py,
 sigpy_recon.py -- all .venv-preprocessing, sigpy-only), this needs
 torch/mirtorch for GatheredSenseB0 -- runs in .venv-recon (sigpy installed
-there specifically for this bridge; see recon/sigpy_b0.py's
+there specifically for this bridge; see recon/L1-wavelet_TV_B0_SENSE.py's
 module docstring for why cupy was not also added). Reimplements the
 per-frame batch loop directly (rather than importing recon_frames.recon_frames)
 since that loop's whole job -- calling recon_fn(data, smaps) per frame -- has
@@ -100,8 +117,47 @@ to change shape anyway: this driver's per-frame k-space is the *gathered*
 zero-filled [Nx,Ny,Nz,Nc] per frame.
 
 Usage (from repo root, .venv-recon):
-    .venv-recon/bin/python -m recon.sigpy_b0 <datdir> <seqname> \\
+    .venv-recon/bin/python -m recon.L1-wavelet_TV_B0_SENSE <datdir> <seqname> \\
         [--lamb-l1 0.005] [--lamb-tv 0.005] [--num-iter 100] [--frames 0,1,2]
+
+
+Formerly recon/basic/recon_sigpy.py (docstring only; its solver code was removed)
+-----------------------------------
+Combined L1-wavelet + total-variation regularized SENSE reconstruction,
+replacing BART's `pics -R W:7:0:lamb_l1 -R T:7:0:lamb_tv -i N -S` (run_bart.m)
+with sigpy (see CLAUDE.md for why BART was dropped in favor of sigpy).
+
+Both regularizers are combined via sigpy's standard multi-regularizer
+pattern for sigpy.app.LinearLeastSquares: a stacked operator
+`G = Vstack([Wavelet, FiniteDifference])` and a block-separable proximal
+operator `prox.Stack([L1Reg(...,lamb_l1), L1Reg(...,lamb_tv)])` -- the same
+structure sigpy.mri.app.L1WaveletRecon / TotalVariationRecon each use
+individually (see their source in sigpy), just combined here rather than
+applied one at a time. Solved via PrimalDualHybridGradient, the standard
+solver for f(x) + g(Gx) with f smooth and g nonsmooth-but-prox-friendly on
+a transformed domain.
+
+Verified against a synthetic SENSE forward model: with fully-sampled
+synthetic k-space and lamb_l1=lamb_tv shrinking to 0, the reconstruction
+converges to the true image (relative error 6.5e-3 -> 7e-4 -> ~0 as lamda
+goes 1e-2 -> 1e-3 -> 1e-5), confirming the Vstack/Stack/PDHG composition is
+solving the intended problem rather than something subtly mis-wired.
+
+`y` is rescaled to O(1) before solving (and the result rescaled back) --
+this port's replacement for BART's `-S` flag, added after real project
+data (wb_2.4mm ball phantom) surfaced the consequence of not having one:
+lamb_l1/lamb_tv are tuned for O(1)-scaled data, so without this step
+they're negligible against raw scanner-unit k-space (|y| ~ 1e4-1e5),
+silently degrading "L1+TV" to an unregularized least-squares SENSE solve.
+At this acquisition's undersampling (R=6) that's ill-posed, and a lambda
+sweep at the true (unscaled) magnitude confirmed it manifests specifically
+as spurious signal loss in a uniform phantom's center -- center/shell
+signal ratio was flat and wrong (~0.64, vs RSS's own 0.76) from lamb=0 up
+through lamb=80, only correcting once lamb reached ~1000, i.e. roughly
+the scale this normalization now reaches automatically at lamb=0.005.
+sigpy's power-iteration step-size calibration (max_power_iter) still
+serves its own separate auto-scaling purpose (for A/G's operator norms,
+not the data/regularizer scale) and remains in place alongside this.
 """
 
 import argparse
@@ -157,8 +213,7 @@ class TorchLinopBridgeAdjoint(sp.linop.Linop):
     """Adjoint half: sigpy Linop wrapping torch_op.adjoint(). Never
     constructed directly -- returned by TorchLinopBridge._adjoint_linop()
     (and vice versa via its own _adjoint_linop() below), matching sigpy's
-    own FFT/IFFT pairing convention (recon/sigpy_b0.py's module
-    docstring)."""
+    own FFT/IFFT pairing convention (this module's docstring)."""
 
     def __init__(self, torch_op: LinearMap, device: torch.device, fwd: TorchLinopBridge):
         self.torch_op = torch_op
@@ -174,6 +229,7 @@ class TorchLinopBridgeAdjoint(sp.linop.Linop):
     def _adjoint_linop(self):
         return self._fwd
 
+
 def wavelet_tv_recon_b0(
     A_sigpy: sp.linop.Linop,
     y: np.ndarray,
@@ -186,7 +242,7 @@ def wavelet_tv_recon_b0(
     """[Nx, Ny, Nz] complex image for one frame.
 
     A_sigpy: bridged GatheredSenseB0 for this one frame (recon/
-    sigpy_b0.py's TorchLinopBridge), ishape=(Nx,Ny,Nz),
+    L1-wavelet_TV_B0_SENSE.py's TorchLinopBridge), ishape=(Nx,Ny,Nz),
     oshape=(K,Nc). y: (K,Nc) complex, this frame's gathered k-space,
     same sample ordering as A_sigpy's underlying torch_op.idx (see
     recon/operators.py's gather_ksp).
@@ -214,6 +270,7 @@ def wavelet_tv_recon_b0(
         show_pbar=False,
     )
     return app.run() / scale
+
 
 def main_run(
     datdir: str, seqname: str,
@@ -264,7 +321,7 @@ def main_run(
     A_full = build_encoding_operator_b0(
         smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0,
     )
-    # One check for the whole batch (not per frame -- see sigpy_b0.py's
+    # One check for the whole batch (not per frame -- see L1-wavelet_TV_B0_SENSE.py's
     # module docstring): lamb_l1/lamb_tv above are tuned assuming a unitary
     # operator, and GatheredSenseB0 is not guaranteed unitary by construction.
     x0 = torch.randn(Nx, Ny, Nz, dtype=torch.complex64, device=device_t)
@@ -329,6 +386,7 @@ def main_run(
         L_b0=L_b0, nbins_b0=nbins_b0, frame_idxs=frame_idxs,
     )
     print(f'Wrote {fn_out}.nii.gz + .json')
+
 
 def _cli_run() -> None:
     parser = argparse.ArgumentParser(description=__doc__)

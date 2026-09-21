@@ -110,13 +110,35 @@ comparison ever shows this backwards.
 
 import math
 import warnings
+from typing import Callable
 
 import torch
 from mirtorch.linear import BlockDiagonal
 from mirtorch.linear.linearmaps import LinearMap
 from mirtorch.linear.mri import mri_exp_approx
 
-from recon.solvers import poweriter
+
+def poweriter(
+    apply_fwd: Callable[[torch.Tensor], torch.Tensor],
+    apply_adj: Callable[[torch.Tensor], torch.Tensor],
+    x0: torch.Tensor,
+    *,
+    niter: int = 200,
+    tol: float = 1e-6,
+) -> float:
+    """Estimate the spectral norm sigma1 = ||A||_2 via power iteration on the
+    normal operator A'A, given as its forward/adjoint applies."""
+    x = x0.clone()
+    ratio_old = float("inf")
+    for _ in range(niter):
+        Ax = apply_fwd(x)
+        ratio = Ax.norm().item() / x.norm().item()
+        if abs(ratio - ratio_old) / ratio < tol:
+            return ratio
+        ratio_old = ratio
+        x = apply_adj(Ax)
+        x = x / x.norm()
+    return apply_fwd(x).norm().item() / x.norm().item()
 
 
 class GatheredSense(LinearMap):
@@ -506,7 +528,7 @@ def build_encoding_operator_b0(
 
 def estimate_spectral_norm(A, x0: torch.Tensor, niter: int = 200, tol: float = 1e-6) -> float:
     """Power iteration estimate of sigma1(A) -- delegates to
-    recon/solvers.py's poweriter (same computation, applied to A's own
+    poweriter above (same computation, applied to A's own
     forward/adjoint) rather than a second copy of the loop: unlike the
     plain (unweighted) SENSE operator, a time-segmented
     GatheredSenseB0/BlockDiagonal's spectral norm has no known closed form
@@ -535,10 +557,10 @@ def check_operator_unitary(
     close to 1.0 -- added 2026-09-18 after a real debugging session where
     exactly this gap (GatheredSenseB0's sigma1 = 1.29, not ~1.0 like the
     plain GatheredSense's 0.9998) went undiagnosed for a while: sigpy's
-    sigpy_recon.py-style L1-wavelet+TV regularization (lamb_l1/lamb_tv,
+    L1-wavelet_TV_B0_SENSE.py-style L1-wavelet+TV regularization (lamb_l1/lamb_tv,
     tuned against a genuinely unitary sigpy.mri.linop.Sense) silently needed
     a ~100x larger lambda once the same pattern was reused with
-    recon/sigpy_b0.py wrapping a non-unitary operator -- a fixed
+    recon/L1-wavelet_TV_B0_SENSE.py wrapping a non-unitary operator -- a fixed
     lambda's *effective* regularization strength (relative to the data
     term) shifts with the operator's own norm, both because sigpy's PDHG
     step-size calibration (tau ~ 1/||A||^2 with sigma held fixed, see
@@ -571,7 +593,7 @@ def check_operator_unitary(
             f"check_operator_unitary: {name}'s sigma1(A) = {sigma1:.4f}, not close to 1.0 "
             f"(tol={tol}) -- this operator is not unitary. Any regularization weight "
             "(lambda_l1/lambda_tv/lambda_global/...) or step size tuned assuming a unitary "
-            "operator (e.g. sigpy_recon.py's lamb_l1=lamb_tv=0.005 default, tuned against a "
+            "operator (e.g. L1-wavelet_TV_B0_SENSE.py's lamb_l1=lamb_tv=0.005 default, tuned against a "
             "genuinely unitary sigpy.mri.linop.Sense) will not transfer directly -- expect to "
             "re-tune, or explicitly normalize the operator/data by sigma1(A) first.",
             stacklevel=2,
