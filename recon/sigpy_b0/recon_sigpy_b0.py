@@ -3,7 +3,7 @@ B0-corrected -- recon_sigpy.py's exact regularization/solver pattern
 (Wavelet + FiniteDifference stacked, prox.Stack of two L1Regs, solved via
 PrimalDualHybridGradient), with recon_sigpy.py's plain sigpy.mri.linop.Sense
 replaced by recon/operators_b0.py's time-segmented GatheredSenseB0, bridged
-into sigpy via recon/sigpy_torch_bridge.py.
+into sigpy via recon/sigpy_b0/sigpy_torch_bridge.py.
 
 Motivation: cg_sense_b0.py's unregularized CG-SENSE shows real semi-
 convergence at this repo's undersampling factors (R=6+) -- the well-posed

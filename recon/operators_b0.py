@@ -452,7 +452,7 @@ def check_operator_unitary(
     recon_sigpy.py-style L1-wavelet+TV regularization (lamb_l1/lamb_tv,
     tuned against a genuinely unitary sigpy.mri.linop.Sense) silently needed
     a ~100x larger lambda once the same pattern was reused with
-    recon/sigpy_torch_bridge.py wrapping a non-unitary operator -- a fixed
+    recon/sigpy_b0/sigpy_torch_bridge.py wrapping a non-unitary operator -- a fixed
     lambda's *effective* regularization strength (relative to the data
     term) shifts with the operator's own norm, both because sigpy's PDHG
     step-size calibration (tau ~ 1/||A||^2 with sigma held fixed, see

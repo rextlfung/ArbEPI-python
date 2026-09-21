@@ -1059,7 +1059,7 @@ MSLR files described below, it also holds the Stage 2 sigpy-based
 reconstruction drivers moved here from `preprocessing/` (see the
 `preprocessing/` section's "Two-stage pipeline" paragraph above for why
 they moved). To keep the top level from sprawling, `recon/` is split into
-three subpackages plus a small set of top-level modules:
+four subpackages plus a small set of top-level modules:
 
 - **`recon/basic/`** -- `recon_frames.py`, `run_cg_sense.py`, `run_rss.py`,
   `run_recon_sigpy.py`, `recon_sigpy.py`: the Stage 2 sanity-check
@@ -1072,6 +1072,10 @@ three subpackages plus a small set of top-level modules:
 - **`recon/analysis/`** -- one-off analysis/validation scripts, not part of
   the production path: `sweep_time_segments.py`, `benchmark_b0_cost.py`,
   `validate_against_mslr.py`.
+- **`recon/sigpy_b0/`** -- B0-corrected L1-wavelet+TV reconstruction that
+  bridges the torch B0 operator into sigpy's solver: `sigpy_torch_bridge.py`
+  (`TorchLinopBridge`), `recon_sigpy_b0.py`, `run_recon_sigpy_b0.py`. Needs
+  both sigpy and torch/mirtorch, so `.venv-recon`.
 - **Top level** -- the reusable torch library (`operators.py`,
   `operators_b0.py`, `lowrank.py`, `solvers.py`, `reconstruct.py`),
   `hdf5_chunked_io.py` (deliberately torch-free, so both venvs can share

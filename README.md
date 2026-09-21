@@ -263,6 +263,9 @@ recon/                        Multi-Scale Low-Rank (MSLR) fMRI reconstruction, p
   lowres_calib/                 Fast low-resolution reconstructions of the fully sampled calibration
                                  region (plain, B0-corrected, B0+R2* complex-field) and a temporal
                                  stability check
+  sigpy_b0/                     B0-corrected L1-wavelet + TV reconstruction: torch B0 operator bridged
+                                 into sigpy's solver (sigpy_torch_bridge.py, recon_sigpy_b0.py,
+                                 run_recon_sigpy_b0.py; .venv-recon)
   analysis/                     One-off analysis/validation scripts: sweep_time_segments.py (L accuracy
                                  sweep), benchmark_b0_cost.py (L cost benchmark) -- see CLAUDE.md's
                                  recon/ section for the numbers -- and validate_against_mslr.py

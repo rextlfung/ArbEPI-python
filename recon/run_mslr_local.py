@@ -5,7 +5,7 @@ hardcoded to the ArbEPI_epi_zf.h5 name and, for the latter, a Julia
 reference .mat that doesn't exist for a dataset that was never run through
 ../mslr-recon).
 
-Motivation: recon/lowres_calib_recon.py's fully-sampled-calibration-region
+Motivation: recon/lowres_calib/lowres_calib_recon.py's fully-sampled-calibration-region
 reconstruction is a fast diagnostic that uses only a few hundred of a
 dataset's many thousand k-space samples -- deliberately, for speed, per its
 own module docstring -- so its thermal-noise floor is far higher than the
@@ -16,7 +16,7 @@ that low-res diagnostic's own noise floor, not a real B0/T2*/spoiling
 artifact, was inflating the fluctuation/drift figures measured so far.
 
 patch_sizes/strides default to a single local scale ([(6,6,6)], [(3,3,3)]),
-not the G+L multi-scale config recon/validate_against_mslr.py's Julia
+not the G+L multi-scale config recon/analysis/validate_against_mslr.py's Julia
 reference uses -- an explicit choice for this investigation (local-only
 avoids the giant whole-volume SVD's added runtime/memory at the higher
 accelerations here, R up to ~93.5, and isolates locally-low-rank spatial
@@ -65,8 +65,7 @@ import torch
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
 from recon.operators import build_encoding_operator
 from recon.operators_b0 import build_encoding_operator_b0, estimate_spectral_norm
-from recon.reconstruct import _load_echo_times, _load_normalized_smaps, run_recon
-from recon.save_result import save_result
+from recon.reconstruct import _load_echo_times, _load_normalized_smaps, run_recon, save_result
 
 
 def main(

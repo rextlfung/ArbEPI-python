@@ -1,6 +1,6 @@
 """Bridges one mirtorch LinearMap (recon/operators.py, recon/operators_b0.py)
 into a pair of sigpy.linop.Linop objects, so sigpy's already-tested
-regularization/solver machinery (recon/recon_sigpy.py's Wavelet +
+regularization/solver machinery (recon/basic/recon_sigpy.py's Wavelet +
 FiniteDifference + prox.Stack + PrimalDualHybridGradient pattern) can be
 reused unchanged with this repo's own B0-corrected encoding operator in
 place of sigpy.mri.linop.Sense -- rather than reimplementing PDHG, wavelet
@@ -71,7 +71,7 @@ class TorchLinopBridgeAdjoint(sp.linop.Linop):
     """Adjoint half: sigpy Linop wrapping torch_op.adjoint(). Never
     constructed directly -- returned by TorchLinopBridge._adjoint_linop()
     (and vice versa via its own _adjoint_linop() below), matching sigpy's
-    own FFT/IFFT pairing convention (recon/sigpy_torch_bridge.py's module
+    own FFT/IFFT pairing convention (recon/sigpy_b0/sigpy_torch_bridge.py's module
     docstring)."""
 
     def __init__(self, torch_op: LinearMap, device: torch.device, fwd: TorchLinopBridge):

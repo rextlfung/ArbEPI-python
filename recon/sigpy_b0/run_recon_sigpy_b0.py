@@ -1,5 +1,5 @@
 """Stage 2 batch driver: B0-corrected combined L1-wavelet + TV regularized
-reconstruction (recon/recon_sigpy_b0.py), for this repo's own
+reconstruction (recon/sigpy_b0/recon_sigpy_b0.py), for this repo's own
 <seqname>_epi_zf.h5 / smaps_<seqname>_sigpy.h5 naming convention -- the
 regularized-recovery counterpart to recon/cg_sense_b0.py (unregularized) and
 recon/run_mslr_local.py (nuclear-norm regularized), all three sharing the
@@ -9,7 +9,7 @@ same B0-corrected GatheredSenseB0 encoding operator but differing in how
 Unlike recon_frames.py's other Stage-2 drivers (run_rss.py, run_cg_sense.py,
 run_recon_sigpy.py -- all .venv-preprocessing, sigpy-only), this needs
 torch/mirtorch for GatheredSenseB0 -- runs in .venv-recon (sigpy installed
-there specifically for this bridge; see recon/sigpy_torch_bridge.py's
+there specifically for this bridge; see recon/sigpy_b0/sigpy_torch_bridge.py's
 module docstring for why cupy was not also added). Reimplements the
 per-frame batch loop directly (rather than importing recon_frames.recon_frames)
 since that loop's whole job -- calling recon_fn(data, smaps) per frame -- has
@@ -18,7 +18,7 @@ to change shape anyway: this driver's per-frame k-space is the *gathered*
 zero-filled [Nx,Ny,Nz,Nc] per frame.
 
 Usage (from repo root, .venv-recon):
-    .venv-recon/bin/python -m recon.run_recon_sigpy_b0 <datdir> <seqname> \\
+    .venv-recon/bin/python -m recon.sigpy_b0.run_recon_sigpy_b0 <datdir> <seqname> \\
         [--lamb-l1 0.005] [--lamb-tv 0.005] [--num-iter 100] [--frames 0,1,2]
 """
 
@@ -35,8 +35,8 @@ from preprocessing.nifti_io import save_recon_nifti
 from recon.operators import gather_ksp
 from recon.operators_b0 import build_encoding_operator_b0, check_operator_unitary
 from recon.reconstruct import _load_array, _load_echo_times, _load_normalized_smaps, _load_omega
-from recon.recon_sigpy_b0 import wavelet_tv_recon_b0
-from recon.sigpy_torch_bridge import TorchLinopBridge
+from recon.sigpy_b0.recon_sigpy_b0 import wavelet_tv_recon_b0
+from recon.sigpy_b0.sigpy_torch_bridge import TorchLinopBridge
 
 
 def main(
