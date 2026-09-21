@@ -1,12 +1,12 @@
 """Chunk-aware reads of this pipeline's own plain-numpy-order .h5 files
 (ksp_epi_zf and friends -- chunked one frame per chunk along the last
 axis; see preprocessing/preprocess.py's writer). No torch/mirtorch import
-here, deliberately: recon/reconstruct.py's `_load_array` and
-recon/lowres_calib_recon.py's (former) `_load_chunked` used to be two
+here, deliberately: recon/mslr.py's `_load_array` and
+recon/lowres_calib.py's (former) `_load_chunked` used to be two
 independent copies of the same chunk-by-chunk-along-the-last-axis loop
 (docs/review-findings.md item 200) specifically because
-lowres_calib_recon.py runs in .venv-preprocessing (no torch) and importing
-recon/reconstruct.py would pull in recon/operators.py's mirtorch/torch
+lowres_calib.py runs in .venv-preprocessing (no torch) and importing
+recon/mslr.py would pull in recon/operators.py's mirtorch/torch
 dependency for no reason -- this module has neither, so both venvs can
 share it.
 

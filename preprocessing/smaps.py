@@ -311,7 +311,7 @@ def process_smaps(
     # resize above -- invisible on its own, but amplified straight back up
     # to unit magnitude by the RSS normalization below (whose `rss < eps`
     # clamp only catches values under ~2e-16, not this leakage) and again by
-    # recon/reconstruct.py's own RSS-renormalization on load, silently
+    # recon/mslr.py's own RSS-renormalization on load, silently
     # erasing the mask everywhere except exact-zero voxels. An exact 0/1
     # re-mask (thresholding, not interpolating, the final decision) after
     # both resizes guarantees background is exactly zero regardless.
@@ -441,7 +441,7 @@ def load_smaps(
     `smaps` via `process_smaps`/`resize_to_epi_grid` -- deGRE-grid uses
     `fov_gre` as both source *and* target FOV (only resolution changes,
     no z-crop), EPI-grid is the existing crop+resize. Loads from/writes
-    `<datdir>/recon/smaps_<seqname>_sigpy.h5` (was `recon_frames.py`'s
+    `<datdir>/recon/smaps_<seqname>_sigpy.h5` (was the removed `recon/sigpy_recon.py`'s
     private `_load_smaps` -- moved here, and extended with the
     `smaps_degre`/`emap_degre` datasets, so `run_b0map.py` can reuse the
     same cache instead of re-running ESPIRiT). An older cache written

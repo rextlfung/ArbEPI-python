@@ -20,7 +20,7 @@ repo's original single-echo GRE rather than re-derived from writeB0.m:
     in params.py.
 
 Outputs: <output_dir>/deGRE.seq (Pulseq format). Still usable for
-coil-sensitivity-map estimation (smaps.py, preprocess.py, recon_frames.py)
+coil-sensitivity-map estimation (smaps.py, preprocess.py, the removed recon/sigpy_recon.py)
 via either echo, in addition to now producing B0 map data -- those
 preprocessing modules key off their own `_gre` raw-data naming convention
 for acquired ScanArchives, independent of this file's name.

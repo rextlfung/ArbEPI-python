@@ -1,4 +1,4 @@
-"""Validates recon/operators_b0.py's GatheredSenseB0/build_encoding_operator_b0
+"""Validates recon/operators.py's GatheredSenseB0/build_encoding_operator_b0
 against the same brute-force, genuinely time-varying ground-truth forward
 model tests/test_recon_b0_correction.py uses for the static (single-segment)
 stage -- reused directly here (not reimplemented) so both stages are held to
@@ -14,7 +14,7 @@ pytest.importorskip("mirtorch")
 
 from mirtorch.linear.mri import mri_exp_approx  # noqa: E402
 
-from recon.operators_b0 import (  # noqa: E402
+from recon.operators import (  # noqa: E402
     GatheredSenseB0,
     build_encoding_operator_b0,
     check_operator_unitary,
@@ -39,11 +39,10 @@ def _build_b0_operator(smaps, samp, b0map_hz, t_frame_s, L, nbins=20):
 
 def test_l1_matches_static_correction():
     """L=1 (a single time segment centered at the mean sample time) should
-    match recon/b0_correction.py's static single-segment correction closely
+    match recon/operators.py's static single-segment correction closely
     -- both are, in the end, one global per-voxel phase term applied before
     the FFT; this is the connective-tissue check between the two stages."""
-    from recon.b0_correction import demodulate_smaps
-    from recon.operators import GatheredSense
+    from recon.operators import GatheredSense, demodulate_smaps
 
     img, smaps, b0map_hz, te, y_true_flat = _setup(seed_offset=30)
     Nx, Ny, Nz = smaps.shape[1:]
@@ -64,7 +63,7 @@ def test_more_segments_reduces_error_in_a_toy_grid():
     """NOT the realistic regime, despite the fixture's B0/ETL parameters
     looking real -- this grid has only 12 distinct echo times, so L>=12
     trivially resolves every one exactly (see the L16 assertion below).
-    recon/sweep_time_segments.py's own module docstring documents this
+    recon/analysis.py's own module docstring documents this
     explicitly: its finding "says nothing about whether L=6 ... is
     adequate at the real ETL=60 scale." See
     test_more_segments_reduces_error_at_real_scale below for the actual
@@ -113,15 +112,15 @@ def test_more_segments_reduces_error_in_a_toy_grid():
 def test_more_segments_reduces_error_at_real_scale():
     """The actual realistic-regime check (real ETL=60, real field-map
     range -300 to +70 Hz), regression-guarding the conclusion
-    recon/sweep_time_segments.py's real-scale sweep found: L=32 (the
+    recon/analysis.py's real-scale sweep found: L=32 (the
     production default, item 82) keeps relative forward-model error under
     1%, while L=6 (mirtorch's own Gmri default, no longer used here)
     doesn't come close -- a sharp, Nyquist-like phase transition around
     L=27-32 (matching this scale's bandwidth-time product BT ~= 27), not a
-    gradual curve. Reuses sweep_time_segments.py's own real-scale ground
+    gradual curve. Reuses analysis.py's own real-scale ground
     truth/operator-construction helpers directly, rather than a third copy
     of them."""
-    from recon.sweep_time_segments import _build_operator, _setup_real_scale
+    from recon.analysis import _build_operator, _setup_real_scale
 
     img, smaps, b0map_hz, t_per_ky, y_true_flat = _setup_real_scale(seed=200)
     Nx, Ny, Nz = smaps.shape[1:]
@@ -145,13 +144,13 @@ def test_more_segments_reduces_error_at_real_scale():
 
 
 def test_production_nbins_avoids_row_sum_warning(recwarn):
-    """operators_b0.py's own docstring identifies nbins=20 (mirtorch's
+    """operators.py's own docstring identifies nbins=20 (mirtorch's
     Gmri default, used throughout this file's other tests) as the actual
     root cause of a real signal-loss-plus-incoherent-noise failure --
     confirm the production default (nbins=128) doesn't trip
     _check_b_weight_row_sums' ill-conditioning warning, at real scale."""
-    from recon.operators_b0 import build_encoding_operator_b0
-    from recon.sweep_time_segments import _setup_real_scale
+    from recon.analysis import _setup_real_scale
+    from recon.operators import build_encoding_operator_b0
 
     _img, smaps, b0map_hz, t_per_ky, _y_true_flat = _setup_real_scale(seed=201)
     Nx, Ny, Nz = smaps.shape[1:]
@@ -242,7 +241,7 @@ def test_r2star_zero_map_matches_phase_only_operator():
     straight from mri_exp_approx's own spatial output, r2star_map=zeros
     goes through this module's manual `torch.exp(tl * psi)` construction
     -- so this is a real cross-check of that construction against the
-    library's own convention, not a tautology. Locks in operators_b0.py's
+    library's own convention, not a tautology. Locks in operators.py's
     stated contract that r2star_map=None is a strict special case of
     r2star_map=0."""
     Nx, Ny, Nz, Nc, Nt, L = 5, 6, 4, 2, 3, 3
@@ -277,7 +276,7 @@ def test_r2star_zero_map_matches_phase_only_operator():
 def test_r2star_generalization_adjoint_is_self_consistent():
     """The check that discriminates this module's PHYSICAL sign
     (psi = i*2*pi*Δf(r) - R2*(r), decaying in the forward direction) from
-    recon/lowres_calib_recon_b0complex.py's flipped sign on the
+    recon/lowres_calib.py's flipped sign on the
     (unmerged) worktree-lowres-calib-recon branch (psi_recon =
     i*2*pi*Δf(r) + R2*(r)): the true adjoint identity <Ax,y> == <x,A^H y>
     holds for ANY complex c_phasors under GatheredSenseB0's `.conj()`
@@ -328,7 +327,7 @@ def test_r2star_forward_model_decays_away_from_reference_time():
     echo, not growth -- an earlier version of this test wrongly asserted
     |c_phasors|<=1 everywhere and failed on exactly this). What the sign
     must never do is flip that direction: a flipped sign
-    (recon/lowres_calib_recon_b0complex.py's branch convention) would make
+    (recon/lowres_calib.py's branch convention) would make
     |c_phasors| INCREASE with tl[l] instead of decrease (see the module
     docstring's measured tSNR-gets-worse regression).
 
@@ -435,7 +434,7 @@ def test_check_operator_unitary_warns_for_real_b0_correction():
     """A genuine (L>1, real field map) B0-corrected operator is not
     guaranteed unitary -- regression guard for the 2026-09-18 finding that
     real GatheredSenseB0 operators measure sigma1 ~= 1.3, not ~1.0 (see
-    operators_b0.py's check_operator_unitary docstring for the real-data
+    operators.py's check_operator_unitary docstring for the real-data
     debugging session this documents). Doesn't hardcode that exact value
     (a different seed/field map would give a different number), just that
     it's measurably away from 1.0 and that check_operator_unitary catches

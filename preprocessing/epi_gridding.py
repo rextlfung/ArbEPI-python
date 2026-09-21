@@ -18,7 +18,7 @@ claimed sigpy's differing normalization vs MIRT's Gmri was a harmless,
 already-flagged tradeoff ("relative image structure is what matters...any
 global scale factor washes out downstream") -- true for RSS combine and
 unregularized SENSE (both scale-invariant), but false once real,
-noise-calibrated regularization (recon/reconstruct.py's normalize_noise,
+noise-calibrated regularization (recon/mslr.py's normalize_noise,
 _reg_weights' unit-variance-noise assumption) needs the *absolute* scale
 correct. Real background k-space/image noise measured ~70-800x (method-
 dependent) away from the unit-variance whitening (preprocessing/coils.py)

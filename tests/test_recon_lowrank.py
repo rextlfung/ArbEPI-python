@@ -1,7 +1,7 @@
-"""Algorithm-invariant tests for recon/lowrank.py, mirroring the cases in
+"""Algorithm-invariant tests for recon/mslr.py, mirroring the cases in
 ../mslr-recon/tests/kernel_tests.jl (patch round-trip, SVST shrinkage,
 unit-patch fast path). No golden Julia output is compared here -- see
-tests/test_recon_reconstruct.py / scratchpad validation for that; these
+tests/test_recon_mslr.py / scratchpad validation for that; these
 tests check mathematical invariants that must hold regardless of backend.
 """
 
@@ -9,7 +9,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from recon.lowrank import SVST, img2patches, patch_nucnorm, patches2img, patchSVST  # noqa: E402
+from recon.mslr import SVST, img2patches, patch_nucnorm, patches2img, patchSVST  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

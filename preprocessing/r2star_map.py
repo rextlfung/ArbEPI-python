@@ -1,8 +1,8 @@
 """Estimates a T2*/R2* map from the same dual-echo deGRE data already used
 for B0 field-map estimation (run_b0map.py), for the generalized complex
-field-map correction in recon/lowres_calib_recon_b0complex.py.
+field-map correction in recon/lowres_calib.py.
 
-Motivation: recon/operators_b0.py's time-segmented correction only
+Motivation: recon/operators.py's time-segmented correction only
 demodulates *phase* (off-resonance) -- it leaves T2*/T1 amplitude decay
 completely uncorrected, which lowres_calib_t2star_check.py measured as a
 real, partial cause of this pipeline's temporal instability (a given

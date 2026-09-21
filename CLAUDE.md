@@ -607,22 +607,18 @@ dependency set -- see below for why it also needs its own venv.
 **Two-stage pipeline, same structure as the MATLAB original**: Stage 1
 (`preprocess.py`, ported from `preprocess.m`, stays in `preprocessing/`)
 reads raw ScanArchives, whitens/coil-compresses/grids/phase-corrects, and
-writes a zero-filled k-space volume. Stage 2 (`recon/recon_frames.py` +
-`recon/run_cg_sense.py`/`recon/run_rss.py`/`recon/run_recon_sigpy.py`,
-ported from `recon_frames.m` + its three driver scripts) reconstructs
-every frame via CG-SENSE, RSS, or combined L1-wavelet+TV regularized
-SENSE -- all three are wired up as sanity checks for validating Stage 1's
-output against real acquired data, not the final production reconstruction
-(the multi-scale-low-rank pipeline described in the `recon/` section
-below). These Stage 2 drivers (plus `recon/lowres_calib_recon.py`,
-`recon/recon_sigpy.py`) moved from `preprocessing/` into `recon/` to live
-alongside the other reconstruction code -- they still run in the
-`.venv-preprocessing` environment, not `.venv-recon` (see the `recon/`
-section's venv-split note below: they need sigpy/h5py/matplotlib, not
-torch/mirtorch, so `recon/` itself is not a single-venv package). Only
-Stage 1 (`preprocess.py`, `raw_io.py`, `calibrate_delay.py`,
-`gre_diagnostics.py`, and the shared config/coil/grid/nifti helpers) stays
-in `preprocessing/` now.
+writes a zero-filled k-space volume. Stage 2 lives in `recon/`: the
+multi-scale-low-rank pipeline (`recon/mslr.py`, see the `recon/` section
+below), B0-informed L1-wavelet+TV SENSE (`recon/L1-wavelet_TV_B0_SENSE.py`),
+and the low-res calibration-region reconstruction (`recon/lowres_calib.py`).
+Stage 2 used to also include sigpy-only sanity-check drivers ported from
+`recon_frames.m` + its three driver scripts (RSS, CG-SENSE and plain
+L1-wavelet+TV over a shared `recon_frames` loop, in `recon/sigpy_recon.py`);
+those were removed when that module was merged into
+`recon/L1-wavelet_TV_B0_SENSE.py`, which only does B0-informed L1-wavelet+TV
+(see git history for the removed code). Only Stage 1 (`preprocess.py`,
+`raw_io.py`, `calibrate_delay.py`, `gre_diagnostics.py`, and the shared
+config/coil/grid/nifti helpers) stays in `preprocessing/`.
 
 **Raw ScanArchive reading needs GE's proprietary Orchestra SDK
 (`GERecon`), isolated to one module (`raw_io.py`).** This is not optional --
@@ -659,8 +655,9 @@ is needed). The 1D NUFFT ramp-sample regridding (`epi_gridding.py`, ported
 from hmriutils' `rampsampepi2cart.m`/`rampsamp2cart.m`/`reconecho.m`) uses
 `sigpy.nufft_adjoint` with the same gradient-magnitude density
 compensation (`dcf = |diff(kx)| / max(...)`) in place of MIRT's `Gmri`. The
-combined L1-wavelet+TV regularized reconstruction (`recon_sigpy.py`,
-replacing `run_bart.m`'s `bart pics -R W:... -R T:...`) is sigpy's standard
+combined L1-wavelet+TV regularized reconstruction (now
+`recon/L1-wavelet_TV_B0_SENSE.py`, originally the plain-operator
+`recon_sigpy.py`, replacing `run_bart.m`'s `bart pics -R W:... -R T:...`) is sigpy's standard
 multi-regularizer pattern: `G = Vstack([Wavelet, FiniteDifference])`,
 `proxg = prox.Stack([L1Reg(...,lamb_l1), L1Reg(...,lamb_tv)])`, solved via
 `PrimalDualHybridGradient` -- the same structure `sigpy.mri.app.
@@ -673,7 +670,8 @@ this repo already uses for sequence generation where no MATLAB comparison
 is available (see Commands section above).
 
 **Validated end to end against real acquired data**: `preprocess.py` ->
-`run_rss.py` was run on a real acquisition (`wb_2.4mm`, GE_UHP hardware) and
+the RSS driver (since removed from `recon/sigpy_recon.py`; see git history) was
+run on a real acquisition (`wb_2.4mm`, GE_UHP hardware) and
 compared against a real MATLAB/BART reference reconstruction
 (`wb_2.4mm_recon_rss.mat`) -- 0.19% relative L2 error, Pearson r = 0.999997
 (after fitting a single overall scale factor, since RSS's own coil
@@ -684,7 +682,7 @@ k-space scatter) end to end, not just its individual building blocks in
 isolation. Every building block was also independently verified before
 that: `raw_io.py` against real `ScanArchive` files (`Archive`/`NextFrame`
 reading real cal/EPI data), `epi_gridding.py`/`oephase.py`/`cg_sense.py`/
-`recon_sigpy.py` via synthetic round-trip/convergence tests, and the
+the L1-wavelet+TV solver via synthetic round-trip/convergence tests, and the
 trickiest piece of
 `preprocess.py` -- the MATLAB column-major
 `permute`/`reshape` chain that scatters gridded k-space into the correct
@@ -731,7 +729,7 @@ shape. Use these for every hdf5storage-written `.mat` this pipeline reads
 (`scan_info.mat`) -- never `scipy.io` (can't read v7.3 at all, see above),
 never a bare `h5py` read without the transpose.
 
-**Everything `preprocess.py`/`recon_frames.py` write for their own
+**Everything `preprocess.py` and the `recon/` drivers write for their own
 internal use -- not for a human to open in a viewer -- stays `.h5`, not
 `.mat`.** These are plain numpy-order `h5py` writes with no MATLAB
 consumer (the zero-filled k-space output, the per-sequence GRE/smaps
@@ -748,12 +746,11 @@ comes from a per-sequence noise scan, a single shared cache is a latent
 correctness bug (whichever sequence's `preprocess.m` ran last silently
 wins for every other sequence's fallback smaps estimation). This port uses
 one consistent per-sequence path, `<datdir>/recon/<seqname>_gre.h5`, on
-both the writer (`preprocess.py`) and reader (`recon_frames.py`) side.
+both the writer (`preprocess.py`) and reader (the removed `recon_frames`) side.
 
 **The final reconstructed-image files are the one exception: `.nii.gz` +
 JSON sidecar, not `.h5`.** `preprocessing/nifti_io.py`'s `save_recon_nifti`
-is the shared writer `run_rss.py`/`run_cg_sense.py`/`run_recon_sigpy.py`
-all call in place of their old direct `h5py.File(...)` writes. This is a
+is the shared writer the `recon/` drivers all call in place of their old direct `h5py.File(...)` writes. This is a
 deliberate format split by *consumer*, not a blanket format change: the
 intermediate files above (`ksp_epi_zf`, smaps, GRE cache) still feed the
 downstream Julia advanced-recon pipeline and stay plain HDF5 (already
@@ -762,9 +759,8 @@ there), while the final magnitude images are for a human to look at, and
 this repo's own `.h5` files have no viewer as good as ITK-SNAP/FSLeyes/3D
 Slicer/etc., all of which expect NIfTI (or DICOM) rather than a bare
 HDF5 array. NIfTI has no native complex dtype, so `save_recon_nifti` saves
-magnitude only (`np.abs`) -- `run_cg_sense.py`/`run_rss.py`'s outputs were
-already real-valued in practice (RSS/CG-SENSE magnitude combines), so this
-loses nothing currently produced, but note it if a future recon driver
+magnitude only (`np.abs`) -- the former RSS/CG-SENSE outputs were
+already real-valued in practice, so this loses nothing currently produced, but note it if a future recon driver
 needs the complex-valued image itself; that consumer should keep reading
 `recon_frames`' return value directly; rather than round-tripping it
 through NIfTI. NIfTI also has no free-form attribute dict (unlike h5py's
@@ -816,7 +812,7 @@ not just a shape-only check.
 **The `<seqname>_gre.h5` cache is the handoff point to B0 field map
 estimation -- deliberately not GE-specific.** Alongside the existing
 `ksp_gre` dataset (the selected echo, whitened + coil-compressed,
-unchanged key so `recon_frames.py`'s cache reader needs no changes), STEP
+unchanged key so the (since removed) `recon_frames` cache reader needed no changes), STEP
 2 now also writes `ksp_gre_echoes` (`[Nx_degre, Ny_degre, Nz_degre,
 n_echoes, Nvcoils]`, both echoes, whitened + coil-compressed) and a
 `TE_degre` attr (seconds) whenever `seq_params.TE_degre` is available.
@@ -870,7 +866,7 @@ calibration and can't be partially reused). `smaps_degre_uncompressed` is
 `None` only when `<seqname>_gre.h5` predates `cc_matrix`/
 `ksp_gre_uncompressed` -- the only field in `load_smaps`' return tuple
 that can come back `None`; both of its current callers
-(`recon_frames.py`, `run_b0map.py`) already discard this return value, so
+(`run_b0map.py`, and the removed `recon_frames`) already discard this return value, so
 nothing downstream consumes it yet -- it exists for a future full-coil-
 domain consumer. `preprocessing/preprocess.py`'s own inline STEP 3 (used
 only for the NIfTI/console-output side effect during `preprocess()`
@@ -908,7 +904,7 @@ network access is needed to run it.
 
 `b0map.jl` reads `ksp_gre_echoes`/`TE_degre` back from the cache, IFFTs
 each echo/coil to image space with the same centered-FFT convention as
-`run_rss.py`'s `_ift3` (`fftshift(ifft(fftshift(.)))` per axis), and calls
+`preprocessing/gre_diagnostics.py`'s `_ift3` (`fftshift(ifft(fftshift(.)))` per axis), and calls
 `MRIFieldmaps.b0map(finit, images, echotime; smap, mask, precon)`.
 `precon=:diag` (not `b0map`'s own default, `:ichol`) -- see the dedicated
 paragraph below for why. `smap`, when `preprocessing/smaps.py`'s
@@ -1054,23 +1050,43 @@ pure Python, pip-installable, no cross-language embedding problem to solve)
 `shutil.which` subprocess check, so the main test suite still collects
 without the `recon` venv active.
 
-**`recon/` is not a single-venv package.** Alongside the torch/mirtorch-based
-MSLR files described below, it also holds the Stage 2 sigpy-based
-reconstruction drivers moved here from `preprocessing/`:
-`recon_frames.py`, `run_cg_sense.py`, `run_rss.py`, `run_recon_sigpy.py`,
-`recon_sigpy.py`, `lowres_calib_recon.py` (see the `preprocessing/`
-section's "Two-stage pipeline" paragraph above for why they moved). Those
-six files need `sigpy`/`h5py`/`matplotlib`/`nibabel`, not `torch`/`mirtorch`,
-and run in `.venv-preprocessing`, exactly as they did before the move --
-moving a file into `recon/` changes where it lives, not what it imports or
-which venv actually has those imports. `recon/cg_sense_b0.py` (literal
-conjugate-gradient SENSE -- see below -- using the B0-corrected operator)
-is the one Stage-2-shaped file that genuinely needs `.venv-recon`, since it
-imports `build_encoding_operator_b0` directly. When adding a new file
-here, pick its venv by what it actually imports, not by which directory it
-sits in.
+**`recon/` is not a single-venv package.** It is a flat set of seven
+modules, consolidated from twenty-five: modules that shared a purpose were
+merged (each merged file keeps the original modules' docstrings verbatim as
+"Formerly ..." sections, and multi-script files expose the old scripts as
+subcommands with unchanged flags), but a merge never crosses a venv boundary
+unless the torch import is made lazy, since importing a torch module from a
+torch-free venv would break it:
 
-**Module layout**: `recon/lowrank.py` (patch extraction/recombination +
+- **`.venv-recon`** (torch/mirtorch): `operators.py` (`GatheredSense` + the
+  B0 operators, formerly `operators_b0.py`; also `poweriter`, formerly in
+  `solvers.py`), `mslr.py` (multi-scale low-rank `run_recon`; POGM and patch
+  SVST, formerly `solvers.py`/`lowrank.py`; `save_result`, formerly
+  `save_result.py`; renamed from `reconstruct.py`), `run_recon.py`
+  (`mslr-ref`/`mslr-local`/`cg` subcommands, formerly `run_b0_recon.py`/
+  `run_mslr_local.py`/`cg_sense_b0.py`), `L1-wavelet_TV_B0_SENSE.py`
+  (B0-informed L1-wavelet+TV SENSE via a torch->sigpy bridge, needs both
+  sigpy and torch; the hyphen means it runs via `python -m` but can't be
+  used in an `import` statement), `analysis.py` (`sweep`/`benchmark`/
+  `validate` subcommands).
+- **`.venv-preprocessing`** (sigpy/h5py/matplotlib/nibabel, no torch):
+  `lowres_calib.py` (`calib`/`stability` subcommands). Its `calib` command
+  applies B0-informed correction when given `--b0`/`--b0map` (and
+  `--r2star`); torch/mirtorch are imported lazily inside those paths only,
+  so the plain path runs in this venv and the B0 paths need `.venv-recon`.
+- **Either venv**: `hdf5_chunked_io.py`, deliberately torch-free so both
+  can share it -- do not merge it into `mslr.py` (torch at module scope).
+
+`recon/L1-wavelet_TV_B0_SENSE.py` replaced both `sigpy_b0.py` and
+`sigpy_recon.py` and only does B0-informed L1-wavelet+TV; the sigpy-only
+sanity-check drivers that lived in `sigpy_recon.py` (RSS, CG-SENSE, plain
+L1-wavelet+TV, and their `recon_frames` loop) were removed (see git
+history). `_ift3` moved to `preprocessing/gre_diagnostics.py`.
+
+When adding a new file here, pick its venv by what it actually imports,
+not by which file it sits next to.
+
+**Module layout**: `recon/mslr.py`'s patch code (patch extraction/recombination +
 singular-value soft-thresholding, ported from `../mslr-recon/src/recon.jl`)
 batches every patch into one tensor and calls a single `torch.linalg.svd`
 rather than looping per-patch like the Julia original's `@threads`/streaming
@@ -1080,7 +1096,7 @@ equivalent needed. The one piece of Julia's `SVST` that *is* still needed is
 the exact-zero shortcut (patches with `‖X‖_F <= beta` are forced to exact
 zero before the SVD, not just after) -- a correctness safeguard against
 subnormal-magnitude matrices producing NaN, not a Julia-GPU-only concern.
-`recon/solvers.py` ports `../mslr-recon/src/mirt_mod.jl`'s `pogm_restart`
+`recon/mslr.py` also ports `../mslr-recon/src/mirt_mod.jl`'s `pogm_restart`
 (PGM/FPGM/POGM with gradient restart and early stopping via `conv_tol`)
 faithfully in the momentum/restart math, but drops its GPU-memory-specific
 mechanics (manual buffer aliasing, forced `GC.gc()`/`CUDA.reclaim()`) since
@@ -1088,14 +1104,15 @@ those exist only to fit Julia's broadcast-allocates-a-new-array semantics
 under a 48GB budget -- PyTorch's caching allocator and Python-float-times-
 complex64-tensor weak-type promotion don't have that problem.
 
-`recon/b0_correction.py`/`recon/operators_b0.py` add B0 off-resonance
-correction on top of the plain `GatheredSense` encoding operator above --
-see the dedicated "B0 off-resonance correction" subsection below for the
-full design and investigation history. `recon/save_result.py` persists a
-`ReconResult` to `.h5`/`.nii.gz`/`.json` (the "next piece" the rest of this
-section used to say was missing); `recon/run_b0_recon.py` is the driver
+`recon/operators.py`'s B0 half (`GatheredSenseB0`, plus `demodulate_smaps`, the
+static single-segment stage formerly in its own `recon/b0_correction.py`)
+adds B0 off-resonance correction on top of the plain `GatheredSense`
+encoding operator above -- see the dedicated "B0 off-resonance correction" subsection below for the
+full design and investigation history. `recon/mslr.py`'s
+`save_result` (formerly `recon/save_result.py`) persists a
+`ReconResult` to `.h5`/`.nii.gz`/`.json`; `recon/run_recon.py` is the driver
 that runs a real (not validation-only) B0-corrected reconstruction end to
-end. `recon/sweep_time_segments.py` and `recon/benchmark_b0_cost.py` are
+end. `recon/analysis.py`'s `sweep` and `benchmark` subcommands are
 one-off analysis scripts (not part of the production path) that produced
 the numbers cited in that subsection.
 
@@ -1123,7 +1140,7 @@ operator`+`gather_ksp` are the two entry points; `.A[it].idx` on the
 returned `mirtorch.linear.BlockDiagonal` exposes each frame's own flat
 spatial sample indices for gathering a matching k-space target array).
 
-**`recon/reconstruct.py`'s `_load_array` reads chunked HDF5 datasets
+**`recon/mslr.py`'s `_load_array` reads chunked HDF5 datasets
 chunk-by-chunk along the last axis, not via a single `d[()]` call.** Measured
 on real `ArbEPI_epi_zf.h5` data (chunked one time-frame per chunk, ~373MB
 each): a bare `d[()]` full-dataset read ran at ~7 MB/s (838M+ read syscalls
@@ -1137,7 +1154,7 @@ data** (2026-08-25, RTX A6000, `20260822ball_radial` and `20260822ball_laminar`
 datasets -- the two `mask2epi` trajectory variants from the same acquisition,
 see `../mslr-recon/experiments/20260822ball.jl`'s header -- both
 `Nx,Ny,Nz,Nvc,Nt = 240,240,45,18,30`, `R~9`, all six run via
-`recon/validate_against_mslr.py`, which re-derives every reconstruction
+`recon/analysis.py`, which re-derives every reconstruction
 parameter from the Julia `.mat`'s own saved fields rather than
 re-specifying them, so it always replicates exactly what the reference run
 used):
@@ -1183,7 +1200,7 @@ Julia-vs-Python effect --
    configs -- `recon.jl`'s own GPU dispatch path is deliberately serial
    ("sequential CUSOLVER calls, no `@threads`", since `CuArray`s can't use
    `@threads`): measured **5.2s for 4500 sequential 3375x30 SVDs** in situ,
-   vs. `recon/lowrank.py`'s single batched `torch.linalg.svd` call over the
+   vs. `recon/mslr.py`'s single batched `torch.linalg.svd` call over the
    same 4500 patches at **3.8s** -- cuSOLVER's batched routine amortizes
    per-call launch overhead that 4500 individual calls each pay.
 
@@ -1200,7 +1217,7 @@ whole-volume SVD costs are comparable (Julia 0.158s vs Python 0.170s for
 the same `2592000x30` matrix) -- it's the two overheads above, not the
 underlying linear algebra, that flip the net result. (Aside, found while
 instrumenting: Julia's own bulk `h5read()` on `ArbEPI_epi_zf.h5` hits the
-same HDF5 chunk-cache pathology `recon/reconstruct.py`'s `_load_array` docs
+same HDF5 chunk-cache pathology `recon/mslr.py`'s `_load_array` docs
 above -- tiny-read-storm, not disk-speed-bound -- confirming that gotcha is
 an HDF5-tooling issue in general, not Python/h5py-specific; irrelevant to
 the runtime comparison above since `runtime_s` on both sides only measures
@@ -1210,11 +1227,11 @@ Not yet ported from `../mslr-recon`: `src/activation.jl` (a standalone
 GLM task-activation module, not wired into the main pipeline even in the
 original) and `src/metrics.jl`/`scripts/report.jl` (tSNR maps and
 convergence-plot reporting) -- both are QA/visualization, not required for
-a working reconstruction path. `recon/save_result.py` now does write
+a working reconstruction path. `recon/mslr.py`'s `save_result` now does write
 `ReconResult` to disk (`.h5` full-precision complex + solver trace,
 `.nii.gz`+`.json` magnitude image + metadata, reusing
-`preprocessing/nifti_io.py`'s `save_recon_nifti`) -- `recon/run_b0_recon.py`
-is the first real (not `validate_against_mslr.py`-style comparison-only)
+`preprocessing/nifti_io.py`'s `save_recon_nifti`) -- `recon/run_recon.py`
+is the first real (not `analysis.py`-style comparison-only)
 consumer of it.
 
 ### B0 off-resonance correction
@@ -1224,7 +1241,7 @@ operator, consuming `preprocessing/run_b0map.py`'s field map
 (`<seqname>_b0map.h5`) and `preprocessing/preprocess.py`'s per-sample
 `echo_times`:
 
-- **`recon/b0_correction.py`'s `demodulate_smaps`** -- static, single-
+- **`recon/operators.py`'s `demodulate_smaps`** -- static, single-
   segment correction: a per-voxel conjugate-phase phasor (evaluated at
   the nominal TE) pre-multiplied into `smaps` before the encoding operator
   is built, zero added per-iteration cost. Validated against a brute-force
@@ -1237,7 +1254,7 @@ operator, consuming `preprocessing/run_b0map.py`'s field map
   how off-resonance phase keeps accruing differently across the echo
   train. That gap is why time-segmented correction exists as a second
   stage, not a redundant one.
-- **`recon/operators_b0.py`'s `GatheredSenseB0`** -- the fuller,
+- **`recon/operators.py`'s `GatheredSenseB0`** -- the fuller,
   time-segmented stage, via `mirtorch.linear.mri.mri_exp_approx` (the same
   min-max frequency-segmentation fit `mirtorch`'s own NUFFT-based
   `Gmri`/`GmriGram` use). `build_encoding_operator_b0(smaps, omega,
@@ -1264,14 +1281,14 @@ time) so one L-segment machinery corrects magnitude decay alongside
 phase. `r2star_map=None` (the default) reproduces the pre-existing
 phase-only operator bit-for-bit. R2* itself comes from
 `preprocessing/r2star_map.py`'s two-point log-ratio estimate on the same
-dual-echo deGRE data already used for Δf(r); `recon/run_b0_recon.py --r2star`
+dual-echo deGRE data already used for Δf(r); `recon/run_recon.py mslr-ref --r2star`
 wires it end to end (estimates R2*, reads the nominal-TE reference time
 from `scan_info.mat`, and saves under a separate `mslr_b0complex/`
 output directory so a `--r2star` run never collides with a plain
 B0-only run at the same `L`).
 
 **Sign convention diverges deliberately from the (unmerged, exploratory)
-`worktree-lowres-calib-recon` branch's `recon/lowres_calib_recon_b0complex.py`
+`worktree-lowres-calib-recon` branch's `recon/lowres_calib_recon_b0complex.py` (its path on that branch)
 -- do not "fix" one to match the other.** That branch script is
 adjoint-only (a fast, non-iterative reconstruction of just the
 calibration region -- it never calls `.apply()`) and deliberately flips
@@ -1282,7 +1299,7 @@ adjoint alone would re-apply the same decay attenuation instead of
 undoing it (confirmed empirically there: the physical sign made tSNR get
 monotonically *worse* through uncorrected -> phase-only -> complex-field).
 `build_encoding_operator_b0` here is bidirectional, though --
-`recon/reconstruct.py`'s `run_recon` calls both `.apply()` and
+`recon/mslr.py`'s `run_recon` calls both `.apply()` and
 `.adjoint()` through POGM, and `estimate_spectral_norm`'s power iteration
 needs both too -- so it uses the PHYSICAL forward exponent
 `psi = i*2*pi*Δf(r) - R2*(r)` (decaying, not growing, as t increases) and
@@ -1311,12 +1328,12 @@ Both stages share one convention, derived from Sutton, Noll, Fessler
 inhomogeneities," IEEE TMI 2003) and cross-checked against
 `mirtorch.linear.mri.Gmri`'s own demo notebook, not just re-derived: the
 forward operator needs `exp(+i 2*pi*b0map_hz(r)*t)` multiplied into the
-image before the spatial-encoding FFT -- see `recon/b0_correction.py`'s
+image before the spatial-encoding FFT -- see `recon/operators.py`'s
 module docstring for the full sign derivation. `mri_exp_approx(b0, bins,
 lseg, t)` (read directly from mirtorch 0.3.1's own source, the pinned
 dependency) expects `b0` in **Hz** and `t` in **milliseconds** (it divides
 by 1000 internally, twice), and returns `tl` already in **seconds** -- so
-`operators_b0.py` passing `echo_times_s * 1000` against an unscaled-Hz
+`operators.py` passing `echo_times_s * 1000` against an unscaled-Hz
 field map is correct, not a units bug, and `-b0map_hz` (not `+`) is what
 composes correctly with `mri_exp_approx`'s own internal sign to reproduce
 the physically-correct convention above (matching `Gmri`'s own
@@ -1328,7 +1345,7 @@ product (`BT = Δf_range * T_readout ≈ 370 Hz * 0.072 s ≈ 27`) -- the one
 test that seemed to validate a small `L` (`test_more_segments_reduces_
 error_in_the_realistic_regime`'s "L=16 is ~exact" result) turned out to be
 an artifact of its own synthetic grid having only 12 distinct echo times,
-not evidence about the real `ETL=60` scale. `recon/sweep_time_segments.py`
+not evidence about the real `ETL=60` scale. `recon/analysis.py`
 reproduces the ground-truth construction at the real scale (`Ny=ETL=60`,
 real field-map range/echo spacing) and sweeps `L` directly: there's a
 sharp, Nyquist-like phase transition around `L≈27-32` (matching the
@@ -1336,8 +1353,8 @@ computed `BT`), not a gradual improvement curve -- `L=6` gives only ~35%
 error reduction (barely better than no correction at all), while `L≈31-32`
 is needed to get relative forward-model error under 1%. **Chose `L=32`**
 as the production value (the smallest swept `L` clearing that 1% bar) --
-`operators_b0.py`'s `build_encoding_operator_b0`, `reconstruct.py`'s
-`run_recon`, and `run_b0_recon.py`'s `main`/`--L` all default to `L=32`
+`operators.py`'s `build_encoding_operator_b0`, `mslr.py`'s
+`run_recon`, and `run_recon.py`'s `main`/`--L` all default to `L=32`
 directly now, not overridden at each call site.
 
 **`nbins`: the histogram width `mri_exp_approx` fits its segmentation
@@ -1352,14 +1369,14 @@ asymmetric -- roughly -300 to +70 Hz, not symmetric around 0), mirtorch's
 own `Gmri` default `nbins=20` puts nearly all the histogram's mass into
 1-3 bins near zero, making the `(nbins, L)` least-squares fit severely
 ill-conditioned everywhere else: measured per-sample `b_weights` row sums
-(`operators_b0.py`'s `_check_b_weight_row_sums` -- each row should sum to
+(`operators.py`'s `_check_b_weight_row_sums` -- each row should sum to
 ~1.0 when well-conditioned) ranged `[0.12, 2.89]` at `nbins=20` vs.
 `[0.9985, 1.0022]` at `nbins=100` on the same real data. `nbins=128`
 (comfortably past that threshold) is the production default; raise it
 further before lowering it.
 
 **Cost of that choice, measured not extrapolated**
-(`recon/benchmark_b0_cost.py`, synthetic tensors at this repo's real scale
+(`recon/analysis.py`, synthetic tensors at this repo's real scale
 -- 240x240x45, 18 coils, 30 frames, `K≈288,000` samples/frame, on a free
 RTX A6000): one forward+adjoint pass costs `L=6`: 5.78s, `L=32`: 30.63s,
 `L=60` (`=ETL`, the accuracy ceiling): 57.40s -- essentially linear in `L`
@@ -1373,7 +1390,7 @@ reconstruction using this repo's own measured non-encoding overhead
 `L≈32` threshold, so `L=32` is both the accuracy floor and the practical
 sweet spot, not a compromise between two competing costs.
 
-**Real reconstruction run**: `recon/run_b0_recon.py` (`--L 32`) reproduces
+**Real reconstruction run**: `recon/run_recon.py mslr-ref` (`--L 32`) reproduces
 the existing G+L (multi-scale) config already validated against
 `../mslr-recon` for the uncorrected case, saving to
 `<datdir>/recon/mslr_b0/G+L_L<L>/<name>_recon.*` (one directory per `L`,
