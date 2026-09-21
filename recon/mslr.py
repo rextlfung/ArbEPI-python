@@ -172,7 +172,7 @@ def estimate_noise_std(X: torch.Tensor, bg_frac: float = 0.25) -> float:
     true real-part variance is sigma^2*(1-(1+t)(1-bg_frac))/bg_frac --
     correction = 1/sqrt(that ratio). Verified: this closed form matches
     a 2M-sample Monte Carlo to 4 significant figures at every bg_frac
-    tested (0.1-0.5) -- see tests/test_recon_reconstruct.py.
+    tested (0.1-0.5) -- see tests/test_recon_mslr.py.
 
     Exact-zero voxels are excluded before the bg_frac selection -- a real
     bug, not a hypothetical, caught on 2026-09-19: GatheredSense's smaps

@@ -106,7 +106,7 @@ def test_process_smaps_background_is_exactly_zero_after_resize():
     # so masking smaps_raw *before* the resize alone leaves a halo of small
     # (~1e-6 to 1e-9) nonzero leaked values just outside the object on the
     # target grid -- invisible until the RSS normalization below (or
-    # recon/reconstruct.py's own re-normalization on load) divides by that
+    # recon/mslr.py's own re-normalization on load) divides by that
     # same tiny value and rescales it straight back up to full unit
     # magnitude, silently erasing the mask everywhere except voxels that
     # happen to be exact-zero. process_smaps must re-apply a hard,

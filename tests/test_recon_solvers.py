@@ -40,7 +40,7 @@ def test_pogm_restart_converges_on_identity_least_squares(mom):
 def test_pogm_restart_matches_closed_form_lasso_regardless_of_prox_style(mom, inplace_prox):
     """A=I LASSO (0.5||x-b||^2 + lam||x||_1) has a closed-form solution,
     the soft-threshold of b -- and its prox step (soft-thresholding) is a
-    realistic stand-in for recon/reconstruct.py's g_prox, which mutates
+    realistic stand-in for recon/mslr.py's g_prox, which mutates
     its argument in place and returns it (a small transient-memory win)
     rather than returning a fresh tensor. Regression test for pogm_restart
     aliasing xnew with znew when g_prox does that: fpgm's prox argument is

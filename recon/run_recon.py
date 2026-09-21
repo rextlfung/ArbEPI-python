@@ -17,7 +17,7 @@ One-off driver: reconstruct real acquisitions with full time-segmented
 B0 correction (recon/operators.py), replicating the existing G+L
 (multi-scale) config already validated against ../mslr-recon
 (recon/analysis.py) for the *uncorrected* case, and saving
-results under <datdir>/recon/mslr_b0/G+L_L<L_b0>/ (recon/reconstruct.py) --
+results under <datdir>/recon/mslr_b0/G+L_L<L_b0>/ (recon/mslr.py) --
 one directory per L (matches the convention already on disk from the
 L=6/10/16 runs made during the sweep below).
 
@@ -117,7 +117,7 @@ B0-informed CG-SENSE: unregularized conjugate-gradient SENSE
 reconstruction using the time-segmented B0-corrected encoding operator
 (recon/operators.py's GatheredSenseB0/build_encoding_operator_b0),
 solved via literal conjugate gradient (Pruessmann et al.) rather than
-recon/reconstruct.py's multi-scale-low-rank POGM solve.
+recon/mslr.py's multi-scale-low-rank POGM solve.
 
 Ports preprocessing/cg_sense.py's exact CG algorithm (CG on the normal
 equations E^H E x = E^H y) onto mirtorch's LinearMap interface
@@ -126,7 +126,7 @@ closures, so it works with any encoding operator sharing that contract --
 here, the B0-corrected one -- not just the plain uncorrected SENSE operator
 preprocessing/cg_sense.py was written for.
 
-Unlike recon/reconstruct.py's run_recon (POGM, needs sigma1A -- the
+Unlike recon/mslr.py's run_recon (POGM, needs sigma1A -- the
 operator's spectral norm -- for its step size), CG is self-scaling and
 needs no such estimate: skip recon/operators.py's estimate_spectral_norm
 entirely here.
@@ -137,7 +137,7 @@ operator (independent per-frame GatheredSenseB0 blocks, see
 recon/operators.py's build_encoding_operator docstring), so A^H A has no
 cross-frame coupling -- solving jointly over the stacked tensor is
 mathematically identical to solving each frame's CG independently, just
-one Python-level loop instead of Nt, and matches recon/reconstruct.py's own
+one Python-level loop instead of Nt, and matches recon/mslr.py's own
 convention of treating the whole (Nx,Ny,Nz,Nt) tensor as one state array.
 
 `num_iter` defaults to 150, not 20 -- the original default converged well at
@@ -173,13 +173,7 @@ from preprocessing.matio import read_mat
 from preprocessing.nifti_io import save_recon_nifti
 from preprocessing.r2star_map import estimate_r2star_map_epi_grid
 from recon.analysis import _read_julia_mat
-from recon.operators import (
-    build_encoding_operator,
-    build_encoding_operator_b0,
-    estimate_spectral_norm,
-    gather_ksp,
-)
-from recon.reconstruct import (
+from recon.mslr import (
     _load_array,
     _load_echo_times,
     _load_normalized_smaps,
@@ -187,12 +181,18 @@ from recon.reconstruct import (
     run_recon,
     save_result,
 )
+from recon.operators import (
+    build_encoding_operator,
+    build_encoding_operator_b0,
+    estimate_spectral_norm,
+    gather_ksp,
+)
 
 
 def _load_omega_broadcast(fn_ksp: str, Nx: int) -> np.ndarray:
     """(Nx,Ny,Nz,Nt) sampling mask, broadcast across the readout axis.
 
-    Mirrors recon/reconstruct.py's own _load_omega: prefers the
+    Mirrors recon/mslr.py's own _load_omega: prefers the
     authoritative 'omegas' dataset preprocess.py writes (a few hundred KB)
     over inferring the mask from which k-space values happen to be exactly
     zero on a single coil -- a real acquired sample can round to exactly

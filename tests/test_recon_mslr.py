@@ -1,4 +1,4 @@
-"""End-to-end smoke test for recon/reconstruct.py's run_recon: simulates a
+"""End-to-end smoke test for recon/mslr.py's run_recon: simulates a
 small synthetic multi-coil Cartesian acquisition, writes it out in the same
 .h5 layout preprocessing/ produces (ksp_epi_zf, smaps), and checks that MSLR
 reconstruction runs to completion with a monotonically-behaved cost and no
@@ -15,14 +15,14 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("mirtorch")
 
-from recon.operators import build_encoding_operator  # noqa: E402
-from recon.reconstruct import (  # noqa: E402
+from recon.mslr import (  # noqa: E402
     _load_omega,
     estimate_kspace_noise_std,
     estimate_noise_std,
     estimate_operator_noise_factor,
     run_recon,
 )
+from recon.operators import build_encoding_operator  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

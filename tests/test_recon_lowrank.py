@@ -1,7 +1,7 @@
 """Algorithm-invariant tests for recon/solvers.py, mirroring the cases in
 ../mslr-recon/tests/kernel_tests.jl (patch round-trip, SVST shrinkage,
 unit-patch fast path). No golden Julia output is compared here -- see
-tests/test_recon_reconstruct.py / scratchpad validation for that; these
+tests/test_recon_mslr.py / scratchpad validation for that; these
 tests check mathematical invariants that must hold regardless of backend.
 """
 

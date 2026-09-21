@@ -311,7 +311,7 @@ def process_smaps(
     # resize above -- invisible on its own, but amplified straight back up
     # to unit magnitude by the RSS normalization below (whose `rss < eps`
     # clamp only catches values under ~2e-16, not this leakage) and again by
-    # recon/reconstruct.py's own RSS-renormalization on load, silently
+    # recon/mslr.py's own RSS-renormalization on load, silently
     # erasing the mask everywhere except exact-zero voxels. An exact 0/1
     # re-mask (thresholding, not interpolating, the final decision) after
     # both resizes guarantees background is exactly zero regardless.

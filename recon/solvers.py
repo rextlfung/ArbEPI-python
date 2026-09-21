@@ -149,7 +149,7 @@ def pogm_restart(
             znew = unew + beta * (unew - uold) + gamma * (unew - xold) - ba_z * (xold - zold)
             zetanew = alpha * (1 + beta + gamma)
             # g_prox is allowed to mutate its argument in place (e.g.
-            # recon/reconstruct.py's g_prox writes into X and returns it,
+            # recon/mslr.py's g_prox writes into X and returns it,
             # for a small transient memory win) -- clone znew first so
             # `xnew is znew` never holds. Without this, xnew - znew below
             # is always exactly zero regardless of what g_prox computed

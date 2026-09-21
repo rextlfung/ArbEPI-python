@@ -1067,8 +1067,9 @@ importing a torch module from a torch-free venv would break it:
 
 - **`.venv-recon`** (torch/mirtorch): `operators.py` (`GatheredSense` +
   the B0 operators, formerly `operators_b0.py`), `solvers.py` (POGM +
-  patch SVST, formerly `lowrank.py`), `reconstruct.py` (`run_recon`, plus
-  `save_result`, formerly `save_result.py`), `run_recon.py`
+  patch SVST, formerly `lowrank.py`), `mslr.py` (multi-scale low-rank
+  `run_recon`, plus `save_result`, formerly `save_result.py`; renamed from
+  `reconstruct.py`), `run_recon.py`
   (`mslr-ref`/`mslr-local`/`cg` subcommands, formerly `run_b0_recon.py`/
   `run_mslr_local.py`/`cg_sense_b0.py`), `sigpy_b0.py` (torch operator
   bridged into sigpy's solver), `lowres_calib_b0.py` (`b0`/`b0complex`
@@ -1078,7 +1079,7 @@ importing a torch module from a torch-free venv would break it:
   `sigpy_recon.py` (frame loop + `rss`/`cg-sense`/`l1-tv` subcommands),
   `lowres_calib.py` (`calib`/`stability` subcommands).
 - **Either venv**: `hdf5_chunked_io.py`, deliberately torch-free so both
-  can share it -- do not merge it into `reconstruct.py`.
+  can share it -- do not merge it into `mslr.py`.
 
 When adding a new file here, pick its venv by what it actually imports,
 not by which file it sits next to.
@@ -1105,7 +1106,7 @@ complex64-tensor weak-type promotion don't have that problem.
 static single-segment stage formerly in its own `recon/b0_correction.py`)
 adds B0 off-resonance correction on top of the plain `GatheredSense`
 encoding operator above -- see the dedicated "B0 off-resonance correction" subsection below for the
-full design and investigation history. `recon/reconstruct.py`'s
+full design and investigation history. `recon/mslr.py`'s
 `save_result` (formerly `recon/save_result.py`) persists a
 `ReconResult` to `.h5`/`.nii.gz`/`.json`; `recon/run_recon.py` is the driver
 that runs a real (not validation-only) B0-corrected reconstruction end to
@@ -1137,7 +1138,7 @@ operator`+`gather_ksp` are the two entry points; `.A[it].idx` on the
 returned `mirtorch.linear.BlockDiagonal` exposes each frame's own flat
 spatial sample indices for gathering a matching k-space target array).
 
-**`recon/reconstruct.py`'s `_load_array` reads chunked HDF5 datasets
+**`recon/mslr.py`'s `_load_array` reads chunked HDF5 datasets
 chunk-by-chunk along the last axis, not via a single `d[()]` call.** Measured
 on real `ArbEPI_epi_zf.h5` data (chunked one time-frame per chunk, ~373MB
 each): a bare `d[()]` full-dataset read ran at ~7 MB/s (838M+ read syscalls
@@ -1214,7 +1215,7 @@ whole-volume SVD costs are comparable (Julia 0.158s vs Python 0.170s for
 the same `2592000x30` matrix) -- it's the two overheads above, not the
 underlying linear algebra, that flip the net result. (Aside, found while
 instrumenting: Julia's own bulk `h5read()` on `ArbEPI_epi_zf.h5` hits the
-same HDF5 chunk-cache pathology `recon/reconstruct.py`'s `_load_array` docs
+same HDF5 chunk-cache pathology `recon/mslr.py`'s `_load_array` docs
 above -- tiny-read-storm, not disk-speed-bound -- confirming that gotcha is
 an HDF5-tooling issue in general, not Python/h5py-specific; irrelevant to
 the runtime comparison above since `runtime_s` on both sides only measures
@@ -1224,7 +1225,7 @@ Not yet ported from `../mslr-recon`: `src/activation.jl` (a standalone
 GLM task-activation module, not wired into the main pipeline even in the
 original) and `src/metrics.jl`/`scripts/report.jl` (tSNR maps and
 convergence-plot reporting) -- both are QA/visualization, not required for
-a working reconstruction path. `recon/reconstruct.py`'s `save_result` now does write
+a working reconstruction path. `recon/mslr.py`'s `save_result` now does write
 `ReconResult` to disk (`.h5` full-precision complex + solver trace,
 `.nii.gz`+`.json` magnitude image + metadata, reusing
 `preprocessing/nifti_io.py`'s `save_recon_nifti`) -- `recon/run_recon.py`
@@ -1296,7 +1297,7 @@ adjoint alone would re-apply the same decay attenuation instead of
 undoing it (confirmed empirically there: the physical sign made tSNR get
 monotonically *worse* through uncorrected -> phase-only -> complex-field).
 `build_encoding_operator_b0` here is bidirectional, though --
-`recon/reconstruct.py`'s `run_recon` calls both `.apply()` and
+`recon/mslr.py`'s `run_recon` calls both `.apply()` and
 `.adjoint()` through POGM, and `estimate_spectral_norm`'s power iteration
 needs both too -- so it uses the PHYSICAL forward exponent
 `psi = i*2*pi*Δf(r) - R2*(r)` (decaying, not growing, as t increases) and
@@ -1350,7 +1351,7 @@ computed `BT`), not a gradual improvement curve -- `L=6` gives only ~35%
 error reduction (barely better than no correction at all), while `L≈31-32`
 is needed to get relative forward-model error under 1%. **Chose `L=32`**
 as the production value (the smallest swept `L` clearing that 1% bar) --
-`operators.py`'s `build_encoding_operator_b0`, `reconstruct.py`'s
+`operators.py`'s `build_encoding_operator_b0`, `mslr.py`'s
 `run_recon`, and `run_recon.py`'s `main`/`--L` all default to `L=32`
 directly now, not overridden at each call site.
 

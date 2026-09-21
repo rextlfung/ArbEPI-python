@@ -357,7 +357,7 @@ def build_encoding_operator_b0(
 
     Returns an operator (Nx,Ny,Nz,Nt) -> (K,Nc,Nt), the same contract as
     build_encoding_operator (including `.A[it].idx`) -- a drop-in
-    replacement wherever recon/reconstruct.py calls it, so long as the
+    replacement wherever recon/mslr.py calls it, so long as the
     caller also re-estimates sigma1A for POGM's step size (the B0-corrected
     operator's spectral norm is not guaranteed to match the uncorrected
     one's, unlike everything else about this operator's contract).
@@ -397,7 +397,7 @@ def build_encoding_operator_b0(
     IMPORTANT, and NOT the sign convention used by
     recon/lowres_calib_b0.py on the (unmerged)
     worktree-lowres-calib-recon branch: this operator is bidirectional
-    (recon/reconstruct.py's run_recon calls both .apply() and .adjoint()
+    (recon/mslr.py's run_recon calls both .apply() and .adjoint()
     through POGM, and estimate_spectral_norm's power iteration needs both
     too), so c_phasors here is built from the PHYSICAL forward exponent
     exp(psi(r)*t) with psi(r) = i*2*pi*Δf(r) - R2*(r) -- decaying, not
@@ -513,7 +513,7 @@ def estimate_spectral_norm(A, x0: torch.Tensor, niter: int = 200, tol: float = 1
     (mri_exp_approx's B weights are a least-squares fit, not guaranteed
     unit-norm/orthogonal), so it needs to be measured before trusting it as
     POGM's Lipschitz-constant basis (`L = Nscales * sigma1A**2` in
-    recon/reconstruct.py's run_recon) -- reusing the uncorrected operator's
+    recon/mslr.py's run_recon) -- reusing the uncorrected operator's
     own sigma1A here would be a guess, not a measurement.
 
     Power iteration converges to sigma1 *from below*, so an under-converged
@@ -545,7 +545,7 @@ def check_operator_unitary(
     sigpy/app.py's LinearLeastSquares._get_PrimalDualHybridGradient) slows
     convergence of both the data and regularization terms together at a
     fixed iteration budget, and because POGM's own Lipschitz constant
-    (recon/reconstruct.py's run_recon: `L = Nscales * sigma1A**2`) is
+    (recon/mslr.py's run_recon: `L = Nscales * sigma1A**2`) is
     directly sigma1(A)-dependent.
 
     Call this once when building a *new* encoding operator (or composing

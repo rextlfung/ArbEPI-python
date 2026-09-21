@@ -178,8 +178,8 @@ from preprocessing.matio import read_mat
 from preprocessing.nifti_io import save_recon_nifti
 from preprocessing.r2star_map import estimate_r2star_map_epi_grid
 from recon.hdf5_chunked_io import read_frames_cropped
+from recon.mslr import _load_array
 from recon.operators import GatheredSenseB0, _check_b_weight_row_sums
-from recon.reconstruct import _load_array
 
 
 def compute_calib_mask(omegas: np.ndarray) -> np.ndarray:

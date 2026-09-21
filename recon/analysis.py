@@ -75,7 +75,7 @@ Usage (from repo root, .venv-recon):
 
 Formerly recon/analysis/validate_against_mslr.py
 ------------------------------------------------
-Validate recon/reconstruct.py against real ../mslr-recon (Julia/MIRT.jl)
+Validate recon/mslr.py against real ../mslr-recon (Julia/MIRT.jl)
 output, field by field. Not a pytest test -- like seq2ge/validate_against_
 matlab.py, this depends on real reference output that isn't committed to
 this repo (machine-specific acquisition data + a completed mslr-recon run).
@@ -121,13 +121,13 @@ import numpy as np
 import torch
 from mirtorch.linear.mri import mri_exp_approx
 
+from recon.mslr import run_recon
 from recon.operators import (
     GatheredSense,
     GatheredSenseB0,
     build_encoding_operator,
     build_encoding_operator_b0,
 )
-from recon.reconstruct import run_recon
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

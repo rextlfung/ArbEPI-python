@@ -249,7 +249,7 @@ recon/                        Multi-Scale Low-Rank (MSLR) fMRI reconstruction, p
                                  guessed, see CLAUDE.md) and demodulate_smaps (static first stage)
   solvers.py                    pogm_restart (PGM/FPGM/POGM with gradient restart, early stopping)
                                  + patch extraction/recombination and singular-value soft-thresholding
-  reconstruct.py                Top-level run_recon (FISTA/POGM over locally-low-rank patches), optional
+  mslr.py                       Multi-scale low-rank recon: run_recon (FISTA/POGM over locally-low-rank patches), optional
                                  B0 correction; save_result persists a ReconResult to .h5/.nii.gz/.json
   hdf5_chunked_io.py            Chunk-aware .h5 reads (deliberately torch-free, shared by both venvs)
   run_recon.py                  Real-data drivers (.venv-recon): `mslr-ref` (G+L from a ../mslr-recon
