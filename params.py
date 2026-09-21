@@ -300,33 +300,38 @@ def load_params(output_dir: str = 'output') -> Params:
     # Values below are the outcome of an empirical sweep (2026-08-27, ~600
     # rise/fall/blip candidates, each a full-dims worst-frame ArbEPI build
     # evaluated with ge/pns.py's RSS-combined total; see CLAUDE.md's PNS
-    # section). rise/fall = 100/120 is the fastest readout-ramp pair under
-    # the 80% normal-mode line (rise 105 tips the full build to 80.06% at
-    # identical echo spacing; fall beyond ~120 buys almost no echo spacing
-    # because with ramp sampling the flat top regrows to keep +-kmax
-    # coverage). blip_slew = 105 is a deliberate ride-the-line choice
-    # (explicit user decision, 2026-08-27): the full seed=0 build measures
-    # 79.8% peak PNS at min TE 34.86 ms, vs 78.3% at 35.10 ms for
-    # blip_slew = 100 -- only ~0.2% margin to the 80% line, thinner than
-    # observed mask-to-mask variation, so re-verify (regression test +
-    # main.py --ge) after ANY change to seed/mask/R/ETL/resolution and
-    # drop back to 100 if a new mask pushes it over. blip 110 sits at
-    # ~80.0% (coin flip), 115+ is over; the symmetric-100 design measures
-    # 77.4% at min TE 35.80 ms. The POPE gain is
-    # deliberately modest here: on this whole-body GE gradient the y-blip
-    # plays centered on the kx turnaround, i.e. exactly where the readout
-    # fall ramp ends, so an aggressive fall slew RSS-combines with the
-    # blip into a 3-channel hotspot (e.g. rise/fall/blip 95/200/170 looks
-    # great per-channel but its RSS total is 106%) -- the sweep therefore
-    # lands on a mild fall/rise ratio and a moderate blip slew rather than
-    # the paper's hardware-limit fall. The prescribed-TE target of 30 ms
-    # is unreachable under the 80% normal-mode line: this config is the
-    # fastest sub-80% one found (min TE 34.86 ms); reaching ~33 ms costs
-    # >85%, and ~30 ms well over 100%.
+    # section) against the protocol shipped at the time -- the sweep's own
+    # measured percentages/TEs are NOT reproduced here since they're
+    # protocol-dependent and go stale on every resolution/R/ETL/TE change
+    # (docs/review-findings.md item 204: an earlier version of this comment
+    # kept quoting the pre-ABCD-protocol numbers long after `0b9c25f`
+    # switched the default, making its own "re-verify after any change"
+    # instruction describe a build that no longer existed). For the
+    # *current* build's real numbers, don't trust a comment -- either read
+    # docs/review-findings.md's "Current baseline" table (refreshed each
+    # review pass) or just run `main.py --ge`/`tests/test_ge_check.py`'s
+    # `test_arbepi_default_params_peak_pns_under_normal_mode_limit`, which
+    # regression-guards peak PNS staying under the 80% normal-mode line on
+    # every test run regardless of what these three values are set to.
+    #
+    # What stays true regardless of protocol (the qualitative shape of the
+    # tuning, not a specific number): rise < fall, and blip_slew is tuned
+    # independently of both, because the y/z blips play centered on the kx
+    # turnaround -- exactly where the readout's POPE fall ramp ends -- so an
+    # aggressive fall slew RSS-combines with the blip into a 3-channel PNS
+    # hotspot (e.g. rise/fall/blip 95/200/170 can look fine per-channel but
+    # RSS-total well over 100%) even though per-channel numbers look safe.
+    # This is why the tuned fall/rise ratio is milder than a naive
+    # hardware-limit fall would suggest, and why blip_slew is swept as its
+    # own axis rather than just set to match rise or fall. Re-run the sweep
+    # (not just eyeball these three numbers) after any change to
+    # seed/mask/R/ETL/resolution/TE -- the right rise/fall/blip combination
+    # is a joint, non-monotonic function of all of those, not just this
+    # protocol's.
     slew_derate = 100.0
     ro_slew_rise = 100.0  # POPE-throttled ramp-up
     ro_slew_fall = 120.0  # ramp-down; not PNS-limited per se, but see above
-    blip_slew = 105.0  # ride-the-line choice, ~0.2% PNS margin -- see above
+    blip_slew = 105.0  # tuned jointly with rise/fall above; re-sweep after any protocol change
 
     # PNS channel weights: the IEC 60601-2-33:2022-recommended
     # [0.8, 1.0, 0.7] for human scanning, or [0, 0, 0] to disable the PNS

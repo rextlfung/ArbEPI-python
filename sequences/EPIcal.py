@@ -80,9 +80,15 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
     seq = pp.Sequence(system=sys_seq)
 
     rf_count = 1
-    # Seeded (reproducible) per-shot spoiler cycles/voxel draws -- see
-    # params.py's spoil_cycles_min/max comment.
-    spoil_rng = np.random.default_rng(0)
+    # Deliberately unseeded (fresh entropy every run/process, independent of
+    # params.seed): per-shot spoiler cycles/voxel draws only need to break a
+    # residual coherence pathway within this sequence's own repeated TR
+    # structure (see params.py's spoil_cycles_min/max comment), not to be
+    # reproducible run-to-run like the sampling mask (params.seed) is --
+    # unlike the mask, no test or downstream consumer depends on a specific
+    # spoiler draw sequence, and reproducibility here would only make it
+    # easier to accidentally rely on one (docs/review-findings.md item 176).
+    spoil_rng = np.random.default_rng()
 
     for shot in range(-params.Ndummyshots, params.Nshots):
         is_dummy = shot < 0
