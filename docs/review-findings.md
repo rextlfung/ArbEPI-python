@@ -467,13 +467,61 @@ feasibility table was re-measured and found within the same run-to-run
 noise band as the previous pass (see below) -- consistent with no code
 having changed since the last pass.
 
-## Current baseline (2026-09-20, against `d620951`)
+Item 223 is a new finding from a later, automated pass (2026-09-21, against
+`e04d9aa`). `git diff d620951 HEAD --stat` shows only `docs/review-
+findings.md` itself changed since the previous pass (item 222's own
+addition) -- no production source file has changed since `d620951`, so
+this pass's re-verification rested on the same "byte-for-byte unchanged"
+basis the previous pass documented, not a fresh line-by-line re-read of
+every open item. Four parallel subagents ran with the full four-way scope
+split used by most earlier passes (`sampling/`+`plotting/`; `ge/`+`lib/`+
+`sequences/`+`params.py`/`main.py`/`scanners.py`; `preprocessing/`;
+`recon/`), each spot-checking a representative sample of its scope's open
+items against current source before hunting for anything new. The
+`ge/`+`lib/`+`sequences/` subagent re-verified seven open items (107, 122,
+126, 142, 170, 181, 220) with no drift and found nothing new after a full
+read of `main.py`, `scanners.py`, `params.py`, `ge/blocks.py`, `ge/pns.py`,
+`ge/acoustics.py`, `ge/writeceq.py`, and `lib/calc_te_tr_delays.py`. The
+`sampling/`+`plotting/` subagent re-verified every open item in its scope
+(118, 136(a), 160, 166, 187, 196, 115, 185) plus every closed item's fix,
+found one citation drift (item 118, corrected in place below), and no new
+findings. The `recon/` subagent re-verified essentially every open item
+citing `recon/` (109, 131, 132, 133, 140, 163, 164, 167, 182, 186, 199,
+202, 207, 208, 210, 211, 212, 214, 215, 216, 217, 218, 219, 221) with no
+drift except item 165 (corrected in place below -- its own citation had
+already gone stale before the 2026-09-17 pass that last touched it, missed
+by every "citation updated" note since), and found no new findings after
+specifically checking B0/R2* sign-convention consistency across all three
+`lowres_calib_recon_b0*.py` variants, whether item 216's unseeded-
+`torch.rand()` flakiness pattern recurs elsewhere (found three more
+unseeded call sites, all judged not live-flaky since their assertions are
+insensitive to which mask is drawn), and whether item 202's
+zero-test-coverage pattern or item 221's redundant-recomputation pattern
+have any new siblings (none found). The `preprocessing/` subagent
+re-verified twelve open items (108, 110, 120, 178, 189, 192, 199, 205,
+206, 209, 210, 222) with no drift, and its hunt (specifically for a fifth
+FFT-shift-pairing copy, a new masking-after-resize gap beyond item 222,
+and a new cache-path-duplication site -- none of which turned up anything
+new) produced one new finding, item 223 (`run_b0map.py` has no
+caching/skip logic for its own primary output, unlike every sibling
+cacheable artifact in this pipeline), independently re-verified against
+the live tree (confirmed no `os.path.exists(output_path)` check anywhere
+in the function, and compared directly against `preprocess.py`'s own
+`*_valid`/checkpoint patterns) before being recorded here, not just
+trusted from the subagent's report. `uv run ruff check .` (33 errors) and
+all three `pytest` configurations (154/17, 192/12, 231/5) reproduced
+exactly the previous pass's counts with no drift, and the whole-sequence
+feasibility table was re-measured and found within the same run-to-run
+noise band as the previous pass (see below) -- consistent with no code
+having changed since the last pass.
+
+## Current baseline (2026-09-21, against `e04d9aa`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **33
   errors** -- **32 `E501` + 1 `I001`** (unsorted imports, still
   `recon/cg_sense_b0.py`) -- identical count and file set to the previous
-  pass (unsurprising: no source file changed between `d515cd0` and
-  `d620951`). Full current list: `ge/check.py`,
+  pass (unsurprising: no source file changed between `d620951` and
+  `e04d9aa`). Full current list: `ge/check.py`,
   `ge/validate_against_matlab.py` (x2), `ge/writeceq.py`,
   `lib/calc_te_tr_delays.py` (x2), `lib/make_readout_grads.py` (x2),
   `params.py`, `plotting/plotting.py` (x2),
@@ -490,18 +538,18 @@ having changed since the last pass.
   `--extra preprocessing --extra recon` both synced (fresh
   `.venv-recon`, Python 3.10): **231 passed, 5 skipped** -- unchanged.
   All three counts reproduce the previous pass's numbers exactly, as
-  expected with no intervening source-file changes. All five remaining
-  skips are still `julia executable not found on PATH`
-  (`tests/test_preprocessing_run_b0map.py`), **zero** GERecon-gated.
-  Item 216's previously-flagged flaky unseeded-RNG test
+  expected with no intervening source-file changes. All remaining skips
+  are still `julia executable not found on PATH`
+  (`tests/test_preprocessing_run_b0map.py`), **zero** GERecon-gated. Item
+  216's previously-flagged flaky unseeded-RNG test
   (`test_build_encoding_operator_b0_matches_manual_per_frame_construction`)
   again did not reproduce in this pass's single run (still open
   regardless -- a quiet run is not evidence the underlying unseeded
-  `torch.rand()` calls were fixed, since they weren't); this pass's run
-  did surface the `_check_b_weight_row_sums` ill-conditioning warning
-  item 164 already documents (`b_weights` row sums as low as 0.217 in
-  `test_recon_operators_b0.py`'s small synthetic fixture), consistent
-  with that item's existing description.
+  `torch.rand()` calls were fixed, since they weren't); this pass's
+  `.venv-recon` run did again surface the `_check_b_weight_row_sums`
+  ill-conditioning warning item 164 already documents (`b_weights` row
+  sums as low as 0.35-0.52 in `test_recon_operators_b0.py`'s small
+  synthetic fixture), consistent with that item's existing description.
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, Python 3.10 with `preprocessing`+`recon` extras
   synced): **re-measured this pass**. No `calc_te_tr_delays`
@@ -509,18 +557,19 @@ having changed since the last pass.
 
   | sequence | peak PNS | acoustics | max grad | max slew |
   |---|---|---|---|---|
-  | `ArbEPI.seq` | 69.8% | 0.0231 | 28.83 mT/m | 119.2 T/m/s |
-  | `EPIcal.seq` | 64.7% | 0.0231 | 28.53 mT/m | 119.2 T/m/s |
+  | `ArbEPI.seq` | 69.8% | 0.0231 | 28.82 mT/m | 119.2 T/m/s |
+  | `EPIcal.seq` | 66.9% | 0.0231 | 28.68 mT/m | 119.2 T/m/s |
   | `deGRE.seq` | 77.4% | 0.2556 | 49.76 mT/m | 174.3 T/m/s |
   | `noise.seq` | 0.0% | 0.0000 | 0.00 mT/m | 0.0 T/m/s |
 
   All four numbers are within measurement noise of the previous pass's
-  table (`ArbEPI.seq` peak PNS 69.5%->69.8%, `EPIcal.seq` max grad
-  28.63->28.53 mT/m, everything else identical to the last significant
-  digit shown) -- expected run-to-run variation from the sampling mask's
-  own randomization, not a code change (no source file differs from the
-  previous pass). Item 123's finding (`ge/check.py`'s docstring still
-  quoting the stale 0.2456 instead of 0.2556) remains open and unchanged.
+  table (`ArbEPI.seq` max grad 28.83->28.82 mT/m, `EPIcal.seq` peak PNS
+  64.7%->66.9% and max grad 28.53->28.68 mT/m, everything else identical
+  to the last significant digit shown) -- expected run-to-run variation
+  from the sampling mask's own randomization, not a code change (no
+  source file differs from the previous pass). Item 123's finding
+  (`ge/check.py`'s docstring still quoting the stale 0.2456 instead of
+  0.2556) remains open and unchanged.
 
 ## Correctness
 
@@ -4186,8 +4235,10 @@ having changed since the last pass.
   miss either -- see item 174.
 - [ ] **118. `sampling/pd_sample.py`'s `dtype` parameter
   (`'logical'`/`'double'`/`'complex'`) is dead in production and
-  untested.** [measured; citation updated 2026-09-17 against `ad2fdc4` --
-  shifted from `:295-300` to `:389-394`, substance unchanged] `pd_sample`'s `dtype` branch (`:389-394`) is only
+  untested.** [measured; citation updated 2026-09-21 against `e04d9aa` --
+  shifted from `:389-394` to `:390-395`, substance unchanged; citation
+  updated 2026-09-17 against `ad2fdc4` -- shifted from `:295-300` to
+  `:389-394`, substance unchanged] `pd_sample`'s `dtype` branch (`:390-395`) is only
   ever called with the default `'logical'` throughout the codebase
   (`gen_sampling_masks.py` never passes `dtype=`), and
   `tests/test_pd_sample.py` never exercises the `'double'`/`'complex'`
@@ -4285,7 +4336,11 @@ having changed since the last pass.
   `smaps_ArbEPI_sigpy.h5` cache-path construction is duplicated verbatim in
   `recon/validate_against_mslr.py` -- now a third, freshly-found site,
   `recon/cg_sense_b0.py`, joins the pair.** [measured, low severity;
-  citation updated 2026-09-17 against `ad2fdc4` -- the brand-new
+  citation updated 2026-09-21 against `e04d9aa` -- the `run_b0_recon.py`
+  citation below (still quoted as `:72-73`) had already drifted to `:101-102`
+  by the time of the very next paragraph's own `:101` reference, apparently
+  missed by every "citation updated" pass since; corrected here, substance
+  unchanged; citation updated 2026-09-17 against `ad2fdc4` -- the brand-new
   `recon/cg_sense_b0.py:129` (`fn_ksp = os.path.join(recon_dir,
   f'{seqname}_epi_zf.h5')`) re-derives this exact path pattern too, despite
   it already being centralized as `SeqPaths.recon`
@@ -4294,7 +4349,7 @@ having changed since the last pass.
   `paths.recon` -- the same unnecessary redundancy `run_b0_recon.py:101`
   already carries against the same existing field, per item 133's own
   "new sites" update above]
-  `run_b0_recon.py:72-73` and `validate_against_mslr.py:132-133` each
+  `run_b0_recon.py:101-102` and `validate_against_mslr.py:132-133` each
   independently build `os.path.join(recon_dir, "ArbEPI_epi_zf.h5")` /
   `os.path.join(recon_dir, "smaps_ArbEPI_sigpy.h5")` from a
   locally-derived `recon_dir`, instead of sharing a helper or reading from
@@ -4762,3 +4817,43 @@ having changed since the last pass.
   `(13, 13, 9)`), but a redundant full-array boolean-mask gather for no
   reason. Fix: replace `roi_signal = img[mask].mean(axis=0)` with
   `roi_signal = voxels.mean(axis=0)`.
+- [ ] **223. `preprocessing/run_b0map.py`'s `run_b0map()` has no
+  caching/skip logic for its own primary output, unlike every other
+  expensive cacheable artifact in this pipeline.** [measured; found
+  2026-09-21 against `e04d9aa`] `run_b0map()`'s per-sequence body
+  (`run_b0map.py:114-172`) unconditionally calls `subprocess.run([julia_bin,
+  ..., output_path, ...], check=True)` (`:114-121`) every time it runs for a
+  given `seqname` -- there is no `os.path.exists(output_path)` check
+  anywhere in the function (confirmed by grep: zero matches for
+  `os.path.exists(output_path)` in this file). Every other expensive,
+  reusable artifact in `preprocessing/` does check first: the GRE cache and
+  ESPIRiT smaps cache in `preprocess.py`'s STEP 2/3 both gate on an
+  `os.path.exists(...)`-plus-attr-match `*_valid` flag before recomputing
+  (e.g. `preprocess.py:361-365`'s `smaps_valid = os.path.exists(fn_smaps)
+  and f.attrs.get('Nvcoils') == Nvcoils`), `smaps.py`'s `load_smaps` has its
+  own analogous cache-validity check (`:495-502`), and `preprocess()`'s
+  STEP 6 explicitly checkpoints/resumes via `os.path.exists(paths.recon)`
+  (`preprocess.py:433`) plus a `last_completed_frame` marker. `run_b0map()`
+  itself already documents this "pay once" expectation for the sibling
+  smaps estimation it triggers ("whichever stage runs first pays the
+  (one-time) ESPIRiT cost," module docstring) -- but that framing doesn't
+  hold for the b0map computation itself, which is the expensive step this
+  function exists to run (an iterative regularized NCG solve inside
+  MRIFieldmaps.jl) and which it always redoes from scratch. Impact:
+  re-running `run_b0map(cfg)` on a batch that already has valid
+  `<seqname>_b0map.h5` output for some or all of `cfg.seqnames` (e.g.
+  because a later-added sequence needs it, or the script is rerun by
+  mistake, or as part of an iterative multi-sequence workflow) always
+  redoes the full Julia subprocess for every sequence in the batch, not
+  just the ones actually missing output -- real, non-trivial wasted
+  compute, and the one inconsistency in an otherwise-consistent
+  caching-discipline pattern across this module and its siblings. Not a
+  correctness bug -- rerunning still produces a correct, freshly-overwritten
+  result each time. Fix: add an `os.path.exists(output_path)` check
+  (optionally gated by a `force`/`overwrite` kwarg, mirroring the
+  `*_valid` pattern `preprocess.py` already uses) before invoking the Julia
+  subprocess and the smaps-loading preamble above it, skipping with a
+  printed message when valid output already exists -- or, if
+  always-recompute is actually the intended design (e.g. because a field
+  map should never be silently reused across reruns), state that
+  explicitly in the module or function docstring instead.
