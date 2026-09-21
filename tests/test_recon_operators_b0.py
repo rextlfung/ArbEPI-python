@@ -39,11 +39,11 @@ def _build_b0_operator(smaps, samp, b0map_hz, t_frame_s, L, nbins=20):
 
 def test_l1_matches_static_correction():
     """L=1 (a single time segment centered at the mean sample time) should
-    match recon/b0_correction.py's static single-segment correction closely
+    match recon/operators_b0.py's static single-segment correction closely
     -- both are, in the end, one global per-voxel phase term applied before
     the FFT; this is the connective-tissue check between the two stages."""
-    from recon.b0_correction import demodulate_smaps
     from recon.operators import GatheredSense
+    from recon.operators_b0 import demodulate_smaps
 
     img, smaps, b0map_hz, te, y_true_flat = _setup(seed_offset=30)
     Nx, Ny, Nz = smaps.shape[1:]
@@ -64,7 +64,7 @@ def test_more_segments_reduces_error_in_a_toy_grid():
     """NOT the realistic regime, despite the fixture's B0/ETL parameters
     looking real -- this grid has only 12 distinct echo times, so L>=12
     trivially resolves every one exactly (see the L16 assertion below).
-    recon/sweep_time_segments.py's own module docstring documents this
+    recon/analysis/sweep_time_segments.py's own module docstring documents this
     explicitly: its finding "says nothing about whether L=6 ... is
     adequate at the real ETL=60 scale." See
     test_more_segments_reduces_error_at_real_scale below for the actual
@@ -113,7 +113,7 @@ def test_more_segments_reduces_error_in_a_toy_grid():
 def test_more_segments_reduces_error_at_real_scale():
     """The actual realistic-regime check (real ETL=60, real field-map
     range -300 to +70 Hz), regression-guarding the conclusion
-    recon/sweep_time_segments.py's real-scale sweep found: L=32 (the
+    recon/analysis/sweep_time_segments.py's real-scale sweep found: L=32 (the
     production default, item 82) keeps relative forward-model error under
     1%, while L=6 (mirtorch's own Gmri default, no longer used here)
     doesn't come close -- a sharp, Nyquist-like phase transition around
@@ -121,7 +121,7 @@ def test_more_segments_reduces_error_at_real_scale():
     gradual curve. Reuses sweep_time_segments.py's own real-scale ground
     truth/operator-construction helpers directly, rather than a third copy
     of them."""
-    from recon.sweep_time_segments import _build_operator, _setup_real_scale
+    from recon.analysis.sweep_time_segments import _build_operator, _setup_real_scale
 
     img, smaps, b0map_hz, t_per_ky, y_true_flat = _setup_real_scale(seed=200)
     Nx, Ny, Nz = smaps.shape[1:]
@@ -150,8 +150,8 @@ def test_production_nbins_avoids_row_sum_warning(recwarn):
     root cause of a real signal-loss-plus-incoherent-noise failure --
     confirm the production default (nbins=128) doesn't trip
     _check_b_weight_row_sums' ill-conditioning warning, at real scale."""
+    from recon.analysis.sweep_time_segments import _setup_real_scale
     from recon.operators_b0 import build_encoding_operator_b0
-    from recon.sweep_time_segments import _setup_real_scale
 
     _img, smaps, b0map_hz, t_per_ky, _y_true_flat = _setup_real_scale(seed=201)
     Nx, Ny, Nz = smaps.shape[1:]
@@ -277,7 +277,7 @@ def test_r2star_zero_map_matches_phase_only_operator():
 def test_r2star_generalization_adjoint_is_self_consistent():
     """The check that discriminates this module's PHYSICAL sign
     (psi = i*2*pi*Δf(r) - R2*(r), decaying in the forward direction) from
-    recon/lowres_calib_recon_b0complex.py's flipped sign on the
+    recon/lowres_calib/lowres_calib_recon_b0complex.py's flipped sign on the
     (unmerged) worktree-lowres-calib-recon branch (psi_recon =
     i*2*pi*Δf(r) + R2*(r)): the true adjoint identity <Ax,y> == <x,A^H y>
     holds for ANY complex c_phasors under GatheredSenseB0's `.conj()`
@@ -328,7 +328,7 @@ def test_r2star_forward_model_decays_away_from_reference_time():
     echo, not growth -- an earlier version of this test wrongly asserted
     |c_phasors|<=1 everywhere and failed on exactly this). What the sign
     must never do is flip that direction: a flipped sign
-    (recon/lowres_calib_recon_b0complex.py's branch convention) would make
+    (recon/lowres_calib/lowres_calib_recon_b0complex.py's branch convention) would make
     |c_phasors| INCREASE with tl[l] instead of decrease (see the module
     docstring's measured tSNR-gets-worse regression).
 

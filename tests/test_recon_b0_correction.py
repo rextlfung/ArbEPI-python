@@ -1,8 +1,8 @@
-"""Validates recon/b0_correction.py's static single-segment demodulation
+"""Validates recon/operators_b0.py's static single-segment demodulation
 against a brute-force, genuinely time-varying ground-truth forward model --
 not just an internal-consistency check (which would pass even with the
 wrong sign), since the whole reason to bother is external correctness. See
-b0_correction.py's own docstring for the sign-convention derivation this
+operators_b0.py's static-stage docstring section for the sign-convention derivation this
 cross-checks empirically.
 
 The ground truth models the same physical structure this repo's real EPI
@@ -21,8 +21,8 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("mirtorch")
 
-from recon.b0_correction import demodulate_smaps  # noqa: E402
 from recon.operators import GatheredSense  # noqa: E402
+from recon.operators_b0 import demodulate_smaps  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -112,7 +112,7 @@ def test_static_correction_reduces_forward_model_error_vs_uncorrected():
 
 def test_wrong_sign_correction_does_not_help():
     """Regression guard for the sign convention documented in
-    b0_correction.py -- flipping the field map's sign should make the
+    operators_b0.py's demodulate_smaps -- flipping the field map's sign should make the
     forward-model fit worse than no correction at all, not better, since a
     wrong-sign demodulation adds phase error instead of removing it."""
     img, smaps, b0map_hz, te, y_true_flat = _setup(seed_offset=1)
@@ -124,7 +124,7 @@ def test_wrong_sign_correction_does_not_help():
     assert err_wrong_sign >= err_uncorrected - 1e-6, (
         f"wrong-sign correction unexpectedly helped "
         f"(uncorrected={err_uncorrected:.4f}, wrong_sign={err_wrong_sign:.4f}) "
-        "-- check the sign convention in b0_correction.py"
+        "-- check the sign convention in operators_b0.py's demodulate_smaps"
     )
 
 

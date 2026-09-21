@@ -229,15 +229,10 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
                                  load_smaps caches both the EPI-grid and deGRE-grid resize (the latter for
                                  run_b0map.py's smap/eig-mask inputs to b0map.jl -- see CLAUDE.md)
   cg_sense.py                   CG-SENSE solver
-  recon_sigpy.py                Combined L1-wavelet + TV regularized SENSE (sigpy, replaces BART pics)
   matio.py                      Shared hdf5storage-compatible .mat reader (h5py-based)
   nifti_io.py                   Writes final recon images as NIfTI + JSON sidecar (for ITK-SNAP/FSLeyes/etc.)
   preprocess.py                 Stage 1 driver: raw data -> zero-filled k-space volume
-  recon_frames.py               Stage 2 shared frame-loop + smaps loading
-  run_preprocessing.py / run_cg_sense.py / run_rss.py / run_recon_sigpy.py   Batch entry points --
-                                 CG-SENSE, RSS, and L1-wavelet+TV are wired up as sanity checks for
-                                 validating Stage 1 output, not the final production reconstruction
-                                 (that's a separate, more advanced Julia pipeline)
+  run_preprocessing.py          Batch entry point for Stage 1 (Stage 2 drivers live in recon/basic/)
   calibrate_delay.py            Automated k-space center delay tuning
   run_b0map.py                  Batch driver for B0 field map estimation (subprocess -> julia/b0map.jl)
   gre_diagnostics.py            One-off: dual-echo deGRE images -> NIfTI/PNG, for visual QC against
@@ -250,18 +245,28 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
 recon/                        Multi-Scale Low-Rank (MSLR) fMRI reconstruction, ported from
                               ../mslr-recon (Julia/MIRT.jl) onto PyTorch/mirtorch
   operators.py                  GatheredSense: memory-efficient gathered-k-space SENSE operator
-  operators_b0.py               GatheredSenseB0: time-segmented B0 off-resonance correction (L=32
-                                 in production -- swept, not guessed, see CLAUDE.md)
-  b0_correction.py              Static (single-segment) B0 correction, the cheaper first stage
+  operators_b0.py               B0 off-resonance correction: GatheredSenseB0 (time-segmented, L=32
+                                 in production -- swept, not guessed, see CLAUDE.md) plus
+                                 demodulate_smaps, the cheaper static single-segment first stage
   lowrank.py                    Patch extraction/recombination + singular-value soft-thresholding
   solvers.py                    pogm_restart: PGM/FPGM/POGM with gradient restart, early stopping
   reconstruct.py                Top-level run_recon driver (FISTA/POGM over locally-low-rank patches),
-                                 with optional B0 correction via operators_b0.py
-  save_result.py                Persists a ReconResult to .h5/.nii.gz/.json
+                                 optional B0 correction via operators_b0.py; save_result persists a
+                                 ReconResult to .h5/.nii.gz/.json
+  hdf5_chunked_io.py            Chunk-aware .h5 reads (deliberately torch-free, shared by both venvs)
   run_b0_recon.py               Driver for a real (non-validation) B0-corrected reconstruction
-  sweep_time_segments.py /      One-off analysis scripts (L accuracy sweep, L cost benchmark) --
-  benchmark_b0_cost.py           see CLAUDE.md's recon/ section for the numbers they produced
-  validate_against_mslr.py      Field-by-field comparison vs. real ../mslr-recon (Julia) output
+  cg_sense_b0.py                CG-SENSE using the B0-corrected operator
+  basic/                        Stage 2 sanity-check reconstructions (sigpy; .venv-preprocessing):
+                                 recon_frames.py (shared frame loop + smaps loading), run_rss.py /
+                                 run_cg_sense.py / run_recon_sigpy.py (batch entry points),
+                                 recon_sigpy.py (L1-wavelet + TV SENSE, replaces BART pics)
+  lowres_calib/                 Fast low-resolution reconstructions of the fully sampled calibration
+                                 region (plain, B0-corrected, B0+R2* complex-field) and a temporal
+                                 stability check
+  analysis/                     One-off analysis/validation scripts: sweep_time_segments.py (L accuracy
+                                 sweep), benchmark_b0_cost.py (L cost benchmark) -- see CLAUDE.md's
+                                 recon/ section for the numbers -- and validate_against_mslr.py
+                                 (field-by-field comparison vs. real ../mslr-recon Julia output)
 tests/                       Unit tests (pytest)
 docs/demo/                   Static images embedded in this README's Demo section
 ```

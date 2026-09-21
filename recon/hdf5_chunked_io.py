@@ -2,7 +2,7 @@
 (ksp_epi_zf and friends -- chunked one frame per chunk along the last
 axis; see preprocessing/preprocess.py's writer). No torch/mirtorch import
 here, deliberately: recon/reconstruct.py's `_load_array` and
-recon/lowres_calib_recon.py's (former) `_load_chunked` used to be two
+recon/lowres_calib/lowres_calib_recon.py's (former) `_load_chunked` used to be two
 independent copies of the same chunk-by-chunk-along-the-last-axis loop
 (docs/review-findings.md item 200) specifically because
 lowres_calib_recon.py runs in .venv-preprocessing (no torch) and importing

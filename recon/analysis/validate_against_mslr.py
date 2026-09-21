@@ -4,7 +4,7 @@ matlab.py, this depends on real reference output that isn't committed to
 this repo (machine-specific acquisition data + a completed mslr-recon run).
 
 Usage (from repo root, using the .venv-recon environment):
-    .venv-recon/bin/python -m recon.validate_against_mslr <julia_reconstruct.mat>
+    .venv-recon/bin/python -m recon.analysis.validate_against_mslr <julia_reconstruct.mat>
 
 The reference .mat is produced by ../mslr-recon's scripts/reconstruct.jl
 (e.g. via experiments/20260822ball.jl -- run_recon's own `matwrite` call).

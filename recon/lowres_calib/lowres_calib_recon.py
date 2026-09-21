@@ -68,7 +68,7 @@ Usage (from repo root, .venv-preprocessing -- this module needs sigpy/h5py/
 matplotlib, not torch/mirtorch, despite living under recon/ alongside the
 torch-based MSLR pipeline; see CLAUDE.md's recon/ section for the venv
 split rationale):
-    .venv-preprocessing/bin/python -m recon.lowres_calib_recon <datdir> [seqname]
+    .venv-preprocessing/bin/python -m recon.lowres_calib.lowres_calib_recon <datdir> [seqname]
 """
 
 import argparse

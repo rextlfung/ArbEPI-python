@@ -1,4 +1,4 @@
-"""B0-corrected variant of recon/lowres_calib_recon.py: same fully-sampled
+"""B0-corrected variant of recon/lowres_calib/lowres_calib_recon.py: same fully-sampled
 (ky, kz) calibration region, same "no iteration, no regularization"
 philosophy (`img = sum_c conj(smap_c) * ifft(ksp_c)`), but through
 recon/operators_b0.py's GatheredSenseB0 adjoint instead of a plain 3D
@@ -35,7 +35,7 @@ per-frame pre-gathered (K,L) copy).
 
 L defaults to 32 here (not operators_b0.py's own L=6 default) -- see
 CLAUDE.md's recon/ "B0 off-resonance correction" section: a real-scale
-sweep (recon/sweep_time_segments.py) found L=6 badly under-resolves this
+sweep (recon/analysis/sweep_time_segments.py) found L=6 badly under-resolves this
 pipeline's real ETL=60 bandwidth-time product, while L=32 is the smallest
 value that gets relative forward-model error under 1%.
 
@@ -60,7 +60,7 @@ build_encoding_operator_b0's own docstring for why -- and isn't
 implemented here.)
 
 Usage (from repo root, .venv-recon):
-    .venv-recon/bin/python -m recon.lowres_calib_recon_b0 <datdir> \
+    .venv-recon/bin/python -m recon.lowres_calib.lowres_calib_recon_b0 <datdir> \
         [--seqname ArbEPI] [--device cuda]
 """
 
@@ -82,7 +82,7 @@ from recon.reconstruct import _load_array
 
 
 def compute_calib_mask(omegas: np.ndarray) -> np.ndarray:
-    """Same as recon/lowres_calib_recon.py's -- duplicated, see module
+    """Same as recon/lowres_calib/lowres_calib_recon.py's -- duplicated, see module
     docstring for why (keeps this .venv-recon module off matplotlib)."""
     return np.all(omegas, axis=-1)
 
@@ -90,7 +90,7 @@ def compute_calib_mask(omegas: np.ndarray) -> np.ndarray:
 def native_calib_grid(
     calib_mask: np.ndarray, fov: tuple[float, float, float], Nx_full: int,
 ) -> dict:
-    """Same as recon/lowres_calib_recon.py's -- duplicated for the same
+    """Same as recon/lowres_calib/lowres_calib_recon.py's -- duplicated for the same
     reason as compute_calib_mask above."""
     ys, zs = np.nonzero(calib_mask)
     y0, y1 = int(ys.min()), int(ys.max()) + 1

@@ -11,17 +11,17 @@ standard NEMA/fBIRN-style phantom stability decomposition (percent
 fluctuation + linear drift from a per-frame ROI-mean signal curve, plus a
 per-voxel tSNR map) is used to quantify that directly.
 
-variant='' reads recon/lowres_calib_recon.py's plain output;
-variant='b0' reads recon/lowres_calib_recon_b0.py's B0-corrected output --
+variant='' reads recon/lowres_calib/lowres_calib_recon.py's plain output;
+variant='b0' reads recon/lowres_calib/lowres_calib_recon_b0.py's B0-corrected output --
 see that module's docstring for why per-frame B0-induced phase, not just
 system drift/noise, is expected to show up here as apparent instability
 for a static object.
 
 Usage (from repo root, .venv-preprocessing -- matplotlib/nibabel, not
-torch/mirtorch, despite comparing recon/lowres_calib_recon_b0.py's
+torch/mirtorch, despite comparing recon/lowres_calib/lowres_calib_recon_b0.py's
 .venv-recon-only output; see CLAUDE.md's recon/ section "not a
 single-venv package" note):
-    .venv-preprocessing/bin/python -m recon.lowres_temporal_stability <datdir> [--seqname ArbEPI] [--variant b0]
+    .venv-preprocessing/bin/python -m recon.lowres_calib.lowres_temporal_stability <datdir> [--seqname ArbEPI] [--variant b0]
 """
 
 import argparse
@@ -37,7 +37,7 @@ def load_lowres_calib_recon(
     datdir: str, seqname: str = 'ArbEPI', variant: str = ''
 ) -> tuple[np.ndarray, dict]:
     """variant: '' for the plain (uncorrected) recon, 'b0' for
-    recon/lowres_calib_recon_b0.py's B0-corrected output."""
+    recon/lowres_calib/lowres_calib_recon_b0.py's B0-corrected output."""
     suffix = f'_{variant}' if variant else ''
     fn_base = os.path.join(datdir, 'recon', 'lowres_calib', f'{seqname}_recon_lowres_calib{suffix}')
     img = np.asarray(nib.load(f'{fn_base}.nii.gz').dataobj)  # [Nx, Ny, Nz, Nframes], magnitude
@@ -195,7 +195,7 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--variant', default='',
-        help="'' for the plain recon, 'b0' for recon/lowres_calib_recon_b0.py's output",
+        help="'' for the plain recon, 'b0' for recon/lowres_calib/lowres_calib_recon_b0.py's output",
     )
     args = parser.parse_args()
     main(args.datdirs, args.seqname, args.tr, args.skip_frames, args.variant)

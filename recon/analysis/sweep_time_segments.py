@@ -25,7 +25,7 @@ depends on t_per_ky (one time per ky row, matching sequences/ArbEPI.py's
 echo_times) and b0map_hz's spatial values, not on Nx/Nz/Nc.
 
 Usage (from repo root, .venv-recon):
-    .venv-recon/bin/python -m recon.sweep_time_segments
+    .venv-recon/bin/python -m recon.analysis.sweep_time_segments
 """
 
 import math
@@ -103,7 +103,7 @@ def _build_operator(smaps: torch.Tensor, b0map_hz: torch.Tensor, t_frame_s: torc
     full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
     idx = torch.nonzero(full_mask.reshape(-1), as_tuple=False).squeeze(-1)
     t_ms = (t_frame_s.reshape(-1)[idx] * 1000).to(torch.float32)
-    b0_neg = (-b0map_hz).to(torch.float32)  # sign convention, see b0_correction.py's module docstring
+    b0_neg = (-b0map_hz).to(torch.float32)  # sign convention, see operators_b0.py's module docstring (static-stage section)
     b, c, _tl = mri_exp_approx(b0_neg, nbins, L, t_ms)
     N = (Nx, Ny, Nz)
     c = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)

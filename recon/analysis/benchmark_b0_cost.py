@@ -8,7 +8,7 @@ GatheredSense operator only.
 
 Uses synthetic (random) smaps/omega/b0map_hz/echo_times -- cost here depends
 only on tensor shapes (FFT size, sample count K, L), not on real scan
-content, matching recon/sweep_time_segments.py's own reasoning for using
+content, matching recon/analysis/sweep_time_segments.py's own reasoning for using
 synthetic data.
 
 Reports, for each swept L:
@@ -25,7 +25,7 @@ Reports, for each swept L:
     the fix for)
 
 Usage (from repo root, .venv-recon):
-    .venv-recon/bin/python -m recon.benchmark_b0_cost
+    .venv-recon/bin/python -m recon.analysis.benchmark_b0_cost
 """
 
 import time

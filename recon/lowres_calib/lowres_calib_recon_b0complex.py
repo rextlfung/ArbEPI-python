@@ -1,4 +1,4 @@
-"""Generalized-complex-field-map variant of recon/lowres_calib_recon_b0.py:
+"""Generalized-complex-field-map variant of recon/lowres_calib/lowres_calib_recon_b0.py:
 same fully-sampled calibration region, same adjoint-only philosophy, but
 the time-segmented correction now accounts for a COMPLEX field combining
 off-resonance and T2* decay, generalizing the real-only Δf(r) (Hz) that
@@ -79,7 +79,7 @@ same dual-echo deGRE data already used for Δf(r) -- see that module's
 docstring.
 
 Usage (from repo root, .venv-recon):
-    .venv-recon/bin/python -m recon.lowres_calib_recon_b0complex <datdir> \
+    .venv-recon/bin/python -m recon.lowres_calib.lowres_calib_recon_b0complex <datdir> \
         [--seqname ArbEPI] [--device cuda]
 """
 
@@ -100,7 +100,11 @@ from preprocessing.matio import read_mat
 from preprocessing.nifti_io import save_recon_nifti
 from preprocessing.r2star_map import estimate_r2star_map_epi_grid
 from recon.hdf5_chunked_io import read_frames_cropped
-from recon.lowres_calib_recon_b0 import compute_calib_mask, gather_calib_ksp, native_calib_grid
+from recon.lowres_calib.lowres_calib_recon_b0 import (
+    compute_calib_mask,
+    gather_calib_ksp,
+    native_calib_grid,
+)
 from recon.operators_b0 import GatheredSenseB0, _check_b_weight_row_sums
 from recon.reconstruct import _load_array
 

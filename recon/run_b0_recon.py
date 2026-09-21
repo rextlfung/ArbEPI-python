@@ -1,8 +1,8 @@
 """One-off driver: reconstruct real acquisitions with full time-segmented
 B0 correction (recon/operators_b0.py), replicating the existing G+L
 (multi-scale) config already validated against ../mslr-recon
-(recon/validate_against_mslr.py) for the *uncorrected* case, and saving
-results under <datdir>/recon/mslr_b0/G+L_L<L_b0>/ (recon/save_result.py) --
+(recon/analysis/validate_against_mslr.py) for the *uncorrected* case, and saving
+results under <datdir>/recon/mslr_b0/G+L_L<L_b0>/ (recon/reconstruct.py) --
 one directory per L (matches the convention already on disk from the
 L=6/10/16 runs made during the sweep below).
 
@@ -15,7 +15,7 @@ estimated from the same dual-echo deGRE data already used for the B0 map
 (preprocessing/r2star_map.py's two-point log-ratio) and referenced to the
 nominal-TE echo's acquisition time (scan_info.mat's
 schedules[0,0,(ETL-1)//2,2] -- the same value
-recon/lowres_calib_recon_b0complex.py reads, read the same way here rather
+recon/lowres_calib/lowres_calib_recon_b0complex.py reads, read the same way here rather
 than re-derived). Output moves to <datdir>/recon/mslr_b0complex/G+L_L<L_b0>/
 so a --r2star run never collides with a plain B0-only run at the same L.
 
@@ -27,7 +27,7 @@ operators_b0.py), so it's measured here via power iteration
 per-dataset smaps/omega/b0map/echo_times rather than assumed.
 
 L (segment count) defaults to 32 -- see operators_b0.py's module docstring
-for the real-scale sweep (recon/sweep_time_segments.py) that settled it;
+for the real-scale sweep (recon/analysis/sweep_time_segments.py) that settled it;
 --L still lets it be overridden per run without a code change.
 
 Usage (from repo root, .venv-recon):
@@ -47,10 +47,15 @@ import torch
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
 from preprocessing.matio import read_mat
 from preprocessing.r2star_map import estimate_r2star_map_epi_grid
+from recon.analysis.validate_against_mslr import _read_julia_mat
 from recon.operators_b0 import build_encoding_operator_b0, estimate_spectral_norm
-from recon.reconstruct import _load_array, _load_echo_times, _load_normalized_smaps, run_recon
-from recon.save_result import save_result
-from recon.validate_against_mslr import _read_julia_mat
+from recon.reconstruct import (
+    _load_array,
+    _load_echo_times,
+    _load_normalized_smaps,
+    run_recon,
+    save_result,
+)
 
 
 def _load_omega(fn_ksp: str, Nx: int) -> np.ndarray:
@@ -86,7 +91,7 @@ def _nominal_te_s(scan_info_path: str, etl: int) -> float:
     excitation), frame/shot-invariant by construction (see CLAUDE.md's
     mask2epi_radial paragraph) -- read directly from scan_info.mat rather
     than re-derived, matching
-    recon/lowres_calib_recon_b0complex.py's own nominal_te_s on the
+    recon/lowres_calib/lowres_calib_recon_b0complex.py's own nominal_te_s on the
     worktree-lowres-calib-recon branch."""
     schedules = read_mat(scan_info_path, ["schedules"])["schedules"]  # (Nframes,Nshots,ETL,3)
     return float(schedules[0, 0, (etl - 1) // 2, 2])

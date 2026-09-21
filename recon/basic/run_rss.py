@@ -11,7 +11,7 @@ import numpy as np
 
 from preprocessing.config import PreprocessingConfig, load_config, load_seq_params, set_seq_paths
 from preprocessing.nifti_io import save_recon_nifti
-from recon.recon_frames import recon_frames
+from recon.basic.recon_frames import recon_frames
 
 
 def _ift3(d: np.ndarray) -> np.ndarray:
