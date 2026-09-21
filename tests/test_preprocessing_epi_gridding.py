@@ -140,3 +140,41 @@ def test_rampsampepi2cart_recovers_object_under_real_pope_readout_trajectory(tmp
         img_n = np.abs(img) / np.abs(img).max()
         rel_err = np.linalg.norm(img_n - true_n) / np.linalg.norm(true_n)
         assert rel_err < 0.15, f'echo {e}: relative L2 image error {rel_err:.4f} too high'
+
+
+def test_rampsamp2cart_absolute_scale_matches_ortho_fft_for_uniform_kx():
+    """Regression test for the 2026-09-21 absolute-scale fix (see module
+    docstring's "Absolute-scale fix" for the derivation from reconecho.m).
+    A uniform (uniformly-spaced) kx degenerates density compensation to a
+    constant (dcf ~= 1 everywhere), isolating the NUFFT/FFT normalization
+    gap this fix addresses from any trajectory-dependent density-
+    compensation effects -- this is deliberately the *cleanest* case, not
+    a claim that DC effects don't also matter for a real ramp trajectory.
+
+    Uses a smooth, non-adversarial test object (this file's own _object
+    helper) rather than white noise -- a fully random signal is close to
+    worst-case for NUFFT interpolation accuracy and produces large,
+    signal-dependent per-sample errors unrelated to the overall scale
+    factor being tested here (confirmed during this fix's investigation:
+    a white-noise probe gave wildly inconsistent per-sample ratios on a
+    real ramp trajectory, while smooth objects and uniform-kx probes both
+    give a clean, tight, nx-independent scale factor)."""
+    for nx in [32, 64, 128]:
+        fov_cm = 20.0
+        res = fov_cm / nx
+        kmax = 1 / (2 * res)
+        kx = np.linspace(-kmax, kmax, nx, endpoint=False)  # uniform -> dcf ~= 1
+        coord = (kx * fov_cm)[:, None]
+
+        x_true = _object(nx).astype(complex)
+        dr = sigpy.nufft(x_true, coord)
+        dc = rampsamp2cart(dr[:, None], kx, nx, fov_cm)[:, 0]
+
+        k_ref = np.fft.fftshift(np.fft.fft(np.fft.fftshift(x_true), norm='ortho'))
+        ratio = np.abs(dc) / np.maximum(np.abs(k_ref), 1e-12)
+        # only compare where k_ref has meaningful energy (avoid dividing by
+        # near-zero reference values at frequencies _object has no content)
+        significant = np.abs(k_ref) > 0.05 * np.abs(k_ref).max()
+        assert significant.sum() > nx // 4
+        median_ratio = np.median(ratio[significant])
+        assert abs(median_ratio - 1.0) < 0.1, f'nx={nx}: median scale ratio {median_ratio:.4f}, expected ~1.0'
