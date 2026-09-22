@@ -67,6 +67,15 @@ class PreprocessingConfig:
     # SNR; either echo works, see sequences/deGRE.py's module docstring).
     gre_echo_idx: int = 0
 
+    # Forwarded to process_smaps' resize_to_epi_grid call (STEP 3). Needed
+    # whenever this sequence's own EPI z-FOV exceeds the (fixed) deGRE
+    # z-FOV -- e.g. a resolution whose Nz*fov_z doesn't evenly divide the
+    # deGRE slab thickness, which resize_to_epi_grid otherwise rejects
+    # outright (see grid_resize.py's docstring). run_b0map.py takes this
+    # as its own function parameter rather than a cfg field, since Stage 2
+    # B0 mapping is invoked standalone, not via this cfg's batch loop.
+    zero_pad_z: bool = False
+
     # sigpy wavelet+TV regularized recon / CG-SENSE
     lamb_l1: float = 0.005
     lamb_tv: float = 0.005
