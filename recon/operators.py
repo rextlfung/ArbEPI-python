@@ -112,6 +112,7 @@ import math
 import warnings
 from typing import Callable
 
+import numpy as np
 import torch
 from mirtorch.linear import BlockDiagonal
 from mirtorch.linear.linearmaps import LinearMap
@@ -188,7 +189,12 @@ def build_encoding_operator(smaps: torch.Tensor, omega: torch.Tensor) -> BlockDi
 def gather_ksp(ksp0: torch.Tensor, A: BlockDiagonal) -> torch.Tensor:
     """ksp0: (Nx,Ny,Nz,Nc,Nt) dense zero-filled k-space (this repo's own
     preprocessing/ output layout). Returns (K,Nc,Nt), gathered with each
-    frame's own operator so it lines up exactly with A.apply's output."""
+    frame's own operator so it lines up exactly with A.apply's output.
+
+    Requires ksp0 already fully materialized (dense, every frame) --
+    fine for a small grid, but see load_and_gather_ksp below for why this
+    is unsafe to call after a whole-dataset .to(device) at this repo's
+    real large-grid scale."""
     Nt = ksp0.shape[-1]
     Nc = ksp0.shape[3]
     K = A.A[0].idx.numel()
@@ -196,6 +202,41 @@ def gather_ksp(ksp0: torch.Tensor, A: BlockDiagonal) -> torch.Tensor:
     for it in range(Nt):
         flat = ksp0[..., it].reshape(-1, Nc)  # spatial C-order flatten, matches GatheredSense
         out[:, :, it] = flat[A.A[it].idx, :]
+    return out
+
+
+def load_and_gather_ksp(fn_ksp: str, A: BlockDiagonal, device: torch.device) -> torch.Tensor:
+    """Memory-bounded alternative to `gather_ksp(torch.from_numpy(_load_array(...)).to(device), A)`:
+    reads and gathers one frame at a time directly from the HDF5 file
+    (one chunk each, per preprocessing/preprocess.py's one-frame-per-chunk
+    convention), so peak memory is bounded to a single frame's full dense
+    (Nx,Ny,Nz,Nc) volume rather than the whole (Nx,Ny,Nz,Nc,Nt) dataset.
+
+    Real numbers this matters for (2026-09-22, this repo's own real
+    4_93.5x_0.8mm dataset, Nx,Ny,Nz,Nc,Nt=270,270,180,32,60): the whole-
+    dataset load needs ~188GB (confirmed by a real torch.cuda.OutOfMemoryError
+    against a 47GB GPU trying exactly that -- see recon/hdf5_chunked_io.py's
+    module docstring for the matching ~201GB/~3.4GB numbers it already
+    documents for lowres_calib.py's own spatial-crop version of this same
+    bounding technique); one frame is ~3.1GB, comfortably fine.
+
+    A must already be built (from smaps/omega alone, not ksp0) before
+    calling this -- callers should get Nx/Ny/Nz/Nc/Nt from smaps' own
+    shape plus a cheap HDF5 shape peek instead of from a loaded ksp0, so
+    the operator-build order doesn't depend on ever loading the dense
+    array (see run_recon's/main_run's/run_cgsense_b0's own reordering)."""
+    import h5py
+
+    Nt = len(A.A)
+    Nc = A.A[0].Nc
+    K = A.A[0].idx.numel()
+    out = torch.empty(K, Nc, Nt, dtype=torch.complex64, device=device)
+    with h5py.File(fn_ksp, "r") as f:
+        d = f["ksp_epi_zf"]
+        for it in range(Nt):
+            frame = torch.from_numpy(np.asarray(d[..., it]).astype(np.complex64)).to(device)
+            flat = frame.reshape(-1, Nc)  # spatial C-order flatten, matches GatheredSense
+            out[:, :, it] = flat[A.A[it].idx, :]
     return out
 
 def demodulate_smaps(smaps: torch.Tensor, b0map_hz: torch.Tensor, te_s: float) -> torch.Tensor:

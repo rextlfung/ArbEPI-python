@@ -185,7 +185,7 @@ from recon.operators import (
     build_encoding_operator,
     build_encoding_operator_b0,
     estimate_spectral_norm,
-    gather_ksp,
+    load_and_gather_ksp,
 )
 
 
@@ -605,14 +605,14 @@ def run_cgsense_b0(
     Nx, Ny, Nz, Nvc = smaps.shape
     print(f'  Sensitivity maps: {tuple(smaps.shape)}')
 
-    print('Loading k-space...')
-    ksp0 = torch.from_numpy(_load_array(fn_ksp, 'ksp_epi_zf').astype(np.complex64)).to(device_t)
-    Nx_, Ny_, Nz_, Nvc_, Nt = ksp0.shape
-    assert (Nx_, Ny_, Nz_, Nvc_) == (Nx, Ny, Nz, Nvc), (
-        f'smaps shape {(Nx, Ny, Nz, Nvc)} does not match k-space dims {(Nx_, Ny_, Nz_, Nvc_)}'
+    with h5py.File(fn_ksp, 'r') as f:
+        ksp_shape = f['ksp_epi_zf'].shape  # cheap metadata peek, no data read
+    assert ksp_shape == (Nx, Ny, Nz, Nvc, ksp_shape[-1]), (
+        f'smaps shape {(Nx, Ny, Nz, Nvc)} does not match k-space dims {ksp_shape[:4]}'
     )
+    Nt = ksp_shape[-1]
 
-    omega = _load_omega(fn_ksp, Nx, Ny, Nz, Nt, ksp0)
+    omega = _load_omega(fn_ksp, Nx, Ny, Nz, Nt, device_t)
     R = (Nx * Ny * Nz) / omega[:, :, :, 0].sum().item()
     print(f'Acceleration factor R ~ {R:.2f}')
 
@@ -643,8 +643,8 @@ def run_cgsense_b0(
         A = build_encoding_operator(smaps_chw, omega)
         label = 'uncorrected'
 
-    ksp = gather_ksp(ksp0, A)  # (K,Nc,Nt)
-    del ksp0
+    print('Loading k-space (gathered per frame, never materializing the dense array)...')
+    ksp = load_and_gather_ksp(fn_ksp, A, device_t)  # (K,Nc,Nt)
     if device_t.type == 'cuda':
         torch.cuda.empty_cache()
 

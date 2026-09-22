@@ -72,7 +72,7 @@ from recon.operators import (
     build_encoding_operator,
     build_encoding_operator_b0,
     estimate_spectral_norm,
-    gather_ksp,
+    load_and_gather_ksp,
 )
 
 
@@ -108,7 +108,7 @@ def _load_array(fn: str, key: str) -> np.ndarray:
 
 
 def _load_omega(
-    fn_ksp: str, Nx: int, Ny: int, Nz: int, Nt: int, ksp0: torch.Tensor
+    fn_ksp: str, Nx: int, Ny: int, Nz: int, Nt: int, device: torch.device
 ) -> torch.Tensor:
     """(Nx,Ny,Nz,Nt) sampling mask, broadcast across the readout axis
     (kx doesn't affect which (ky,kz) locations were sampled).
@@ -122,12 +122,17 @@ def _load_omega(
     consistency check can't catch it either -- so that check is only worth
     doing in the fallback branch below, where it's actually load-bearing.
     Falls back to the `!= 0` derivation, logged, for recon files written
-    before 'omegas' existed.
+    before 'omegas' existed -- that fallback loads the whole dense ksp0
+    itself (there's no way around it, needing every coil's exact-zero
+    pattern), unlike the normal (has_omegas) path, which takes only
+    `device` and never touches ksp_epi_zf at all so callers can build the
+    encoding operator (and therefore load_and_gather_ksp's memory-bounded
+    per-frame path) before ever loading real k-space data.
     """
     with h5py.File(fn_ksp, "r") as f:
         has_omegas = "omegas" in f
         if has_omegas:
-            omegas_yzt = torch.from_numpy(np.asarray(f["omegas"][()])).to(ksp0.device)
+            omegas_yzt = torch.from_numpy(np.asarray(f["omegas"][()])).to(device)
     if has_omegas:
         assert tuple(omegas_yzt.shape) == (Ny, Nz, Nt), (
             f"omegas shape {tuple(omegas_yzt.shape)} doesn't match k-space dims ({Ny},{Nz},{Nt})"
@@ -138,6 +143,7 @@ def _load_omega(
         f"  '{fn_ksp}' has no 'omegas' dataset (written before preprocess.py added it) -- "
         "falling back to inferring the sampling mask from exact-zero k-space values."
     )
+    ksp0 = torch.from_numpy(_load_array(fn_ksp, "ksp_epi_zf").astype(np.complex64)).to(device)
     omega = ksp0[:, :, :, 0, :] != 0
     for ic in range(1, ksp0.shape[3]):
         assert torch.equal(omega, ksp0[:, :, :, ic, :] != 0), f"Coil {ic} has a differing mask"
@@ -435,15 +441,16 @@ def run_recon(
     print("Loading sensitivity maps...")
     smaps, smaps_chw = _load_normalized_smaps(fn_smaps, device)
     print(f"  Sensitivity maps: {tuple(smaps.shape)}")
+    Nx, Ny, Nz, Nvc = smaps.shape
 
-    print("Loading k-space...")
-    ksp0 = torch.from_numpy(_load_array(fn_ksp, "ksp_epi_zf").astype(np.complex64)).to(device)
-    Nx, Ny, Nz, Nvc, Nt = ksp0.shape
-    assert tuple(smaps.shape) == (Nx, Ny, Nz, Nvc), (
-        f"smaps shape {tuple(smaps.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz},{Nvc})"
+    with h5py.File(fn_ksp, "r") as f:
+        ksp_shape = f["ksp_epi_zf"].shape  # cheap metadata peek, no data read
+    assert ksp_shape == (Nx, Ny, Nz, Nvc, ksp_shape[-1]), (
+        f"smaps shape {tuple(smaps.shape)} doesn't match k-space dims {ksp_shape[:4]}"
     )
+    Nt = ksp_shape[-1]
 
-    omega = _load_omega(fn_ksp, Nx, Ny, Nz, Nt, ksp0)
+    omega = _load_omega(fn_ksp, Nx, Ny, Nz, Nt, device)
     R = (Nx * Ny * Nz) / omega[:, :, :, 0].sum().item()
     print(f"Acceleration factor R ~ {R:.2f}")
     counts = omega.sum(dim=(0, 1, 2))
@@ -488,12 +495,12 @@ def run_recon(
         print(f"    sigma1A (B0-corrected) = {sigma1A:.6f}")
         del x0
 
-    ksp = gather_ksp(ksp0, A)  # (K,Nc,Nt) -- see operators.py for why gathered, not dense
-    del ksp0
+    print("Loading k-space (gathered per frame, never materializing the dense array)...")
+    ksp = load_and_gather_ksp(fn_ksp, A, device)  # (K,Nc,Nt)
     if device.type == "cuda":
         torch.cuda.empty_cache()
         free_gb, total_gb = (x / 1e9 for x in torch.cuda.mem_get_info())
-        print(f"  VRAM free after freeing dense k-space: {free_gb:.2f} / {total_gb:.2f} GB")
+        print(f"  VRAM free after loading gathered k-space: {free_gb:.2f} / {total_gb:.2f} GB")
 
     # See normalize_noise's docstring above: the k-space-side factor is not
     # measured from real (structured-content-contaminated) acquired data --
