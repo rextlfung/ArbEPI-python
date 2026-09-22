@@ -349,7 +349,21 @@ def main_mslr_local(
     L_b0: int = 32,
     nbins_b0: int = 128,
     lambda_global: float | None = None,
+    r2star: bool = False,
+    zero_pad_z: bool = False,
 ) -> None:
+    """r2star: layer T2*/T1 amplitude-decay correction on top of the B0
+    phase correction (see run_cgsense_b0's docstring for the same pattern
+    -- R2* estimated from the dual-echo deGRE data, referenced to the
+    nominal-TE echo's acquisition time). Requires b0_correct=True. Output
+    moves to mslr_local_b0complex/ so a --r2star run never collides with a
+    plain B0-only run.
+
+    zero_pad_z: forwarded to estimate_r2star_map_epi_grid's deGRE-grid ->
+    EPI-grid resize (only relevant with r2star=True) -- set True when this
+    seqname's own z-FOV exceeds deGRE's fixed z-FOV (e.g. 1_1x_5.4mm's
+    145.8mm vs. deGRE's 144mm)."""
+    assert b0_correct or not r2star, 'main_mslr_local: r2star requires b0_correct=True'
     device_t = torch.device(device)
     recon_dir = os.path.join(datdir, 'recon')
     fn_ksp = os.path.join(recon_dir, f'{seqname}_epi_zf.h5')
@@ -381,14 +395,24 @@ def main_mslr_local(
         lambda_global = float(R)
     print(f'  Acceleration factor R ~ {R:.2f}  ->  lambda_global = {lambda_global:.4f}')
 
-    corrected_label = 'B0-corrected' if b0_correct else 'plain (uncorrected)'
+    corrected_label = 'B0+R2*-corrected' if r2star else ('B0-corrected' if b0_correct else 'plain (uncorrected)')
     print(f'Estimating sigma1(A) for the {corrected_label} operator via power iteration...')
+    r2star_map, t_ref_s = None, 0.0
     if b0_correct:
         with h5py.File(fn_b0map, 'r') as f:
             b0map_hz = torch.from_numpy(f['b0map_hz'][()].astype(np.float32)).to(device_t)
         echo_times_yz = _load_echo_times(fn_ksp, device_t)
+        if r2star:
+            t_ref_s = _nominal_te_s(paths.scan_info, sp.ETL)
+            print(f'  Estimating R2* map from dual-echo deGRE data (TE_nominal={t_ref_s * 1000:.3f} ms)...')
+            r2star_map = torch.from_numpy(
+                estimate_r2star_map_epi_grid(
+                    datdir, seqname, sp.fov_degre, sp.fov, tuple(smaps.shape[:3]), zero_pad_z=zero_pad_z,
+                )
+            ).to(device_t)
         A = build_encoding_operator_b0(
             smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0,
+            r2star_map=r2star_map, t_ref_s=t_ref_s,
         )
         del b0map_hz, echo_times_yz
     else:
@@ -402,7 +426,13 @@ def main_mslr_local(
     if device_t.type == 'cuda':
         torch.cuda.empty_cache()
 
-    out_dir = os.path.join(recon_dir, 'mslr_local_b0' if b0_correct else 'mslr_local')
+    if r2star:
+        out_subdir = 'mslr_local_b0complex'
+    elif b0_correct:
+        out_subdir = 'mslr_local_b0'
+    else:
+        out_subdir = 'mslr_local'
+    out_dir = os.path.join(recon_dir, out_subdir)
     os.makedirs(out_dir, exist_ok=True)
 
     print(f'\nRunning {corrected_label} local-low-rank reconstruction for {seqname} '
@@ -418,6 +448,8 @@ def main_mslr_local(
         fn_b0map=fn_b0map,
         L_b0=L_b0,
         nbins_b0=nbins_b0,
+        r2star_map=r2star_map,
+        t_ref_s=t_ref_s,
     )
 
     fn_out = os.path.join(out_dir, f'{seqname}_recon')
@@ -426,6 +458,7 @@ def main_mslr_local(
         patch_size=list(patch_size), stride=list(stride),
         b0_corrected=b0_correct, L_b0=L_b0 if b0_correct else None,
         nbins_b0=nbins_b0 if b0_correct else None,
+        r2star_corrected=r2star,
     )
     print(f'Wrote {fn_out}.h5 + .nii.gz + .json')
 
@@ -441,10 +474,19 @@ def _cli_mslr_local() -> None:
         '--lambda-global', type=float, default=None,
         help='override the default lambda_global=R (this dataset\'s own acceleration factor)',
     )
+    parser.add_argument('--r2star', action='store_true')
+    parser.add_argument(
+        '--zero-pad-z', action='store_true',
+        help='(with --r2star) zero-pad the deGRE-grid R2* estimate where the EPI z-FOV exceeds '
+             "deGRE's own -- see estimate_r2star_map_epi_grid's docstring",
+    )
     args = parser.parse_args()
+    if args.r2star and args.no_b0:
+        parser.error('--r2star requires b0 correction (omit --no-b0)')
     main_mslr_local(
         args.datdir, args.seqname, device=args.device, b0_correct=not args.no_b0,
         L_b0=args.L_b0, nbins_b0=args.nbins_b0, lambda_global=args.lambda_global,
+        r2star=args.r2star, zero_pad_z=args.zero_pad_z,
     )
 
 def cg_sense_solve(

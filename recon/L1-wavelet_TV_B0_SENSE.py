@@ -172,8 +172,10 @@ from mirtorch.linear.linearmaps import LinearMap
 
 from preprocessing.config import load_config, load_seq_params, set_seq_paths
 from preprocessing.nifti_io import save_recon_nifti
+from preprocessing.r2star_map import estimate_r2star_map_epi_grid
 from recon.mslr import _load_array, _load_echo_times, _load_normalized_smaps, _load_omega
 from recon.operators import build_encoding_operator_b0, check_operator_unitary, gather_ksp
+from recon.run_recon import _nominal_te_s
 
 
 def _to_torch(x: np.ndarray, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
@@ -278,6 +280,7 @@ def main_run(
     wave_name: str = 'db4', max_power_iter: int = 30,
     L_b0: int = 32, nbins_b0: int = 128, device: str = 'cuda',
     frames: list[int] | None = None, normalize_operator: bool = True,
+    r2star: bool = False, zero_pad_z: bool = False,
 ) -> None:
     """frames: reconstruct only these frame indices (for quick validation on
     real data before committing to a full multi-hour batch); None
@@ -287,7 +290,18 @@ def main_run(
     solving (see the code below for the derivation) so lamb_l1/lamb_tv=0.005
     -- sigpy_recon.py's own defaults -- carry their original meaning; pass
     False to use the raw (non-unitary) operator instead, e.g. to reproduce
-    an earlier un-normalized run for comparison."""
+    an earlier un-normalized run for comparison.
+
+    r2star: layer T2*/T1 amplitude-decay correction on top of the B0 phase
+    correction (see recon/run_recon.py's run_cgsense_b0 for the same
+    pattern -- R2* estimated from the dual-echo deGRE data, referenced to
+    the nominal-TE echo's acquisition time). Output moves to cs_b0complex/
+    so a --r2star run never collides with a plain B0-only run.
+
+    zero_pad_z: forwarded to estimate_r2star_map_epi_grid's deGRE-grid ->
+    EPI-grid resize (only relevant with r2star=True) -- set True when this
+    seqname's own z-FOV exceeds deGRE's fixed z-FOV (e.g. 1_1x_5.4mm's
+    145.8mm vs. deGRE's 144mm)."""
     device_t = torch.device(device)
     recon_dir = os.path.join(datdir, 'recon')
     fn_ksp = os.path.join(recon_dir, f'{seqname}_epi_zf.h5')
@@ -317,9 +331,21 @@ def main_run(
     b0map_hz = torch.from_numpy(_load_array(fn_b0map, 'b0map_hz').astype(np.float32)).to(device_t)
     echo_times_yz = _load_echo_times(fn_ksp, device_t)
 
-    print('Building B0-corrected encoding operator (shared across frames)...')
+    r2star_map, t_ref_s = None, 0.0
+    if r2star:
+        t_ref_s = _nominal_te_s(paths.scan_info, sp_params.ETL)
+        print(f'  Estimating R2* map from dual-echo deGRE data (TE_nominal={t_ref_s * 1000:.3f} ms)...')
+        r2star_map = torch.from_numpy(
+            estimate_r2star_map_epi_grid(
+                datdir, seqname, sp_params.fov_degre, sp_params.fov, (Nx, Ny, Nz), zero_pad_z=zero_pad_z,
+            )
+        ).to(device_t)
+
+    print(f'Building {"B0+R2*-corrected" if r2star else "B0-corrected"} encoding operator '
+          '(shared across frames)...')
     A_full = build_encoding_operator_b0(
         smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0,
+        r2star_map=r2star_map, t_ref_s=t_ref_s,
     )
     # One check for the whole batch (not per frame -- see L1-wavelet_TV_B0_SENSE.py's
     # module docstring): lamb_l1/lamb_tv above are tuned assuming a unitary
@@ -368,7 +394,7 @@ def main_run(
     runtime_s = time.time() - t_start
     print(f'Wall-clock: {runtime_s:.1f}s ({runtime_s / len(frame_idxs):.1f}s/frame)')
 
-    out_dir = os.path.join(recon_dir, 'cs_b0')
+    out_dir = os.path.join(recon_dir, 'cs_b0complex' if r2star else 'cs_b0')
     os.makedirs(out_dir, exist_ok=True)
     frames_tag = 'all' if frames is None else '-'.join(map(str, frame_idxs))
     fn_out = os.path.join(out_dir, f'{seqname}_recon_frames{frames_tag}')
@@ -378,12 +404,13 @@ def main_run(
         f.attrs['R'] = R
         f.attrs['runtime_s'] = runtime_s
         f.attrs['frame_idxs'] = np.asarray(frame_idxs)
+        f.attrs['r2star_corrected'] = r2star
     print(f'Wrote {fn_out}.h5')
 
     save_recon_nifti(
         fn_out, img, fov=sp_params.fov, seqname=seqname, R=R, runtime_s=runtime_s,
         lamb_l1=lamb_l1, lamb_tv=lamb_tv, num_iter=num_iter, wave_name=wave_name,
-        L_b0=L_b0, nbins_b0=nbins_b0, frame_idxs=frame_idxs,
+        L_b0=L_b0, nbins_b0=nbins_b0, frame_idxs=frame_idxs, r2star_corrected=r2star,
     )
     print(f'Wrote {fn_out}.nii.gz + .json')
 
@@ -408,13 +435,19 @@ def _cli_run() -> None:
         '--no-normalize', action='store_true',
         help='use the raw (non-unitary) operator instead of rescaling by 1/sigma1(A)',
     )
+    parser.add_argument('--r2star', action='store_true')
+    parser.add_argument(
+        '--zero-pad-z', action='store_true',
+        help='(with --r2star) zero-pad the deGRE-grid R2* estimate where the EPI z-FOV exceeds '
+             "deGRE's own -- see estimate_r2star_map_epi_grid's docstring",
+    )
     args = parser.parse_args()
     frames = [int(x) for x in args.frames.split(',')] if args.frames else None
     main_run(
         args.datdir, args.seqname, lamb_l1=args.lamb_l1, lamb_tv=args.lamb_tv,
         num_iter=args.num_iter, wave_name=args.wave_name, max_power_iter=args.max_power_iter,
         L_b0=args.L_b0, nbins_b0=args.nbins_b0, device=args.device, frames=frames,
-        normalize_operator=not args.no_normalize,
+        normalize_operator=not args.no_normalize, r2star=args.r2star, zero_pad_z=args.zero_pad_z,
     )
 
 
