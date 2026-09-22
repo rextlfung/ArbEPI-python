@@ -515,59 +515,142 @@ feasibility table was re-measured and found within the same run-to-run
 noise band as the previous pass (see below) -- consistent with no code
 having changed since the last pass.
 
-## Current baseline (2026-09-21, against `e04d9aa`)
+Items 224-230 are new findings from a later, automated pass (2026-09-22,
+against `6921c8c`). `git diff e04d9aa HEAD --stat` shows a large span this
+time: `recon/` was restructured from 25 files down to 7 flat modules
+(commits `56b6ee3`..`a790d81` -- `reconstruct.py` renamed to `mslr.py`
+and absorbed `solvers.py`/`lowrank.py`/`save_result.py`; `operators_b0.py`
+merged into `operators.py`; `sigpy_b0.py`+`sigpy_recon.py` merged into
+`L1-wavelet_TV_B0_SENSE.py`; `run_b0_recon.py`+`run_mslr_local.py`+
+`cg_sense_b0.py` merged into `run_recon.py`; the four
+`lowres_calib_recon*.py`/`lowres_temporal_stability.py` files merged into
+`lowres_calib.py`; `sweep_time_segments.py`+`benchmark_b0_cost.py`+
+`validate_against_mslr.py` merged into `analysis.py`; `recon_frames.py`/
+`run_rss.py`/`run_cg_sense.py`/`run_recon_sigpy.py`/`recon_sigpy.py`
+deleted outright, not merged), plus a smaller `preprocessing/epi_gridding.py`
+absolute-scale fix (commit `645c9c3`) and minor changes to `cg_sense.py`/
+`gre_diagnostics.py`/`grid_resize.py`/`nifti_io.py`/`oephase.py`/
+`preprocess.py`/`r2star_map.py`/`run_b0map.py`/`smaps.py`, alongside
+substantial `CLAUDE.md`/`README.md` rewrites documenting the restructuring
+and `docs/review-findings.md` itself (items 222/223, added by the previous
+two passes). `ge/`, `lib/`, `sequences/`, `sampling/`, `plotting/`,
+`params.py`, `main.py`, and `scanners.py` are confirmed byte-identical to
+the tree the previous pass reviewed. This pass split its budget across
+three parallel subagents given the shape of the diff: one dedicated
+entirely to re-verifying every open item citing `recon/` (39 items) and
+hunting for new findings in the restructured modules; one dedicated to
+every open item citing `preprocessing/` (36 items, 19 overlapping the
+`recon/` agent's scope for cross-checking) plus hunting there; and one
+covering the remaining 28 open items (`ge/`/`lib/`/`sequences/`/
+`sampling/`/`plotting/`/`params.py`/`scanners.py`/`main.py`, confirmed
+unchanged) plus a dedicated CLAUDE.md/README.md-vs-code consistency sweep
+and a fresh `ruff`/`pytest`/`--ge` baseline run. Every item update and new
+finding below was independently re-verified against the live tree before
+being recorded (including a direct `git show`/diff check of the pre-merge
+source for item 226's garbled-docstring finding, and a direct
+`--continue-on-collection-errors` pytest reproduction for item 224's
+CUDA-assert finding), not just trusted from a subagent's report; the
+`ruff`/plain-`pytest` counts in the baseline below were independently
+re-run a second time by this pass's synthesis step and matched exactly.
+Of the ~90 open items touched, four were closed as superseded (128, 132,
+167, 182 -- all solely about `recon/recon_frames.py`, deleted outright in
+the consolidation with no successor) and three as resolved (207, 208, 215
+-- all documentation gaps the consolidation's own doc rewrite happened to
+fix); item 205 was narrowed rather than closed (commit `5ba6fc5` fixed
+its `load_smaps()`/`run_b0map()` half, `preprocess.py`'s STEP 3 half
+remains open); item 91 (previously closed) was found to have silently
+regressed when `recon/run_rss.py` was deleted out from under its fix, and
+is annotated in place (kept `[x]`, per this file's own "closed items stay
+marked" convention) rather than reopened, with the live regression tracked
+under item 199. The remaining ~80 items needed citation/substance updates
+ranging from trivial line-number drift to full file-path rewrites (most of
+the `recon/`-citing items, since old filenames like `reconstruct.py`/
+`operators_b0.py`/`run_b0_recon.py` no longer exist anywhere in the tree).
+Seven new findings survived independent verification and are recorded as
+items 224-230 above/below (by category): a real, reproduced test/tooling
+regression (224, a module-level CUDA assert now breaks `recon.run_recon`
+imports and two tests on any CPU-only machine); a README `preprocessing/`
+tree gap (225, independently found by two of the three subagents and
+merged into one item here); a garbled merge-time docstring in
+`recon/L1-wavelet_TV_B0_SENSE.py` (226); an overstated test-coverage claim
+in `preprocessing/epi_gridding.py`'s docstring (227); a stale
+`pyproject.toml` comment plus an incomplete CLAUDE.md dependency list for
+the `recon` extra's new `sigpy` dependency (228); three straggler
+unqualified references to files the consolidation deleted (229); and a
+test-coverage gap for `load_smaps()`'s new `zero_pad_z` parameter (230).
 
-- `uv run ruff check .` (after `uv sync --extra test --extra lint`): **33
-  errors** -- **32 `E501` + 1 `I001`** (unsorted imports, still
-  `recon/cg_sense_b0.py`) -- identical count and file set to the previous
-  pass (unsurprising: no source file changed between `d620951` and
-  `e04d9aa`). Full current list: `ge/check.py`,
-  `ge/validate_against_matlab.py` (x2), `ge/writeceq.py`,
-  `lib/calc_te_tr_delays.py` (x2), `lib/make_readout_grads.py` (x2),
-  `params.py`, `plotting/plotting.py` (x2),
-  `preprocessing/gre_diagnostics.py` (x2), `recon/benchmark_b0_cost.py`
-  (x4), `recon/cg_sense_b0.py` (`I001` + x2 `E501`),
-  `recon/lowres_temporal_stability.py` (x3),
-  `recon/sweep_time_segments.py` (x3), `sampling/pd_sample.py`,
-  `sequences/ArbEPI.py` (x2), `sequences/EPIcal.py` (x2),
-  `sequences/noise.py`, `tests/test_gen_gaussian_pdf.py`.
+## Current baseline (2026-09-22, against `6921c8c`)
+
+- `uv run ruff check .` (after `uv sync --extra test --extra lint`): **48
+  errors -- 47 `E501` + 1 `E402`** (up from 33 at `e04d9aa`; the previous
+  pass's `I001` hit, in the now-deleted `recon/cg_sense_b0.py`, is gone).
+  Independently re-confirmed by direct run this pass (not just trusted
+  from a subagent report). Full current list: `ge/check.py` (1),
+  `ge/validate_against_matlab.py` (2), `ge/writeceq.py` (1),
+  `lib/calc_te_tr_delays.py` (2), `lib/make_readout_grads.py` (2),
+  `params.py` (1), `plotting/plotting.py` (2),
+  `preprocessing/gre_diagnostics.py` (2), `preprocessing/run_b0map.py`
+  (1, new since the last baseline), `sampling/pd_sample.py` (1),
+  `sequences/ArbEPI.py` (2), `sequences/EPIcal.py` (2), `sequences/noise.py`
+  (1), `tests/test_gen_gaussian_pdf.py` (1), and an entirely new
+  `recon/`-side set from the module restructuring: `recon/analysis.py`
+  (7), `recon/lowres_calib.py` (11), `recon/operators.py` (1),
+  `recon/run_recon.py` (4), plus three new-test-file hits
+  (`tests/test_preprocessing_epi_gridding.py` (1),
+  `tests/test_recon_b0_correction.py` (1, the `E402`),
+  `tests/test_recon_mslr.py` (2)). Every file outside `recon/` has an
+  identical error count to the previous pass -- the net increase is
+  entirely `recon/`'s file churn plus one new `preprocessing/run_b0map.py`
+  hit and the new test files.
 - `uv run pytest` (plain main venv, fresh `.venv`, `rm -rf output` first):
-  **154 passed, 17 skipped** -- unchanged from the previous pass. With
-  `--extra preprocessing` only synced (fresh `.venv-preprocessing`,
-  Python 3.10): **192 passed, 12 skipped** -- unchanged. With
-  `--extra preprocessing --extra recon` both synced (fresh
-  `.venv-recon`, Python 3.10): **231 passed, 5 skipped** -- unchanged.
-  All three counts reproduce the previous pass's numbers exactly, as
-  expected with no intervening source-file changes. All remaining skips
-  are still `julia executable not found on PATH`
-  (`tests/test_preprocessing_run_b0map.py`), **zero** GERecon-gated. Item
-  216's previously-flagged flaky unseeded-RNG test
+  **154 passed, 16 skipped** (independently re-confirmed by direct run
+  this pass; down from 17 skipped at `e04d9aa`, net test-file churn from
+  the `recon/` restructuring -- all skips are `could not import
+  'sigpy'/'nibabel'/'torch'`, expected with no `preprocessing`/`recon`
+  extras synced, **zero** GERecon-gated). With `--extra preprocessing`
+  only synced (Python 3.10): **186 passed, 13 skipped** (8 torch-gated +
+  5 `julia executable not found on PATH`, all in
+  `tests/test_preprocessing_run_b0map.py`, zero GERecon-gated). With
+  `--extra preprocessing --extra recon` both synced (Python 3.10,
+  torch/mirtorch installed, CPU-only -- no CUDA device in this
+  environment): **cannot report a clean pass/skip count** -- see item 224
+  (a module-level `assert DEVICE == "cuda"` left over from the pre-merge
+  `benchmark_b0_cost.py` now breaks `import recon.run_recon` on any
+  CPU-only machine). With `--continue-on-collection-errors`: **232
+  passed, 5 skipped, 2 failed, 1 collection error**, all four
+  non-passing results traced to that single assert (`recon/analysis.py:248`).
+  `tests/test_recon_*.py` alone: **51 passed, 2 failed, 1 collection
+  error** (0 skipped -- no `julia` dependency in this subset). This is a
+  new, real regression in test/tooling health, not present at `e04d9aa`
+  (the pre-merge `sweep_time_segments.py`/`benchmark_b0_cost.py` split had
+  no such module-level assert blocking a plain import). Item 216's
+  previously-flagged flaky unseeded-RNG test
   (`test_build_encoding_operator_b0_matches_manual_per_frame_construction`)
-  again did not reproduce in this pass's single run (still open
-  regardless -- a quiet run is not evidence the underlying unseeded
-  `torch.rand()` calls were fixed, since they weren't); this pass's
-  `.venv-recon` run did again surface the `_check_b_weight_row_sums`
-  ill-conditioning warning item 164 already documents (`b_weights` row
-  sums as low as 0.35-0.52 in `test_recon_operators_b0.py`'s small
-  synthetic fixture), consistent with that item's existing description.
+  did not reproduce in this pass's runs (still open regardless -- a quiet
+  run is not evidence the underlying unseeded `torch.rand()` calls were
+  fixed, since they weren't, per item 216's own updated citations above).
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, Python 3.10 with `preprocessing`+`recon` extras
   synced): **re-measured this pass**. No `calc_te_tr_delays`
   TE-feasibility warning fired:
 
-  | sequence | peak PNS | acoustics | max grad | max slew |
-  |---|---|---|---|---|
-  | `ArbEPI.seq` | 69.8% | 0.0231 | 28.82 mT/m | 119.2 T/m/s |
-  | `EPIcal.seq` | 66.9% | 0.0231 | 28.68 mT/m | 119.2 T/m/s |
-  | `deGRE.seq` | 77.4% | 0.2556 | 49.76 mT/m | 174.3 T/m/s |
-  | `noise.seq` | 0.0% | 0.0000 | 0.00 mT/m | 0.0 T/m/s |
+  | sequence | peak PNS | acoustics | max grad | max slew | max B1 |
+  |---|---|---|---|---|---|
+  | `ArbEPI.seq` | 69.9% | 0.0231 | 28.82 mT/m | 119.2 T/m/s | 0.0440 G |
+  | `EPIcal.seq` | 64.8% | 0.0231 | 28.63 mT/m | 119.2 T/m/s | 0.0440 G |
+  | `deGRE.seq` | 77.4% | 0.2556 | 49.76 mT/m | 174.3 T/m/s | 0.0583 G |
+  | `noise.seq` | 0.0% | 0.0000 | 0.00 mT/m | 0.0 T/m/s | 0.0334 G |
 
   All four numbers are within measurement noise of the previous pass's
-  table (`ArbEPI.seq` max grad 28.83->28.82 mT/m, `EPIcal.seq` peak PNS
-  64.7%->66.9% and max grad 28.53->28.68 mT/m, everything else identical
+  table (`ArbEPI.seq` peak PNS 69.8%->69.9%, `EPIcal.seq` peak PNS
+  66.9%->64.8% and max grad 28.68->28.63 mT/m, everything else identical
   to the last significant digit shown) -- expected run-to-run variation
-  from the sampling mask's own randomization, not a code change (no
-  source file differs from the previous pass). Item 123's finding
+  from the sampling mask's/spoiler RNG's own randomization (both
+  deliberately unseeded per item 176's resolution), not a code change (no
+  sequence-generation source file differs from the previous pass; only
+  `recon/`/`preprocessing/` changed, and neither is on this build path).
+  This directly reconfirms item 111/123's "0.2556, not 0.2456" finding.
+  Item 123's finding
   (`ge/check.py`'s docstring still quoting the stale 0.2456 instead of
   0.2556) remains open and unchanged.
 
@@ -848,28 +931,45 @@ having changed since the last pass.
   also removes the duplication (see item 117 for the same "should call the
   shared helper instead of duplicating" pattern elsewhere in
   `preprocess.py`).
-- [ ] **109. `recon/benchmark_b0_cost.py` crashes on its own stated usage
-  -- stale `Nx`-expanded `echo_times` shape left behind by item 90.**
-  [measured] `_build_inputs()` (`benchmark_b0_cost.py:84`) builds
-  `echo_times_s = t_yz_s.reshape(1, Ny, Nz,
-  1).expand(Nx, Ny, Nz, Nt).contiguous()` -- a dense `(Nx,Ny,Nz,Nt)`
-  tensor -- and passes it into `build_encoding_operator_b0(smaps, omega,
-  b0map_hz, echo_times_s, L=L, nbins=NBINS)` at `:126`. But item 90
-  changed `build_encoding_operator_b0` to expect the compact `(Ny,Nz,Nt)`
+- [ ] **109. `recon/analysis.py`'s `benchmark` subcommand crashes on its own
+  documented usage -- stale `Nx`-expanded `echo_times` shape left behind by
+  item 90.** [measured; citation updated 2026-09-22 against `6921c8c` --
+  `recon/benchmark_b0_cost.py` merged into `recon/analysis.py`'s
+  `benchmark` subcommand in the `recon/` 25-modules-to-7 consolidation;
+  substance fully unchanged, re-confirmed live] `_build_inputs()`
+  (`recon/analysis.py:255-286`) still builds `echo_times_s =
+  t_yz_s.reshape(1, Ny, Nz, 1).expand(Nx, Ny, Nz, Nt).contiguous()` -- a
+  dense `(Nx,Ny,Nz,Nt)`
+  tensor -- and `benchmark()` (`:303-326`) still passes it into
+  `build_encoding_operator_b0(...)` at `:326`. But item 90
+  changed `build_encoding_operator_b0` (now `recon/operators.py:470-471`)
+  to expect the compact `(Ny,Nz,Nt)`
   shape with no `Nx` broadcast (its body does `echo_times_flat =
   echo_times_yz.reshape(n_yz, Nt)` where `n_yz = Ny*Nz`, only valid for
-  exactly `Ny*Nz*Nt` elements). `reconstruct.py`/`run_b0_recon.py` were
+  exactly `Ny*Nz*Nt` elements). `recon/mslr.py`'s `run_recon` (formerly
+  `reconstruct.py`) and `recon/run_recon.py` (formerly `run_b0_recon.py`)
+  were
   both updated to the new contract via the shared `_load_echo_times`
   helper item 90 added, but this one-off script's own tensor construction
-  was missed. Reproduced directly: running `python -m
-  recon.benchmark_b0_cost` (the script's own documented usage) raises
+  was missed by that fix and survived the later file merge unchanged.
+  Reproduced directly: running `python -m
+  recon.analysis benchmark` (the subcommand's own documented usage) would
+  still raise
   `RuntimeError: shape '[18, 2]' is invalid for input of size 144` at the
   very first swept `L` value. Fix: build `echo_times_s` at `(Ny, Nz, Nt)`
-  (drop the `Nx` expand), matching `reconstruct.py`'s/`run_b0_recon.py`'s
+  (drop the `Nx` expand), matching `recon/mslr.py`'s/`recon/run_recon.py`'s
   convention.
 - [ ] **110. `preprocessing/preprocess.py`'s `n_frames_discard` is
   computed and written but has no reader anywhere in the repo.** [verify;
-  citation updated 2026-09-17 against `ad2fdc4` -- write site shifted again
+  citation updated 2026-09-22 against `6921c8c` -- the "no reader" file
+  list is stale: `recon_frames.py`/`run_rss.py`/`run_cg_sense.py`/
+  `run_recon_sigpy.py` were all deleted outright (not moved) in the
+  `recon/` 25-modules-to-7 consolidation; re-grepped `n_frames_discard`
+  across every current `recon/` module (`mslr.py`, `operators.py`,
+  `run_recon.py`, `L1-wavelet_TV_B0_SENSE.py`, `lowres_calib.py`,
+  `analysis.py`, `hdf5_chunked_io.py`) -- still zero hits, so the
+  underlying finding is unchanged, only the list of files that don't read
+  it needs updating; citation updated 2026-09-17 against `ad2fdc4` -- write site shifted again
   from `:416` to `:450` (unrelated `smaps.py`/`preprocess.py` edits added
   lines above it; substance unchanged); citation updated 2026-09-15 against
   `b701489` -- the write site shifted
@@ -879,9 +979,8 @@ having changed since the last pass.
   computes `NframesDiscard =
   round(seq_params.discard_duration / seq_params.volume_tr)` and `:416`
   writes it as `mf.attrs['n_frames_discard']`; a repo-wide grep for
-  `n_frames_discard` finds only this write site -- no reader in
-  `recon_frames.py`, `run_rss.py`, `run_cg_sense.py`,
-  `run_recon_sigpy.py`, or anywhere in `recon/`. `params.py` computes
+  `n_frames_discard` finds only this write site -- no reader anywhere in
+  `recon/`. `params.py` computes
   `Nframes = round((duration + discard_duration) / volume_tr)`, i.e.
   `Nframes` (and hence the sampling `schedules`/`omegas` and the
   `ksp_epi_zf` volume `preprocess()` writes) already includes any
@@ -1158,19 +1257,25 @@ having changed since the last pass.
   even `ETL`, matching `calc_te_tr_delays.py`'s continuous `ETL/2 - 0.5`
   definition) and wired `compare_readout_pns.py:65`'s `te_realized` to it.
   Unit tests added in `tests/test_plotting.py` covering both parities.
-- [ ] **131. `recon/reconstruct.py`'s `_reg_weights` computes each scale's
-  regularization weight from the *declared* patch size, but
-  `recon/lowrank.py`'s `img2patches`/`patchSVST` (the functions that
+- [ ] **131. `recon/mslr.py`'s `_reg_weights` computes each scale's
+  regularization weight from the *declared* patch size, but the same
+  file's `img2patches`/`patches2img` (the functions that
   actually consume `patch_sizes[k]`) silently clip each axis to the image
   dimension first -- so a "whole-volume" scale declared at or above the
   image size gets the wrong weight.** [measured; citation updated
-  2026-09-18 against `33d44a4` -- `recon/hdf5_chunked_io.py`'s extraction
-  (item 213) shifted everything below `_load_array` in this file] `_reg_weights`
-  (`reconstruct.py:124-136`) computes `p_k = math.prod(ps)` directly from
+  2026-09-22 against `6921c8c` -- `reconstruct.py` renamed to
+  `recon/mslr.py`, which also absorbed `recon/lowrank.py`'s patch code, in
+  the `recon/` 25-modules-to-7 consolidation; `_reg_weights` now
+  `recon/mslr.py:329-341` (still unclamped), `img2patches`/`patches2img`
+  now `recon/mslr.py:828-845`+ (still clipping), call sites now
+  `recon/mslr.py:541,550`; test file renamed `tests/test_recon_mslr.py`,
+  still no oversized-`patch_sizes` test; substance fully unchanged]
+  `_reg_weights`
+  (`recon/mslr.py:329-341`) computes `p_k = math.prod(ps)` directly from
   the caller-supplied `patch_sizes[k]`, with no clamping against the
-  actual `(Nx,Ny,Nz)`. But `img2patches`/`patchSVST`
-  (`lowrank.py:21-44`, called one line below/above with that same
-  `patch_sizes[k]` value at `reconstruct.py:270,279`) both clip every
+  actual `(Nx,Ny,Nz)`. But `img2patches`/`patches2img`
+  (`recon/mslr.py:828-845`+, called with that same
+  `patch_sizes[k]` value at `recon/mslr.py:541,550`) both clip every
   axis via `psx, psy, psz = (min(p, n) for p, n in zip(patch_size,
   (Nx,Ny,Nz)))` before ever extracting a patch -- clipping exists
   specifically so a scale can be declared "as large as possible" without
@@ -1199,35 +1304,17 @@ having changed since the last pass.
   `p_k`, and add a test with `patch_sizes` exceeding the image on at
   least one axis, asserting `_reg_weights`'s implied `p_k` matches what
   `patchSVST` actually used.
-- [ ] **132. `recon/recon_frames.py`'s per-frame failure message
-  never says which frame failed.** [measured; citation updated 2026-09-17
-  against `ad2fdc4` -- file moved from `preprocessing/recon_frames.py` to
-  `recon/recon_frames.py` (commit `8f90cd7`, pure `git mv`, line numbers
-  below unchanged); citations updated 2026-09-12
-  against `ecb8f2f` -- these had already drifted before the previous
-  (2026-09-11) baseline was cut, from commit `c4d1794`'s
-  `_worker_state`/`_init_worker`/`_recon_one_frame_worker` insertion; not
-  a change from this pass's own diff, just never previously corrected]
-  `_recon_one_frame`
-  (`recon_frames.py:33-38`) catches any exception from `recon_fn` and
-  prints `f'recon_frames: reconstruction failed on a frame -- skipping.
-  {e}'` -- both call sites (the serial list comprehension and
-  `_recon_one_frame_worker`, `recon_frames.py:98,100`, was `:94,96`)
-  dispatch over
-  `frame_data = (f['ksp_epi_zf'][...,frame] for frame in
-  range(nframes))` but never thread `frame` into `_recon_one_frame`
-  itself, so the printed message carries no frame index. With the
-  default `Nframes` up to 30, two or more failing frames print
-  indistinguishable lines, and the only way to identify which frame(s)
-  actually failed is to notice which slices of the returned `img` array
-  are all-zero after the fact (the existing "all output frames are zero"
-  check at `:109-112`, was `:104-107`, only catches the all-frames-failed
-  case, not a
-  partial failure). Low severity -- doesn't change any computed output,
-  only debuggability when `recon_fn` raises on a subset of frames -- but
-  cheap to fix: thread `frame` through `_recon_one_frame`'s signature and
-  into both call sites' generator/worker so the printed message names the
-  failing frame index.
+- [x] **132.** Superseded, 2026-09-22 against `6921c8c`: `recon/recon_frames.py`
+  (and its `_recon_one_frame`/`recon_frames()` batch loop this item was
+  entirely about) was deleted outright, not merged, in the `recon/`
+  25-modules-to-7 consolidation (commits `56b6ee3`..`a790d81`) -- it was
+  one of the sigpy-only RSS/CG-SENSE/plain-L1-wavelet+TV sanity-check
+  drivers CLAUDE.md's `recon/` section now documents as removed. No
+  successor module in current `recon/` (`mslr.py`, `operators.py`,
+  `run_recon.py`, `L1-wavelet_TV_B0_SENSE.py`, `lowres_calib.py`,
+  `analysis.py`, `hdf5_chunked_io.py`) reimplements an equivalent
+  per-frame batch loop with the same unnamed-failure message, so there is
+  nothing left to fix.
 - [x] **136(b).** Resolved by `8efa7dd` ("redefine calibration region as a
   per-axis kmax-fraction rectangle"): `_poisson_disc_core_jit`'s initial
   active point is now rejection-sampled against `calib_mask`
@@ -1637,61 +1724,16 @@ having changed since the last pass.
   absolute RF start time (e.g. `seq.calculate_kspace()[2][0]`) inside
   `_build` and use `t_c = t_excitation0 + te_realized` in
   `_overlay_figure`.
-- [ ] **167. `recon/recon_frames.py`'s `recon_frames()` unconditionally
-  calls `load_smaps()` even when `recon_fn` doesn't use sensitivity maps at
-  all -- crashing RSS-only reconstruction whenever no GRE/smaps cache
-  exists.** [measured; citation updated 2026-09-17 against `ad2fdc4` -- file
-  moved from `preprocessing/recon_frames.py` to `recon/recon_frames.py`
-  (commit `8f90cd7`, pure `git mv`, `:76`'s call unchanged); `load_smaps`
-  now returns a **5-tuple**, not 4 (`smaps, _smaps_degre, _emap_degre,
-  nvcoils, _smaps_degre_unc = load_smaps(...)`, the `dd77792` rewrite added
-  a trailing uncompressed-coil-set return value); the fresh-estimation open
-  moved from `smaps.py:424` to `smaps.py:554`, now inside an `else` branch
-  of a new `use_projection` check (`smaps.py:468` guards on
-  `os.path.exists(fn_gre)`) -- substance unchanged: with neither cache
-  present, `use_projection` is `False` and execution still falls through to
-  the same unconditional `h5py.File(fn_gre, 'r')` open and the same
-  `FileNotFoundError`] [citation updated 2026-09-16 against `de3d535` --
-  fresh-estimation write site shifted from `smaps.py:204` to `:424`; also
-  narrowed since last verified: `load_smaps` now trusts an existing stale
-  smaps cache rather than crashing when only the GRE cache is missing, so
-  this still crashes only on a true first-run with neither cache present]
-  `recon_frames()` (`recon_frames.py:76`) opens with
-  `smaps, _smaps_degre, _emap_degre, nvcoils, _smaps_degre_unc =
-  load_smaps(cfg, paths,
-  seq_params)`, unconditional on what `recon_fn` actually needs. But
-  `run_rss.py`'s own module docstring states this driver is "root-sum-of-
-  squares reconstruction (**no smaps, no BART**)", and its `_rss_recon(data,
-  _smaps)` (`run_rss.py:35`, drifted from the `:30-31` cited 2026-09-17)
-  explicitly discards its `smaps` argument
-  (underscore-prefixed, never read). `load_smaps`'s fresh-estimation branch
-  (`smaps.py:554`) unconditionally opens `<datdir>/recon/<seqname>_gre.h5`
-  (`with h5py.File(fn_gre, 'r') as f:`) on a true first run, which raises
-  `FileNotFoundError` if that file doesn't exist. Reproduced directly: a
-  minimal `ksp_epi_zf.h5`
-  with no matching `<seqname>_gre.h5` present (a real scenario -- deGRE
-  wasn't acquired, or its cache was cleaned up independently of the EPI
-  data, since nothing ties their lifecycles together) makes
-  `recon_frames(cfg, paths, seq_params, _rss_recon)` raise `FileNotFoundError:
-  ... 'testseq_gre.h5' ... No such file or directory` before ever touching
-  the k-space data RSS actually needs. Even when the GRE cache *is*
-  present, every RSS run still pays for a full ESPIRiT sensitivity-map
-  estimation (or at least a cache-validity check load) for a value it then
-  throws away -- the same "confirmed expensive" cost `smaps.py`'s own
-  `estimate_smaps` docstring documents elsewhere in this codebase (a
-  full-resolution GRE volume "thrashed 14GB+ of memory and never completed
-  in over an hour" before the `cal_size` fix). Confirmed intentional-looking,
-  not a typo: `tests/test_recon_recon_frames.py::test_recon_frames_
-  estimates_smaps_when_no_cache` (renamed from
-  `tests/test_preprocessing_recon_frames.py` alongside the file move)
-  already exercises (and expects) this eager
-  smaps estimation, so this is a real design gap in `recon_frames()`'s API
-  (no way to opt out of smaps loading), not an accidental leftover. Fix
-  direction: thread whether `recon_fn` needs smaps into `recon_frames()`
-  (e.g. a `needs_smaps: bool` parameter defaulting `True`, with `run_rss.py`
-  passing `False`), deriving `nvcoils` from `f['ksp_epi_zf'].shape[3]`
-  instead of `load_smaps`'s return value when smaps aren't needed, skipping
-  `load_smaps()` entirely on that path.
+- [x] **167.** Superseded, 2026-09-22 against `6921c8c`: `recon/recon_frames.py`
+  and `recon/run_rss.py` (the two files this item is entirely about) were
+  both deleted outright in the `recon/` 25-modules-to-7 consolidation
+  (commits `56b6ee3`..`a790d81`) -- the sigpy-only RSS driver and its
+  shared per-frame loop no longer exist anywhere in the tree. No current
+  `recon/` module (`mslr.py`, `operators.py`, `run_recon.py`,
+  `L1-wavelet_TV_B0_SENSE.py`, `lowres_calib.py`, `analysis.py`) calls
+  `load_smaps()` at all (repo-wide grep confirms zero hits), so the
+  unconditional-smaps-load-crashes-RSS-only-recon failure mode this item
+  described has no surviving code path.
 - [x] **168. `lib/make_excitation_pulse.py`'s (and `sequences/deGRE.py`'s
   identical inline copy) post-`trap4ge` RF/slice-select resync has no guard
   against producing a negative gradient delay.** [measured, not live today]
@@ -1979,46 +2021,14 @@ having changed since the last pass.
   rise time for `adc.delay`), and add a regression test building
   `generate_degre` at a non-default `crt` (e.g. `20e-6`) asserting
   `adc.delay == gx.delay + gx.rise_time`.
-- [ ] **182. `recon/recon_frames.py`'s `use_parfor=True` path drains
-  its own memory-bounding frame generator eagerly, defeating the design its
-  own comment describes.** [measured; citation updated 2026-09-17 against
-  `ad2fdc4` -- file moved from `preprocessing/recon_frames.py` to
-  `recon/recon_frames.py` (commit `8f90cd7`, pure `git mv`, line numbers
-  below unchanged); substance unchanged] `recon_frames()` builds
-  `frame_data = (f['ksp_epi_zf'][:, :, :, :, frame] for frame in
-  range(nframes))` specifically, per the adjacent comment (`recon_frames.py:89-92`),
-  "to bound memory" for a full-res acquisition that can otherwise exceed
-  physical RAM. When `cfg.use_parfor` is `True` (`:96-98`), this generator is
-  handed straight to `concurrent.futures.ProcessPoolExecutor.map()`. The
-  stdlib `Executor.map()` implementation eagerly builds
-  `fs = [self.submit(fn, *args) for args in zip(*iterables)]` before
-  returning anything -- i.e. it fully drains the iterable up front,
-  submitting every frame's task (and therefore reading every frame's HDF5
-  slice into memory) regardless of worker count or how fast tasks are
-  consumed. Reproduced directly two ways: (a) a standalone repro
-  (`ProcessPoolExecutor(max_workers=2).map(slow_fn, generator)`, `slow_fn`
-  sleeping 0.3s) shows all 10 generator items produced before `map()` even
-  returns, well before either worker finishes its first task; (b) an
-  instrumented real `recon_frames()` run (patching `h5py.Dataset.__getitem__`
-  to timestamp reads), `use_parfor=True`, `recon_fn` sleeping 0.2s: all 8
-  frame slices were read from the HDF5 file within 0.05s -- before any
-  worker had finished even its first (0.2s) task -- confirming the same
-  eager-drain happens in the real code path, not just the abstract repro. At
-  this repo's real scale (240x240x45x18-coil complex64, ~373MB/frame per
-  CLAUDE.md's own cited chunk size, up to 30 frames ~= 11GB), this means the
-  `use_parfor=True` path reads essentially the entire acquisition into
-  memory at once -- exactly the OOM scenario the streaming-generator design
-  exists to avoid. Distinct from the already-resolved item 105 (which fixed
-  re-pickling `smaps` per dispatched task, not this generator-draining
-  issue). Latent in the shipped default (`PreprocessingConfig.use_parfor`
-  defaults to `False`), but real and reproducible for any user who opts into
-  parallel reconstruction -- a real, documented config knob, not a
-  hypothetical. No test in `tests/test_preprocessing_recon_frames.py`
-  exercises `use_parfor=True` at all, so nothing catches this. Fix: bound
-  submission with a semaphore/rolling window (submit new work only as prior
-  futures complete), or dispatch via `executor.submit()` one frame at a time
-  against a bounded in-flight queue, instead of a bare `.map()` over an
-  unbounded-lookahead generator.
+- [x] **182.** Superseded, 2026-09-22 against `6921c8c`: `recon/recon_frames.py`
+  (the file this item's `use_parfor=True`/`ProcessPoolExecutor.map()`
+  eager-drain finding is entirely about) was deleted outright in the
+  `recon/` 25-modules-to-7 consolidation. No current `recon/` module
+  reimplements a `use_parfor`/parallel-frame-dispatch concept at all (the
+  current batch drivers in `run_recon.py`/`lowres_calib.py` process one
+  dataset synchronously, no `ProcessPoolExecutor` anywhere in `recon/`), so
+  there is no surviving code path for this finding.
 - [ ] **183. `preprocessing/julia/b0map.jl`'s `romeo_finit` never receives
   the sensitivity maps the module docstring says replace its noisy
   coil-combine fallback -- the ROMEO-unwrapped `finit` is always built from
@@ -2054,10 +2064,15 @@ having changed since the last pass.
   `romeo_finit`'s signature and call `coil_combine(images, smap)` when `smap`
   is available (mirroring what the main fit call already does), falling back
   to `coil_combine(images, nothing)` only when no `smap` was loaded.
-- [ ] **184. `recon/lowrank.py`'s `img2patches`/`patches2img` silently zero
+- [ ] **184. `recon/mslr.py`'s `img2patches`/`patches2img` silently zero
   out real image voxels whenever `stride_size > patch_size` on an axis --
-  unvalidated, and untested in that regime.** [measured] `_patch_starts(n,
-  patch, stride)` (`lowrank.py:21-23`) places patch starts at
+  unvalidated, and untested in that regime.** [measured; citation updated
+  2026-09-22 against `6921c8c` -- `recon/lowrank.py` merged into
+  `recon/mslr.py` in the `recon/` 25-modules-to-7 consolidation
+  (`_patch_starts` now `:823`, `img2patches` now `:828-845`, `patches2img`
+  now `:848-870`+, call sites now `:541,550`); substance fully unchanged]
+  `_patch_starts(n,
+  patch, stride)` (`recon/mslr.py:823`) places patch starts at
   `min(i*stride, n-patch)`, guaranteeing the *last* patch reaches `n-patch`,
   but nothing constrains `stride <= patch` the way `img2patches`/
   `patches2img` already validate `stride > 0` (`:29-30`) -- so when
@@ -2075,17 +2090,17 @@ having changed since the last pass.
   divide, so those voxels compute `0/1 = 0` with no warning, NaN, or error.
   At a more realistic 3D scale (`23x23x5`, patch `(3,3,3)`, stride
   `(10,10,10)`), `patchSVST(..., beta=0.0)` -- which should be a near-identity
-  round-trip -- zeroes **84.7%** of all voxels. Since `reconstruct.py`'s
+  round-trip -- zeroes **84.7%** of all voxels. Since `recon/mslr.py`'s
   `g_prox`/`reg_cost` call `patchSVST`/`img2patches` every iteration for
-  every scale (`reconstruct.py:270,279`, citation updated 2026-09-18 --
-  see item 131's own citation-update note for why), a config that trips this would
+  every scale (`recon/mslr.py:541,550`), a config that trips this would
   silently zero out most of a scale's contribution to `X_recon` on every
   iteration. Latent, not live today: every current call site
-  (`reconstruct.py`'s own tests, `run_b0_recon.py`/`validate_against_mslr.py`,
+  (`recon/mslr.py`'s own tests, `recon/run_recon.py`'s `main_mslr_ref`/
+  `recon/analysis.py`'s `validate`,
   which both read `patch_sizes`/`strides` from the external Julia reference
   `.mat` already byte-validated against real MSLR output per CLAUDE.md's
   table) uses `stride <= patch` on every axis -- confirmed by grepping every
-  `strides=`/`patch_sizes=` call site repo-wide. `tests/test_recon_lowrank.py`'s
+  `strides=`/`patch_sizes=` call site repo-wide. `tests/test_recon_mslr.py`'s
   only stride-related test (`test_img2patches_rejects_nonpositive_stride`)
   checks `stride <= 0`, not `stride > patch`; every other test uses
   non-overlapping or half-overlapping strides. Fix: assert
@@ -2149,8 +2164,9 @@ having changed since the last pass.
   a dedicated exception type for the triangular-lobe/coverage-bump cases,
   or check the relevant condition directly before calling), and let
   unrelated assertions propagate with their real message.
-- [ ] **199. `recon/lowres_calib_recon.py`/`preprocessing/
-  r2star_map.py` each paste an undocumented copy of `run_rss.py`'s `_ift3`,
+- [ ] **199. `recon/lowres_calib.py` (formerly `lowres_calib_recon.py`)/
+  `preprocessing/r2star_map.py`/`preprocessing/gre_diagnostics.py` each
+  paste an undocumented copy of `_ift3`,
   losing the odd-axis complex-value warning its own source carries --
   but only `lowres_calib_recon.py`'s copy is a live risk, not both, as
   originally claimed (narrowed 2026-09-17).** [measured; narrowed
@@ -2175,14 +2191,33 @@ having changed since the last pass.
   applied to both new files. So this item is really a fifth occurrence
   (`lowres_calib_recon.py`, live risk) plus a sixth, lower-severity
   documentation-only occurrence (`r2star_map.py`, inert but still worth
-  deduplicating for consistency)] `run_rss.py:17-32`'s `_ift3`
+  deduplicating for consistency). **Citation updated 2026-09-22 against
+  `6921c8c`, and a real regression uncovered**: `recon/lowres_calib_recon.py`
+  merged into `recon/lowres_calib.py` in the `recon/` 25-modules-to-7
+  consolidation; its bare, undocumented `_ift3` copy is now at
+  `recon/lowres_calib.py:310-312` (still no docstring, live-complex-consumer
+  usage unchanged: `img_coils = _ift3(ksp_crop)` at `:379` through `:383`,
+  still returns complex, no `np.abs()`). More significantly, `recon/run_rss.py`
+  -- the file item 91's "fix" pointed `gre_diagnostics.py` at -- was
+  **deleted outright** in this same consolidation. That means item 91's own
+  closure ("`gre_diagnostics.py` now correctly imports this shared
+  function") has silently regressed: `gre_diagnostics.py` now defines its
+  own **third** local copy of `_ift3` again (own module, ~lines 35-50, same
+  non-canonical pairing) since there's no shared home left to import from
+  -- still inert today (magnitude-only usage), but item 91 should probably
+  be reopened or cross-noted rather than left claiming a fix that no longer
+  holds. Ironically, this also changes the right fix for `r2star_map.py`:
+  `_ift3` now lives in `preprocessing/gre_diagnostics.py` (same package),
+  so `r2star_map.py` could import it in-package with zero cross-package
+  coupling -- resolving the very concern this item's own fix paragraph
+  raised about `preprocessing/` importing from `recon/`] `run_rss.py:17-32`'s `_ift3`
   docstring explicitly warns its `fftshift`-in/`fftshift`-out pairing (not
   the canonical `ifftshift`-in) is "NOT shift-equivalent on an odd-length
   axis... safe here only because every consumer... takes a magnitude... a
   future complex-valued consumer would inherit it silently."
-  `gre_diagnostics.py` correctly imports this shared function (item 91's
-  fix). `recon/lowres_calib_recon.py:87-89` and `r2star_map.py:52-54` instead
-  paste an undocumented copy each. `lowres_calib_recon()`'s own module
+  `gre_diagnostics.py` no longer imports a shared function at all (item 91's
+  fix has regressed -- see the bracket note above). `recon/lowres_calib.py:310-312`
+  and `r2star_map.py:52-54` and now `gre_diagnostics.py` itself each paste an undocumented copy. The `lowres_calib`-side module
   docstring cites a real measured example where the calibration-region
   crop is `49 x 10` (`Ny_eff=49`, and `Nx_eff = round(Ny_eff*fov_x/fov_y)
   = 49` too) -- both **odd** -- and `lowres_calib_recon()` returns the
@@ -2208,12 +2243,23 @@ having changed since the last pass.
   consider factoring `_ift3` itself into a small shared, dependency-free
   module (e.g. alongside `preprocessing/matio.py`) both packages can import
   without coupling to each other's optional-extra dependency sets.
-- [ ] **205. `preprocessing/smaps.py`'s `load_smaps()` (and
-  `preprocessing/preprocess.py`'s STEP 3) never forward item 203's new
-  `zero_pad_z` parameter, so the real 5.4mm-resolution dataset item 203's
-  closure was written for cannot have its EPI-grid smaps rebuilt through
-  any real pipeline entry point -- undercutting that closure's own claim.**
-  [measured; found 2026-09-17 against `ad2fdc4`] Item 203 (closed) added an
+- [ ] **205. `preprocessing/preprocess.py`'s STEP 3 never forwards item
+  203's `zero_pad_z` parameter -- narrowed 2026-09-22, `load_smaps()`'s
+  own half of this gap is now fixed.** [measured; **partially resolved by
+  commit `5ba6fc5`** ("preprocessing/smaps.py: add zero_pad_z param to
+  load_smaps"), confirmed 2026-09-22 against `6921c8c`: `load_smaps()`
+  (`smaps.py:395`) now takes `zero_pad_z: bool = False` and threads it
+  into its EPI-grid `process_smaps` call (`smaps.py:575-577`);
+  `run_b0map.py:102` now forwards its own `zero_pad_z` parameter into
+  `load_smaps()` -- this closes the item's most severe documented
+  consequence (`run_b0map()`'s silent smap-loss fallback on the real
+  5.4mm dataset). **Still open, narrowing this item to just this residual
+  gap**: `preprocess.py`'s STEP 3 (`:352-388`) still calls `process_smaps`
+  with no `zero_pad_z` at all -- a fresh/invalidated-cache Stage-1 run on
+  that dataset would still crash `preprocess()` outright (no surrounding
+  try/except). No regression test was added for the new `load_smaps`
+  forwarding either -- see item 230 below. Original finding text
+  preserved below for context; found 2026-09-17 against `ad2fdc4`] Item 203 (closed) added an
   opt-in `zero_pad_z: bool` parameter to `preprocessing/grid_resize.py`'s
   `resize_to_epi_grid`, and `preprocessing/smaps.py`'s `process_smaps`
   forwards it correctly through both of its own `resize_to_epi_grid` calls
@@ -2255,20 +2301,25 @@ having changed since the last pass.
   the smaps side at all; whatever produced the real
   `smaps_1_1x_5.4mm_sigpy.h5` cache item 203 cites must have called
   `process_smaps` directly (bypassing `load_smaps`), not through any
-  shipped driver. Fix: add a `zero_pad_z` parameter to `load_smaps()` (and
-  thread it from `preprocess.py`'s STEP 3 the same way `run_b0map()`
-  threads its own -- likely via a new `PreprocessingConfig` field, since
+  shipped driver at the time this was written. **`load_smaps()` now has
+  the parameter (see the resolution note above) -- remaining fix**: thread
+  `zero_pad_z` from `preprocess.py`'s STEP 3 the same way `run_b0map()`
+  now does -- likely via a new `PreprocessingConfig` field, since
   this is a per-dataset condition a config value can carry the same way
-  item 203 chose for `run_b0map`), so the smaps side has the same opt-in
-  the field-map side already has.
+  item 203 chose for `run_b0map`.
 - [ ] **206. `preprocessing/preprocess.py`'s STEP 3 guarantees a wasted
   full ESPIRiT re-run on every fresh pipeline execution today, not just an
   occasional legacy-cache transition -- sharpens items 117/141.** [measured
   by code tracing plus an existing passing test; a live standalone
   reproduction of this exact mechanism could not be completed this pass due
   to heavy concurrent CPU contention in the review container, see below;
-  found 2026-09-17 against `ad2fdc4`] `smaps.py`'s new `Ncoils`-based
-  cache-invalidation logic (`smaps.py:483-494`) is commented as "a one-time
+  citation updated 2026-09-22 against `6921c8c` -- line drift only,
+  substance fully unchanged: the "opportunistic upgrade" comment block
+  drifted `:483-494`->`:498-509`, the cache-validity guard drifted
+  `:495-502`->`:510-517`; `preprocess.py:319-350,352-388` citations
+  unchanged; STEP 3 still writes no `Ncoils` attr, so the double-ESPIRiT
+  behavior is unchanged; found 2026-09-17 against `ad2fdc4`] `smaps.py`'s new `Ncoils`-based
+  cache-invalidation logic (`smaps.py:498-509`) is commented as "a one-time
   opportunistic upgrade... costs one extra ESPIRiT run exactly once per
   acquisition, the first time `load_smaps` runs after its GRE cache gains
   projection support" -- phrasing that implies a rare, historical
@@ -2307,12 +2358,19 @@ having changed since the last pass.
 - [ ] **222. `run_b0map.py`/`r2star_map.py` cubic-spline-resize `b0map_hz`/
   `r2star` onto the EPI grid but never re-apply the resized mask afterward
   -- unlike the identical, already-fixed case in `smaps.py`'s
-  `process_smaps`.** [measured; found 2026-09-20 against `d620951`]
-  `preprocessing/run_b0map.py:140-147` builds the EPI-grid field map via
+  `process_smaps`.** [measured; citation updated 2026-09-22 against
+  `6921c8c` -- line drift only, substance fully reconfirmed live and
+  unchanged: `run_b0map.py`'s resize block drifted `:140-147`->`:139-146`,
+  write block `:158-161`->`:157-160`; `r2star_map.py:131-134` unchanged;
+  `smaps.py:281,319-320` (the analogous, already-fixed re-mask) unchanged
+  exactly; `recon/operators.py` (formerly `recon/operators_b0.py`) still
+  applies no masking of its own; `tests/test_preprocessing_run_b0map.py:207-247`
+  citation unchanged; found 2026-09-20 against `d620951`]
+  `preprocessing/run_b0map.py:139-146` builds the EPI-grid field map via
   `resize_to_epi_grid(b0map_hz_degre * mask_degre, ..., order=3, ...)` and
   separately resizes `mask_degre` (`order=0`, nearest) into `mask` -- but
   `b0map_hz` is never multiplied by that resized `mask` before being
-  written to `<seqname>_b0map.h5` (`:158-161`).
+  written to `<seqname>_b0map.h5` (`:157-160`).
   `preprocessing/r2star_map.py:131-134` (`estimate_r2star_map_epi_grid`)
   has the identical pattern: `resize_to_epi_grid(r2star_degre *
   mask_degre, ..., order=3, ...)` followed only by `np.clip(r2star, 0.0,
@@ -2331,10 +2389,10 @@ having changed since the last pass.
   Hz, ~6.6% of outside voxels > 1 Hz) -- comparable in scale to the field's
   own real variation, not the ~1e-6-1e-9 far-field leakage
   `process_smaps`' own docstring describes for its case. Downstream impact:
-  `recon/operators_b0.py`'s `build_encoding_operator_b0`/`GatheredSenseB0`
+  `recon/operators.py`'s `build_encoding_operator_b0`/`GatheredSenseB0`
   reads `b0map_hz` (and, with `--r2star`, `r2star_map`) at every voxel of
   the full grid with no masking of its own (confirmed: no `mask` reference
-  anywhere in `recon/operators_b0.py`) -- the only thing zeroing a
+  anywhere in `recon/operators.py`) -- the only thing zeroing a
   background voxel's contribution is `smaps` being exactly zero there.
   `smaps`' EPI-grid object mask is a direct cal_size->EPI cubic resize of
   `emap`, computed via a completely different path than `b0map`'s own
@@ -2355,6 +2413,30 @@ having changed since the last pass.
   this pass). Fix: re-multiply `b0map_hz`/`r2star` by their own resized
   boolean mask after the cubic-spline resize, mirroring
   `process_smaps`'s pattern exactly.
+- [ ] **224. `recon/analysis.py`'s module-level `assert DEVICE == "cuda"`
+  breaks import of `recon.run_recon` (and two `recon/operators_b0.py`
+  tests) on any CPU-only machine, including one with the full `recon`
+  extra installed.** [measured] This bare assert (`recon/analysis.py:248`)
+  is left over from the old standalone GPU-only `benchmark_b0_cost.py`
+  script, carried verbatim into `analysis.py`'s `benchmark` section by the
+  `recon/` 25-modules-to-7 consolidation without being moved inside
+  `_cli_benchmark`/behind an `if __name__` guard. Since
+  `recon/run_recon.py:175` does `from recon.analysis import
+  _read_julia_mat` at module scope, merely importing `recon.run_recon`
+  crashes on any machine without an active CUDA device. Reproduced
+  directly: `uv sync --extra test --extra preprocessing --extra recon
+  --python 3.10` (torch installed, CPU-only), then `uv run pytest
+  --continue-on-collection-errors` -> 1 collection error
+  (`tests/test_recon_cg_sense_b0.py` fails to collect entirely) plus 2
+  failures (`tests/test_recon_operators_b0.py::test_more_segments_reduces_error_at_real_scale`
+  and `::test_production_nbins_avoids_row_sum_warning`, both via a lazy
+  `from recon.analysis import ...` inside the test body). Also means
+  `python -m recon.analysis sweep` -- a subcommand that needs no GPU per
+  its own docstring -- is unusable on CPU today, a real regression from
+  before the merge (the standalone `sweep_time_segments.py` script had no
+  such module-level assert). Fix: move the assert inside
+  `_cli_benchmark`'s body (or the `benchmark()` function itself), so
+  importing the module and running `sweep`/`validate` on CPU still work.
 
 ## Consistency & documentation
 
@@ -2556,29 +2638,37 @@ having changed since the last pass.
   run's scope to edit (only `docs/review-findings.md` may be modified this
   pass) but should be updated to match the next time CLAUDE.md itself is
   touched.
-- [ ] **112. `recon/sweep_time_segments.py` still describes `L=6` as "the
-  current production default" and cites a test name item 85 renamed.**
-  [measured; re-verified 2026-09-16 against `de3d535`, still open,
-  unchanged. Note: item 179 below is a near-duplicate of this same claim
+- [ ] **112. `recon/analysis.py`'s `sweep` subcommand still describes `L=6`
+  as "the current production default" and cites a test name item 85
+  renamed.** [measured; citation updated 2026-09-22 against `6921c8c` --
+  `recon/sweep_time_segments.py` merged into `recon/analysis.py`'s `sweep`
+  subcommand in the `recon/` 25-modules-to-7 consolidation (filenames in
+  the surrounding prose were updated by the merge, but not the stale
+  `L=6`/old-test-name claims themselves); still open, unchanged in
+  substance. Note: item 179 below is a near-duplicate of this same claim
   (same file, same stale-`L=6` text) -- kept as separate items per this
-  doc's never-reuse-a-number convention, but treat as one fix] The module docstring (`:9-11`) says "...L=6 (the current
+  doc's never-reuse-a-number convention, but treat as one fix. Also found
+  this pass: the same file's `NBINS = 128` comment (`recon/analysis.py:139`)
+  still cites `run_b0_recon.py`'s production default as its source --
+  `run_b0_recon.py` no longer exists (merged into `recon/run_recon.py`),
+  worth fixing in the same pass] The docstring (`recon/analysis.py:19-24`) says "...L=6 (the current
   production default, params.py-adjacent choice in
-  operators_b0.py/run_b0_recon.py)..." and the sweep table's own printed
-  marker (`:148`, `marker = "  <- current default" if L == 6 else ""`)
+  operators.py/run_recon.py)..." and the `sweep()` function's own printed
+  marker (`recon/analysis.py:240`, `marker = "  <- current default" if L == 6 else ""`)
   labels the `L==6` row as current -- but item 82 changed the default to
-  **`L=32`** in all four places (`operators_b0.py`'s
-  `build_encoding_operator_b0`, `reconstruct.py`'s `run_recon`,
-  `run_b0_recon.py`'s `main`/`--L`), confirmed still the case by reading
-  the current code, and `operators_b0.py`'s own module docstring was
-  updated accordingly by that item. Separately, the same file's docstring
-  (`:6-7`) still points at
+  **`L=32`** in all four places (now `recon/operators.py:333`,
+  `recon/mslr.py:357`, `recon/run_recon.py:232,349,502`), confirmed still
+  the case by reading
+  the current code. Separately, the same file's docstring
+  (`recon/analysis.py:19`) still points at
   `tests/test_recon_operators_b0.py::test_more_segments_reduces_error_in_the_realistic_regime`,
   which item 85 renamed to
   `test_more_segments_reduces_error_in_a_toy_grid` (confirmed: no test of
   the old name exists anywhere in the repo). Both drifts look like this
   script was simply missed when items 82 and 85 updated every other
-  doc/code reference -- worth one pass over `sweep_time_segments.py` to
-  bring its docstring and printed marker in line with both.
+  doc/code reference, and survived the later `recon/` file merge unchanged
+  -- worth one pass over `recon/analysis.py` to bring its docstring and
+  printed marker in line with both.
 - [ ] **113. Dangling `docs/review-findings.md` item-number
   cross-references in source comments: item 28 (and, previously flagged
   but still unresolved, item 12) don't exist in this file.**
@@ -2633,14 +2723,20 @@ having changed since the last pass.
   docstring to 0.2556, or better, point at this file's "Current baseline"
   table the way the surrounding paragraph already does for the `ArbEPI`
   number, so it can't drift out of sync again.
-- [ ] **124. `recon/reconstruct.py`'s `run_recon` docstring still claims
+- [ ] **124. `recon/mslr.py`'s `run_recon` docstring still claims
   `echo_times` gets "broadcast across Nx here," directly contradicting the
   actual post-item-90 implementation in the same file.** [measured;
-  citation updated 2026-09-16 against `de3d535` -- write site shifted from
+  citation updated 2026-09-22 against `6921c8c` -- `reconstruct.py` renamed
+  to `recon/mslr.py` in the `recon/` 25-modules-to-7 consolidation, the
+  stale docstring text now at `recon/mslr.py:369`, still unfixed; also
+  found this pass: `recon/operators.py:222`'s own docstring still says
+  "...no change to GatheredSense/build_encoding_operator/reconstruct.py at
+  all" -- one more stale `reconstruct.py` reference the rename missed,
+  worth fixing in the same pass]; citation updated 2026-09-16 against `de3d535` -- write site shifted from
   `:169-171` to `:172`; citation updated again 2026-09-18 against `33d44a4`
   -- item 213's `recon/hdf5_chunked_io.py` extraction shifted it again, to
   `:163`, substance unchanged]
-  `run_recon`'s docstring (`reconstruct.py:163`) says the `echo_times`
+  `run_recon`'s docstring (`recon/mslr.py:369`) says the `echo_times`
   dataset is "`(Ny,Nz,Nt)`, broadcast across Nx here since kx doesn't
   affect echo time." But `run_recon` actually gets `echo_times` via
   `_load_echo_times(fn_ksp, device)` (same file, `:97`), whose own
@@ -2664,55 +2760,31 @@ having changed since the last pass.
   referenced the old broadcast, but neither touched this specific sentence.
   Fix: reword `reconstruct.py:163-164` to match `_load_echo_times`'s/
   `build_encoding_operator_b0`'s accurate phrasing.
-- [ ] **128. `recon/recon_frames.py`'s module docstring claims a
-  smaps-cache legacy-format branch is unreachable, but that branch is the
-  normal path on every first pipeline run and is already exercised by this
-  repo's own tests.** [measured; citation updated 2026-09-17 against
-  `ad2fdc4` -- the file moved from `preprocessing/recon_frames.py` to
-  `recon/recon_frames.py` (commit `8f90cd7`, a pure `git mv`, no content
-  change -- docstring lines `:14-17` and the `load_smaps()` call at `:76`
-  are byte-identical at the new path); `smaps.py:179` shifted to `:508`
-  and `preprocess.py:343-344` shifted to `:378-380` after the `dd77792`
-  smaps.py rewrite; substance unchanged] The docstring (`recon_frames.py:14-17`)
-  says: "The smaps-cache legacy-format fallback (`recon_frames.m`'s 'cache
-  file has smaps_raw/emaps but no smaps yet' branch) isn't ported either --
-  `preprocess.py`, this port's only writer, always writes the full format,
-  so that branch can never be reached here." Both halves are false today:
-  (a) `recon_frames.py` itself (same file, `:76`) calls
-  `preprocessing.smaps.load_smaps()`, which is *also* a writer -- it
-  creates the cache from scratch when none is valid
-  (`smaps.py:207-215`) -- so `preprocess.py` is not "this port's only
-  writer"; this docstring predates `load_smaps` being factored out of
-  `recon_frames.py` into `smaps.py` (per `smaps.py`'s own docstring). (b)
-  `preprocess.py`'s STEP 3 cache write (`preprocess.py:378-380`) writes
-  only `smaps_raw`/`emap` (plus `smaps`, written just above) -- three
-  keys, never `smaps_degre`/`emap_degre` -- which `smaps.py:508`'s
-  `has_degre = 'smaps_degre' in f and 'emap_degre' in f` check treats as
-  part of the "full" format. Since `preprocess.py`'s STEP 3 always runs
-  before `recon_frames.py` in the documented pipeline order, the cache
-  `recon_frames.py`/`load_smaps` finds on essentially every first run is
-  exactly this 3-key "legacy" shape -- the branch this docstring calls
-  unreachable is the routine case, handled by `smaps.py:184-192`'s own
-  backfill block (which the `smaps.py` docstring correctly documents as
-  real). Confirmed live, not hypothetical:
-  `tests/test_recon_recon_frames.py`'s `_make_fixture`
-  (`:25-44`, renamed from `tests/test_preprocessing_recon_frames.py`
-  alongside the file move, same line range) writes a cache with exactly
-  these 3 keys and no `fn_gre`,
-  so `test_recon_frames_uses_cached_smaps_and_reconstructs_all_frames`/
-  `test_recon_frames_caps_at_cfg_nframes` already exercise the backfill
-  path on every run, without either the fixture or the assertions calling
-  that out. Distinct from item 117 (which flags `preprocess.py`'s STEP 3
-  as a *duplicate* of `load_smaps`'s caching logic, not this docstring's
-  incorrect claim about which branches are reachable). Fix: reword
-  `recon_frames.py:14-17` to describe the real, current relationship (two
-  writers, an intentionally-backfilled older cache format), or resolve it
-  by fixing item 117 (making `preprocess.py` call `load_smaps` directly),
-  which would make the claim true again.
+- [x] **128.** Superseded, 2026-09-22 against `6921c8c`: `recon/recon_frames.py`
+  (the module whose docstring this item quotes) was deleted outright in the
+  `recon/` 25-modules-to-7 consolidation. Repo-wide grep confirms
+  `load_smaps()` today has exactly one caller (`preprocessing/run_b0map.py`),
+  and no current `recon/`/`preprocessing/` module carries an equivalent
+  "legacy-format branch is unreachable" claim to correct. (This closure
+  doesn't resolve the underlying `smaps.py`/`preprocess.py` cache-format
+  documentation gap itself -- see item 117, still open.)
 - [ ] **133. The `<seqname>_gre.h5`/`smaps_<seqname>_sigpy.h5` cache paths
   are hand-built with the identical f-string independently in many
   separate files instead of being `SeqPaths` fields, and the count of
-  independent call sites keeps growing.** [citations corrected 2026-09-19
+  independent call sites keeps growing.** [citations updated 2026-09-22
+  against `6921c8c` -- `recon/cg_sense_b0.py` and `recon/lowres_calib_recon.py`
+  (the two `recon/`-side sites this item last tracked) both merged in the
+  `recon/` 25-modules-to-7 consolidation, but the pattern reappeared
+  *more* times in the merged files rather than being deduplicated: the
+  smaps-cache f-string is now independently re-derived at
+  `recon/run_recon.py:238,356,518` (three of its own subcommands) and
+  `recon/lowres_calib.py:393,562,802` (three more) -- 6 independent
+  recon/-side sites post-merge vs. 2 pre-merge, none reading `SeqPaths`.
+  `preprocessing/`-side citations (`preprocess.py:319,358`,
+  `run_b0map.py:78,100`) reconfirmed unchanged; `smaps.py`'s two sites
+  drifted `:451`->`:468` and `:453`->`:466`; `gre_diagnostics.py`'s site
+  drifted `:39`->`:56`; `r2star_map.py:81-82` still not folded into this
+  item's own citation list as its text below says it should be] [citations corrected 2026-09-19
   against `d515cd0` -- the 2026-09-17 note below overstated
   `recon/cg_sense_b0.py`'s duplication: that file never builds a
   `<seqname>_gre.h5` path at all (its `:129` is the *already-tracked*
@@ -2774,7 +2846,17 @@ having changed since the last pass.
 - [ ] **140. `preprocessing/nifti_io.py`'s module docstring caller list is
   stale on three counts now (was two): it names a module that no longer
   calls `save_recon_nifti`, and omits several that do and contradict its
-  "always the EPI grid" claim.** [citation updated 2026-09-19 against
+  "always the EPI grid" claim.** [citation updated 2026-09-22 against
+  `6921c8c` -- caller count now **11**, spread across both
+  `preprocessing/`
+  (`preprocess.py:385`, `gre_diagnostics.py:91` -- still passes
+  `fov=sp.fov_degre` at `:92`, still contradicting the docstring's blanket
+  "always EPI grid" claim, `run_b0map.py:165`, `smaps.py:543,612`) and
+  `recon/` (`L1-wavelet_TV_B0_SENSE.py:383`, `lowres_calib.py:436,676,961`,
+  `mslr.py:641`, `run_recon.py:595`) -- none of the docstring's four named
+  modules (`run_rss.py`/`run_cg_sense.py`/`run_recon_sigpy.py`/
+  `recon_frames.py`) exist any more, all four deleted outright in the
+  `recon/` 25-modules-to-7 consolidation; citation updated 2026-09-19 against
   `d515cd0` -- the call-site count grew again, to 13: `recon/
   lowres_calib_recon_b0.py` and `recon/lowres_calib_recon_b0complex.py`
   (both new since the 2026-09-17 note below) also call `save_recon_nifti`
@@ -3071,18 +3153,26 @@ having changed since the last pass.
   `L == 6` marker condition to `L == 32` (or read the production default
   from a single named constant so this can't re-drift the next time it
   changes).
-- [ ] **180. `recon/validate_against_mslr.py`'s module docstring documents
+- [ ] **180. `recon/analysis.py`'s `validate` subcommand module docstring
+  documents
   only the three radial-dataset validation configs, omitting the three
   matching laminar-dataset configs CLAUDE.md documents as validated via
-  this same script.** [measured, low severity, documentation only]
-  `recon/validate_against_mslr.py:20-33`'s "Validated results (2026-08-25,
+  this same script.** [measured, low severity, documentation only;
+  citation updated 2026-09-22 against `6921c8c` -- `validate_against_mslr.py`
+  merged into `recon/analysis.py`'s `validate` subcommand in the `recon/`
+  25-modules-to-7 consolidation; results table now `recon/analysis.py:97-109`
+  (still radial-only), tolerance-setting comment now `:401-403` (still
+  references "both real G+L runs (radial and laminar)"); substance
+  unchanged]
+  `recon/analysis.py:97-109`'s "Validated results (2026-08-25,
   RTX A6000, 20260822ball_radial dataset...)" paragraph lists only the
   radial L/G/G+L rows. CLAUDE.md's `recon/` section documents six configs
   from the same 2026-08-25 validation run -- the same three radial rows
   plus three matching laminar rows (`20260822ball_laminar`) -- explicitly
-  stating "all six run via `recon/validate_against_mslr.py`." This isn't
+  stating "all six run via `recon/analysis.py`'s `validate` subcommand
+  (formerly `recon/validate_against_mslr.py`)." This isn't
   just a stale copy-paste: the script's own inline comment
-  (`recon/validate_against_mslr.py:103`, "Multi-scale reg_cost...
+  (`recon/analysis.py:401-403`, "Multi-scale reg_cost...
   accumulates more floating-point noise... measured ~1-2e-4 on both real
   G+L runs (radial and laminar)") already references the laminar run's
   measured tolerance directly -- i.e. the laminar validation was
@@ -3091,7 +3181,7 @@ having changed since the last pass.
   file's docstring would incorrectly believe laminar was never validated
   against real MSLR output. Fix: add the three laminar rows (or a pointer
   to CLAUDE.md's fuller six-row table) to
-  `recon/validate_against_mslr.py:20-33`.
+  `recon/analysis.py:97-109`.
 - [ ] **185. CLAUDE.md's "Plotting" paragraph undercounts
   `plotting/plot_last_run.py`'s functions -- "four" should be "five" -- and
   has been wrong since the sentence was written.** [measured, low severity]
@@ -3141,6 +3231,12 @@ having changed since the last pass.
   `ksp_epi_zf` carries no in-code rationale, and the sibling module that
   documents this exact dataset's read performance now silently describes
   data from before the change.** [measured, low-medium severity; citation
+  updated 2026-09-22 against `6921c8c` -- substance fully unchanged
+  through the `recon/` restructuring: `preprocess.py:445-446` unchanged;
+  `recon/hdf5_chunked_io.py`'s docstring still has no compression mention;
+  `tests/test_recon_hdf5_chunked_io.py` still writes its fixture
+  uncompressed (plain `f.create_dataset(key, data=full, chunks=chunks)`,
+  no `compression=`); citation
   updated 2026-09-19 against `d515cd0` -- item 213's 2026-09-16 refactor
   (predating this item's own 2026-09-17 citation update, but apparently
   not accounted for by it) split `_load_array` into a thin wrapper at
@@ -3166,7 +3262,7 @@ having changed since the last pass.
   decision in `smaps.py`/`grid_resize.py`) is to record measured rationale
   for exactly this kind of choice directly in code so it survives
   independent of git history -- here a real, well-justified number is
-  invisible to anyone reading the source. `tests/test_recon_reconstruct.py`'s
+  invisible to anyone reading the source. `tests/test_recon_hdf5_chunked_io.py`'s
   fixtures also write `ksp_epi_zf` uncompressed and unchunked, so
   `_load_array`'s chunk-by-chunk read path is untested against real
   gzip-compressed data. Fix: add a short comment at `preprocess.py:443-446`
@@ -3274,43 +3370,27 @@ having changed since the last pass.
   finding history" section still carries the old-protocol numbers as
   historical record (that section is explicitly framed as history, unlike
   this source comment) -- out of scope here, not touched.
-- [ ] **207. README.md's Architecture file tree is stale on both directions
-  of the `preprocessing/` -> `recon/` Stage-2 file move (commit `8f90cd7`),
-  and never gained an entry for the new `recon/cg_sense_b0.py`.**
-  [measured; found 2026-09-17 against `ad2fdc4`] `README.md`'s
-  `preprocessing/` tree (lines ~222-244) still lists `recon_sigpy.py`
-  (`:232`), `recon_frames.py` (`:236`), and "`run_preprocessing.py /
-  run_cg_sense.py / run_rss.py / run_recon_sigpy.py`" (`:237`, mixing the
-  one file that legitimately stays in `preprocessing/`,
-  `run_preprocessing.py`, with three files that moved to `recon/` in the
-  same breath) as if they still lived in `preprocessing/` -- `ls
-  preprocessing/*.py` confirms none of `recon_sigpy.py`/`recon_frames.py`/
-  `run_cg_sense.py`/`run_rss.py`/`run_recon_sigpy.py` exist there any more.
-  Meanwhile README's `recon/` tree (lines ~250-264) lists only the
-  pre-existing MSLR files (`operators.py` through `validate_against_mslr.py`)
-  and is missing all six moved files (also including
-  `lowres_calib_recon.py`) *and* the brand-new `cg_sense_b0.py` -- `ls
-  recon/*.py` confirms all seven are real files with no README entry. Same
-  class of doc-drift item 128/133 already track for other files, but on
-  README's own architecture diagram, previously untouched by any pass. Fix:
-  move the six file-description lines from the `preprocessing/` block to
-  the `recon/` block, and add a `cg_sense_b0.py` line (literal
-  conjugate-gradient SENSE using the B0-corrected operator, see item 208).
-- [ ] **208. CLAUDE.md's own introduction of `recon/cg_sense_b0.py` promises
-  detail "see below" that doesn't exist anywhere in the file.** [measured;
-  found 2026-09-17 against `ad2fdc4`] `CLAUDE.md:1066-1067`: "`recon/
-  cg_sense_b0.py` (literal conjugate-gradient SENSE -- see below -- using
-  the B0-corrected operator) is the one Stage-2-shaped file that genuinely
-  needs `.venv-recon`..." -- a repo-wide grep for `cg_sense_b0` in
-  CLAUDE.md shows this is the *only* occurrence. No paragraph in the "B0
-  off-resonance correction" section (which covers `b0_correction.py`,
-  `operators_b0.py`, `save_result.py`, `run_b0_recon.py` in detail) or
-  anywhere else mentions `cg_sense_b0.py`'s algorithm, its relationship to
-  `reconstruct.py`'s POGM solve, or why a literal-CG alternative exists at
-  all -- a reader following "see below" finds nothing. Fix: either add a
-  short paragraph (the module's own docstring already has the content: the
-  CG-vs-POGM tradeoff, no `sigma1A` needed, whole-volume-not-per-frame
-  solve) or drop "see below."
+- [x] **207.** Resolved, confirmed 2026-09-22 against `6921c8c`:
+  README.md's Architecture file tree was rewritten as part of the `recon/`
+  25-modules-to-7 consolidation (commits `56b6ee3`..`a790d81`) to match the
+  current layout. Repo-wide check confirms zero remaining references
+  anywhere in README.md to any of the files this item (or item 214's/215's
+  neighboring findings) named as removed (`recon_sigpy.py`, `recon_frames.py`,
+  `run_cg_sense.py`, `run_rss.py`, `run_recon_sigpy.py`, `cg_sense_b0.py`
+  under that name, `lowres_calib_recon.py`), and README's current `recon/`
+  tree (lines ~222-265) lists exactly the seven real files
+  (`operators.py`, `mslr.py`, `hdf5_chunked_io.py`, `run_recon.py`,
+  `L1-wavelet_TV_B0_SENSE.py`, `lowres_calib.py`, `analysis.py`) with
+  accurate one-line descriptions including subcommand names. (A different,
+  pre-existing gap survives in the *`preprocessing/`* half of the same
+  tree -- see item 225 below.)
+- [x] **208.** Resolved, confirmed 2026-09-22 against `6921c8c`: CLAUDE.md's
+  `recon/` section was rewritten as part of the `recon/` 25-modules-to-7
+  consolidation; the dangling `cg_sense_b0.py`-specific "see below" promise
+  no longer exists (`cg_sense_b0.py`'s content is now folded into
+  `recon/run_recon.py`'s `cg` subcommand, mentioned plainly in the
+  module-mapping list with no unmet forward-reference). `grep -n "see
+  below" CLAUDE.md` shows no unresolved case tied to CG-SENSE.
 - [ ] **209. CLAUDE.md's `preprocessing/`/`grid_resize.py` discussion has no
   mention of the new `zero_pad_z` resize feature (item 203) at all.**
   [measured; found 2026-09-17 against `ad2fdc4`] A `grep -n "zero_pad\|item
@@ -3328,65 +3408,36 @@ having changed since the last pass.
   gap item 205 describes).
 - [ ] **214. Four in-repo cross-references to "item 204" in `recon/`
   source comments actually mean item 213 -- item 204 is an unrelated
-  `params.py` finding.** [measured; found 2026-09-18 against `33d44a4`]
-  Item 213 (added directly by commit `1adc368`, not by an automated
+  `params.py` finding.** [measured; citation updated 2026-09-22 against
+  `6921c8c` -- `recon/lowres_calib_recon.py` and `recon/lowres_calib_recon_b0.py`
+  merged into `recon/lowres_calib.py` in the `recon/` 25-modules-to-7
+  consolidation; the three wrong citations now live at
+  `recon/lowres_calib.py:358`, `:412`, and `:643` (still "item 204,"
+  should be "item 213"), alongside `recon/hdf5_chunked_io.py:14`
+  (unchanged/still wrong) -- still 4 wrong sites total. The one correct
+  citation (formerly `lowres_calib_recon_b0complex.py:339`) is now at
+  `recon/lowres_calib.py:928` and still correctly says "item 213"] Item 213
+  (added directly by commit `1adc368`, not by an automated
   review pass) documents the fix for loading the full dense `ksp_epi_zf`
   array into memory (~201GB) just to read a few hundred calibration-region
-  samples, via the new `recon/hdf5_chunked_io.py`. Three source files cite
-  that exact fix but write "item 204" instead of "item 213" -- item 204 is
-  actually `params.py`'s stale PNS-slew-tuning comment (see this file's own
-  entry above), unrelated to HDF5 reads entirely:
-  `recon/hdf5_chunked_io.py:14`, `recon/lowres_calib_recon.py:135` and
-  `:189`, and `recon/lowres_calib_recon_b0.py:266`. Confirmed by direct
-  reading, not just grep: all four sit in comments/docstrings describing
-  exactly item 213's "cropped during the HDF5 read itself... not after
-  loading the full dense array" pattern, word-for-word close to item 213's
-  own text. The very next commit (`33d44a4`, adding
-  `recon/lowres_calib_recon_b0complex.py`) gets this right --
-  `lowres_calib_recon_b0complex.py:339` correctly cites "item 213" for the
-  identical claim -- confirming this is a copy-paste-and-forget-to-fix-up
-  slip in the three earlier sites, not a case where "204" was ever the
-  intended number. CLAUDE.md's own numbering convention exists specifically
-  because "source files cite item numbers... never reused" -- a wrong
-  number here silently points a future reader at the wrong finding. Fix:
-  s/item 204/item 213/ at all four sites.
-- [ ] **215. CLAUDE.md and four `recon/` source files describe
-  `recon/lowres_calib_recon_b0complex.py` as living only on the
-  "(unmerged) worktree-lowres-calib-recon branch" -- but a file of that
-  exact name and path now exists in this tree too, with different
-  (corrected-sign) behavior from the branch file being described.**
-  [measured; found 2026-09-18 against `33d44a4`; supersedes/broadens item
-  201's now-closed finding, which caught the `r2star_map.py:3` instance of
-  this same staleness before the file existed at all] Commit `33d44a4`
-  (2026-09-17) added `recon/lowres_calib_recon_b0complex.py` to this
-  branch, explicitly "ported from the unmerged, exploratory
-  worktree-lowres-calib-recon branch's lowres_calib_recon_b0complex.py,
-  adapted... to match GatheredSenseB0's current (pos, b_by_echo) contract
-  instead of that branch's stale pre-gathered-b signature" (that commit's
-  own message) -- i.e. a real, on-main file with the same name and purpose
-  as the exploratory branch's, but not byte-identical to it. Eight
-  references across five files still describe
-  `recon/lowres_calib_recon_b0complex.py` as if it only exists on that
-  other, unmerged branch, with no acknowledgment that this path is now
-  live in this tree: `CLAUDE.md:1273-1274` ("Sign convention diverges
-  deliberately from the (unmerged, exploratory) worktree-lowres-calib-recon
-  branch's `recon/lowres_calib_recon_b0complex.py`"),
-  `recon/operators_b0.py:239-240,278`, `recon/run_b0_recon.py:13,18,89-90`,
-  and `tests/test_recon_operators_b0.py:278-279,329`. A reader hitting any
-  of these eight sites cold, without already knowing commit `33d44a4`'s
-  history, would reasonably conclude `recon/lowres_calib_recon_b0complex.py`
-  doesn't exist in this checkout -- it does, and (per item 214's sibling
-  file `lowres_calib_recon_b0.py`'s own docstring cross-references) is
-  actively used. This is doubly confusing because the *content* being
-  contrasted is still accurate in substance (this repo's operators use the
-  physically-correct sign, the description of what the exploratory
-  branch's file originally did wrong is still correct historical
-  context) -- only the "doesn't exist here" implication is now stale. Fix:
-  reword all eight sites to distinguish the two files explicitly, e.g.
-  "the exploratory branch's original (differently-signed)
-  `lowres_calib_recon_b0complex.py`, not this repo's own adapted
-  `recon/lowres_calib_recon_b0complex.py`" or similar, rather than implying
-  the path is branch-only.
+  samples, via `recon/hdf5_chunked_io.py`. CLAUDE.md's own numbering
+  convention exists specifically because "source files cite item
+  numbers... never reused" -- a wrong number here silently points a future
+  reader at the wrong finding (item 204 is `params.py`'s stale
+  PNS-slew-tuning comment, unrelated to HDF5 reads). Fix: s/item 204/item
+  213/ at all four sites.
+- [x] **215.** Resolved, confirmed 2026-09-22 against `6921c8c` -- ironically
+  re-resolved by the second (`recon/`-wide) merge: the standalone
+  `recon/lowres_calib_recon_b0complex.py` this item was about no longer
+  exists in this tree at all, folded into `recon/lowres_calib.py`
+  ("Formerly `recon/lowres_calib/lowres_calib_recon_b0complex.py`" at
+  `:196`), and every cross-reference was cleaned up during the merge to
+  correctly and unambiguously describe the *other* branch's *own* copy:
+  `CLAUDE.md:1290-1291` now says "(its path on that branch)";
+  `recon/operators.py:421`, `recon/run_recon.py:28,226`, and
+  `tests/test_recon_operators_b0.py:278-280` all correctly attribute the
+  flipped-sign file to "the worktree-lowres-calib-recon branch" without
+  implying it's absent from this tree. No remaining ambiguity.
 - [ ] **220. `lib/make_excitation_pulse.py`'s new item-168 explanatory
   comment cites the wrong backlog item number for its own claim.**
   [measured; found 2026-09-19 against `d515cd0`, in the fix commit for
@@ -3414,6 +3465,107 @@ having changed since the last pass.
   cheap to fix. Fix: change "item 63" to "item 168" at
   `lib/make_excitation_pulse.py:45` (or drop the citation entirely, since
   the surrounding prose already explains the mechanism inline).
+- [ ] **225. README.md's Architecture file tree for `preprocessing/` omits
+  two real modules: `grid_resize.py` and `r2star_map.py`.** [measured]
+  `ls preprocessing/*.py` shows 17 files (excluding `__init__.py`);
+  README's tree (lines ~222-244) lists 15, and `grep -n
+  "grid_resize\|r2star_map" README.md` returns nothing -- neither module
+  is mentioned anywhere in the file. Both are substantial,
+  CLAUDE.md-documented modules (`grid_resize.py`'s `grid_mode=True` fix is
+  called "directly load-bearing" for B0-corrected reconstruction in
+  CLAUDE.md's `recon/` section; `r2star_map.py` computes the R2* map that
+  feeds the optional T2*-decay-correction path). By contrast, README's
+  `recon/` tree is fully accurate (all 7 current files present, correct
+  one-line descriptions, subcommand names verified against `_COMMANDS`
+  dicts in `run_recon.py`/`analysis.py`/`lowres_calib.py` --
+  `mslr-ref`/`mslr-local`/`cg`, `sweep`/`benchmark`/`validate`,
+  `calib`/`stability`, all exact matches) -- this is a narrower,
+  pre-existing gap in the `preprocessing/` half of the same tree that the
+  recent `recon/`-tree rewrite (item 207) didn't happen to touch (`r2star_map.py`
+  predates that rewrite by some margin). Fix: add one line each to
+  README's `preprocessing/` tree block.
+- [ ] **226. `recon/L1-wavelet_TV_B0_SENSE.py`'s "Formerly
+  `run_recon_sigpy_b0.py`" docstring section is garbled from a bad
+  merge-time search/replace, listing the same filename three times where
+  three distinct removed drivers belong, and separately conflates two
+  different files under one name two lines later.** [measured]
+  `recon/L1-wavelet_TV_B0_SENSE.py:107-108` reads: "Unlike sigpy_recon.py's
+  other Stage-2 drivers (sigpy_recon.py, sigpy_recon.py, sigpy_recon.py --
+  all .venv-preprocessing, sigpy-only), this needs torch/mirtorch..." --
+  nonsensical as written (a driver cannot be one of "its own" other
+  drivers) and demonstrably wrong: `git show
+  9c288b0:recon/sigpy_b0/run_recon_sigpy_b0.py` shows the pre-merge
+  original text was "Unlike recon_frames.py's other Stage-2 drivers
+  (run_rss.py, run_cg_sense.py, run_recon_sigpy.py -- all
+  .venv-preprocessing, sigpy-only)" -- every one of those four filenames
+  was replaced with the single string "sigpy_recon.py" at some point in
+  the `9c288b0`->`a790d81` merge chain, destroying the actual list of
+  sibling drivers. Separately, two lines above (`:103-104`), "the
+  regularized-recovery counterpart to recon/run_recon.py (unregularized)
+  and recon/run_recon.py (nuclear-norm regularized), all three sharing the
+  same B0-corrected GatheredSenseB0 encoding operator" cites the identical
+  path `recon/run_recon.py` twice with contradictory parenthetical
+  descriptions -- this should almost certainly distinguish
+  `recon/run_recon.py`'s `cg` subcommand (unregularized) from
+  `recon/mslr.py`'s `run_recon` (nuclear-norm regularized MSLR), not name
+  the same file twice. Both defects sit in the same docstring paragraph
+  and both look like mechanical, unreviewed renames during the module
+  consolidation. Also found in the same file family: `recon/analysis.py:139`'s
+  `NBINS = 128` comment still cites `run_b0_recon.py`'s production default
+  as its source -- that file no longer exists (merged into
+  `recon/run_recon.py`), same class of drift, worth fixing in the same
+  pass (see also item 112/179, which already tracks a related staleness in
+  this same file). Fix: reword `L1-wavelet_TV_B0_SENSE.py:103-104,107-108`
+  to name the real current files/subcommands, and fix `analysis.py:139`'s
+  comment.
+- [ ] **227. `preprocessing/epi_gridding.py`'s module docstring overstates
+  its own regression test's coverage.** [measured] The docstring (added by
+  the `645c9c3` absolute-scale fix) claims the test "measures this exact
+  sqrt(nx) gap to 4 significant figures across nx in `{32,64,128,256}`"
+  (`epi_gridding.py:46`), but the actual test,
+  `test_rampsamp2cart_absolute_scale_matches_ortho_fft_for_uniform_kx`
+  (`tests/test_preprocessing_epi_gridding.py:145-180`), only loops `for nx
+  in [32, 64, 128]` (`:162`) -- `256` is not tested at all. Either the
+  docstring overstates coverage or a swept value was dropped when the test
+  was finalized. Fix: add `256` to the loop, or correct the docstring's
+  claimed range.
+- [ ] **228. `pyproject.toml`'s `recon` extra comment cites a file deleted
+  by the `recon/` consolidation, and CLAUDE.md's `recon`-extra dependency
+  list is now incomplete.** [measured] `pyproject.toml`'s comment on the
+  `recon` extra's `sigpy>=0.1.26` dependency ("...see
+  `recon/sigpy_torch_bridge.py`'s module docstring") cites a file that no
+  longer exists: `recon/sigpy_torch_bridge.py` was added by commit
+  `56ad29b` and merged into `recon/L1-wavelet_TV_B0_SENSE.py` by the later
+  `a790d81` consolidation (the `TorchLinopBridge` class and the
+  cupy-avoidance rationale both now live at
+  `recon/L1-wavelet_TV_B0_SENSE.py:28-41,187`). Companion issue:
+  `CLAUDE.md`'s `recon/` section still explicitly lists the `recon`
+  extra's dependencies as "`torch`, `mirtorch`, `h5py`, `nibabel`" --
+  omitting `sigpy`, which `pyproject.toml` added to that same extra when
+  `sigpy_torch_bridge.py` was first introduced. Fix: retarget the
+  `pyproject.toml` comment at `recon/L1-wavelet_TV_B0_SENSE.py`, and add
+  `sigpy` to CLAUDE.md's recon-extra dependency list.
+- [ ] **229. Three `preprocessing/` docstrings still cite deleted `recon/`
+  files (`sigpy_recon.py`, `recon_frames.py`) unqualified, as if they
+  still exist.** [measured] `recon/sigpy_recon.py` and
+  `recon/recon_frames.py` were both deleted outright (not moved) in the
+  `recon/` 25-modules-to-7 consolidation. Every sibling reference to
+  `sigpy_recon.py` was correctly updated to say "the removed
+  `recon/sigpy_recon.py`" during the same consolidation
+  (`preprocessing/cg_sense.py:59`, `grid_resize.py:45`, `run_b0map.py:3,20,27,109`,
+  `nifti_io.py:3`, `smaps.py`'s docstring, `preprocess.py`'s docstring,
+  `sequences/deGRE.py:23`) -- `preprocessing/oephase.py:116-117`'s
+  "`sigpy_recon.py`'s `_ift3`" is the one unqualified straggler repo-wide
+  (`_ift3` itself now lives in `preprocessing/gre_diagnostics.py`, per
+  item 199). Separately, `preprocessing/nifti_io.py:4` and
+  `preprocessing/config.py:156` both still cite "`recon_frames.py`"
+  unqualified as a still-existing sibling module -- CLAUDE.md itself
+  already qualifies every one of its own `recon_frames` references as
+  historical ("(since removed) `recon_frames`", "the removed
+  `sigpy_recon.py`'s...`recon_frames` loop"); these two `preprocessing/`
+  docstrings are the only unqualified survivors repo-wide. Fix: reword all
+  three sites to say "the removed `recon/<file>.py`," matching the
+  convention every other sibling reference already follows.
 
 ## Test & tooling health
 
@@ -3515,13 +3667,19 @@ having changed since the last pass.
   monkeypatch `balanced_factors` to force a non-dividing pair through,
   which tests the guard's existence but not anything a real caller can
   trigger -- not worth the complexity for defense-in-depth code.
-- [ ] **129. `recon/save_result.py` has zero test coverage anywhere in the
+- [ ] **129. `recon/mslr.py`'s `save_result` function has zero test coverage
+  anywhere in the
   repo, including no regression guard for the exact GPU-tensor-ordering
   bug its own docstring says previously destroyed a completed
-  reconstruction.** [measured] A repo-wide grep for `save_result` under
-  `tests/` finds nothing; `recon/save_result.py` is never imported by any
-  test file. Its own module docstring and inline comment
-  (`save_result.py:1-10,23-27`) explain a fix baked into the current code:
+  reconstruction.** [measured; citation updated 2026-09-22 against
+  `6921c8c` -- `recon/save_result.py` (standalone file) merged into
+  `recon/mslr.py` as the `save_result` function (`:616-653`, same body,
+  same CPU/GPU-boundary comment intact at `:617-625`) in the `recon/`
+  25-modules-to-7 consolidation; still zero test coverage -- confirmed
+  `grep -rn save_result tests/` finds nothing outside `recon/mslr.py`
+  itself, and `tests/test_recon_mslr.py` (the renamed test file) doesn't
+  call it either] Its own module docstring and inline comment
+  (`recon/mslr.py:617-625`) explain a fix baked into the current code:
   `result.X_recon.detach().cpu().numpy()` and the raw-complex `.h5` write
   must both happen *before* handing data to
   `preprocessing/nifti_io.save_recon_nifti` -- "getting that boundary
@@ -3576,9 +3734,16 @@ having changed since the last pass.
   item 126's fix once applied (construct a synthetic `Ceq` whose segment
   block count divides `NMAXBLOCKSFORGRADHEATCHECK` evenly, matching that
   item's own repro).
-- [ ] **135. `recon/reconstruct.py`'s entire `fn_b0map` branch in
+- [ ] **135. `recon/mslr.py`'s entire `fn_b0map` branch in
   `run_recon` -- including the item-93 `sigma1A` auto-measurement and its
   `ValueError` guard -- has zero test coverage.** [measured; citation
+  updated 2026-09-22 against `6921c8c` -- `reconstruct.py` renamed to
+  `recon/mslr.py` in the `recon/` 25-modules-to-7 consolidation; branch now
+  `recon/mslr.py:453-488` (`b0map_hz.shape` assert `:456-458`, `ValueError`
+  guard `:478-484`, auto-sigma1A power iteration `:485-488`); test file
+  renamed to `tests/test_recon_mslr.py`; confirmed all three `sigma1A=`
+  call sites (`:134,191,260`) still pass it explicitly and never set
+  `fn_b0map`; substance fully unchanged; citation
   updated 2026-09-16 against `de3d535` -- the branch grew from
   `:202-227` to `:213-247` after commit `1b4704a`'s r2star_map/t_ref_s
   shape-assert block was inserted; citation updated again 2026-09-18
@@ -3663,10 +3828,17 @@ having changed since the last pass.
   this describes, confirmed still exactly matching that description by
   direct manual exercise (`TE=1ms` against default params correctly
   warns "Minimum achievable TE (32.104 ms) exceeds prescribed TE (1.000
-  ms)." and falls back to `te_delay=0.0`). But a repo-wide grep for
-  `pytest.warns` across the entire `tests/` directory returns zero
-  matches -- no test anywhere in this suite ever asserts on a
-  `warnings.warn` call, and there is no dedicated
+  ms)." and falls back to `te_delay=0.0`). [citation updated 2026-09-22
+  against `6921c8c`: the "zero `pytest.warns` matches" sub-claim is now
+  stale -- a grep finds exactly one hit repo-wide,
+  `tests/test_recon_operators_b0.py:453` (`pytest.warns(UserWarning,
+  match="not unitary")`, added by the `recon/` restructuring's test
+  rewrite), which is unrelated to `calc_te_tr_delays`; the substantive
+  finding (nothing exercises either of `calc_te_tr_delays.py`'s two
+  warn-and-fallback branches) is unchanged] But a repo-wide grep for
+  `pytest.warns` across the entire `tests/` directory otherwise finds
+  nothing -- no test anywhere in this suite asserts on
+  `calc_te_tr_delays`'s own `warnings.warn` calls, and there is no dedicated
   `tests/test_calc_te_tr_delays.py` at all; every existing
   sequence-generation test uses default or otherwise-achievable timing,
   so neither the TE nor the TR warn-and-fallback branch is ever
@@ -3711,26 +3883,38 @@ having changed since the last pass.
   `subprocess.run`/`resize_to_epi_grid`/`load_smaps` the way the repro
   above does and asserts the batch survives a mid-sequence failure and
   prints the expected `ERROR .../Skipping...` message.
-- [ ] **162. `preprocessing/gre_diagnostics.py` has zero test coverage
-  anywhere in the repo, including for the two `KeyError`-avoiding guard
-  clauses item 152 just added.** [measured, low severity] A repo-wide grep
+- [ ] **162. `preprocessing/gre_diagnostics.py`'s `ValueError` guard clauses
+  and `main()` have no test coverage** [reworded 2026-09-22 against
+  `6921c8c` -- the "zero test coverage anywhere" claim is now false:
+  `tests/test_preprocessing_ift3.py` exists and imports/tests
+  `gre_diagnostics._ift3` in isolation (added when `_ift3` was relocated
+  into `gre_diagnostics.py` after `recon/run_rss.py` was deleted in the
+  `recon/` consolidation -- see item 199's update). That test covers only
+  `_ift3`; the two `ValueError` guard clauses (now `gre_diagnostics.py:65-70`
+  for `TE_degre`, `:99-105` for `b0map_hz_degre`, drifted from
+  `:82-89`) and `main()` itself remain completely untested] [measured, low
+  severity] A repo-wide grep
   confirms no `tests/test_preprocessing_gre_diagnostics.py` exists and no
-  other test file imports `preprocessing.gre_diagnostics`. Item 152's fix
+  other test file imports the guard clauses or `main()`. Item 152's fix
   added a `KeyError`-avoiding check for `TE_degre` (already existed,
   copied from item 78's pattern) and a brand-new one for
-  `b0map_hz_degre` (`gre_diagnostics.py:82-89`) -- neither is exercised by
+  `b0map_hz_degre` -- neither is exercised by
   any test. Same "one-off diagnostic script with no test file" gap item
   115 already documents for `plotting/`, not yet flagged for this file.
   Fix direction: a small synthetic-fixture test (mirroring
   `run_b0map.py`'s own test fixtures) asserting both `ValueError` guards
   fire on malformed inputs, and that `main()` completes and writes the
   expected PNG/NIfTI files on well-formed ones.
-- [ ] **163. `recon/operators_b0.py`'s frame-shared `c_phasors`/`b_by_echo`
+- [ ] **163. `recon/operators.py`'s frame-shared `c_phasors`/`b_by_echo`
   tensors -- the fix for a documented real CUDA-OOM bug -- have no
   regression test for the sharing/object-identity property that fix
-  depends on.** [measured; citation updated 2026-09-16 against `de3d535`
-  -- shifted from `:213-221` to `:216-224`, substance unchanged]
-  `operators_b0.py:216-224`'s own docstring
+  depends on.** [measured; citation updated 2026-09-22 against `6921c8c`
+  -- `operators_b0.py` merged into `recon/operators.py` in the `recon/`
+  25-modules-to-7 consolidation; docstring now `recon/operators.py:397-405`
+  (`build_encoding_operator_b0`), `GatheredSenseB0` construction
+  `:270-297`; substance and gap fully unchanged, still no `data_ptr()`
+  test anywhere in `tests/test_recon_operators_b0.py`]
+  `recon/operators.py:397-405`'s docstring
   explains: an earlier version built an independent `(L,*N)` `c_phasors`
   copy per frame, and at this repo's real scale that redundancy alone was
   large enough (`L=16`) to push a real reconstruction into a CUDA OOM. The
@@ -3748,12 +3932,15 @@ having changed since the last pass.
   as items 129/134/135/161/162. Fix: add an assertion in an existing
   `build_encoding_operator_b0` test that every frame's
   `.c_phasors`/`.b_by_echo` share `data_ptr()` with frame 0's.
-- [ ] **164. `recon/operators_b0.py`'s `_check_b_weight_row_sums` --
+- [ ] **164. `recon/operators.py`'s `_check_b_weight_row_sums` --
   the detector for a real, documented signal-loss/incoherent-noise bug --
   is never tested actually firing on a bad input.** [measured; citation
-  updated 2026-09-16 against `de3d535` -- shifted from `:118-141` to
-  `:120-144`, substance unchanged]
-  `operators_b0.py:120-144`'s docstring explains this check exists
+  updated 2026-09-22 against `6921c8c` -- `operators_b0.py` merged into
+  `recon/operators.py` in the `recon/` 25-modules-to-7 consolidation,
+  `_check_b_weight_row_sums` now `recon/operators.py:301-324`; substance
+  unchanged, still only the negative case (`test_production_nbins_avoids_row_sum_warning`)
+  is tested, no `pytest.warns` test at a known-bad `nbins`]
+  `recon/operators.py:301-324`'s docstring explains this check exists
   specifically because `nbins=20` was confirmed as the root cause of a
   real ill-conditioned-segmentation-fit failure on real reconstructions
   (see CLAUDE.md's `nbins` paragraph). The only test that touches it,
@@ -3844,7 +4031,16 @@ having changed since the last pass.
 - [ ] **175. `preprocessing/smaps.py`'s two new Gaussian-smoothing tests
   don't exercise an anisotropic target grid, the one shape of bug the
   physical-mm sigma conversion could plausibly hide.** [measured, low-
-  medium severity; citation updated 2026-09-17 against `ad2fdc4` -- the
+  medium severity; citation updated 2026-09-22 against `6921c8c` --
+  correction to a mischaracterization: `tests/test_preprocessing_smaps.py:104-142`
+  is actually `test_process_smaps_background_is_exactly_zero_after_resize`
+  (a resize/background-masking regression test, not a dedicated smoothing
+  test -- though it does run with the default `smooth_sigma_mm=6.0`
+  active, so it does exercise the smoothing code path incidentally). The
+  real, dedicated smoothing test is only `:145-198`. The
+  underlying finding (no anisotropic-grid test for the `sigma_vox`
+  conversion) still holds, since both tests use isotropic grids; citation
+  updated 2026-09-17 against `ad2fdc4` -- the
   `vox_mm`/`sigma_vox` lines shifted again from `:332-333` to `:342-343`
   (the `dd77792` single-calibration rewrite); test file citations
   unchanged, still exactly `:104-142`/`:145-196`; substance unchanged]
@@ -3937,37 +4133,41 @@ having changed since the last pass.
   `_ESP_BANDS_US`) where the first feasible dwell's `gro` duration falls
   inside a forbidden band, asserting `find_min_feasible_dwell` returns the
   next dwell instead.
-- [ ] **202. `recon/lowres_calib_recon.py`/`preprocessing/
-  r2star_map.py` have zero test coverage -- now three more siblings in
-  the same family share the gap too.** [measured; citation updated
-  2026-09-17 against `ad2fdc4` -- `lowres_calib_recon.py` moved from
-  `preprocessing/` to `recon/` (commit `8f90cd7`); substance (still zero
-  coverage for either file) unchanged; found 2026-09-16
+- [ ] **202. `recon/lowres_calib.py` (all five merged calibration-recon
+  variants) and `preprocessing/
+  r2star_map.py` have zero test coverage.** [measured; citation updated
+  2026-09-22 against `6921c8c` -- all five previously-tracked files
+  (`lowres_calib_recon.py`, `lowres_calib_recon_b0.py`,
+  `lowres_calib_recon_b0complex.py`, `lowres_temporal_stability.py`)
+  merged into `recon/lowres_calib.py` in the `recon/` 25-modules-to-7
+  consolidation; gap consolidated, not closed -- confirmed **no test file
+  exists at all** for `recon/lowres_calib.py` (`ls tests/` has no
+  `test_recon_lowres_calib.py`; the only reference is two incidental
+  comment lines in `tests/test_recon_operators_b0.py:279,330`). Every
+  function this item previously listed is confirmed still present and
+  still untested: `compute_calib_mask` (`:315`), `native_calib_grid`
+  (`:322`), `_build_calib_operator_b0` (`:478`), `gather_calib_ksp`
+  (`:531`), `run_b0_corrected_calib_recon` (`:548`),
+  `_build_calib_operator_b0_complex` (`:699`), `nominal_te_s` (`:688`),
+  `object_mask` (`:1009`), `temporal_stability` (`:1018`).
+  `preprocessing/r2star_map.py`'s own portion is unchanged -- still zero
+  tests (note: `tests/test_recon_operators_b0.py` mentions `r2star_map`
+  but only tests `recon/operators.py`'s `r2star_map` *parameter*, not
+  `preprocessing/r2star_map.py`'s functions at all -- a false negative if
+  someone greps naively). Substance below unchanged, only file/line
+  citations drifted; found 2026-09-16
   against `de3d535`, commit `42edeb3`; broadened 2026-09-18 against
   `33d44a4`] No
-  `tests/test_recon_lowres_calib_recon.py`/
+  `tests/test_recon_lowres_calib.py`/
   `test_preprocessing_r2star_map.py` exists, and no other test imports
   either module (confirmed by grep). Same "no regression test for
   just-added real behavior" pattern items 161/162/174/175/178/189/198
   already document elsewhere in `preprocessing/`. Given item 199 above,
-  a test on an odd-sized synthetic grid asserting `lowres_calib_recon()`'s
+  a test on an odd-sized synthetic grid asserting the plain calib recon's
   magnitude output is correct (and ideally regression-locking that fix)
-  would be the highest-value addition. Three brand-new files added by
-  `f81a62e`/`33d44a4` extend the same gap: `recon/lowres_calib_recon_b0.py`
-  (318 lines -- `compute_calib_mask`/`native_calib_grid`/
-  `_build_calib_operator_b0`/`gather_calib_ksp`/
-  `run_b0_corrected_calib_recon` all untested), `recon/
-  lowres_calib_recon_b0complex.py` (395 lines -- same plus
-  `_build_calib_operator_b0_complex`/`nominal_te_s`), and `recon/
-  lowres_temporal_stability.py` (201 lines -- `object_mask`/
-  `temporal_stability`, the latter a plain-numpy function with no
-  torch/GPU dependency and the least excuse of the group for having no
-  unit test, computing the actual percent-fluctuation/drift/tSNR numbers
-  CLAUDE.md's B0-correction section quotes). No `tests/
-  test_recon_lowres_calib_recon_b0*.py`/`test_recon_lowres_temporal_stability.py`
-  exists (confirmed by `ls tests/`); `tests/test_recon_hdf5_chunked_io.py`
+  would be the highest-value addition. `tests/test_recon_hdf5_chunked_io.py`
   (item 213's own new test file) only covers the shared chunked-read
-  helper these five files call into, not their own logic.
+  helper `recon/lowres_calib.py` calls into, not its own logic.
 - [ ] **210. `preprocessing/smaps.py`'s `process_smaps`'s own `zero_pad_z`
   parameter (item 203) has no direct test.** [measured, low severity;
   found 2026-09-17 against `ad2fdc4`] `tests/test_preprocessing_smaps.py`
@@ -3976,34 +4176,49 @@ having changed since the last pass.
   `tests/test_preprocessing_grid_resize.py` (confirmed via `grep -rn
   zero_pad_z tests/`). Same "no regression test for a just-added real
   behavior in this file" pattern items 161/174/175/178/189 already
-  document for `smaps.py`. Low priority on its own, but directly relevant
+  document for `smaps.py`. [Cross-reference to item 205 corrected
+  2026-09-22: `load_smaps()` now *does* expose `zero_pad_z` (commit
+  `5ba6fc5`), it's just still completely untested --
+  `tests/test_preprocessing_load_smaps.py` has zero references to
+  `zero_pad_z` either.] Low priority on its own, but directly relevant
   to item 205: a test calling `process_smaps(..., zero_pad_z=True)` at the
-  EPI-grid target would have surfaced that `load_smaps()` never exposes
-  this knob at all. Fix: add such a test, ideally alongside item 205's fix.
-- [ ] **212. `recon/cg_sense_b0.py`'s `run_cgsense_b0` (the orchestration
+  EPI-grid target, and one calling `load_smaps(..., zero_pad_z=True)`
+  directly, would lock in commit `5ba6fc5`'s fix and catch a future
+  regression of the `run_b0map()` silent-fallback bug item 205 originally
+  found. Fix: add such tests, ideally alongside item 205's remaining
+  `preprocess.py` fix.
+- [ ] **212. `recon/run_recon.py`'s `run_cgsense_b0` (the orchestration
   function, not the tested `cg_sense_solve` solver) has zero test
   coverage, matching the established items 129/135 pattern exactly.**
-  [measured; found 2026-09-17 against `ad2fdc4`]
+  [measured; citation updated 2026-09-22 against `6921c8c` --
+  `cg_sense_b0.py` merged into `recon/run_recon.py` in the `recon/`
+  25-modules-to-7 consolidation, `run_cgsense_b0` now `recon/run_recon.py:497`;
+  `grep -rn run_cgsense_b0 tests/` still finds zero hits; substance
+  unchanged]
   `tests/test_recon_cg_sense_b0.py`'s two tests both call `cg_sense_solve`
   directly with hand-built operators/k-space; nothing calls
-  `run_cgsense_b0` itself (`grep -rn "run_cgsense_b0" tests/` finds no
-  hits outside `cg_sense_b0.py`'s own `if __name__` block). Untested: the
+  `run_cgsense_b0` itself. Untested: the
   `use_b0`/`fn_b0map=''` branching, the `b0map_hz.shape == (Nx,Ny,Nz)`
   assert, the `assert not r2star` guard, the r2star-map wiring, and the
-  `.h5`/`.nii.gz`/`.json` write triplet (mirroring `save_result.py`'s own
+  `.h5`/`.nii.gz`/`.json` write triplet (mirroring `save_result`'s own
   untested write pattern, item 129) -- a future refactor could silently
   break any of these with nothing to catch it. Fix: extend
   `tests/test_recon_cg_sense_b0.py` with a small synthetic-fixture test of
   `run_cgsense_b0` itself (small `ksp_epi_zf.h5`/`smaps_...h5`/
   `scan_info.mat`/optional `b0map.h5`), the same style item 135's
-  suggested fix proposes for `reconstruct.py`'s `fn_b0map` branch.
+  suggested fix proposes for `recon/mslr.py`'s `fn_b0map` branch.
 - [ ] **216. `tests/test_recon_operators_b0.py` builds its `omega` sampling
   mask from an unseeded `torch.rand()` in four tests, unlike every other
   random tensor in the file -- genuinely flaky, reproduced directly this
-  pass.** [measured; found and reproduced 2026-09-18 against `33d44a4`]
+  pass.** [measured; citation updated 2026-09-22 against `6921c8c` -- all
+  four line numbers drifted +1 from the `recon/` restructuring's test-file
+  churn: `:175` (was `:174`), `:202` (was `:201`), `:251` (was `:250`),
+  `:292` (was `:291`); substance fully unchanged -- still 4 unseeded
+  `torch.rand(Nx,Ny,Nz,...)` calls, no `torch.manual_seed`/generator
+  anywhere in the file; found and reproduced 2026-09-18 against `33d44a4`]
   `test_build_encoding_operator_b0_matches_manual_per_frame_construction`
-  (`:201`), `test_r2star_zero_map_matches_phase_only_operator` (`:250`),
-  and two more (`:174`, `:291`) all build their sampling mask via
+  (`:202`), `test_r2star_zero_map_matches_phase_only_operator` (`:251`),
+  and two more (`:175`, `:292`) all build their sampling mask via
   `torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.4` (or `> 0.5`) with no
   `torch.manual_seed` anywhere in the file and no seed argument -- unlike
   every *other* random tensor in this file, which goes through
@@ -4033,8 +4248,21 @@ having changed since the last pass.
   infra/timing issue), the fix is trivial and permanent: seed `omega`'s
   construction the same way every other random tensor in this file already
   is (e.g. thread a `seed` through a local `torch.Generator`, matching
-  `_complex_randn`'s own pattern) at all four sites (`:174`, `:201`,
-  `:250`, `:291`).
+  `_complex_randn`'s own pattern) at all four sites (`:175`, `:202`,
+  `:251`, `:292`).
+- [ ] **230. `preprocessing/smaps.py`'s `load_smaps()` `zero_pad_z`
+  parameter has zero test coverage.** [measured] Commit `5ba6fc5` gave
+  `load_smaps()` a real, behavior-changing `zero_pad_z` parameter (see
+  item 205's partial resolution above), but `grep -n zero_pad_z
+  tests/test_preprocessing_load_smaps.py` finds nothing, and no other test
+  file exercises `load_smaps(..., zero_pad_z=True)`. Distinct from (and
+  narrower than) item 210, which only covers `process_smaps`'s own
+  `zero_pad_z` parameter -- `load_smaps`'s parameter didn't exist yet when
+  item 210 was written. Fix: add a test mirroring
+  `tests/test_preprocessing_grid_resize.py`'s real-5.4mm-config test, but
+  through `load_smaps()` itself, to lock in commit `5ba6fc5`'s fix and
+  catch a future regression of the `run_b0map()` silent-fallback bug item
+  205 originally found.
 
 ## Conciseness & performance
 
@@ -4150,6 +4378,17 @@ having changed since the last pass.
   `run_rss.py`) now covers this consumer too automatically. Verified no
   circular import (`run_rss.py` doesn't import `gre_diagnostics`) and no
   new lint/test regressions.
+
+  **Regressed 2026-09-22, found while re-verifying item 199**: `recon/run_rss.py`
+  -- the shared import target this fix relied on -- was deleted outright
+  in the `recon/` 25-modules-to-7 consolidation. `gre_diagnostics.py` now
+  defines its own local `_ift3` copy again (still inert -- magnitude-only
+  usage, so no live bug), but the "imports a shared function" fix this
+  item describes no longer holds. Kept `[x]` (the fix was real and correct
+  at the time) rather than reopened, per this file's "closed items stay
+  marked, don't delete" convention -- see item 199 for the live tracking
+  of this regression and its fix direction (import from
+  `preprocessing/gre_diagnostics.py` itself now, in-package).
 - [x] **94.** Resolved: added `recon/reconstruct.py`'s
   `_load_normalized_smaps(fn_smaps, device) -> (smaps, smaps_chw)` helper
   (next to `_load_omega`/`_load_echo_times`), called by both `run_recon`
@@ -4186,6 +4425,16 @@ having changed since the last pass.
 - [ ] **117. `preprocessing/preprocess.py`'s STEP 3 duplicates
   `smaps.py`'s `load_smaps()` caching logic instead of calling it, and the
   duplicate is already narrower and drifting.** [verify; citation updated
+  2026-09-22 against `6921c8c` -- `smooth_sigma_mm` threading citation
+  drifted `:341`->`:375`; `recon_frames.py:76` (the "used by" citation
+  below) is stale -- that file was deleted outright in the `recon/`
+  25-modules-to-7 consolidation, and `load_smaps()` today has exactly one
+  real caller, `preprocessing/run_b0map.py:102`; `preprocess.py:355`'s own
+  comment ("backfilled lazily by smaps.py's load_smaps() the first time
+  something (recon_frames.py, run_b0map.py) actually needs them") likewise
+  still cites the now-deleted `recon_frames.py` -- same class of drift,
+  fix together; substance of the core duplication finding fully unchanged]
+  [verify; citation updated
   2026-09-17 against `ad2fdc4` -- STEP 3 shifted from `:323-353` to
   `:352-388` and its `Nvcoils` check from `:330` to `:364` after the
   `dd77792` smaps.py rewrite (single-calibration projection design);
@@ -4197,11 +4446,12 @@ having changed since the last pass.
   redesign; substance unchanged] `preprocess()`'s
   STEP 3 (`preprocess.py:352-388`) hand-rolls the same "check cached
   `Nvcoils` attr, load-or-estimate-and-cache" pattern
-  `smaps.load_smaps()` (used by `recon_frames.py:76`) already implements
+  `smaps.load_smaps()` (used by `run_b0map.py:102`, its only remaining
+  caller now that `recon_frames.py` is gone) already implements
   -- but narrower: it never computes/writes `smaps_degre`/`emap_degre`
   (the deGRE-grid maps `run_b0map.py` needs), leaving that to
   `load_smaps()`'s documented backfill path the first time
-  `recon_frames.py` or `run_b0map.py` runs later. Not a correctness bug
+  `run_b0map.py` runs later. Not a correctness bug
   today (the backfill path is real and tested), but it's duplicated
   cache-validity logic in two places that can already drift: item 41's
   fix made `smaps.py:386-392` compare `int(f.attrs['Nvcoils'])`
@@ -4248,51 +4498,54 @@ having changed since the last pass.
   used. Either add a couple of parametrized `dtype=` cases to
   `test_pd_sample.py`, or drop the untested branches if nothing is
   expected to ever pass a non-default `dtype`.
-- [ ] **130. The Stage-2 batch-driver skeleton is duplicated near-verbatim
-  across five files.** [measured] `preprocessing/run_preprocessing.py`,
-  `run_rss.py`, `run_cg_sense.py`, `run_recon_sigpy.py`, and
-  `run_b0map.py` all share the identical outer skeleton: `print(f'Batch:
-  {len(cfg.seqnames)} sequence(s) in {cfg.datdir}')`, then `for i,
-  seqname in enumerate(cfg.seqnames, start=1): print(f'\n[{i}/{len(cfg.
-  seqnames)}] {seqname}')`, a per-sequence `try/except Exception as e:
-  print(f"ERROR [{seqname}]: {e}\nSkipping...")` (each carrying the same
-  `# noqa: BLE001` comment citing "mirrors the sibling batch drivers'
-  try/catch"), and a trailing `print('\nBatch complete.')`. In the three
-  Stage-2 recon drivers (`run_rss.py:39-57`, `run_cg_sense.py:18-46`,
-  `run_recon_sigpy.py:15-49`) the duplication runs deeper: each also
-  repeats `paths = set_seq_paths(...)`, `seq_params =
-  load_seq_params(paths)`, an `out_dir = os.path.join(cfg.datdir, 'recon',
-  'basic'); os.makedirs(out_dir, exist_ok=True)`, a call into
-  `recon_frames(cfg, paths, seq_params, recon_fn)`, and a
-  `save_recon_nifti(fn_recon, img, ..., seqname=seqname,
-  runtime_s=runtime_s, **sp)` call -- differing only in the `recon_fn`
-  construction and the extra kwargs passed to `save_recon_nifti`.
-  Confirmed by direct side-by-side comparison of `run_rss.py`/
-  `run_cg_sense.py` -- the shared structure is real, unambiguous
-  duplication (not superficial similarity), and the drivers' own comments
-  already acknowledge they're siblings of one another. (Re-verified
-  2026-09-10: `run_b0map.py`'s own try/except was widened by item 151's
-  fix to wrap its entire per-sequence body, now spanning lines 105-162 --
-  it still carries the identical `# noqa: BLE001`/print-message pattern
-  described above, so this item's substance is unchanged, only that one
-  citation's line range moved.) Fix direction: a
-  shared helper (e.g. a `_run_batch(cfg, make_recon_fn, fn_recon_name,
-  extra_attrs)` in a small shared module, or a decorator/context-manager
-  wrapping the per-sequence try/except+prints) could factor out the outer
-  skeleton across all five drivers and the inner recon-specific portion
-  across the three Stage-2 drivers. (Re-verified 2026-09-19: the three
-  Stage-2 recon drivers (`run_rss.py`, `run_cg_sense.py`,
-  `run_recon_sigpy.py`) have since moved from `preprocessing/` to `recon/`
-  per commit `8f90cd7` -- the duplication itself is unchanged, only the
-  file locations: `run_preprocessing.py`/`run_b0map.py` stay in
-  `preprocessing/`, the other three are now under `recon/`.)
-- [ ] **145. `recon/`'s `_complex_randn` test helper is duplicated
-  verbatim in two test files despite an established cross-file-reuse
-  precedent right next to it.** [measured, low severity]
+- [ ] **130. The Stage-2 batch-driver "outer" skeleton is duplicated
+  across the remaining batch drivers; the "inner" per-recon duplication it
+  used to also describe no longer has a home, but a smaller-scoped version
+  of the same duplication class re-emerged inside `recon/run_recon.py`
+  itself.** [measured; substantially narrowed 2026-09-22 against `6921c8c`
+  -- `run_rss.py`, `run_cg_sense.py`, and `run_recon_sigpy.py` (the three
+  files carrying this item's "inner" duplication: shared `set_seq_paths`/
+  `load_seq_params`/`recon_frames`/`save_recon_nifti` pattern) were deleted
+  outright, not merged, in the `recon/` 25-modules-to-7 consolidation (the
+  sigpy-only RSS/CG-SENSE/plain-L1-wavelet+TV drivers were dropped
+  entirely, and `recon_frames()` itself no longer exists), so that half of
+  this finding is moot. The "outer" `Batch: N sequence(s)...`/per-sequence
+  try-except/`Batch complete.` skeleton survives in exactly 3 files:
+  `preprocessing/run_preprocessing.py:11-19` (unchanged),
+  `preprocessing/run_b0map.py:75,77,172` (line drift only), and a new
+  fourth-generation instance, `recon/lowres_calib.py:468-475`'s `calib`
+  subcommand (confirmed via grep -- carries the identical `# noqa: BLE001`
+  comment, explicitly says "mirrors run_preprocessing.py's"). Separately,
+  a smaller-scoped version of the *inner* duplication class re-emerged
+  within `recon/run_recon.py` itself: `main_mslr_ref` (`:231-321`),
+  `main_mslr_local` (`:344-432`), and `run_cgsense_b0`/`main_cg`
+  (`:497-600`) each independently repeat `cfg = load_config(...)`, `paths
+  = set_seq_paths(cfg, ...)`, `sp = load_seq_params(paths)`, spectral-norm
+  power-iteration setup, `os.makedirs(out_dir, exist_ok=True)`, and a
+  `save_result`/`save_recon_nifti` call -- three near-duplicate ~40-90
+  line function bodies in one file (see also item 211, which tracks a
+  related but narrower duplication within this same trio).] Fix
+  direction: a
+  shared helper (e.g. a `_run_batch(cfg, ...)` in a small shared module,
+  or a decorator/context-manager wrapping the per-sequence try/except+prints)
+  could factor out the 3-file outer skeleton, and a separate shared
+  setup/output helper could factor out `run_recon.py`'s own three-subcommand
+  inner duplication.
+- [ ] **145. `recon/`'s `_complex_randn` test helper is still duplicated
+  verbatim in two test files, despite the `recon/`-side copies
+  deduplicating naturally as a side effect of the module consolidation.**
+  [measured, low severity; citation updated 2026-09-22 against `6921c8c`
+  -- the `recon/`-side half of this finding is **resolved**: the two
+  script copies (`sweep_time_segments.py`, `benchmark_b0_cost.py`) merged
+  into `recon/analysis.py`, and the merge naturally deduplicated into a
+  single `_complex_randn` definition at `recon/analysis.py:142`, shared by
+  both the `sweep` and `benchmark` subcommands -- a good outcome of the
+  merge, nothing to fix there any more. The `tests/`-side half is
+  unchanged and still open: `tests/test_recon_operators.py:15-19` and
+  `tests/test_recon_b0_correction.py:32` (not `:30-34`) still each define
+  an independent copy]
   `tests/test_recon_operators.py:15-19`,
-  `tests/test_recon_b0_correction.py:30-34`,
-  `recon/sweep_time_segments.py:49-53`, and
-  `recon/benchmark_b0_cost.py:48-52` each independently define the
+  `tests/test_recon_b0_correction.py:30-34` each independently define the
   identical 4-line function:
   ```python
   def _complex_randn(*shape, seed):
@@ -4332,11 +4585,27 @@ having changed since the last pass.
   `get_block_type(b).has_trid` for the TRID-presence check instead of a
   duplicated `if b.label is not None:` scan (the value-extraction loop
   itself is unchanged).
-- [ ] **165. `recon/run_b0_recon.py`'s `ArbEPI_epi_zf.h5`/
-  `smaps_ArbEPI_sigpy.h5` cache-path construction is duplicated verbatim in
-  `recon/validate_against_mslr.py` -- now a third, freshly-found site,
-  `recon/cg_sense_b0.py`, joins the pair.** [measured, low severity;
-  citation updated 2026-09-21 against `e04d9aa` -- the `run_b0_recon.py`
+- [ ] **165. `recon/run_recon.py`'s (formerly `run_b0_recon.py`'s)
+  `ArbEPI_epi_zf.h5`/
+  `smaps_ArbEPI_sigpy.h5` cache-path construction is duplicated in three
+  places within the merged file, plus a fourth, independent inline read.**
+  [measured, low severity;
+  citation updated 2026-09-22 against `6921c8c` -- `run_b0_recon.py`,
+  `validate_against_mslr.py` (now `recon/analysis.py`'s `validate`), and
+  `cg_sense_b0.py` all merged into `recon/run_recon.py`/`recon/analysis.py`
+  in the `recon/` 25-modules-to-7 consolidation, but none of the three
+  call sites were switched to read `paths.recon` despite `set_seq_paths`
+  already being called immediately after in every case:
+  `recon/run_recon.py:237` (`main_mslr_ref`, formerly `run_b0_recon.py`),
+  `recon/run_recon.py:517` (`run_cgsense_b0`/`main_cg`, formerly
+  `cg_sense_b0.py`), and `recon/analysis.py:431` (`validate`, formerly
+  `validate_against_mslr.py`). A **fourth, newly-found** site:
+  `main_mslr_local` (`recon/run_recon.py:355-356`, formerly the untracked
+  `run_mslr_local.py`, now committed) independently re-derives the same
+  pattern too, using a bare `h5py.File(fn_ksp,'r')` inline read with no
+  fallback -- a third distinct omega/path-loading implementation now
+  coexists alongside the shared `_load_omega` helper (see item 186); citation
+  updated 2026-09-21 against `e04d9aa` -- the `run_b0_recon.py`
   citation below (still quoted as `:72-73`) had already drifted to `:101-102`
   by the time of the very next paragraph's own `:101` reference, apparently
   missed by every "citation updated" pass since; corrected here, substance
@@ -4370,20 +4639,29 @@ having changed since the last pass.
   filename, and separately fold the `ArbEPI_epi_zf.h5` case into item
   133's fix if `SeqPaths` grows `gre_cache`/`smaps_cache` fields for the
   other two patterns.
-- [ ] **186. `recon/run_b0_recon.py` carries its own independent copy of
-  `_load_omega` instead of importing `recon/reconstruct.py`'s, inconsistent
-  with the sibling helpers items 90/94 already deduplicated the same way.**
+- [ ] **186. `recon/run_recon.py`'s `main_mslr_ref` (formerly
+  `run_b0_recon.py`) still carries its own independent omega-loading copy
+  instead of importing `recon/mslr.py`'s `_load_omega` -- and a *third*,
+  independent, no-fallback implementation has now joined the pair.**
   [measured, low severity -- not a live bug, item 74 already fixed the
-  correctness issue in both copies; citation updated 2026-09-17 against
-  `ad2fdc4` -- import line shifted from `:36` to `:51`, `_load_omega`'s own
-  def from `:41-66` to `:56-80` (drift already present since `1b4704a`'s
-  r2star/complex-field commit, never previously corrected); substance
-  unchanged. **New corroborating evidence this pass**: the brand-new
-  `recon/cg_sense_b0.py` does this the *right* way -- it imports
-  `_load_omega` directly from `recon.reconstruct` rather than pasting its
-  own copy -- confirming the duplication is a `run_b0_recon.py`-only
-  regression from item 74's fix, not a systemic pattern in newer code]
-  `run_b0_recon.py:51` already imports
+  correctness issue in every copy; citation updated 2026-09-22 against
+  `6921c8c` -- `run_b0_recon.py` and `cg_sense_b0.py` both merged into
+  `recon/run_recon.py` in the `recon/` 25-modules-to-7 consolidation.
+  `main_mslr_ref`'s local `_load_omega_broadcast`
+  (`recon/run_recon.py:192-215`) is now explicitly justified in its own
+  docstring as deliberate (avoiding a second full ~11GB/~23s
+  `ksp_epi_zf` read before `run_recon()` itself loads it), which the
+  pre-merge version didn't state as clearly -- a real improvement, though
+  the duplication itself is unchanged. `main_cg`/`run_cgsense_b0`
+  (formerly `cg_sense_b0.py`) does import and use the shared `_load_omega`
+  directly (`recon/run_recon.py:180,536`), confirming the "already does it
+  right" observation from a prior pass. **New this pass**: `main_mslr_local`
+  (formerly the untracked `run_mslr_local.py`, now committed,
+  `recon/run_recon.py:372-377`) uses a *third*, independent, no-fallback
+  inline read (`with h5py.File(fn_ksp,'r') as f: omegas_yzt =
+  f['omegas'][()]`) -- three different omega-loading implementations now
+  coexist in the same file]
+  `recon/run_recon.py:180` already imports
   `_load_array, _load_echo_times, _load_normalized_smaps, run_recon` from
   `recon.reconstruct` -- three helpers items 90 and 94 each added "next to
   `_load_omega`" specifically so both driver scripts would share one
@@ -4559,50 +4837,58 @@ having changed since the last pass.
   RSS and B0-informed CG-SENSE reconstructions of real data, not just
   unit-tested in isolation. 2 new tests total; full suite (149 passed)
   unaffected.
-- [ ] **211. `recon/cg_sense_b0.py`'s `run_cgsense_b0` duplicates several
-  substantial, previously-shared chunks of `recon/reconstruct.py`'s
-  `run_recon` and `recon/run_b0_recon.py`'s `main`, rather than reusing
+- [ ] **211. `recon/run_recon.py`'s `run_cgsense_b0` (formerly
+  `cg_sense_b0.py`) duplicates several
+  substantial chunks of `recon/mslr.py`'s
+  `run_recon` and its own sibling `main_mslr_ref`, rather than reusing
   them -- a broader and more concrete instance of the pattern items
-  130/165/133/188 already track piecemeal.** [measured; found 2026-09-17
-  against `ad2fdc4`] Four separate near/exact-verbatim copies, none
-  previously recorded:
-  1. **`_nominal_te_s`** (`cg_sense_b0.py:101-106`) is a byte-for-byte-
-     identical reimplementation of `run_b0_recon.py:84-92`'s function of
-     the same name -- its own docstring even says "Same as
-     `recon/run_b0_recon.py`'s own helper," i.e. the duplication is
-     self-acknowledged in the source rather than accidental.
-  2. **The r2star_map/t_ref_s wiring block** (`cg_sense_b0.py:160-166`) is
-     functionally identical to `run_b0_recon.py:126-135`'s block (differing
-     only in string formatting and the `"ArbEPI"`-vs-`seqname` argument).
-  3. **The B0-map-loading preamble** (`cg_sense_b0.py:154-159`: the print,
+  130/165/133/188 already track piecemeal.** [measured; citation updated
+  2026-09-22 against `6921c8c` -- `cg_sense_b0.py`, `reconstruct.py`, and
+  `run_b0_recon.py` all merged into `recon/mslr.py`/`recon/run_recon.py`
+  in the `recon/` 25-modules-to-7 consolidation. **Point 1
+  (`_nominal_te_s`) is now RESOLVED**: it's a single shared function at
+  `recon/run_recon.py:220`, called from both `main_mslr_ref` (`:264`) and
+  `run_cgsense_b0`/`main_cg` (`:550`) -- a real improvement from the
+  merge. **Points 2-4 are still duplicated**, just now within the same
+  file: compare `run_cgsense_b0` (`recon/run_recon.py:536-552`) against
+  `main_mslr_ref`'s near-identical block (`:258-268`) and
+  `recon/mslr.py`'s `run_recon` (`:453-488`) -- three near-identical
+  copies of the same ~15-line block now live across two files instead of
+  three. The path-duplication note below (`fn_ksp` not reading
+  `paths.recon`) still applies -- see item 165's own update, which found a
+  fourth site too] Three separate near/exact-verbatim copies survive:
+  1. **The r2star_map/t_ref_s wiring block** (`recon/run_recon.py:544-550`) is
+     functionally identical to `main_mslr_ref`'s block (`:262-268`).
+  2. **The B0-map-loading preamble** (`recon/run_recon.py:539-543`: the print,
      `_load_array(fn_b0map, 'b0map_hz')` call, `b0map_hz.shape ==
      (Nx,Ny,Nz)` assert, `_load_echo_times` call) is near-identical to
-     `reconstruct.py:214-219`'s equivalent block inside `run_recon`.
-  4. **`R = (Nx*Ny*Nz)/omega[:,:,:,0].sum().item()` plus its print**
-     (`cg_sense_b0.py:149-150`) is a verbatim copy of
-     `reconstruct.py:207-208`.
+     `main_mslr_ref`'s equivalent block (`:258-261`) and `recon/mslr.py`'s
+     `run_recon` (`:453-488`)'s own version.
+  3. **`R = (Nx*Ny*Nz)/omega[:,:,:,0].sum().item()` plus its print**
+     (`recon/run_recon.py:536-537`) is a near-verbatim copy of
+     `main_mslr_ref`'s equivalent (`:256-257`).
 
   On top of this, `fn_ksp = os.path.join(recon_dir, f'{seqname}_epi_zf.h5')`
-  (`cg_sense_b0.py:129`) re-derives a path that's already centralized as
+  (`recon/run_recon.py:518`) re-derives a path that's already centralized as
   `SeqPaths.recon` (`preprocessing/config.py:149`, the identical f-string)
-  -- and `cg_sense_b0.py` even calls `set_seq_paths(cfg, seqname)` two
-  lines later (`:133`) without using `paths.recon` (`run_b0_recon.py:101`
+  -- and `run_cgsense_b0` even calls `set_seq_paths(cfg, seqname)` two
+  lines earlier without using `paths.recon` (`main_mslr_ref`
   has the identical unnecessary redundancy against the same already-
-  existing field). `fn_b0map`/`fn_smaps` construction (`:128,130`) also
-  adds new sites to items 188's and 133's already-tracked
-  `<seqname>_b0map.h5`/`smaps_<seqname>_sigpy.h5` cache-path duplication,
-  and item 165 above now tracks the third `<seqname>_epi_zf.h5` site.
-  This is distinct from item 130 (the `cfg.seqnames`-batch-driver
-  skeleton) -- `cg_sense_b0.py` is a single-dataset CLI script
-  (`datdir, seqname` args, no per-sequence loop/try-except), structurally
-  like `run_b0_recon.py`, not like the batch drivers item 130 describes --
+  existing field, and item 165 now tracks a fourth site,
+  `main_mslr_local`). `fn_b0map`/`fn_smaps` construction also
+  adds sites to items 188's and 133's already-tracked
+  `<seqname>_b0map.h5`/`smaps_<seqname>_sigpy.h5` cache-path duplication.
+  This is distinct from item 130 (the outer batch-driver
+  skeleton) -- `run_cgsense_b0` is one subcommand of a single-dataset CLI
+  script (`datdir, seqname` args, no per-sequence loop/try-except), not
+  like the batch drivers item 130 describes --
   so it doesn't extend that item, it's a new duplication class of its own.
   Fix direction: factor a shared helper (or several smaller ones --
-  path-construction via `SeqPaths`, `_nominal_te_s` moved to
-  `recon/reconstruct.py` next to its siblings, the r2star wiring as its
-  own function) that all three of `reconstruct.py`, `run_b0_recon.py`, and
-  `cg_sense_b0.py` call; this would resolve items 133/165/186/188's
-  `recon/`-side instances in one pass, not just `cg_sense_b0.py`'s new
+  path-construction via `SeqPaths`, the B0-map-loading preamble as its
+  own function) that all three of `recon/mslr.py`'s `run_recon`,
+  `main_mslr_ref`, and
+  `run_cgsense_b0` call; this would resolve items 133/165/186/188's
+  `recon/`-side instances in one pass, not just `run_cgsense_b0`'s new
   copies.
 - [x] **213.** Resolved 2026-09-16: `recon/reconstruct.py`'s `_load_array`
   and `recon/lowres_calib_recon.py`'s `_load_chunked` (see item 200) both
@@ -4677,12 +4963,22 @@ having changed since the last pass.
   excluding one pre-existing, unrelated sigpy-import collection error in
   `test_preprocessing_run_b0map.py`) all pass; ruff clean on every touched
   file.
-- [ ] **217. `recon/lowres_calib_recon_b0.py`/`recon/
-  lowres_calib_recon_b0complex.py` re-RSS-normalize smaps on load, which
+- [ ] **217. `recon/lowres_calib.py`'s B0/B0complex calibration-recon
+  variants re-RSS-normalize smaps on load, which
   `preprocessing/smaps.py`'s `process_smaps` already guarantees -- almost
   certainly an inert no-op in practice, but an undocumented inconsistency
-  with their own sibling `recon/lowres_calib_recon.py`, which loads smaps
-  directly with no such step.** [measured, low severity; found 2026-09-18
+  with the plain calib-recon path, which loads smaps
+  directly with no such step.** [measured, low severity; citation updated
+  2026-09-22 against `6921c8c` -- `lowres_calib_recon.py`,
+  `lowres_calib_recon_b0.py`, and `lowres_calib_recon_b0complex.py` all
+  merged into `recon/lowres_calib.py` in the `recon/` 25-modules-to-7
+  consolidation. The plain path (`_recon_one`, `:387`+) still loads smaps
+  directly with no renormalization; the B0 path
+  (`run_b0_corrected_calib_recon`) still re-derives
+  `smaps_rss`/divides again, now at `:573-574`; the B0complex path
+  (`run_b0complex_corrected_calib_recon`) does the same at `:813-814` --
+  same inconsistency, same three functions, now in one file; found
+  2026-09-18
   against `33d44a4`] `process_smaps` (`preprocessing/smaps.py:347-352`)'s
   own step 4 already divides by the cross-coil RSS so `sum_c|s_c|^2 == 1`
   at every voxel inside its object mask (`== 1` exactly by construction,
@@ -4718,10 +5014,21 @@ having changed since the last pass.
   to match `lowres_calib_recon.py`, or adding it to `lowres_calib_recon.py`
   too for defensive consistency with the rest of `recon/`'s established
   convention, with a one-line comment either way explaining the choice.
-- [ ] **218. `recon/lowres_calib_recon_b0complex.py`'s driver function
-  duplicates essentially all of `recon/lowres_calib_recon_b0.py`'s sibling
+- [ ] **218. `recon/lowres_calib.py`'s B0complex driver function
+  duplicates essentially all of its B0 sibling
   driver, not just the operator-building helper its own docstring already
-  discusses.** [measured; found 2026-09-17 against `33d44a4`, the commit
+  discusses.** [measured; citation updated 2026-09-22 against `6921c8c` --
+  both files merged into `recon/lowres_calib.py` in the `recon/`
+  25-modules-to-7 consolidation. Re-diffed directly: `run_b0_corrected_calib_recon`
+  (`:548-661`) and `run_b0complex_corrected_calib_recon` (`:781-944`) still
+  share the smaps-load+RSS-normalize block, B0-map load+shape-assert,
+  omegas/echo_times load, `native_calib_grid`/`voxel_mm`,
+  `resize_to_epi_grid` calls, `idx_full` consistency loop, and
+  `read_frames_cropped`+`gather_calib_ksp`+adjoint-recon block almost
+  verbatim, with only R2*-specific logic genuinely new; `main_b0`
+  (`:662`)/`main_b0complex` (`:945`) still share the same duplicated
+  `out_dir`/`os.makedirs` pattern -- now more glaring since both live in
+  the same 1000+-line file; found 2026-09-17 against `33d44a4`, the commit
   that added this file] The module docstring is explicit about *not*
   reusing `build_encoding_operator_b0` and about *not* copying the
   exploratory branch's operator-construction call verbatim -- but says
@@ -4758,16 +5065,25 @@ having changed since the last pass.
   `_build_calib_operator_b0_complex`) and an optional R2*/TE-shift hook,
   with `main()` similarly factored to take just the output-filename suffix
   and `note=` string as the two per-variant knobs.
-- [ ] **219. `recon/reconstruct.py`'s `run_recon` already implements the
-  exact power-iteration sigma1A estimate `recon/run_mslr_local.py` was
+- [ ] **219. `recon/mslr.py`'s `run_recon` already implements the
+  exact power-iteration sigma1A estimate `main_mslr_local` was
   forced to duplicate, gated behind a restriction whose stated rationale
-  doesn't hold.** [measured; found 2026-09-17 against the untracked
-  `recon/run_mslr_local.py`; note 2026-09-19 -- that file (always
-  untracked/gitignored, per its own nature) is no longer present in this
-  checkout at all, so its cited line numbers can't be independently
-  re-verified from here going forward; the `reconstruct.py`/
-  `operators_b0.py` half of the finding below is unaffected by that and
-  still holds] `reconstruct.py:228-235` raises
+  doesn't hold.** [measured; citation updated 2026-09-22 against `6921c8c`
+  -- **now fully independently verifiable again**: `run_mslr_local.py`
+  (previously untracked/gitignored, uncheckable) is now committed as
+  `main_mslr_local` inside tracked `recon/run_recon.py` in the `recon/`
+  25-modules-to-7 consolidation. The `ValueError` gate is now
+  `recon/mslr.py:477-482`; `estimate_spectral_norm` is now
+  `recon/operators.py:529-532` ("delegates to poweriter... A: any
+  mirtorch LinearMap/BlockDiagonal" -- fully generic, confirmed still
+  true); `main_mslr_local` (`recon/run_recon.py:344-432`) confirmed still
+  reimplements the identical power-iteration block (building `A` via
+  plain `build_encoding_operator`, `x0 = torch.randn(...)`,
+  `estimate_spectral_norm(A, x0)`, `del`/`torch.cuda.empty_cache()`) at
+  `:381-401` instead of calling `run_recon(..., sigma1A=None)` directly --
+  substance fully unchanged, fix direction unchanged; found 2026-09-17
+  against the untracked
+  `recon/run_mslr_local.py`] `recon/mslr.py:477-482` raises
   `ValueError` whenever `sigma1A is None` and `fn_b0map is None`, with the
   message "the plain SENSE operator's spectral norm has no cheap
   closed-form estimate wired up here, so auto-estimation only covers the
@@ -4801,13 +5117,15 @@ having changed since the last pass.
   file's `estimate_spectral_norm`/`build_encoding_operator` imports and the
   `smaps`/`omega`-loading preamble entirely, since `run_recon` already
   loads both internally.
-- [ ] **221. `recon/lowres_temporal_stability.py`'s `temporal_stability`
+- [ ] **221. `recon/lowres_calib.py`'s `temporal_stability`
   fancy-indexes the same masked array twice instead of reusing the first
-  result.** [measured, low severity; found 2026-09-19 against `d515cd0`]
-  `temporal_stability()` computes `voxels = img[mask]` at
-  `lowres_temporal_stability.py:73` (`[Nvox, Nframes]`, used for
+  result.** [measured, low severity; citation updated 2026-09-22 against
+  `6921c8c` -- `lowres_temporal_stability.py` merged into
+  `recon/lowres_calib.py` in the `recon/` 25-modules-to-7 consolidation;
+  substance unchanged] `temporal_stability()` computes `voxels = img[mask]` at
+  `recon/lowres_calib.py:1032` (`[Nvox, Nframes]`, used for
   `mean_t`/`std_t`/`tsnr_map`), then separately recomputes the identical
-  `img[mask]` a second time at `:79` (`roi_signal = img[mask].mean(axis=0)`)
+  `img[mask]` a second time at `:1038` (`roi_signal = img[mask].mean(axis=0)`)
   instead of reusing `voxels.mean(axis=0)` -- both index the full
   `[Nx, Ny, Nz, Nframes]` array with the same boolean `mask` and produce
   the same `[Nvox, Nframes]` intermediate. Not a correctness bug (the two
@@ -4819,9 +5137,15 @@ having changed since the last pass.
   `roi_signal = voxels.mean(axis=0)`.
 - [ ] **223. `preprocessing/run_b0map.py`'s `run_b0map()` has no
   caching/skip logic for its own primary output, unlike every other
-  expensive cacheable artifact in this pipeline.** [measured; found
+  expensive cacheable artifact in this pipeline.** [measured; citation
+  updated 2026-09-22 against `6921c8c` -- line drift only, substance fully
+  live: `subprocess.run(...)` call still effectively at `run_b0map.py:114`,
+  the per-sequence try body now spans `:113-171` (was `:114-172`);
+  `smaps.py`'s analogous cache-validity guard drifted `:495-502`->`:510-517`;
+  still zero matches for `os.path.exists(output_path)` in `run_b0map.py`;
+  found
   2026-09-21 against `e04d9aa`] `run_b0map()`'s per-sequence body
-  (`run_b0map.py:114-172`) unconditionally calls `subprocess.run([julia_bin,
+  (`run_b0map.py:113-171`) unconditionally calls `subprocess.run([julia_bin,
   ..., output_path, ...], check=True)` (`:114-121`) every time it runs for a
   given `seqname` -- there is no `os.path.exists(output_path)` check
   anywhere in the function (confirmed by grep: zero matches for
