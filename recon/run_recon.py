@@ -343,12 +343,13 @@ def _cli_mslr_ref() -> None:
 
 def main_mslr_local(
     datdir: str, seqname: str, device: str = 'cuda',
-    patch_size: tuple[int, int, int] = (6, 6, 6),
-    stride: tuple[int, int, int] = (3, 3, 3),
+    patch_size: tuple[int, int, int] | None = None,
+    stride: tuple[int, int, int] | None = None,
     b0_correct: bool = True,
     L_b0: int = 32,
     nbins_b0: int = 128,
     lambda_global: float | None = None,
+    conv_tol: float = 0.0,
     r2star: bool = False,
     zero_pad_z: bool = False,
 ) -> None:
@@ -362,7 +363,20 @@ def main_mslr_local(
     zero_pad_z: forwarded to estimate_r2star_map_epi_grid's deGRE-grid ->
     EPI-grid resize (only relevant with r2star=True) -- set True when this
     seqname's own z-FOV exceeds deGRE's fixed z-FOV (e.g. 1_1x_5.4mm's
-    145.8mm vs. deGRE's 144mm)."""
+    145.8mm vs. deGRE's 144mm).
+
+    patch_size/stride: None (the default) auto-computes a physical-size
+    patch (explicit 2026-09-22 user choice) -- 14.4mm isotropic in voxels
+    (round(14.4 / voxel_size_mm) per axis) for every seqname except
+    '1_1x_5.4mm' (R~1, fully sampled -- a fixed 3-voxel patch instead,
+    since a large physical patch isn't buying anything at R~1 the way it
+    does for the accelerated/ill-posed datasets), stride = floor(patch_size
+    / 2) each axis. Pass explicit tuples to override either.
+
+    conv_tol: 0.0 (the default here, not run_recon's own 1e-5) disables
+    POGM's early-stop check entirely (recon/mslr.py's pogm_restart: `if
+    conv_tol > 0 and ...`) -- every run does the full `niters` iterations,
+    an explicit 2026-09-22 user choice for this batch."""
     assert b0_correct or not r2star, 'main_mslr_local: r2star requires b0_correct=True'
     device_t = torch.device(device)
     recon_dir = os.path.join(datdir, 'recon')
@@ -377,6 +391,19 @@ def main_mslr_local(
     print(f'Loading sensitivity maps ({fn_smaps}) for spectral-norm estimation...')
     smaps, smaps_chw = _load_normalized_smaps(fn_smaps, device_t)
     print(f'  Sensitivity maps: {tuple(smaps.shape)}')
+
+    if patch_size is None:
+        if seqname == '1_1x_5.4mm':
+            patch_size = (3, 3, 3)
+        else:
+            Nx_, Ny_, Nz_ = smaps.shape[:3]
+            patch_size = tuple(
+                max(1, round(14.4 / (fov_i * 1000 / n_i)))
+                for fov_i, n_i in zip(sp.fov, (Nx_, Ny_, Nz_))
+            )
+    if stride is None:
+        stride = tuple(max(1, p // 2) for p in patch_size)
+    print(f'  patch_size={patch_size}, stride={stride}')
 
     # omega is needed only to build A for the power-iteration spectral-norm
     # estimate below (and to measure R for the default lambda_global) --
@@ -444,10 +471,12 @@ def main_mslr_local(
         strides=[stride],
         sigma1A=sigma1A,
         device=device,
+        conv_tol=conv_tol,
         lambda_global=lambda_global,
         fn_b0map=fn_b0map,
         L_b0=L_b0,
         nbins_b0=nbins_b0,
+        normalize_noise=True,
         r2star_map=r2star_map,
         t_ref_s=t_ref_s,
     )
