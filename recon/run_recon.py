@@ -444,22 +444,43 @@ def main_mslr_local(
 
     print(f'\nRunning {corrected_label} local-low-rank reconstruction for {seqname} '
           f'(patch_size={patch_size}, stride={stride}, lambda_global={lambda_global:.4f})...')
-    result = run_recon(
-        fn_ksp=fn_ksp,
-        fn_smaps=fn_smaps,
-        patch_sizes=[patch_size],
-        strides=[stride],
-        sigma1A=sigma1A,
-        device=device,
-        conv_tol=conv_tol,
-        lambda_global=lambda_global,
-        fn_b0map=fn_b0map,
-        L_b0=L_b0,
-        nbins_b0=nbins_b0,
-        normalize_noise=True,
-        r2star_map=r2star_map,
-        t_ref_s=t_ref_s,
-    )
+    # mom fallback: POGM (best convergence per iteration, most auxiliary
+    # state) -> FPGM (one fewer auxiliary iterate) -> PGM (none) -- device
+    # always stays 'cuda' here (never silently drops to CPU); only the
+    # *solver's own* momentum-state memory is reduced by this fallback.
+    # NOTE: this does NOT help an OOM coming from patchSVST's single batched
+    # torch.linalg.svd over every patch at once (recon/mslr.py's SVST) --
+    # that memory is identical regardless of mom, since all three momentum
+    # variants call the same g_prox. Measured 2026-09-22 for this batch's
+    # actual (patch_size, stride): 4_93.5x_0.8mm alone needs ~90GB just for
+    # patchSVST's P+U tensors (16k patches x (5832,60) complex64) against a
+    # 49GB GPU -- a hard blocker no mom fallback can rescue.
+    for mom in ('pogm', 'fpgm', 'pgm'):
+        try:
+            result = run_recon(
+                fn_ksp=fn_ksp,
+                fn_smaps=fn_smaps,
+                patch_sizes=[patch_size],
+                strides=[stride],
+                sigma1A=sigma1A,
+                device=device,
+                mom=mom,
+                conv_tol=conv_tol,
+                lambda_global=lambda_global,
+                fn_b0map=fn_b0map,
+                L_b0=L_b0,
+                nbins_b0=nbins_b0,
+                normalize_noise=True,
+                r2star_map=r2star_map,
+                t_ref_s=t_ref_s,
+            )
+            break
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if mom == 'pgm':
+                raise
+            print(f'  mom={mom} ran out of GPU memory -- falling back to the next momentum '
+                  'method (staying on GPU)...')
 
     fn_out = os.path.join(out_dir, f'{seqname}_recon')
     save_result(
