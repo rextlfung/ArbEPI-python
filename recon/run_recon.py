@@ -343,13 +343,13 @@ def _cli_mslr_ref() -> None:
 
 def main_mslr_local(
     datdir: str, seqname: str, device: str = 'cuda',
-    patch_size: tuple[int, int, int] | None = None,
-    stride: tuple[int, int, int] | None = None,
+    patch_size: tuple[int, int, int] = (6, 6, 6),
+    stride: tuple[int, int, int] = (3, 3, 3),
     b0_correct: bool = True,
     L_b0: int = 32,
     nbins_b0: int = 128,
     lambda_global: float | None = None,
-    conv_tol: float = 0.0,
+    conv_tol: float = 1e-5,
     r2star: bool = False,
     zero_pad_z: bool = False,
 ) -> None:
@@ -365,18 +365,11 @@ def main_mslr_local(
     seqname's own z-FOV exceeds deGRE's fixed z-FOV (e.g. 1_1x_5.4mm's
     145.8mm vs. deGRE's 144mm).
 
-    patch_size/stride: None (the default) auto-computes a physical-size
-    patch (explicit 2026-09-22 user choice) -- 14.4mm isotropic in voxels
-    (round(14.4 / voxel_size_mm) per axis) for every seqname except
-    '1_1x_5.4mm' (R~1, fully sampled -- a fixed 3-voxel patch instead,
-    since a large physical patch isn't buying anything at R~1 the way it
-    does for the accelerated/ill-posed datasets), stride = floor(patch_size
-    / 2) each axis. Pass explicit tuples to override either.
-
-    conv_tol: 0.0 (the default here, not run_recon's own 1e-5) disables
-    POGM's early-stop check entirely (recon/mslr.py's pogm_restart: `if
-    conv_tol > 0 and ...`) -- every run does the full `niters` iterations,
-    an explicit 2026-09-22 user choice for this batch."""
+    patch_size/stride/conv_tol are plain passthroughs to run_recon() (same
+    defaults run_recon() itself uses) -- per-experiment choices (e.g.
+    physical-size patches, disabling early stopping) belong in the
+    calling script, not hardcoded here; see _cli_mslr_local's --patch-size/
+    --stride/--conv-tol."""
     assert b0_correct or not r2star, 'main_mslr_local: r2star requires b0_correct=True'
     device_t = torch.device(device)
     recon_dir = os.path.join(datdir, 'recon')
@@ -391,19 +384,6 @@ def main_mslr_local(
     print(f'Loading sensitivity maps ({fn_smaps}) for spectral-norm estimation...')
     smaps, smaps_chw = _load_normalized_smaps(fn_smaps, device_t)
     print(f'  Sensitivity maps: {tuple(smaps.shape)}')
-
-    if patch_size is None:
-        if seqname == '1_1x_5.4mm':
-            patch_size = (3, 3, 3)
-        else:
-            Nx_, Ny_, Nz_ = smaps.shape[:3]
-            patch_size = tuple(
-                max(1, round(14.4 / (fov_i * 1000 / n_i)))
-                for fov_i, n_i in zip(sp.fov, (Nx_, Ny_, Nz_))
-            )
-    if stride is None:
-        stride = tuple(max(1, p // 2) for p in patch_size)
-    print(f'  patch_size={patch_size}, stride={stride}')
 
     # omega is needed only to build A for the power-iteration spectral-norm
     # estimate below (and to measure R for the default lambda_global) --
@@ -509,13 +489,20 @@ def _cli_mslr_local() -> None:
         help='(with --r2star) zero-pad the deGRE-grid R2* estimate where the EPI z-FOV exceeds '
              "deGRE's own -- see estimate_r2star_map_epi_grid's docstring",
     )
+    parser.add_argument('--patch-size', type=int, nargs=3, default=(6, 6, 6), metavar=('PX', 'PY', 'PZ'))
+    parser.add_argument('--stride', type=int, nargs=3, default=(3, 3, 3), metavar=('SX', 'SY', 'SZ'))
+    parser.add_argument(
+        '--conv-tol', type=float, default=1e-5,
+        help='POGM early-stop threshold; <= 0 disables early stopping (always runs to niters)',
+    )
     args = parser.parse_args()
     if args.r2star and args.no_b0:
         parser.error('--r2star requires b0 correction (omit --no-b0)')
     main_mslr_local(
         args.datdir, args.seqname, device=args.device, b0_correct=not args.no_b0,
+        patch_size=tuple(args.patch_size), stride=tuple(args.stride),
         L_b0=args.L_b0, nbins_b0=args.nbins_b0, lambda_global=args.lambda_global,
-        r2star=args.r2star, zero_pad_z=args.zero_pad_z,
+        conv_tol=args.conv_tol, r2star=args.r2star, zero_pad_z=args.zero_pad_z,
     )
 
 def cg_sense_solve(
