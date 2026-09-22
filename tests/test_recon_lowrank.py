@@ -96,3 +96,24 @@ def test_img2patches_rejects_nonpositive_stride():
     img = _random_img(4, 4, 4, 2, seed=7)
     with pytest.raises(ValueError):
         img2patches(img, (2, 2, 2), (0, 2, 2))
+
+
+def test_patchsvst_chunking_matches_unchunked_result():
+    """patchSVST never materializes the full (Np, prod(patch_size), Nt)
+    patch tensor -- it gathers/SVSTs/scatters memory-budgeted chunks of
+    patches directly (2026-09-22, see its docstring for why: a real
+    large-grid/fine-resolution dataset can need ~45GB for that tensor
+    alone). A tiny max_chunk_bytes here forces many chunks (as opposed to
+    the single chunk every other test in this file exercises, since their
+    grids are small enough to fit in one chunk under the real default) --
+    result should match the unchunked (one big chunk) computation to
+    float32 summation-order noise, not just approximately."""
+    img = _random_img(10, 10, 6, 5, seed=8)
+    beta = 0.3
+    patch_size, stride_size = (3, 3, 3), (2, 2, 2)
+
+    out_unchunked, reg_unchunked = patchSVST(img, beta, patch_size, stride_size, max_chunk_bytes=10_000_000_000)
+    out_chunked, reg_chunked = patchSVST(img, beta, patch_size, stride_size, max_chunk_bytes=2000)
+
+    assert torch.allclose(out_unchunked, out_chunked, atol=1e-4)
+    assert abs(reg_unchunked.item() - reg_chunked.item()) < 1e-2
