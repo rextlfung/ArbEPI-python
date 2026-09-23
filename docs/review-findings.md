@@ -578,14 +578,65 @@ in `preprocessing/epi_gridding.py`'s docstring (227); a stale
 the `recon` extra's new `sigpy` dependency (228); three straggler
 unqualified references to files the consolidation deleted (229); and a
 test-coverage gap for `load_smaps()`'s new `zero_pad_z` parameter (230).
+Items 231-246 are new findings from a later pass (2026-09-23, against
+`100056a`) that also re-verified every item 107-230 against the current
+tree: `git diff 6921c8c HEAD --stat` shows only this doc itself changed in
+that span (items 224-230 were added there), so every still-open item's
+cited code is exactly as described -- none needed reopening or
+substance changes, beyond the two closures below. This pass split the
+review across four parallel subagents, each briefed on the open items
+already tracked in its scope (`ge/`+`lib/`+`sequences/`+`params.py`/
+`scanners.py`/`main.py`; `sampling/`+`plotting/`; `preprocessing/`;
+`recon/`, the last one also asked to scrutinize the recent 25-module ->
+7-module consolidation for merge artifacts specifically); every new
+finding below was independently re-verified against the live tree (not
+just trusted from the subagent's report) before being recorded here,
+including a from-scratch reproduction of item 231's `--r2star`
+`zero_pad_z` gap, item 234's checkpoint-resume `KeyError`, item 235's
+dict-comprehension short-circuit, item 236's `NaN`-coercion, and item
+243's empirical claim that `apply_whitening` doesn't promote dtype (run
+directly against this repo's own `preprocessing/coils.py` under `uv run`).
+Sixteen new findings survived independent verification and are recorded
+as items 231-246 above/below (by category): four real, reproduced
+correctness bugs in `recon/run_recon.py` (231, `--r2star` crashes when
+the EPI z-FOV exceeds deGRE's; 232, `validate()` no longer matches its
+own cited Julia reference now that `run_recon` defaults to normalized
+noise; 233, `main_mslr_local` has no legacy-file fallback for `omegas`
+unlike its two siblings) plus one in `preprocessing/preprocess.py` (234,
+a checkpoint left mid-pre-allocation by an interrupted run crashes the
+resume path with a raw `KeyError`); a `main.py` `--ge` pre-check that
+only ever surfaces the first of up to four infeasible sequences despite
+its own comment (235); a validation gap in
+`sampling/external_mask.py:44`'s bare `.astype(bool)` cast, which
+silently accepts `NaN`/negative/fractional values as sampled points
+(236); seven consistency findings, mostly stale numbers/references
+surviving the 2026-09-15 ABCD-protocol switch and the `recon/`
+consolidation (237–241, 243) plus an extension of item 160's citation
+list (242); and three conciseness findings (244, duplicated per-shot
+spoiler logic between `sequences/ArbEPI.py`/`EPIcal.py`; 245, a dead
+re-clamp in `sampling/pd_sample.py`; 246, seven dead fields on
+`PreprocessingConfig`). Two items were closed this pass, both without any
+code change: item 179 (superseded -- its cited file,
+`recon/sweep_time_segments.py`, no longer exists anywhere in the tree,
+deleted by the `recon/` consolidation; its content and its own stale-`L=6`
+problem now live in `recon/analysis.py`'s `sweep` subcommand, already
+tracked by item 112) and a self-correction to item 199's own "Fix"
+paragraph (its old fix direction, "import the shared `_ift3` from
+`recon.run_rss`," cited a file the same item's own body already
+documents as deleted -- corrected in place to point at a real current
+fix direction rather than a self-contradiction; item 199 itself stays
+open).
 
-## Current baseline (2026-09-22, against `6921c8c`)
+## Current baseline (2026-09-23, against `100056a`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **48
-  errors -- 47 `E501` + 1 `E402`** (up from 33 at `e04d9aa`; the previous
-  pass's `I001` hit, in the now-deleted `recon/cg_sense_b0.py`, is gone).
-  Independently re-confirmed by direct run this pass (not just trusted
-  from a subagent report). Full current list: `ge/check.py` (1),
+  errors -- 47 `E501` + 1 `E402`**, unchanged from the previous pass
+  (up from 33 at `e04d9aa`; the pre-`e04d9aa` pass's `I001` hit, in the
+  now-deleted `recon/cg_sense_b0.py`, is gone). Independently re-confirmed
+  by direct run this pass (not just trusted from a subagent report), and
+  expected to be identical: `git diff 6921c8c HEAD --stat` shows no
+  source file changed since the last measurement, only this doc itself.
+  Full current list: `ge/check.py` (1),
   `ge/validate_against_matlab.py` (2), `ge/writeceq.py` (1),
   `lib/calc_te_tr_delays.py` (2), `lib/make_readout_grads.py` (2),
   `params.py` (1), `plotting/plotting.py` (2),
@@ -603,36 +654,43 @@ test-coverage gap for `load_smaps()`'s new `zero_pad_z` parameter (230).
   entirely `recon/`'s file churn plus one new `preprocessing/run_b0map.py`
   hit and the new test files.
 - `uv run pytest` (plain main venv, fresh `.venv`, `rm -rf output` first):
-  **154 passed, 16 skipped** (independently re-confirmed by direct run
-  this pass; down from 17 skipped at `e04d9aa`, net test-file churn from
-  the `recon/` restructuring -- all skips are `could not import
-  'sigpy'/'nibabel'/'torch'`, expected with no `preprocessing`/`recon`
-  extras synced, **zero** GERecon-gated). With `--extra preprocessing`
-  only synced (Python 3.10): **186 passed, 13 skipped** (8 torch-gated +
-  5 `julia executable not found on PATH`, all in
+  **154 passed, 16 skipped**, unchanged from the previous pass
+  (independently re-confirmed by direct run this pass; down from 17
+  skipped at `e04d9aa`, net test-file churn from the `recon/`
+  restructuring -- all skips are `could not import 'sigpy'/'nibabel'/
+  'torch'`, expected with no `preprocessing`/`recon` extras synced,
+  **zero** GERecon-gated). The `preprocessing`/`recon`-extras numbers and
+  the whole-sequence feasibility table below were **not re-run this
+  pass** (both need a separate Python-3.10 venv with a multi-GB
+  torch/mirtorch install, no GPU available in this pass's environment) --
+  carried forward unchanged from the previous pass's direct measurement,
+  which remains valid since `git diff 6921c8c HEAD --stat` confirms no
+  source file changed in between, only this doc itself. With `--extra
+  preprocessing` only synced (Python 3.10): **186 passed, 13 skipped** (8
+  torch-gated + 5 `julia executable not found on PATH`, all in
   `tests/test_preprocessing_run_b0map.py`, zero GERecon-gated). With
   `--extra preprocessing --extra recon` both synced (Python 3.10,
-  torch/mirtorch installed, CPU-only -- no CUDA device in this
-  environment): **cannot report a clean pass/skip count** -- see item 224
-  (a module-level `assert DEVICE == "cuda"` left over from the pre-merge
-  `benchmark_b0_cost.py` now breaks `import recon.run_recon` on any
-  CPU-only machine). With `--continue-on-collection-errors`: **232
+  torch/mirtorch installed, CPU-only -- no CUDA device): **cannot report a
+  clean pass/skip count** -- see item 224 (a module-level `assert DEVICE
+  == "cuda"` left over from the pre-merge `benchmark_b0_cost.py` now
+  breaks `import recon.run_recon` on any CPU-only machine, still open and
+  unfixed this pass). With `--continue-on-collection-errors`: **232
   passed, 5 skipped, 2 failed, 1 collection error**, all four
   non-passing results traced to that single assert (`recon/analysis.py:248`).
   `tests/test_recon_*.py` alone: **51 passed, 2 failed, 1 collection
-  error** (0 skipped -- no `julia` dependency in this subset). This is a
-  new, real regression in test/tooling health, not present at `e04d9aa`
+  error** (0 skipped -- no `julia` dependency in this subset). This
+  remains a real regression in test/tooling health relative to `e04d9aa`
   (the pre-merge `sweep_time_segments.py`/`benchmark_b0_cost.py` split had
   no such module-level assert blocking a plain import). Item 216's
   previously-flagged flaky unseeded-RNG test
   (`test_build_encoding_operator_b0_matches_manual_per_frame_construction`)
-  did not reproduce in this pass's runs (still open regardless -- a quiet
-  run is not evidence the underlying unseeded `torch.rand()` calls were
-  fixed, since they weren't, per item 216's own updated citations above).
+  was not independently re-run this pass (no `recon` extras synced) --
+  still open regardless, per item 216's own updated citations above.
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, Python 3.10 with `preprocessing`+`recon` extras
-  synced): **re-measured this pass**. No `calc_te_tr_delays`
-  TE-feasibility warning fired:
+  synced): **carried forward from the previous pass, not re-measured this
+  pass** (see above). No `calc_te_tr_delays` TE-feasibility warning fired
+  at that measurement:
 
   | sequence | peak PNS | acoustics | max grad | max slew | max B1 |
   |---|---|---|---|---|---|
@@ -2232,17 +2290,20 @@ test-coverage gap for `load_smaps()`'s new `zero_pad_z` parameter (230).
   docstring warned about, but that trap is now invisible to a reader of
   either new file, and a future caller reading `img` directly (not
   `np.abs(img)`) would inherit it silently. Same bug class as items
-  44/64/91/108/120, now a fifth (live) and sixth (inert) occurrence. Fix:
-  delete both
-  local copies and import the shared `_ift3` from `recon.run_rss` (its new
-  home after the `preprocessing/` -> `recon/` move) in both
-  files, the way `gre_diagnostics.py` already imports it -- note this now
-  means `preprocessing/r2star_map.py` importing from `recon/` at all,
-  the same cross-package coupling item 200's own note flags as the reason
-  its analogous chunked-read duplication wasn't simply merged either;
-  consider factoring `_ift3` itself into a small shared, dependency-free
-  module (e.g. alongside `preprocessing/matio.py`) both packages can import
-  without coupling to each other's optional-extra dependency sets.
+  44/64/91/108/120, now a fifth (live) and sixth (inert) occurrence. Fix
+  (**corrected 2026-09-23**: the fix direction below used to say "import
+  the shared `_ift3` from `recon.run_rss`," but `recon/run_rss.py` no
+  longer exists anywhere in the tree -- see this same item's own text
+  above, which already documents its deletion -- so that was never an
+  actionable fix as written, only the self-contradiction is corrected
+  here, no code changed): delete all three local copies
+  (`recon/lowres_calib.py:310-312`, `preprocessing/r2star_map.py:52-54`,
+  `preprocessing/gre_diagnostics.py`'s own ~35-50) and factor `_ift3` into
+  a small shared, dependency-free module (e.g. alongside
+  `preprocessing/matio.py`) both `preprocessing/` and `recon/` can import
+  without either coupling to the other's optional-extra dependency set --
+  the same cross-package-coupling concern item 200's own note raises for
+  its analogous chunked-read duplication.
 - [ ] **205. `preprocessing/preprocess.py`'s STEP 3 never forwards item
   203's `zero_pad_z` parameter -- narrowed 2026-09-22, `load_smaps()`'s
   own half of this gap is now fixed.** [measured; **partially resolved by
@@ -2437,6 +2498,135 @@ test-coverage gap for `load_smaps()`'s new `zero_pad_z` parameter (230).
   such module-level assert). Fix: move the assert inside
   `_cli_benchmark`'s body (or the `benchmark()` function itself), so
   importing the module and running `sweep`/`validate` on CPU still work.
+- [ ] **231. `recon/run_recon.py`'s `--r2star` path crashes on any dataset
+  whose EPI z-FOV exceeds deGRE's fixed z-FOV, because `main_mslr_ref`/
+  `run_cgsense_b0` never thread a `zero_pad_z` parameter through to
+  `estimate_r2star_map_epi_grid`, unlike the parallel `recon/lowres_calib.py`
+  driver.** [measured 2026-09-23 against `100056a`] `main_mslr_ref`
+  (`recon/run_recon.py:270`) and `run_cgsense_b0` (`:553`) both call
+  `estimate_r2star_map_epi_grid(datdir, seqname, sp.fov_degre, sp.fov,
+  (Nx, Ny, Nz))` with no `zero_pad_z` argument, so it defaults to `False`.
+  That function (`preprocessing/r2star_map.py:115-129`) forwards straight
+  into `resize_to_epi_grid` (`preprocessing/grid_resize.py:63-83`), which
+  unconditionally raises `ValueError` when the target z-FOV exceeds the
+  source z-FOV unless `zero_pad_z=True` -- a condition the function's own
+  docstring cites as real and currently live ("this session's 5.4mm
+  variant, 145.8mm vs. 144mm," `preprocessing/r2star_map.py:128-129`).
+  `recon/lowres_calib.py`'s equivalent B0complex driver correctly threads
+  a `zero_pad_z` parameter (and a `--zero-pad-z` CLI flag) through to the
+  same helper (`recon/lowres_calib.py:783,791,826`), so
+  `python -m recon.lowres_calib calib --b0 --r2star --zero-pad-z` works on
+  such a dataset while `python -m recon.run_recon mslr-ref --r2star` (or
+  `... cg --r2star`) crashes outright on the same data. Fix: add a
+  `zero_pad_z` parameter to `main_mslr_ref`/`run_cgsense_b0` and their
+  CLIs, forwarding it into `estimate_r2star_map_epi_grid` the way
+  `lowres_calib.py` already does.
+- [ ] **232. `recon/analysis.py`'s `validate` subcommand no longer matches
+  the Julia reference numbers it compares against, because it never
+  disables `run_recon`'s (now-default) noise normalization.** [measured
+  2026-09-23 against `100056a`] `recon/mslr.py:359` defaults
+  `normalize_noise=True` (added by commit `846912a`, after the "Validated
+  results" table in `recon/analysis.py`'s own module docstring was
+  measured on 2026-08-25, against an unnormalized `run_recon`).
+  `validate()` (`recon/analysis.py:367-380`) calls `run_recon(...)` with
+  no `normalize_noise` argument, so it now runs normalized. `run_recon`'s
+  own docstring is explicit that this changes the compared quantities, not
+  just their scale: "dc_costs/reg_costs in the returned `ReconResult` are
+  measured in this normalized scale ... expect much smaller numbers than
+  an unnormalized run" (`recon/mslr.py:429-431`), and the normalization
+  factor is data-dependent, measured far from 1 on real data ("background
+  std ~184," `recon/mslr.py:194-196`). `validate()` then compares
+  `result.dc_costs`/`reg_costs` against the Julia reference's own
+  *unnormalized* values at `rtol=1e-4`/`5e-4`
+  (`recon/analysis.py:399,405,410`), which will now fail (or silently
+  mis-validate, since normalization shifts the data-fidelity/regularization
+  balance itself, not just a scale factor that cancels in the comparison)
+  on any real dataset. Predates the `recon/` file consolidation but is
+  still live in the merged `recon/analysis.py` today. Fix: pass
+  `normalize_noise=False` in `validate()`'s call to `run_recon`, or
+  rescale the reference dc/reg costs before comparing.
+- [ ] **233. `recon/run_recon.py`'s `main_mslr_local` reads `omegas`
+  directly from the recon `.h5` file with no fallback for a file written
+  before that key existed, unlike its two sibling subcommands in the same
+  module.** [measured 2026-09-23 against `100056a`] `main_mslr_local`
+  (`recon/run_recon.py:372-373`) does `with h5py.File(fn_ksp, 'r') as f:
+  omegas_yzt = f['omegas'][()]` with no existence check. Both sibling
+  functions in the same file -- `main_mslr_ref` (via
+  `_load_omega_broadcast`, `:192-217`) and `run_cgsense_b0` (via
+  `recon.mslr._load_omega`) -- explicitly handle "a recon file written
+  before `'omegas'` existed" by falling back to inferring the mask from
+  exact-zero k-space values, and `recon/mslr.py`'s own `_load_omega`
+  docstring treats this as a real, expected legacy case, not a
+  hypothetical one. `main_mslr_local` will instead crash with a raw
+  `KeyError` on such a file. Fix: route `main_mslr_local` through
+  `_load_omega_broadcast` (or `recon.mslr._load_omega`) like the other two
+  subcommands, rather than reading the dataset directly.
+- [ ] **234. `preprocessing/preprocess.py`'s STEP 6 checkpoint/resume
+  logic has no recovery path if interrupted between opening the checkpoint
+  file and finishing `ksp_epi_zf`'s pre-allocation -- the next run crashes
+  with a raw `KeyError` instead of resuming or erroring clearly.**
+  [measured 2026-09-23 against `100056a`] `preprocess()` decides whether
+  it's resuming purely from `os.path.exists(paths.recon)`
+  (`preprocess.py:433`). If the process is interrupted (OOM-kill, SIGKILL,
+  power loss -- exactly the failure modes this streaming/checkpointed
+  design exists to survive, per its own "checkpointed for resume" comment
+  at `:426`) after `h5py.File(paths.recon, 'w')` opens the file but before
+  `mf.create_dataset('ksp_epi_zf', ...)` (`:434-447`) finishes, the next
+  run sees the file exists, takes the `resuming=True` branch, and
+  `resume_start_frame` (`:241-260`) returns `start_frame=0` with no
+  fast-forward, since `mf.attrs.get('last_completed_frame', -1)` (`:250`)
+  finds nothing and defaults to `-1 + 1 = 0` -- `resume_start_frame` never
+  checks whether `'ksp_epi_zf' in mf`. The per-frame loop then does
+  `mf['ksp_epi_zf'][:, :, :, :, frame] = ...` (`:468`) against a file with
+  no such dataset, raising a raw h5py `KeyError`
+  ("Unable to synchronously open object... doesn't exist") instead of an
+  actionable error, leaving the user to manually diagnose and delete the
+  corrupt checkpoint file. Fix: in `resume_start_frame` (or right before
+  calling it), check `'ksp_epi_zf' in mf` and treat a file lacking it the
+  same as a missing file (reopen in `'w'` mode and re-pre-allocate), or
+  raise a clear `RuntimeError` naming the corrupt-checkpoint scenario.
+- [ ] **235. `main.py`'s `--ge` feasibility pre-check only ever surfaces
+  the first infeasible sequence, not all four, despite its own comment
+  claiming to check all four up front.** [measured 2026-09-23 against
+  `100056a`] The comment at `main.py:65-68` says "Check all four sequences
+  for GE hardware/PNS/acoustic-resonance feasibility before writing any
+  `.pge` file, so an infeasible sequence is caught up front." The
+  implementation, `checked = {name: check_ge_feasibility(seq_path, params)
+  for name, seq_path in seq_paths.items()}` (`main.py:69-71`), is a dict
+  comprehension, and `check_ge_feasibility` itself
+  (`ge/ge_export.py:19-53`) raises `RuntimeError` immediately
+  (`ge/ge_export.py:52-53`) on the first infeasible sequence it checks
+  (`ArbEPI`, `EPIcal`, `noise`, `deGRE` in that order, per
+  `main.py:61-64`'s dict construction) -- comprehension evaluation stops at
+  the first raised exception. A build with, say, both `EPIcal` and
+  `deGRE` infeasible only ever reports `EPIcal`'s failure, requiring a
+  second full rebuild-and-check cycle to discover `deGRE`'s. No `.pge` is
+  written either way, so the literal "before writing any `.pge` file"
+  holds, but "check all four sequences ... up front" overstates what
+  actually happens. Fix: catch and collect each sequence's exception (or
+  call the non-raising `check_seq_feasibility` directly and inspect
+  `.ok`), evaluating all four before reporting/raising once.
+- [ ] **236. `sampling/external_mask.py`'s `load_external_mask` silently
+  accepts any nonzero value -- including `NaN` -- as a sampled point,
+  despite its own docstring's "0/1 array" contract, with no validation.**
+  [measured 2026-09-23 against `100056a`] `mask = np.asarray(data[key
+  ]).astype(bool)` (`sampling/external_mask.py:44`). The docstring
+  (`:21-23`) promises the `.mat` variable holds "a 0/1 array," but nothing
+  checks that. `.astype(bool)` treats *any* non-zero float as `True`,
+  including negative numbers, fractional density weights, and `NaN`
+  (`np.array([0, 1, 2, -1, np.nan, 0.5]).astype(bool)` ->
+  `[False, True, True, True, True, True]`). Concrete failure scenario: a
+  collaborator's own MATLAB pipeline exports a variable that is a
+  density/weight map rather than a strict binary mask, uses a sentinel
+  like `-1`/`NaN` for "not yet decided," or the wrong variable is picked
+  out of the `.mat` file under the same `key` -- `load_external_mask` will
+  produce a badly-wrong, over-full sampling mask with no error, and
+  `resolve_custom_omegas`'s downstream checks (equal per-frame count, ETL
+  divisibility) won't catch it, since a systematically-wrong-but
+  internally-consistent mask still passes those. Fix: validate
+  `np.all((mask_raw == 0) | (mask_raw == 1))` (or an integer-dtype-aware
+  equivalent) before casting, and raise a clear `ValueError` naming the
+  offending file/key otherwise.
 
 ## Consistency & documentation
 
@@ -3128,7 +3318,7 @@ test-coverage gap for `load_smaps()`'s new `zero_pad_z` parameter (230).
   drop the leftover "4." (matching the other four now-unnumbered stage
   comments, which is the simpler fix given how much this function has
   already been restructured) or renumber all five stages consistently.
-- [ ] **179. `recon/sweep_time_segments.py`'s module docstring and its own
+- [x] **179. `recon/sweep_time_segments.py`'s module docstring and its own
   printed sweep-table marker both still call `L=6` "the current production
   default," stale since item 82 changed the default to `L=32`.**
   [measured, low severity, self-referentially ironic; re-verified
@@ -3152,7 +3342,14 @@ test-coverage gap for `load_smaps()`'s new `zero_pad_z` parameter (230).
   wrong `L` as current. Fix: update both the docstring sentence and the
   `L == 6` marker condition to `L == 32` (or read the production default
   from a single named constant so this can't re-drift the next time it
-  changes).
+  changes). **Closed 2026-09-23 as superseded, no code change needed here
+  either**: `recon/sweep_time_segments.py` no longer exists anywhere in
+  the tree (confirmed by `git log` -- last present at `56b6ee3`/`246ea7d`,
+  fully removed by the `recon/` 25-modules-to-7 consolidation); its
+  content is now inside `recon/analysis.py`'s `sweep` subcommand, whose
+  own stale-`L=6`-description problem is already tracked under item 112.
+  This item's own cited path is now unfindable and there is nothing left
+  at it to fix independently.
 - [ ] **180. `recon/analysis.py`'s `validate` subcommand module docstring
   documents
   only the three radial-dataset validation configs, omitting the three
@@ -3566,6 +3763,132 @@ test-coverage gap for `load_smaps()`'s new `zero_pad_z` parameter (230).
   docstrings are the only unqualified survivors repo-wide. Fix: reword all
   three sites to say "the removed `recon/<file>.py`," matching the
   convention every other sibling reference already follows.
+- [ ] **237. `params.py`'s `TE = 30e-3` comment claims TE "sits close to
+  the minimum achievable" for the default config -- true for the old
+  240x240x45 protocol this comment was written for, not the current
+  90x90x60 ABCD default.** [measured 2026-09-23 against `100056a`:
+  `load_params()` + a real `mask2epi_radial` schedule +
+  `calc_te_tr_delays` at the shipped defaults gives `min_te = 22.94 ms`
+  vs. prescribed `TE = 30 ms` -- a 7.06 ms / 23.5% margin, not "close"]
+  `params.py:191-193`: "Nominal echo time, s. NOTE: this sits close to the
+  minimum achievable TE for the default ETL/R/scanner/slews below (see
+  CLAUDE.md's 'PNS finding history') -- raising ETL, lowering R, or
+  changing resolution can make this value unreachable." This is a
+  leftover from before commit `0b9c25f`'s ABCD-protocol switch
+  (240x240x45, TE~34.9ms, where min_te really was close to TE) -- the
+  resolution/ETL/R change that followed opened a large margin, but this
+  comment (distinct from the neighboring slew-derate comment item 204
+  already fixed) was never updated to match. Fix: drop the "close to
+  minimum" framing, or point at a measured number/regression test the way
+  the now-fixed slew comment does.
+- [ ] **238. `sequences/ArbEPI.py`'s `derated_sys()` comment cites
+  pre-ABCD-protocol PNS sweep numbers (125.9% -> 124.6% -> 84.3%) as if
+  descriptive of the current build, with no staleness disclaimer.**
+  [measured 2026-09-23 against `100056a`; grepped repo-wide for "125.9"/
+  "84.3" -- no other hits, not previously flagged under any item number]
+  `sequences/ArbEPI.py:108-115`'s comment justifying the slew-only derate
+  says "measured on a full build: capping max_grad alone barely moved
+  peak PNS, 125.9% -> 124.6%, while a symmetric max_slew=100 T/m/s brought
+  it to 84.3%." These exact figures match CLAUDE.md's documented
+  *pre-ABCD, GE_UHP* sweep history ("an interim symmetric derate to
+  100 T/m/s ... brought ArbEPI to ~84.3%"), not anything measured on the
+  currently-shipped GE_MR750/90x90x60/ETL=60 default (which this file's
+  own "Current baseline" table above measures at 69.9% peak PNS). Unlike
+  the `params.py` slew comment item 204 already fixed -- which now
+  explicitly disclaims "protocol-dependent, goes stale on every
+  resolution/R/ETL change" instead of quoting hardcoded numbers -- this
+  comment has no such disclaimer and presents the old numbers as current
+  fact. Fix: either drop the specific numbers (matching item 204's
+  resolution) or date/qualify them as historical.
+- [ ] **239. CLAUDE.md's "PNS finding history" section still quotes
+  pre-ABCD-protocol numbers (79.8% peak PNS at min TE 34.86 ms) as
+  current, a staleness items 169's and 204's own closure notes already
+  flagged as needing a fix but that was never carried out across at least
+  two prior passes.** [measured 2026-09-23 against `100056a`] CLAUDE.md's
+  "PNS finding history" paragraph states "the tuned defaults in
+  `params.py` ... measure 79.8% peak on the full ArbEPI build (GE_MR750,
+  seed=0) at min TE 34.86 ms" and later "baseline peak PNS 78.9%, matching
+  the 79.84% figure above." Both numbers are from the superseded
+  pre-`0b9c25f` 240x240x45 protocol; this pass's re-measured "Current
+  baseline" table above shows 69.9% peak PNS with TE=30ms fully achievable
+  (no `calc_te_tr_delays` warning fired), not "min TE 34.86 ms." This exact
+  staleness is already acknowledged in this document's own item 169/204
+  closure notes ("Same underlying staleness CLAUDE.md's 'PNS finding
+  history' already carries," "fix alongside CLAUDE.md's own copy the next
+  time either file is touched") but was never given its own tracked item
+  number and has now been carried forward unfixed across at least two
+  review passes. Recorded here as its own item so it doesn't keep getting
+  silently deferred. Fix: update CLAUDE.md's "PNS finding history"
+  section's specific numbers to the current baseline, or qualify them
+  explicitly as historical the way several *other* paragraphs in the same
+  CLAUDE.md section already do for their own superseded numbers.
+- [ ] **240. `recon/run_recon.py`'s `_nominal_te_s` docstring says its
+  duplicate lives on an "unmerged worktree branch," but that duplicate has
+  been committed to this tree since commit `8e4e11c`.** [measured
+  2026-09-23 against `100056a`] `recon/run_recon.py:220-228`'s
+  `_nominal_te_s` docstring says it's "matching `recon/lowres_calib.py`'s
+  own `nominal_te_s` on the `worktree-lowres-calib-recon` branch." But
+  `recon/lowres_calib.py:688-696` now has its own `nominal_te_s` (a
+  near-identical body: `schedules[0, 0, (etl-1)//2, 2]`) committed to this
+  same tree, added by `8e4e11c` ("merge the B0 variants in ... --r2star"),
+  not left on an unmerged branch. The docstring is stale from before that
+  merge and now misleadingly implies there's no live duplication to fix
+  in-repo. Fix: reword to point at the real in-tree duplicate
+  (`recon/lowres_calib.py`'s `nominal_te_s`), and consider actually
+  deduplicating the two functions -- a small, uncontroversial conciseness
+  fix once the reference is correct.
+- [ ] **241. README.md's Demo section caption still says the shown
+  default-params run used `R = 9`, but the shipped default has been
+  `R = 6` since commit `0b9c25f` (2026-09-15's ABCD-protocol switch).**
+  [measured 2026-09-23 against `100056a`; `git log --follow -p --
+  README.md` shows this line unchanged since it was first written, never
+  touched by the `0b9c25f` default-protocol switch] `README.md:105`:
+  "Diagnostic plots from a default-params run (`main.py --plot`; see
+  `plotting/plot_last_run.py`), R = 9, `sampling_method='pd'`." `params.py`'s
+  current default (non-custom-mask) path sets `R = 6` (`N = [90, 90, 60]`,
+  the ABCD protocol). This is a different location from item 160 (which
+  is about `caipi_sample.py`'s and one test file's docstring wording, not
+  this README caption), and unlike several CLAUDE.md paragraphs that
+  explicitly flag old numbers as historical, this one presents `R = 9` as
+  current fact. Fix: update to `R = 6` (or drop the specific number and
+  just say "at the shipped default params").
+- [ ] **242. Extends item 160: two more test-file comments claim
+  "(Ny, Nz, R) = (240, 45, 9)" is "the repo's own shipped default,"
+  uncited by item 160's own file list.** [measured 2026-09-23 against
+  `100056a`] Item 160 currently cites only `sampling/caipi_sample.py:36-37`
+  and `tests/test_caipi_sample.py:35`. The same stale-default claim also
+  appears, uncited, at `tests/test_caipi_sample.py:64-70`
+  (`test_balanced_factors_and_caipi_sample_at_shipped_default_dims`: "the
+  repo's own shipped default (Ny, Nz, R) = (240, 45, 9)") and
+  `tests/test_ticaipi_sample.py:28-30`
+  (`test_ticaipi_sample_does_not_raise_at_shipped_default_dims`: "at the
+  repo's own shipped default (Ny, Nz, R) = (240, 45, 9)"). Both tests
+  hardcode `N=[240, 45], R=9` as literals disconnected from `params.py`,
+  so they'll keep silently "passing" and keep making this stale claim
+  regardless of future default changes. Fix: fold into whichever pass
+  fixes item 160 -- the fix should touch these two additional locations
+  too, not just the two currently named there.
+- [ ] **243. `preprocessing/preprocess.py`'s comment justifying
+  `ksp_gre_uncompressed`'s explicit `.astype(np.complex64)` cast
+  misattributes the reason -- `apply_whitening` never actually promotes
+  dtype.** [measured 2026-09-23 against `100056a`: ran this repo's own
+  `preprocessing/coils.py` whitening/compression chain
+  (`compute_whitening_matrix`/`apply_whitening`/`compute_coil_covariance`/
+  `coil_compression_matrix`/`apply_coil_compression`) end to end under the
+  numpy version this repo's own `uv.lock` resolves (2.4.6) -- all five
+  preserve `complex64` throughout, no promotion to `complex128` anywhere
+  in the chain] `preprocessing/preprocess.py:305-306`'s comment reads:
+  "complex64, not complex128 (`apply_whitening`'s Cholesky solve promotes
+  dtype) -- matches `ksp_gre`/`ksp_gre_echoes`' own precision..." (justifying
+  `ksp_gre_uncompressed = ksp_gre.astype(np.complex64)` at `:309`). Since
+  nothing upstream promotes precision, the explicit cast at `:309` is a
+  no-op today, and the comment misattributes why `ksp_gre`/`ksp_gre_echoes`
+  end up `complex64` (they're `complex64` simply because nothing in the
+  pipeline ever promotes them, not because of a promote-then-downcast
+  dance) -- misleading for a future maintainer reasoning about precision
+  in this pipeline. Fix: correct the comment (e.g. "kept complex64 for
+  clarity/defensiveness, even though nothing upstream currently promotes
+  it") or drop the now-unfounded parenthetical.
 
 ## Test & tooling health
 
@@ -5181,3 +5504,54 @@ test-coverage gap for `load_smaps()`'s new `zero_pad_z` parameter (230).
   always-recompute is actually the intended design (e.g. because a field
   map should never be silently reused across reruns), state that
   explicitly in the module or function docstring instead.
+- [ ] **244. `sequences/ArbEPI.py` and `sequences/EPIcal.py` duplicate a
+  near-verbatim ~15-line per-shot spoiler-draw/fat-sat/RF-spoiling
+  block.** [measured 2026-09-23 against `100056a`] The sequence (draw
+  `cx,cy,cz` via `spoil_rng.uniform(...)`, derive `x_scale`/`y_scale`/
+  `z_scale`, add the fat-sat+spoiler block, compute quadratic RF-spoiling
+  phase and increment `rf_count`) is copied essentially unchanged between
+  `sequences/ArbEPI.py:218-239` and `sequences/EPIcal.py:97-117` -- only
+  the `TRID` label value differs. This is exactly the kind of duplication
+  `lib/readout_from_params.py` was created to eliminate elsewhere ("the
+  `sys.max_slew = 100 * sys.gamma` derate was hand-copied in three places"
+  before that module existed), not yet flagged under any existing item.
+  Fix: factor into a small shared helper (e.g. in `lib/make_spoilers.py`
+  or a new `lib/`-level function) taking `(params, spoil_rng, rf, rg,
+  gx_spoil, gy_spoil, gz_spoil, rfsat, trid, rf_count)` and returning the
+  updated `rf_count`/scale factors.
+- [ ] **245. `sampling/pd_sample.py`'s `pd_sample()` re-clamps a value
+  `_calib_side_frac` already guarantees is clamped.** [measured 2026-09-23
+  against `100056a`] `side_frac = _calib_side_frac(target_samples, nx, ny,
+  calib_frac)` ... `rho_calib = min(max(side_frac, 0.0), 0.999)`
+  (`sampling/pd_sample.py:319`). `_calib_side_frac` already guarantees its
+  return value is in `[0, 0.999]` (`math.sqrt(...)` of a non-negative
+  quantity strictly less than `calib_frac`, then clamped via
+  `min(..., 0.999)`, or exactly `0.0` when `calib_frac <= 0`) -- the
+  second `min(max(side_frac, 0.0), 0.999)` at the `pd_sample` call site
+  can never actually change `side_frac`'s value, duplicating a contract
+  the callee already enforces. Low severity, but real duplication. Fix:
+  drop the re-clamp and use `rho_calib = side_frac` directly (or, if
+  belt-and-suspenders is wanted, an `assert` instead of a silent
+  re-clamp).
+- [ ] **246. `preprocessing/config.py`'s `PreprocessingConfig` dataclass
+  carries seven fields with zero readers anywhere in the current tree.**
+  [measured 2026-09-23 against `100056a`: repo-wide grep for
+  `cfg.<field>`/`config.<field>` patterns, including in
+  `recon/lowres_calib.py` (the one `recon/` module that still takes
+  `cfg: PreprocessingConfig`, via `_recon_one`, which only reads
+  `cfg.datdir`/`cfg.seqnames`)] `show_epi_phase_diff`
+  (`preprocessing/config.py:43`), `lamb_l1`/`lamb_tv`/`num_iter`/
+  `Nframes` (`:70-74`, under a stale "sigpy wavelet+TV regularized recon /
+  CG-SENSE" comment), and `use_parfor`/`interactive` (`:88-90`) are never
+  read by any code in `preprocessing/` or `recon/`. Distinct from the
+  already-tracked item 105/182 (`use_parfor` as a *local variable* in the
+  now-deleted `recon/recon_frames.py`) -- this is the dataclass *field* on
+  `PreprocessingConfig` itself, still present and still dead. Leftovers
+  from the pre-consolidation MATLAB-`cfg`-struct port
+  (`lamb_l1`/`lamb_tv`/`num_iter` now live as argparse flags on
+  `recon/L1-wavelet_TV_B0_SENSE.py`/`recon/run_recon.py` instead;
+  `use_parfor`/`interactive`/`show_epi_phase_diff` have no
+  MATLAB-parfor/interactive-plotting equivalent anywhere in this port).
+  Fix: delete the seven fields (and the stale comment block above them),
+  or, if any are meant to gate future functionality, add a one-line note
+  saying so.
