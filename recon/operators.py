@@ -166,9 +166,17 @@ class GatheredSense(LinearMap):
         return kc_flat[self.idx, :]
 
     def _apply_adjoint(self, y: torch.Tensor) -> torch.Tensor:
-        kc_full = torch.zeros(math.prod(self.N), self.Nc, dtype=y.dtype, device=y.device)
-        kc_full[self.idx, :] = y
-        kc_full = kc_full.T.reshape(self.Nc, *self.N)
+        # Scatter into a (Nc,prod(N))-laid-out buffer directly (along dim=1,
+        # not dim=0) so the follow-up .reshape(Nc,*N) is a free view -- the
+        # (prod(N),Nc)-then-.T.reshape() ordering this used to use forces a
+        # full (Nc,*N)-sized copy (reshape can't return a view of a
+        # transposed/non-contiguous tensor), a real, measured contributor to
+        # a CUDA OOM at this repo's largest dataset scale (4_93.5x_0.8mm,
+        # (270,270,180) grid, Nc=32 -- each such copy is ~3.13 GiB; see
+        # CLAUDE.md's recon/ B0 subsection).
+        kc_full = torch.zeros(self.Nc, math.prod(self.N), dtype=y.dtype, device=y.device)
+        kc_full[:, self.idx] = y.T
+        kc_full = kc_full.reshape(self.Nc, *self.N)
         kc_shifted = torch.fft.ifftshift(kc_full, dim=self.dims)
         xc = torch.fft.fftshift(
             torch.fft.ifftn(kc_shifted, dim=self.dims, norm="ortho"), dim=self.dims
@@ -585,8 +593,33 @@ def estimate_spectral_norm(A, x0: torch.Tensor, niter: int = 200, tol: float = 1
     tol-based early stop only returns once the ratio has stabilized,
     instead of trusting a fixed iteration count to have been enough.
 
+    For a BlockDiagonal A (this repo's per-frame-independent-block
+    contract -- build_encoding_operator/build_encoding_operator_b0 couple
+    nothing across frames), the spectral norm is exactly the max over the
+    blocks' own spectral norms: the singular values of
+    block_diag(A_1,...,An) are the union of each A_i's own singular
+    values. Measuring per-block instead of on the whole Nt-stacked
+    operator cuts the power iteration's buffer size by a factor of Nt --
+    the whole-operator x0/Ax/adjoint-out buffers are (*N,Nt)/(K,Nc,Nt)-
+    shaped, several of which are simultaneously live inside poweriter's
+    loop, while a single block's are just (*N,)/(K,Nc). This is what makes
+    the estimate tractable at this repo's largest dataset scale: a real
+    CUDA OOM (44.5/47.4 GB in use, "Tried to allocate 3.13 GiB") hit here
+    on 4_93.5x_0.8mm's (270,270,180)-grid, Nt=60, Nc=32 operator, where a
+    single (*N,Nt) buffer alone is 6.3 GB and several coexist -- see
+    CLAUDE.md's recon/ B0 subsection. x0 only needs to match a single
+    block's own size_in ((*N,), not (*N,Nt)) -- callers building an
+    operator via build_encoding_operator[_b0] should pass a per-frame-
+    shaped x0 regardless of whether A ends up being a lone operator (the
+    tests/test_recon_operators_b0.py case) or a BlockDiagonal (every real
+    production call site), since both now take the same shape.
+
     A: any mirtorch LinearMap/BlockDiagonal (.apply/.adjoint). x0: any
-    nonzero starting tensor matching A's size_in (dtype/device included)."""
+    nonzero starting tensor matching a single block's size_in (dtype/
+    device included) -- for a non-BlockDiagonal A, matching A's own
+    size_in directly."""
+    if isinstance(A, BlockDiagonal):
+        return max(poweriter(block.apply, block.adjoint, x0, niter=niter, tol=tol) for block in A.A)
     return poweriter(A.apply, A.adjoint, x0, niter=niter, tol=tol)
 
 

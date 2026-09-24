@@ -490,7 +490,9 @@ def run_recon(
                 "B0-corrected path."
             )
         print("  sigma1A not supplied -- measuring via power iteration...")
-        x0 = torch.randn(Nx, Ny, Nz, Nt, dtype=torch.complex64, device=device)
+        # Per-block (max over frames), not whole-operator -- see
+        # estimate_spectral_norm's docstring; x0 only needs one frame's shape.
+        x0 = torch.randn(Nx, Ny, Nz, dtype=torch.complex64, device=device)
         sigma1A = estimate_spectral_norm(A, x0)
         print(f"    sigma1A (B0-corrected) = {sigma1A:.6f}")
         del x0

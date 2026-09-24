@@ -279,8 +279,12 @@ def main_mslr_ref(
         smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0,
         r2star_map=r2star_map, t_ref_s=t_ref_s,
     )
-    Nt = omega.shape[-1]  # A is the full BlockDiagonal over every frame, size_in=(Nx,Ny,Nz,Nt)
-    x0 = torch.randn(Nx, Ny, Nz, Nt, dtype=torch.complex64, device=device_t)
+    # A is the full BlockDiagonal over every frame, but estimate_spectral_norm
+    # measures per-block (max over frames) now -- x0 only needs one frame's
+    # own (Nx,Ny,Nz) shape, not the whole-operator (Nx,Ny,Nz,Nt) stack (see
+    # that function's docstring for why -- this is what keeps this estimate
+    # tractable at the largest dataset scale).
+    x0 = torch.randn(Nx, Ny, Nz, dtype=torch.complex64, device=device_t)
     sigma1A = estimate_spectral_norm(A, x0)
     print(
         f"  sigma1A ({corrected_label}) = {sigma1A:.6f}  "
@@ -426,7 +430,9 @@ def main_mslr_local(
         A = build_encoding_operator(smaps_chw, omega)
     Nt = omega.shape[-1]
     Nx_, Ny, Nz = smaps.shape[:3]
-    x0 = torch.randn(Nx_, Ny, Nz, Nt, dtype=torch.complex64, device=device_t)
+    # Per-block (max over frames), not whole-operator -- see
+    # estimate_spectral_norm's docstring; x0 only needs one frame's shape.
+    x0 = torch.randn(Nx_, Ny, Nz, dtype=torch.complex64, device=device_t)
     sigma1A = estimate_spectral_norm(A, x0)
     print(f'  sigma1A = {sigma1A:.6f}')
     del A, smaps, smaps_chw, omega, x0
