@@ -30,7 +30,7 @@ from lib.readout_from_params import derated_sys, make_readout_grads_from_params
 from params import Params
 
 
-def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
+def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) -> pp.Sequence:
     os.makedirs(params.output_dir, exist_ok=True)
     # Derated system for the non-readout gradients, matching ArbEPI's
     # (same gradient design, see sequences/ArbEPI.py's sys comment).
@@ -90,7 +90,10 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
     # easier to accidentally rely on one (docs/review-findings.md item 176).
     spoil_rng = np.random.default_rng()
 
-    for shot in range(-params.Ndummyshots, params.Nshots):
+    # n_frames > 1 repeats the real (ADC-on) shots for that many volumes,
+    # e.g. as a phase-encode-free time series for readout/hardware
+    # stability testing; the default 1 is the usual single calibration pass.
+    for shot in range(-params.Ndummyshots, params.Nshots * n_frames):
         is_dummy = shot < 0
         TRID = 1 if is_dummy else 2  # TRID 1 = dummy, TRID 2 = real (see Pulseq on GE manual)
 
@@ -103,7 +106,10 @@ def generate_epical(params: Params, seqname: str = 'EPIcal') -> pp.Sequence:
         z_scale = cz / params.spoil_cycles_max
 
         # Fat-sat
-        seq.add_block(rfsat, pp.make_label('TRID', 'SET', TRID))
+        seq.add_block(
+            rfsat if params.fatsat.enabled else pp.make_delay(pp.calc_duration(rfsat)),
+            pp.make_label('TRID', 'SET', TRID),
+        )
         seq.add_block(
             pp.scale_grad(gx_spoil, x_scale),
             pp.scale_grad(gy_spoil, y_scale),

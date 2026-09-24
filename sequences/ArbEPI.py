@@ -225,7 +225,10 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             z_scale = cz / params.spoil_cycles_max
 
             # Fat-sat (label first block in each unique section with TRID for GE)
-            seq.add_block(rfsat, pp.make_label('TRID', 'SET', 1))
+            seq.add_block(
+                rfsat if params.fatsat.enabled else pp.make_delay(pp.calc_duration(rfsat)),
+                pp.make_label('TRID', 'SET', 1),
+            )
             seq.add_block(
                 pp.scale_grad(gx_spoil, x_scale),
                 pp.scale_grad(gy_spoil, y_scale),

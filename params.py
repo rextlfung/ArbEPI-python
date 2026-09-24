@@ -27,6 +27,11 @@ class FatsatParams:
     sl_thick: float  # m (dummy value; just needs to be large)
     tbw: float  # time-bandwidth product
     dur: float  # s
+    # False replaces the fat-sat RF pulse with an equal-duration delay in
+    # ArbEPI/EPIcal, keeping its crusher and every block timing identical --
+    # isolates the pulse's own contribution (e.g. as an unintended refocusing
+    # pulse on off-resonant water) from everything else.
+    enabled: bool = True
 
 
 @dataclass
@@ -383,7 +388,16 @@ def load_params(output_dir: str = 'output') -> Params:
     # -- float64 noise can make an exact ratio like 216mm/2mm evaluate to
     # 108.00000000000001 instead of 108.0, which would otherwise make
     # ceil silently add a spurious extra voxel.
-    N_degre = np.ceil(fov / res_degre - 1e-9).astype(int)
+    #
+    # degre_z_margin (m, per side) extends only the z-FOV past the EPI's, so
+    # the deGRE slab covers the EPI slab with room to spare even when a
+    # single deGRE is shared across EPI variants whose z-FOVs differ by a
+    # rounding step (e.g. 144mm vs 145.8mm at 2.4mm vs 5.4mm res) -- avoids
+    # needing preprocessing/grid_resize.py's zero_pad_z workaround, since
+    # the z crop path handles any deGRE z-FOV >= the EPI's. x/y must still
+    # match the EPI FOV exactly (grid_resize.py raises otherwise).
+    degre_z_margin = 4e-3
+    N_degre = np.ceil((fov + np.array([0, 0, 2 * degre_z_margin])) / res_degre - 1e-9).astype(int)
     fov_degre = N_degre * res_degre
     Nx_degre, Ny_degre, Nz_degre = int(N_degre[0]), int(N_degre[1]), int(N_degre[2])
 
