@@ -185,7 +185,7 @@ from recon.operators import (
     build_encoding_operator,
     build_encoding_operator_b0,
     estimate_spectral_norm,
-    gather_ksp,
+    load_and_gather_ksp,
 )
 
 
@@ -279,8 +279,12 @@ def main_mslr_ref(
         smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0,
         r2star_map=r2star_map, t_ref_s=t_ref_s,
     )
-    Nt = omega.shape[-1]  # A is the full BlockDiagonal over every frame, size_in=(Nx,Ny,Nz,Nt)
-    x0 = torch.randn(Nx, Ny, Nz, Nt, dtype=torch.complex64, device=device_t)
+    # A is the full BlockDiagonal over every frame, but estimate_spectral_norm
+    # measures per-block (max over frames) now -- x0 only needs one frame's
+    # own (Nx,Ny,Nz) shape, not the whole-operator (Nx,Ny,Nz,Nt) stack (see
+    # that function's docstring for why -- this is what keeps this estimate
+    # tractable at the largest dataset scale).
+    x0 = torch.randn(Nx, Ny, Nz, dtype=torch.complex64, device=device_t)
     sigma1A = estimate_spectral_norm(A, x0)
     print(
         f"  sigma1A ({corrected_label}) = {sigma1A:.6f}  "
@@ -349,7 +353,28 @@ def main_mslr_local(
     L_b0: int = 32,
     nbins_b0: int = 128,
     lambda_global: float | None = None,
+    conv_tol: float = 1e-5,
+    r2star: bool = False,
+    zero_pad_z: bool = False,
 ) -> None:
+    """r2star: layer T2*/T1 amplitude-decay correction on top of the B0
+    phase correction (see run_cgsense_b0's docstring for the same pattern
+    -- R2* estimated from the dual-echo deGRE data, referenced to the
+    nominal-TE echo's acquisition time). Requires b0_correct=True. Output
+    moves to mslr_local_b0complex/ so a --r2star run never collides with a
+    plain B0-only run.
+
+    zero_pad_z: forwarded to estimate_r2star_map_epi_grid's deGRE-grid ->
+    EPI-grid resize (only relevant with r2star=True) -- set True when this
+    seqname's own z-FOV exceeds deGRE's fixed z-FOV (e.g. 1_1x_5.4mm's
+    145.8mm vs. deGRE's 144mm).
+
+    patch_size/stride/conv_tol are plain passthroughs to run_recon() (same
+    defaults run_recon() itself uses) -- per-experiment choices (e.g.
+    physical-size patches, disabling early stopping) belong in the
+    calling script, not hardcoded here; see _cli_mslr_local's --patch-size/
+    --stride/--conv-tol."""
+    assert b0_correct or not r2star, 'main_mslr_local: r2star requires b0_correct=True'
     device_t = torch.device(device)
     recon_dir = os.path.join(datdir, 'recon')
     fn_ksp = os.path.join(recon_dir, f'{seqname}_epi_zf.h5')
@@ -381,44 +406,87 @@ def main_mslr_local(
         lambda_global = float(R)
     print(f'  Acceleration factor R ~ {R:.2f}  ->  lambda_global = {lambda_global:.4f}')
 
-    corrected_label = 'B0-corrected' if b0_correct else 'plain (uncorrected)'
+    corrected_label = 'B0+R2*-corrected' if r2star else ('B0-corrected' if b0_correct else 'plain (uncorrected)')
     print(f'Estimating sigma1(A) for the {corrected_label} operator via power iteration...')
+    r2star_map, t_ref_s = None, 0.0
     if b0_correct:
         with h5py.File(fn_b0map, 'r') as f:
             b0map_hz = torch.from_numpy(f['b0map_hz'][()].astype(np.float32)).to(device_t)
         echo_times_yz = _load_echo_times(fn_ksp, device_t)
+        if r2star:
+            t_ref_s = _nominal_te_s(paths.scan_info, sp.ETL)
+            print(f'  Estimating R2* map from dual-echo deGRE data (TE_nominal={t_ref_s * 1000:.3f} ms)...')
+            r2star_map = torch.from_numpy(
+                estimate_r2star_map_epi_grid(
+                    datdir, seqname, sp.fov_degre, sp.fov, tuple(smaps.shape[:3]), zero_pad_z=zero_pad_z,
+                )
+            ).to(device_t)
         A = build_encoding_operator_b0(
             smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0,
+            r2star_map=r2star_map, t_ref_s=t_ref_s,
         )
         del b0map_hz, echo_times_yz
     else:
         A = build_encoding_operator(smaps_chw, omega)
     Nt = omega.shape[-1]
     Nx_, Ny, Nz = smaps.shape[:3]
-    x0 = torch.randn(Nx_, Ny, Nz, Nt, dtype=torch.complex64, device=device_t)
+    # Per-block (max over frames), not whole-operator -- see
+    # estimate_spectral_norm's docstring; x0 only needs one frame's shape.
+    x0 = torch.randn(Nx_, Ny, Nz, dtype=torch.complex64, device=device_t)
     sigma1A = estimate_spectral_norm(A, x0)
     print(f'  sigma1A = {sigma1A:.6f}')
     del A, smaps, smaps_chw, omega, x0
     if device_t.type == 'cuda':
         torch.cuda.empty_cache()
 
-    out_dir = os.path.join(recon_dir, 'mslr_local_b0' if b0_correct else 'mslr_local')
+    if r2star:
+        out_subdir = 'mslr_local_b0complex'
+    elif b0_correct:
+        out_subdir = 'mslr_local_b0'
+    else:
+        out_subdir = 'mslr_local'
+    out_dir = os.path.join(recon_dir, out_subdir)
     os.makedirs(out_dir, exist_ok=True)
 
     print(f'\nRunning {corrected_label} local-low-rank reconstruction for {seqname} '
           f'(patch_size={patch_size}, stride={stride}, lambda_global={lambda_global:.4f})...')
-    result = run_recon(
-        fn_ksp=fn_ksp,
-        fn_smaps=fn_smaps,
-        patch_sizes=[patch_size],
-        strides=[stride],
-        sigma1A=sigma1A,
-        device=device,
-        lambda_global=lambda_global,
-        fn_b0map=fn_b0map,
-        L_b0=L_b0,
-        nbins_b0=nbins_b0,
-    )
+    # mom fallback: POGM (best convergence per iteration, most auxiliary
+    # state) -> FPGM (one fewer auxiliary iterate) -> PGM (none) -- device
+    # always stays 'cuda' here (never silently drops to CPU); only the
+    # *solver's own* momentum-state memory is reduced by this fallback.
+    # NOTE: this does NOT help an OOM coming from patchSVST's single batched
+    # torch.linalg.svd over every patch at once (recon/mslr.py's SVST) --
+    # that memory is identical regardless of mom, since all three momentum
+    # variants call the same g_prox. Measured 2026-09-22 for this batch's
+    # actual (patch_size, stride): 4_93.5x_0.8mm alone needs ~90GB just for
+    # patchSVST's P+U tensors (16k patches x (5832,60) complex64) against a
+    # 49GB GPU -- a hard blocker no mom fallback can rescue.
+    for mom in ('pogm', 'fpgm', 'pgm'):
+        try:
+            result = run_recon(
+                fn_ksp=fn_ksp,
+                fn_smaps=fn_smaps,
+                patch_sizes=[patch_size],
+                strides=[stride],
+                sigma1A=sigma1A,
+                device=device,
+                mom=mom,
+                conv_tol=conv_tol,
+                lambda_global=lambda_global,
+                fn_b0map=fn_b0map,
+                L_b0=L_b0,
+                nbins_b0=nbins_b0,
+                normalize_noise=True,
+                r2star_map=r2star_map,
+                t_ref_s=t_ref_s,
+            )
+            break
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if mom == 'pgm':
+                raise
+            print(f'  mom={mom} ran out of GPU memory -- falling back to the next momentum '
+                  'method (staying on GPU)...')
 
     fn_out = os.path.join(out_dir, f'{seqname}_recon')
     save_result(
@@ -426,6 +494,7 @@ def main_mslr_local(
         patch_size=list(patch_size), stride=list(stride),
         b0_corrected=b0_correct, L_b0=L_b0 if b0_correct else None,
         nbins_b0=nbins_b0 if b0_correct else None,
+        r2star_corrected=r2star,
     )
     print(f'Wrote {fn_out}.h5 + .nii.gz + .json')
 
@@ -441,10 +510,26 @@ def _cli_mslr_local() -> None:
         '--lambda-global', type=float, default=None,
         help='override the default lambda_global=R (this dataset\'s own acceleration factor)',
     )
+    parser.add_argument('--r2star', action='store_true')
+    parser.add_argument(
+        '--zero-pad-z', action='store_true',
+        help='(with --r2star) zero-pad the deGRE-grid R2* estimate where the EPI z-FOV exceeds '
+             "deGRE's own -- see estimate_r2star_map_epi_grid's docstring",
+    )
+    parser.add_argument('--patch-size', type=int, nargs=3, default=(6, 6, 6), metavar=('PX', 'PY', 'PZ'))
+    parser.add_argument('--stride', type=int, nargs=3, default=(3, 3, 3), metavar=('SX', 'SY', 'SZ'))
+    parser.add_argument(
+        '--conv-tol', type=float, default=1e-5,
+        help='POGM early-stop threshold; <= 0 disables early stopping (always runs to niters)',
+    )
     args = parser.parse_args()
+    if args.r2star and args.no_b0:
+        parser.error('--r2star requires b0 correction (omit --no-b0)')
     main_mslr_local(
         args.datdir, args.seqname, device=args.device, b0_correct=not args.no_b0,
+        patch_size=tuple(args.patch_size), stride=tuple(args.stride),
         L_b0=args.L_b0, nbins_b0=args.nbins_b0, lambda_global=args.lambda_global,
+        conv_tol=args.conv_tol, r2star=args.r2star, zero_pad_z=args.zero_pad_z,
     )
 
 def cg_sense_solve(
@@ -526,14 +611,14 @@ def run_cgsense_b0(
     Nx, Ny, Nz, Nvc = smaps.shape
     print(f'  Sensitivity maps: {tuple(smaps.shape)}')
 
-    print('Loading k-space...')
-    ksp0 = torch.from_numpy(_load_array(fn_ksp, 'ksp_epi_zf').astype(np.complex64)).to(device_t)
-    Nx_, Ny_, Nz_, Nvc_, Nt = ksp0.shape
-    assert (Nx_, Ny_, Nz_, Nvc_) == (Nx, Ny, Nz, Nvc), (
-        f'smaps shape {(Nx, Ny, Nz, Nvc)} does not match k-space dims {(Nx_, Ny_, Nz_, Nvc_)}'
+    with h5py.File(fn_ksp, 'r') as f:
+        ksp_shape = f['ksp_epi_zf'].shape  # cheap metadata peek, no data read
+    assert ksp_shape == (Nx, Ny, Nz, Nvc, ksp_shape[-1]), (
+        f'smaps shape {(Nx, Ny, Nz, Nvc)} does not match k-space dims {ksp_shape[:4]}'
     )
+    Nt = ksp_shape[-1]
 
-    omega = _load_omega(fn_ksp, Nx, Ny, Nz, Nt, ksp0)
+    omega = _load_omega(fn_ksp, Nx, Ny, Nz, Nt, device_t)
     R = (Nx * Ny * Nz) / omega[:, :, :, 0].sum().item()
     print(f'Acceleration factor R ~ {R:.2f}')
 
@@ -564,8 +649,8 @@ def run_cgsense_b0(
         A = build_encoding_operator(smaps_chw, omega)
         label = 'uncorrected'
 
-    ksp = gather_ksp(ksp0, A)  # (K,Nc,Nt)
-    del ksp0
+    print('Loading k-space (gathered per frame, never materializing the dense array)...')
+    ksp = load_and_gather_ksp(fn_ksp, A, device_t)  # (K,Nc,Nt)
     if device_t.type == 'cuda':
         torch.cuda.empty_cache()
 

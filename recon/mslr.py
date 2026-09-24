@@ -65,6 +65,7 @@ from typing import Callable, Literal
 import h5py
 import numpy as np
 import torch
+from mirtorch.linear import BlockDiagonal
 
 from preprocessing.nifti_io import save_recon_nifti
 from recon.hdf5_chunked_io import read_frames_cropped
@@ -72,7 +73,7 @@ from recon.operators import (
     build_encoding_operator,
     build_encoding_operator_b0,
     estimate_spectral_norm,
-    gather_ksp,
+    load_and_gather_ksp,
 )
 
 
@@ -108,7 +109,7 @@ def _load_array(fn: str, key: str) -> np.ndarray:
 
 
 def _load_omega(
-    fn_ksp: str, Nx: int, Ny: int, Nz: int, Nt: int, ksp0: torch.Tensor
+    fn_ksp: str, Nx: int, Ny: int, Nz: int, Nt: int, device: torch.device
 ) -> torch.Tensor:
     """(Nx,Ny,Nz,Nt) sampling mask, broadcast across the readout axis
     (kx doesn't affect which (ky,kz) locations were sampled).
@@ -122,12 +123,17 @@ def _load_omega(
     consistency check can't catch it either -- so that check is only worth
     doing in the fallback branch below, where it's actually load-bearing.
     Falls back to the `!= 0` derivation, logged, for recon files written
-    before 'omegas' existed.
+    before 'omegas' existed -- that fallback loads the whole dense ksp0
+    itself (there's no way around it, needing every coil's exact-zero
+    pattern), unlike the normal (has_omegas) path, which takes only
+    `device` and never touches ksp_epi_zf at all so callers can build the
+    encoding operator (and therefore load_and_gather_ksp's memory-bounded
+    per-frame path) before ever loading real k-space data.
     """
     with h5py.File(fn_ksp, "r") as f:
         has_omegas = "omegas" in f
         if has_omegas:
-            omegas_yzt = torch.from_numpy(np.asarray(f["omegas"][()])).to(ksp0.device)
+            omegas_yzt = torch.from_numpy(np.asarray(f["omegas"][()])).to(device)
     if has_omegas:
         assert tuple(omegas_yzt.shape) == (Ny, Nz, Nt), (
             f"omegas shape {tuple(omegas_yzt.shape)} doesn't match k-space dims ({Ny},{Nz},{Nt})"
@@ -138,6 +144,7 @@ def _load_omega(
         f"  '{fn_ksp}' has no 'omegas' dataset (written before preprocess.py added it) -- "
         "falling back to inferring the sampling mask from exact-zero k-space values."
     )
+    ksp0 = torch.from_numpy(_load_array(fn_ksp, "ksp_epi_zf").astype(np.complex64)).to(device)
     omega = ksp0[:, :, :, 0, :] != 0
     for ic in range(1, ksp0.shape[3]):
         assert torch.equal(omega, ksp0[:, :, :, ic, :] != 0), f"Coil {ic} has a differing mask"
@@ -256,6 +263,7 @@ def estimate_noise_std(X: torch.Tensor, bg_frac: float = 0.25) -> float:
 
 def estimate_operator_noise_factor(
     A, size_out: tuple, dtype: torch.dtype, device: torch.device, n_trials: int = 20,
+    max_frames: int = 4,
 ) -> float:
     """Mean image-domain std from propagating synthetic unit-variance
     complex Gaussian k-space noise through A.adjoint(), averaged over
@@ -275,7 +283,37 @@ def estimate_operator_noise_factor(
     needs to be correct for (the masked-out region is exactly zero in
     every reconstruction anyway, regardless of any regularization
     threshold, so its "noise level" is neither real nor relevant).
+
+    For a multi-frame BlockDiagonal A, this samples up to max_frames of its
+    blocks (evenly spaced across the frame index, e.g. frames 0/20/40/59 of
+    60) and averages their own per-block factors, rather than calling
+    A.adjoint() on the whole stacked operator -- a real CUDA OOM on
+    4_93.5x_0.8mm (270,270,180 grid, Nt=60, Nc=32): even a single such call
+    needs a 6.3GB (*N,Nt) adjoint-output buffer on top of the operator's
+    own resident memory, and every A.A[t] block shares smaps (and, for a
+    B0-corrected operator, c_phasors) with every other block, differing
+    only in sampling pattern -- so a handful of frames' own noise
+    propagation already characterizes the whole operator (matching
+    estimate_spectral_norm's analogous per-block reasoning, empirically
+    confirmed there: sigma1 varied only 3.45-3.51 across frames 0/20/40/59
+    of that same 60-frame operator). Also several times faster: each
+    per-block adjoint call is Nt times cheaper than the whole-operator one,
+    so sampling max_frames << Nt frames costs a small fraction of the
+    original per-call time.
     """
+    if isinstance(A, BlockDiagonal) and len(A.A) > 1:
+        Nt = len(A.A)
+        n_sample = min(max_frames, Nt)
+        frame_idx = torch.linspace(0, Nt - 1, steps=n_sample).round().long().unique().tolist()
+        block_size_out = tuple(size_out[:-1])  # (K,Nc) -- drop the Nt axis
+        factors = [
+            estimate_operator_noise_factor(
+                A.A[t], block_size_out, dtype, device, n_trials=n_trials, max_frames=max_frames,
+            )
+            for t in frame_idx
+        ]
+        return float(np.mean(factors))
+
     stds = []
     for _ in range(n_trials):
         noise_k = (
@@ -285,6 +323,13 @@ def estimate_operator_noise_factor(
         img_noise = A.adjoint(noise_k.to(dtype))
         nonzero = img_noise[img_noise.abs() > 0]
         stds.append(nonzero.std().item() if nonzero.numel() > 0 else img_noise.std().item())
+        # Explicitly drop this trial's buffers before the next iteration --
+        # a real bug found alongside the whole-operator issue above: without
+        # this, img_noise (a full (*N,) or (*N,Nt) tensor) and nonzero (a
+        # same-size-order copy of it) both stay referenced by these local
+        # names until reassigned next loop, so peak memory across n_trials
+        # includes two full trials' worth of dead buffers rather than one.
+        del noise_k, img_noise, nonzero
     return float(np.mean(stds))
 
 
@@ -435,15 +480,16 @@ def run_recon(
     print("Loading sensitivity maps...")
     smaps, smaps_chw = _load_normalized_smaps(fn_smaps, device)
     print(f"  Sensitivity maps: {tuple(smaps.shape)}")
+    Nx, Ny, Nz, Nvc = smaps.shape
 
-    print("Loading k-space...")
-    ksp0 = torch.from_numpy(_load_array(fn_ksp, "ksp_epi_zf").astype(np.complex64)).to(device)
-    Nx, Ny, Nz, Nvc, Nt = ksp0.shape
-    assert tuple(smaps.shape) == (Nx, Ny, Nz, Nvc), (
-        f"smaps shape {tuple(smaps.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz},{Nvc})"
+    with h5py.File(fn_ksp, "r") as f:
+        ksp_shape = f["ksp_epi_zf"].shape  # cheap metadata peek, no data read
+    assert ksp_shape == (Nx, Ny, Nz, Nvc, ksp_shape[-1]), (
+        f"smaps shape {tuple(smaps.shape)} doesn't match k-space dims {ksp_shape[:4]}"
     )
+    Nt = ksp_shape[-1]
 
-    omega = _load_omega(fn_ksp, Nx, Ny, Nz, Nt, ksp0)
+    omega = _load_omega(fn_ksp, Nx, Ny, Nz, Nt, device)
     R = (Nx * Ny * Nz) / omega[:, :, :, 0].sum().item()
     print(f"Acceleration factor R ~ {R:.2f}")
     counts = omega.sum(dim=(0, 1, 2))
@@ -483,17 +529,19 @@ def run_recon(
                 "B0-corrected path."
             )
         print("  sigma1A not supplied -- measuring via power iteration...")
-        x0 = torch.randn(Nx, Ny, Nz, Nt, dtype=torch.complex64, device=device)
+        # Per-block (max over frames), not whole-operator -- see
+        # estimate_spectral_norm's docstring; x0 only needs one frame's shape.
+        x0 = torch.randn(Nx, Ny, Nz, dtype=torch.complex64, device=device)
         sigma1A = estimate_spectral_norm(A, x0)
         print(f"    sigma1A (B0-corrected) = {sigma1A:.6f}")
         del x0
 
-    ksp = gather_ksp(ksp0, A)  # (K,Nc,Nt) -- see operators.py for why gathered, not dense
-    del ksp0
+    print("Loading k-space (gathered per frame, never materializing the dense array)...")
+    ksp = load_and_gather_ksp(fn_ksp, A, device)  # (K,Nc,Nt)
     if device.type == "cuda":
         torch.cuda.empty_cache()
         free_gb, total_gb = (x / 1e9 for x in torch.cuda.mem_get_info())
-        print(f"  VRAM free after freeing dense k-space: {free_gb:.2f} / {total_gb:.2f} GB")
+        print(f"  VRAM free after loading gathered k-space: {free_gb:.2f} / {total_gb:.2f} GB")
 
     # See normalize_noise's docstring above: the k-space-side factor is not
     # measured from real (structured-content-contaminated) acquired data --
@@ -536,10 +584,20 @@ def run_recon(
         return g.unsqueeze(-1).expand(-1, -1, -1, -1, Nscales).clone()
 
     def reg_cost(X: torch.Tensor) -> float:
+        # Chunked gather (patchSVST's own _all_patch_starts/_gather_patch_chunk),
+        # not img2patches directly -- the same full-P-tensor OOM risk applies
+        # here (called once, for X0, but still needs to not crash before the
+        # solve even starts on a large grid/fine patch_size).
         total = 0.0
         for k in range(Nscales):
-            P = img2patches(X[..., k], patch_sizes[k], strides[k])
-            total += lambdas[k] * patch_nucnorm(P).item()
+            img_k = X[..., k]
+            starts, ps = _all_patch_starts(img_k.shape[:3], patch_sizes[k], strides[k])
+            chunk_size = _chunk_size_for_budget(ps, img_k.shape[-1], img_k.element_size(), _DEFAULT_SVD_CHUNK_BYTES)
+            nuc = 0.0
+            for i in range(0, len(starts), chunk_size):
+                P_chunk = _gather_patch_chunk(img_k, starts[i : i + chunk_size], ps)
+                nuc += patch_nucnorm(P_chunk).item()
+            total += lambdas[k] * nuc
         return total
 
     last_reg = [0.0]  # updated for free inside g_prox each iter; set once for iter 0 below
@@ -825,6 +883,50 @@ def _patch_starts(n: int, patch: int, stride: int) -> list[int]:
     return [min(i * stride, n - patch) for i in range(nsteps + 1)]
 
 
+_DEFAULT_SVD_CHUNK_BYTES = 4_000_000_000  # see SVST's docstring for the benchmark this is based on
+
+
+def _all_patch_starts(
+    shape: tuple[int, int, int], patch_size: tuple[int, int, int], stride_size: tuple[int, int, int]
+) -> tuple[list[tuple[int, int, int]], tuple[int, int, int]]:
+    """Every (sx,sy,sz) patch start position over `shape`, plus the clamped
+    (psx,psy,psz) patch size actually used (patch_size capped to each
+    axis' own image size) -- shared by img2patches/patches2img (unchanged,
+    still used directly by tests and reg_cost's chunked path below) and
+    patchSVST's own chunked gather/scatter (which never materializes the
+    full per-scale patch tensor -- see patchSVST's docstring)."""
+    Nx, Ny, Nz = shape
+    psx, psy, psz = (min(p, n) for p, n in zip(patch_size, shape))
+    starts_x = _patch_starts(Nx, psx, stride_size[0])
+    starts_y = _patch_starts(Ny, psy, stride_size[1])
+    starts_z = _patch_starts(Nz, psz, stride_size[2])
+    starts = [(sx, sy, sz) for sz in starts_z for sy in starts_y for sx in starts_x]
+    return starts, (psx, psy, psz)
+
+
+def _chunk_size_for_budget(
+    patch_size: tuple[int, int, int], Nt: int, element_size: int, max_chunk_bytes: int
+) -> int:
+    p_k = patch_size[0] * patch_size[1] * patch_size[2]
+    return max(1, max_chunk_bytes // (element_size * p_k * Nt))
+
+
+def _gather_patch_chunk(
+    img: torch.Tensor, starts_chunk: list[tuple[int, int, int]], patch_size: tuple[int, int, int]
+) -> torch.Tensor:
+    """(len(starts_chunk), prod(patch_size), Nt) -- img2patches' own gather,
+    restricted to one chunk of patch positions."""
+    psx, psy, psz = patch_size
+    Nt = img.shape[-1]
+    return torch.stack(
+        [
+            img[sx : sx + psx, sy : sy + psy, sz : sz + psz, :].reshape(psx * psy * psz, Nt)
+            for sx, sy, sz in starts_chunk
+        ],
+        dim=0,
+    )
+
+
 def img2patches(img: torch.Tensor, patch_size, stride_size) -> torch.Tensor:
     """(Nx,Ny,Nz,Nt) -> (Np, prod(patch_size), Nt), one row per (space x time) patch."""
     Nx, Ny, Nz, Nt = img.shape
@@ -878,23 +980,10 @@ def patch_nucnorm(P: torch.Tensor) -> torch.Tensor:
     return torch.linalg.svdvals(P).sum()
 
 
-def SVST(X: torch.Tensor, beta: float) -> tuple[torch.Tensor, torch.Tensor]:
-    """Singular Value Soft-Thresholding, the proximal operator of beta * nuclear-norm.
-
-    X: (..., m, n), batched over any leading dims. Returns (X_thresholded, reg),
-    reg = per-batch-element sum(max(sigma - beta, 0)), the nuclear norm of the
-    thresholded result -- a free byproduct of the SVD already computed.
-
-    Whenever ||X||_F <= beta, every singular value is <= beta too (sigma_max <=
-    ||X||_F), so the result is exactly zero -- not an approximation. Forcing
-    those entries to exact zero *before* the SVD (rather than just zeroing the
-    output after) avoids feeding a near-zero-magnitude matrix through
-    torch.linalg.svd: repeated soft-thresholding near this boundary can produce
-    subnormal-magnitude patches, and the mslr-recon Julia port found cuSOLVER's
-    GPU SVD returns all-NaN (not just imprecise) on those -- CPU LAPACK handles
-    them fine, but the guard is applied on both backends here since it's cheap
-    and exact either way.
-    """
+def _svst_batch(X: torch.Tensor, beta: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """One un-chunked SVST batch -- see SVST's docstring for the algorithm;
+    this is exactly its former body, factored out so SVST can call it
+    per-chunk without duplicating the math."""
     fro = torch.linalg.matrix_norm(X, ord="fro")
     zero_mask = fro <= beta
     mask_mnn = zero_mask[..., None, None]
@@ -910,6 +999,55 @@ def SVST(X: torch.Tensor, beta: float) -> tuple[torch.Tensor, torch.Tensor]:
     return recon, reg
 
 
+def SVST(
+    X: torch.Tensor, beta: float, max_chunk_bytes: int = _DEFAULT_SVD_CHUNK_BYTES
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Singular Value Soft-Thresholding, the proximal operator of beta * nuclear-norm.
+
+    X: (Np, m, n), batched over patches. Returns (X_thresholded, reg),
+    reg = per-batch-element sum(max(sigma - beta, 0)), the nuclear norm of the
+    thresholded result -- a free byproduct of the SVD already computed.
+
+    Whenever ||X||_F <= beta, every singular value is <= beta too (sigma_max <=
+    ||X||_F), so the result is exactly zero -- not an approximation. Forcing
+    those entries to exact zero *before* the SVD (rather than just zeroing the
+    output after) avoids feeding a near-zero-magnitude matrix through
+    torch.linalg.svd: repeated soft-thresholding near this boundary can produce
+    subnormal-magnitude patches, and the mslr-recon Julia port found cuSOLVER's
+    GPU SVD returns all-NaN (not just imprecise) on those -- CPU LAPACK handles
+    them fine, but the guard is applied on both backends here since it's cheap
+    and exact either way.
+
+    max_chunk_bytes: torch.linalg.svd runs on Np patches at once, chunked
+    along the patch (batch) dimension so no single call needs more than
+    ~max_chunk_bytes for X's own storage (U's output is comparable size,
+    so peak memory is a small multiple of this, not of the full Np-patch
+    batch). A single un-chunked call scales memory linearly with patch
+    count and can exceed real GPU capacity at fine resolution/large grids
+    -- measured for this repo's real 4_93.5x_0.8mm dataset at its
+    patch_size=(18,18,18): ~90GB unchunked (15979 patches) against a 49GB
+    GPU. Chunking was benchmarked (2026-09-22, same GPU, dataset-3-scale
+    23958x729x60 patches) at chunk sizes 1000-8000 patches: wall-clock
+    time was within noise of the unchunked call (0.95-1.00x) -- cuSOLVER's
+    batched SVD is already compute-saturated at these chunk sizes, so this
+    is a real fix for memory with no meaningful runtime cost, not a
+    speed/memory tradeoff. 4GB keeps every chunk far below the point where
+    the benchmark showed any slowdown, for any patch_size/Nt this repo
+    uses today.
+    """
+    item_bytes = X.element_size() * X.shape[-2] * X.shape[-1]
+    chunk_size = max(1, max_chunk_bytes // item_bytes)
+    if X.shape[0] <= chunk_size:
+        return _svst_batch(X, beta)
+
+    recons, regs = [], []
+    for i in range(0, X.shape[0], chunk_size):
+        recon_i, reg_i = _svst_batch(X[i : i + chunk_size], beta)
+        recons.append(recon_i)
+        regs.append(reg_i)
+    return torch.cat(recons, dim=0), torch.cat(regs, dim=0)
+
+
 def _unit_block_svst(img: torch.Tensor, beta: float) -> tuple[torch.Tensor, torch.Tensor]:
     """patch_size=[1,1,1]: SVST of each (1,Nt) voxel time series reduces to a
     vector soft-threshold (see recon.jl's derivation: SVD of a 1xNt row is
@@ -922,17 +1060,42 @@ def _unit_block_svst(img: torch.Tensor, beta: float) -> tuple[torch.Tensor, torc
 
 
 def patchSVST(
-    img: torch.Tensor, beta: float, patch_size, stride_size
+    img: torch.Tensor, beta: float, patch_size, stride_size,
+    max_chunk_bytes: int = _DEFAULT_SVD_CHUNK_BYTES,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Apply patch-wise SVST to a 4-D image (Nx,Ny,Nz,Nt) with threshold beta.
     Returns (img_thresholded, reg), reg = nuclear norm of the result summed
-    over all patches (sum of thresholded singular values), free from the SVD."""
-    Nx, Ny, Nz, _ = img.shape
-    psx, psy, psz = (min(p, n) for p, n in zip(patch_size, (Nx, Ny, Nz)))
+    over all patches (sum of thresholded singular values), free from the SVD.
+
+    Unlike img2patches+SVST+patches2img (mathematically identical, and
+    still what small/test-scale callers use), this never materializes the
+    full (Np, prod(patch_size), Nt) patch tensor -- it gathers, SVST's, and
+    scatters one memory-budgeted chunk of patches at a time (same budget/
+    rationale as SVST's own max_chunk_bytes -- see its docstring for the
+    benchmark showing this costs no meaningful wall-clock time). Needed for
+    real large-grid/fine-resolution reconstructions: this repo's real
+    4_93.5x_0.8mm dataset at patch_size=(18,18,18) would need ~45GB just
+    for the unchunked P tensor alone (before SVST's own U/Vh), against a
+    49GB GPU."""
+    Nx, Ny, Nz, Nt = img.shape
+    starts, (psx, psy, psz) = _all_patch_starts((Nx, Ny, Nz), patch_size, stride_size)
     if (psx, psy, psz) == (1, 1, 1):
         return _unit_block_svst(img, beta)
 
-    P = img2patches(img, patch_size, stride_size)
-    result, reg_per_patch = SVST(P, beta)
-    img_out = patches2img(result, patch_size, stride_size, (Nx, Ny, Nz))
-    return img_out, reg_per_patch.sum()
+    chunk_size = _chunk_size_for_budget((psx, psy, psz), Nt, img.element_size(), max_chunk_bytes)
+    img_out = torch.zeros_like(img)
+    pcount = torch.zeros(Nx, Ny, Nz, dtype=torch.float32, device=img.device)
+    reg_total = torch.zeros((), dtype=torch.float32, device=img.device)
+
+    for i in range(0, len(starts), chunk_size):
+        chunk = starts[i : i + chunk_size]
+        P_chunk = _gather_patch_chunk(img, chunk, (psx, psy, psz))
+        result_chunk, reg_chunk = _svst_batch(P_chunk, beta)
+        reg_total = reg_total + reg_chunk.sum()
+        for j, (sx, sy, sz) in enumerate(chunk):
+            patch = result_chunk[j].reshape(psx, psy, psz, Nt)
+            img_out[sx : sx + psx, sy : sy + psy, sz : sz + psz, :] += patch
+            pcount[sx : sx + psx, sy : sy + psy, sz : sz + psz] += 1.0
+
+    pcount.clamp_(min=1.0)
+    return img_out / pcount.unsqueeze(-1), reg_total
