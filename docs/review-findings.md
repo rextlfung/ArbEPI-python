@@ -625,9 +625,37 @@ paragraph (its old fix direction, "import the shared `_ift3` from
 `recon.run_rss`," cited a file the same item's own body already
 documents as deleted -- corrected in place to point at a real current
 fix direction rather than a self-contradiction; item 199 itself stays
-open).
+open). Items 247-250 are new findings from a later pass (2026-09-24,
+against `3ab2854`): `git diff 6921c8c HEAD --stat` shows only this doc
+itself changed since the previous pass's source snapshot (items 231-246
+were added there, doc-only) -- no source file in the repo has changed at
+all since `6921c8c`, so every still-open item's citations were already
+confirmed accurate as of the previous pass and did not need re-checking
+line by line this pass; this pass's budget instead went entirely to
+hunting for new findings, split across the same four parallel subagents
+as recent passes (`ge/`+`lib/`+`sequences/`+`params.py`/`scanners.py`/
+`main.py`; `sampling/`+`plotting/`; `preprocessing/`; `recon/`), each
+briefed on the open items already tracked in its scope and told
+explicitly not to re-verify them, only to hunt for new ones; every
+candidate finding below was independently re-verified against the live
+tree by this top-level pass (not just trusted from a subagent's report)
+before being recorded, including a from-scratch reproduction of item
+248's Poisson-disc seed-exclusion gap (163/200 seeded trials) and a
+direct read confirming items 247/249/250's cited code. Four findings
+survived: a real correctness bug in `sequences/deGRE.py`'s `te_min`
+(247, the same `tr_min`-vs-`te_min` prephase-block-duration asymmetry
+item 36 already fixed for `tr_min` alone, now found to persist in
+`te_min`); a real correctness bug in `sampling/pd_sample.py`'s
+Poisson-disc core (248, inherited from upstream real sigpy 0.1.27 but
+kept per this module's own established precedent of auditing and fixing
+sigpy's algorithm rather than trusting it blindly); a CLI consistency gap
+in `recon/run_recon.py`'s `_cli_mslr_ref` (249, missing the `--device`
+flag its two siblings both have); and a conciseness/dead-code finding in
+`preprocessing/cg_sense.py` (250, zero production callers anywhere in
+the tree since its former caller was deleted by the `recon/`
+consolidation). No items needed closing this pass.
 
-## Current baseline (2026-09-23, against `100056a`)
+## Current baseline (2026-09-24, against `3ab2854`)
 
 - `uv run ruff check .` (after `uv sync --extra test --extra lint`): **48
   errors -- 47 `E501` + 1 `E402`**, unchanged from the previous pass
@@ -635,7 +663,9 @@ open).
   now-deleted `recon/cg_sense_b0.py`, is gone). Independently re-confirmed
   by direct run this pass (not just trusted from a subagent report), and
   expected to be identical: `git diff 6921c8c HEAD --stat` shows no
-  source file changed since the last measurement, only this doc itself.
+  source file changed since the last measurement, only this doc itself
+  (true again this pass -- no source file has changed since `6921c8c` at
+  all).
   Full current list: `ge/check.py` (1),
   `ge/validate_against_matlab.py` (2), `ge/writeceq.py` (1),
   `lib/calc_te_tr_delays.py` (2), `lib/make_readout_grads.py` (2),
@@ -661,11 +691,11 @@ open).
   'torch'`, expected with no `preprocessing`/`recon` extras synced,
   **zero** GERecon-gated). The `preprocessing`/`recon`-extras numbers and
   the whole-sequence feasibility table below were **not re-run this
-  pass** (both need a separate Python-3.10 venv with a multi-GB
-  torch/mirtorch install, no GPU available in this pass's environment) --
-  carried forward unchanged from the previous pass's direct measurement,
-  which remains valid since `git diff 6921c8c HEAD --stat` confirms no
-  source file changed in between, only this doc itself. With `--extra
+  pass either** (both need a separate Python-3.10 venv with a multi-GB
+  torch/mirtorch install, and this pass's environment again has no GPU) --
+  carried forward unchanged from the last pass that directly measured
+  them, which remains valid since `git diff 6921c8c HEAD --stat` confirms
+  no source file has changed since, only this doc itself. With `--extra
   preprocessing` only synced (Python 3.10): **186 passed, 13 skipped** (8
   torch-gated + 5 `julia executable not found on PATH`, all in
   `tests/test_preprocessing_run_b0map.py`, zero GERecon-gated). With
@@ -688,9 +718,9 @@ open).
   still open regardless, per item 216's own updated citations above.
 - Whole-sequence feasibility (`uv run python main.py --ge`, full
   default-params build, Python 3.10 with `preprocessing`+`recon` extras
-  synced): **carried forward from the previous pass, not re-measured this
-  pass** (see above). No `calc_te_tr_delays` TE-feasibility warning fired
-  at that measurement:
+  synced): **carried forward, not re-measured this pass either** (see
+  above). No `calc_te_tr_delays` TE-feasibility warning fired at that
+  measurement:
 
   | sequence | peak PNS | acoustics | max grad | max slew | max B1 |
   |---|---|---|---|---|---|
@@ -2627,6 +2657,64 @@ open).
   `np.all((mask_raw == 0) | (mask_raw == 1))` (or an integer-dtype-aware
   equivalent) before casting, and raise a clear `ValueError` naming the
   offending file/key otherwise.
+- [ ] **247. `sequences/deGRE.py`'s `te_min` omits `gy_pre`/`gz_pre` from
+  the prephase block's duration, unlike its own `tr_min` a few lines
+  below -- the same asymmetry item 36 already fixed for `tr_min` alone.**
+  [measured 2026-09-24 against `3ab2854`] `te_min` (`:179-185`) credits
+  the prephase block's duration as `pp.calc_duration(gx_pre)` alone, but
+  the block actually played is `seq.add_block(gx_pre,
+  pp.scale_grad(gy_pre, y_step), pp.scale_grad(gz_pre, z_step))` (`:258`)
+  -- its real duration is `max(pp.calc_duration(gx_pre),
+  pp.calc_duration(gy_pre), pp.calc_duration(gz_pre))`, exactly what
+  `tr_min` already computes for the identical block a few lines later
+  (`:214`, item 36's fix). At the shipped default `crt=4e-6` (==
+  `grad_raster_time`) all three prephasers land on the same duration
+  (each built with an explicit `duration=params.Tpre`), so this is inert
+  today -- but at `crt=20e-6` (the one alternate value CLAUDE.md itself
+  names as a plausible future Siemens-dual-raster setting, see
+  `lib/trap4ge.py`'s docstring), building the real deGRE prephasers gives
+  `gx_pre` duration 1.000 ms vs. `gy_pre`/`gz_pre` 1.020 ms; the assembled
+  block actually takes 1.020 ms while `te_min` only credits 1.000 ms -- a
+  20 us undercount that would make the realized `TE_degre` run late by
+  that amount, the same class of TE-lateness bug CLAUDE.md documents
+  fixing for the `gro1` lead-in bug (POPE paragraph) and already tracked
+  for other blocks under items 142/170/181 (inert at today's default,
+  live once `crt` or resolution diverges). Fix: change `te_min`'s `+
+  pp.calc_duration(gx_pre)` term to `+ max(pp.calc_duration(gx_pre),
+  pp.calc_duration(gy_pre), pp.calc_duration(gz_pre))`, matching
+  `tr_min`'s existing pattern, plus a `crt`-varied regression test.
+- [ ] **248. `sampling/pd_sample.py`'s Poisson-disc core never marks its
+  own seed point occupied in `mask`, letting later points land inside the
+  seed's exclusion radius.** [measured 2026-09-24 against `3ab2854`]
+  `_poisson_disc_core_jit` (`:176-184`) sets `pxs[0]`/`pys[0]` to the
+  rejection-sampled seed `(x0, y0)` and uses it as a valid growth center,
+  but never sets `mask[y0, x0] = 1` for it -- contrast every
+  subsequently-accepted point, which does get `mask[floor(qy),
+  floor(qx)] = 1` (`:228`). Since the collision check (`:216-221`) only
+  tests `mask[yy, xx] == 1`, a point grown from an unrelated branch of the
+  active-point tree can later land inside the seed's own exclusion
+  ellipse without being rejected. Reproduced directly: isolating the core
+  loop (identical numba code, instrumented to return `x0, y0`) on a
+  40x40 grid at radius=2px, 163/200 seeded trials placed another accepted
+  point inside the seed's exclusion ellipse -- a direct violation of the
+  minimum-spacing invariant Poisson-disc sampling exists to guarantee.
+  `sampling_method='pd'` is this repo's shipped default, so every
+  `pd_sample()` call (once per frame, e.g. 30x for the default
+  `Nframes=30`) has exactly one such unprotected location, silently
+  baking a small number of closer-than-intended sample pairs into the
+  shipped default masks every run. Verified this is an inherited upstream
+  quirk, not a porting regression: real `sigpy==0.1.27`'s
+  `sigpy/mri/samp.py::_poisson` has the identical gap (its own initial
+  active point is never marked in `mask` either) -- but this module's own
+  docstring already establishes precedent for auditing and fixing
+  sigpy's algorithm rather than trusting it blindly ("three independent
+  bugs found in both `../ArbEPI/lib/pd_sample.m` and real SigPy", per
+  CLAUDE.md's README cross-reference), so this fits the established
+  pattern rather than being out of scope. No existing test
+  (`tests/test_pd_sample.py`) checks a minimum-spacing invariant, so
+  there's no regression coverage either way. Fix: add `mask[y0, x0] = 1`
+  immediately after the seed's rejection-sampling loop, mirroring how
+  every other accepted point is recorded.
 
 ## Consistency & documentation
 
@@ -3889,6 +3977,30 @@ open).
   in this pipeline. Fix: correct the comment (e.g. "kept complex64 for
   clarity/defensiveness, even though nothing upstream currently promotes
   it") or drop the now-unfounded parenthetical.
+- [ ] **249. `recon/run_recon.py`'s `_cli_mslr_ref` CLI has no `--device`
+  flag, unlike its two siblings in the same file, silently pinning
+  `mslr-ref` to `cuda`.** [measured 2026-09-24 against `3ab2854`]
+  `main_mslr_ref(datdir, name, L_b0=32, nbins_b0=128, device='cuda',
+  r2star=False)` (`:231-234`) accepts a `device` parameter, but
+  `_cli_mslr_ref`'s `argparse.ArgumentParser()` (`:330-341`) only
+  registers `datdir`, `name`, `--L`, `--nbins`, `--r2star` -- no
+  `--device` -- and calls `main_mslr_ref(args.datdir, args.name,
+  L_b0=args.L_b0, nbins_b0=args.nbins_b0, r2star=args.r2star)`, so
+  `device` is silently pinned to its `'cuda'` default regardless of what
+  the caller wants. Its siblings `_cli_mslr_local` (`:432-448`) and
+  `_cli_cg` both register `--device` and thread it through unchanged;
+  `_cli_mslr_ref` also omits the `description=__doc__` its siblings pass
+  to `argparse.ArgumentParser()`. Concrete failure scenario: a user on a
+  machine where `cuda:0` is busy or absent (or debugging on CPU before a
+  full GPU run) can run `python -m recon.run_recon mslr-local ...
+  --device cpu` or `cg ... --device cpu`, but the identical request
+  against `mslr-ref` has no CLI way to override the device -- they'd have
+  to call `main_mslr_ref` from Python directly, bypassing the documented
+  `python -m recon.run_recon mslr-ref <datdir> <name>` usage in the
+  module docstring. Fix: add `parser.add_argument('--device',
+  default='cuda')` (and `description=__doc__`) to `_cli_mslr_ref`, and
+  thread `device=args.device` into its `main_mslr_ref(...)` call,
+  matching `_cli_mslr_local`/`_cli_cg`.
 
 ## Test & tooling health
 
@@ -5555,3 +5667,31 @@ open).
   Fix: delete the seven fields (and the stale comment block above them),
   or, if any are meant to gate future functionality, add a one-line note
   saying so.
+- [ ] **250. `preprocessing/cg_sense.py` has zero production callers
+  anywhere in the current tree -- only its own unit test exercises it.**
+  [measured 2026-09-24 against `3ab2854`] `grep -rn "cg_sense\|_fftc\|
+  _ifftc" --include=*.py .` (excluding the module's own definitions)
+  shows the only caller of `cg_sense()` is
+  `tests/test_preprocessing_cg_sense.py`; `_fftc`/`_ifftc` have no
+  callers outside the module itself. Its former production caller was
+  the CG-SENSE driver inside the removed `recon/sigpy_recon.py` (per
+  CLAUDE.md's `recon/` section: those sigpy-only sanity-check drivers
+  "were removed when that module was merged into
+  `recon/L1-wavelet_TV_B0_SENSE.py`"). `recon/run_recon.py`'s
+  `cg_sense_solve` is a *separate* reimplementation targeting the
+  `mirtorch` operator abstraction -- its own docstring says it "ports
+  `preprocessing/cg_sense.py`'s exact CG algorithm onto
+  `A.apply`/`A.adjoint`," i.e. a from-scratch port, not a caller into
+  this module. Not a crash risk, but ~55 lines of numerically-live-looking
+  code (with its own MATLAB-broadcasting-semantics docstring) sitting in
+  the `preprocessing` venv's dependency surface and README's file listing
+  ("CG-SENSE solver") with nothing in the current pipeline exercising it
+  end-to-end except its own unit test -- unlike the
+  `matlab_reference/`-removed scripts or `recon/`'s many "formerly X.py"
+  notes, nothing signals to a future reader that this file is orphaned
+  rather than load-bearing, so a maintainer changing `coils.py`'s
+  conventions or the `[*spatial, Ncoils]` layout elsewhere could silently
+  break it without any integration test noticing. Fix: either delete the
+  module (and its test) now that `recon/run_recon.py` has its own
+  independent CG-SENSE path, or add a one-line docstring note that it's
+  kept only as the reference algorithm `cg_sense_solve` was ported from.
