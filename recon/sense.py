@@ -403,9 +403,9 @@ def main(
         fn_b0map = os.path.join(recon_dir, f"{seqname}_b0map.h5")
     device = kwargs.get("device", "cuda")
 
-    sp = load_seq_params(set_seq_paths(load_config(datdir=datdir, seqnames=[seqname]), seqname))
+    paths = set_seq_paths(load_config(datdir=datdir, seqnames=[seqname]), seqname)
+    sp = load_seq_params(paths)
     if R2star:
-        paths = set_seq_paths(load_config(datdir=datdir, seqnames=[seqname]), seqname)
         t_ref_s = nominal_te_s(paths.scan_info, sp.ETL)
         with h5py.File(fn_ksp, "r") as f:
             grid = f["ksp_epi_zf"].shape[:3]
@@ -442,7 +442,7 @@ def main(
     out_dir = os.path.join(recon_dir, f"sense_{reg}{suffix}")
     os.makedirs(out_dir, exist_ok=True)
     frames = kwargs.get("frames")
-    tag = "" if frames is None else "_frames" + "-".join(map(str, frames))
+    tag = "" if frames is None else "_frames" + _format_frames(frames)
     fn_out = os.path.join(out_dir, f"{seqname}_recon{tag}")
     save_result(
         fn_out,
@@ -455,6 +455,22 @@ def main(
         L_b0=kwargs.get("L_b0", 32) if B0 else None,
     )
     return fn_out
+
+
+def _parse_frames(text: str) -> list[int]:
+    """'0,2,5' or '0-9' or '0-4,10' -> list of frame indices."""
+    frames = []
+    for part in text.split(","):
+        lo, _, hi = part.partition("-")
+        frames += list(range(int(lo), int(hi) + 1)) if hi else [int(lo)]
+    return frames
+
+
+def _format_frames(frames: list[int]) -> str:
+    """Inverse of _parse_frames, compact: [0..9] -> '0-9', [0, 2] -> '0,2'."""
+    if len(frames) > 1 and list(frames) == list(range(frames[0], frames[-1] + 1)):
+        return f"{frames[0]}-{frames[-1]}"
+    return ",".join(map(str, frames))
 
 
 def _parse_patches(patches, strides, shape):
@@ -495,7 +511,7 @@ def _cli() -> None:
         default=None,
         help="iterations (default: none 150, lowrank 200, wavelet-tv 100)",
     )
-    p.add_argument("--frames", default=None, help="comma-separated frame indices (default: all)")
+    p.add_argument("--frames", default=None, help="frame indices, e.g. 0,1,2 or 0-9 (default: all)")
     p.add_argument("--device", default="cuda")
     lr = p.add_argument_group("lowrank")
     lr.add_argument(
@@ -531,7 +547,7 @@ def _cli() -> None:
         L_b0=a.L_b0,
         nbins_b0=a.nbins_b0,
         niters=a.niter or {"none": 150, "lowrank": 200, "wavelet-tv": 100}[a.reg],
-        frames=[int(n) for n in a.frames.split(",")] if a.frames else None,
+        frames=_parse_frames(a.frames) if a.frames else None,
     )
     if a.reg == "lowrank":
         with h5py.File(os.path.join(a.datdir, "recon", f"{a.seqname}_epi_zf.h5"), "r") as f:
@@ -549,7 +565,7 @@ def _cli() -> None:
         )
     elif a.reg == "wavelet-tv":
         kwargs.update(lamb_l1=a.lamb_l1, lamb_tv=a.lamb_tv, wave=a.wave, levels=a.levels)
-    fn_out = main(
+    main(
         a.datdir,
         a.seqname,
         a.reg,
@@ -559,7 +575,6 @@ def _cli() -> None:
         zero_pad_z=a.zero_pad_z,
         **kwargs,
     )
-    print(f"Wrote {fn_out}.h5 + .nii.gz + .json")
 
 
 if __name__ == "__main__":
