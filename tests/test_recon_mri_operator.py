@@ -1,8 +1,6 @@
-"""Validates recon/operators.py's GatheredSenseB0/build_encoding_operator_b0
-against the same brute-force, genuinely time-varying ground-truth forward
-model tests/test_recon_b0_correction.py uses for the static (single-segment)
-stage -- reused directly here (not reimplemented) so both stages are held to
-the exact same ground truth."""
+"""Tests for recon/mri_operator.py's SENSE, SENSE_B0 and SENSE_B0_R2star:
+adjoint self-consistency, spectral norms, and the B0 operators' accuracy
+against a brute-force, genuinely time-varying ground-truth forward model."""
 
 import math
 import warnings
@@ -14,42 +12,143 @@ pytest.importorskip("mirtorch")
 
 from mirtorch.linear.mri import mri_exp_approx  # noqa: E402
 
-from recon.operators import (  # noqa: E402
-    GatheredSenseB0,
-    build_encoding_operator_b0,
+from recon.mri_operator import (  # noqa: E402
+    SENSE,
+    SENSE_B0,
+    SENSE_B0_R2star,
+    build_sense,
+    build_sense_b0,
+    build_sense_b0_r2star,
+)
+from recon.utils import (  # noqa: E402
+    _brute_force_time_varying_ksp,
+    _build_operator,
+    _setup_real_scale,
     check_operator_unitary,
     estimate_spectral_norm,
 )
-from tests.test_recon_b0_correction import DEVICE, _complex_randn, _setup  # noqa: E402
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def _build_b0_operator(smaps, samp, b0map_hz, t_frame_s, L, nbins=20):
+def _complex_randn(*shape, seed):
+    g = torch.Generator(device=DEVICE).manual_seed(seed)
+    real = torch.randn(*shape, generator=g, device=DEVICE)
+    imag = torch.randn(*shape, generator=g, device=DEVICE)
+    return (real + 1j * imag).to(torch.complex64)
+
+
+def _setup(seed_offset=0, b0_max_hz=40.0, dt_echo=5e-5):
+    """b0_max_hz/dt_echo default to a deliberately *small* total phase
+    excursion across the echo train (max ~0.15 rad here) -- the regime
+    static (single-segment) correction is actually designed for, and where
+    it should nearly eliminate the forward-model error, making a sign error
+    unambiguous. This repo's real acquisitions are nowhere near this gentle
+    (B0 maps up to +-300-350 Hz over a ~70ms, ETL=60 echo train -- tens of
+    radians of phase drift, not a fraction of one), where static correction
+    provides much weaker benefit -- see test_realistic_regime_only_partly_
+    corrects below, which uses those real numbers directly and checks the
+    (much weaker) partial-correction claim instead."""
+    Nx, Ny, Nz, Nc = 8, 12, 6, 3
+    img = _complex_randn(Nx, Ny, Nz, seed=10 + seed_offset)
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=11 + seed_offset)
+    smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-6)
+
+    # A smooth, non-trivial field map (a ramp along y plus a bit of curvature).
+    yy = torch.linspace(-1, 1, Ny, device=DEVICE).reshape(1, Ny, 1)
+    zz = torch.linspace(-1, 1, Nz, device=DEVICE).reshape(1, 1, Nz)
+    b0map_hz = (b0_max_hz * yy + 0.4 * b0_max_hz * zz**2).expand(Nx, Ny, Nz).contiguous()
+
+    # Per-echo (per-ky) acquisition time: uniform spacing, matching
+    # sequences/ArbEPI.py's echo_times model (one gro-duration step per
+    # echo). Centered so the mean is a clean "nominal TE".
+    te = 0.030  # s
+    t_per_ky = te + (torch.arange(Ny, device=DEVICE, dtype=torch.float32) - (Ny - 1) / 2) * dt_echo
+
+    y_true = _brute_force_time_varying_ksp(img, smaps, b0map_hz, t_per_ky)
+    y_true_flat = y_true.reshape(Nc, -1).T  # (K,Nc), C-order -- matches SENSE's own flatten
+
+    return img, smaps, b0map_hz, te, y_true_flat
+
+
+def test_adjoint_is_self_consistent_on_odd_spatial_dims():
+    """Nz odd (this repo's real data has Nz=45) -- regression case for the
+    fftshift/ifftshift adjoint bug mslr-recon's sense_gpu.jl once had."""
+    Nx, Ny, Nz, Nc, Nt = 6, 7, 5, 3, 4
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=0)
+    omega = torch.stack(
+        [torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.5 for _ in range(Nt)], dim=-1
+    )
+    # BlockDiagonal requires every frame operator to share the same K
+    # (sample count); this repo's real acquisitions guarantee that, but a
+    # per-frame-independent random mask generally won't, so trim to the min.
+    counts = omega.sum(dim=(0, 1, 2))
+    k = counts.min().item()
+    omega = omega & (torch.cumsum(omega.reshape(-1, Nt), dim=0) <= k).reshape(Nx, Ny, Nz, Nt)
+
+    A = build_sense(smaps, omega)
+    K = A.A[0].idx.numel()
+
+    x = _complex_randn(Nx, Ny, Nz, Nt, seed=1)
+    y = _complex_randn(K, Nc, Nt, seed=2)
+
+    lhs = torch.vdot(A.apply(x).reshape(-1), y.reshape(-1))
+    rhs = torch.vdot(x.reshape(-1), A.adjoint(y).reshape(-1))
+    assert abs(lhs - rhs).item() / abs(lhs).item() < 1e-5
+
+
+def test_spectral_norm_is_near_unity_for_normalized_smaps_full_sampling():
+    """Matches sense_gpu.jl's documented convention: unitary + normalized
+    smaps + full sampling gives sigma1(A) ~= 1.0."""
+    Nx, Ny, Nz, Nc = 8, 8, 6, 4
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=3)
+    smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-8)
+    full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
+    A = build_sense(smaps, full_mask.unsqueeze(-1))
+
+    x = _complex_randn(Nx, Ny, Nz, 1, seed=4)
+    x = x / x.norm()
+    for _ in range(30):
+        x = A.adjoint(A.apply(x))
+        x = x / x.norm()
+    sigma1 = A.apply(x).norm().item()
+    assert abs(sigma1 - 1.0) < 1e-3
+
+
+def _build_b0_operator(smaps, samp, b0map_hz, t_frame_s, L, nbins=20, fit_t_ms=None):
+    """One frame's SENSE_B0, built by hand. The segmentation is fit on
+    fit_t_ms if given (e.g. a set of distinct echo times, as build_sense_b0
+    does), else on every sampled location's own time."""
     idx = torch.nonzero(samp.reshape(-1), as_tuple=False).squeeze(-1)
     t_ms = (t_frame_s.reshape(-1)[idx] * 1000).to(torch.float32)
     b0_neg = (-b0map_hz).to(torch.float32)
-    b, c, _tl = mri_exp_approx(b0_neg, nbins, L, t_ms)
+    b, c, _tl = mri_exp_approx(b0_neg, nbins, L, t_ms if fit_t_ms is None else fit_t_ms)
     N = tuple(smaps.shape[1:])
     c = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)
-    # b is already one row per sampled location -- pos=arange is the
-    # identity gather, recovering GatheredSenseB0's old one-tensor-per-
-    # instance behavior exactly (see its docstring).
-    pos = torch.arange(b.shape[0], device=b.device)
-    return GatheredSenseB0(smaps, samp, pos, b.to(smaps.dtype), c)
+    if fit_t_ms is None:
+        # b is already one row per sampled location -- pos=arange is the
+        # identity gather, recovering SENSE_B0's old one-tensor-per-
+        # instance behavior exactly (see its docstring).
+        pos = torch.arange(b.shape[0], device=b.device)
+    else:
+        pos = torch.searchsorted(fit_t_ms, t_ms)
+    return SENSE_B0(smaps, samp, pos, b.to(smaps.dtype), c)
 
 
 def test_l1_matches_static_correction():
     """L=1 (a single time segment centered at the mean sample time) should
-    match recon/operators.py's static single-segment correction closely
+    match a static single-segment correction (one exp(+i 2 pi df te) phasor
+    baked into smaps) closely
     -- both are, in the end, one global per-voxel phase term applied before
     the FFT; this is the connective-tissue check between the two stages."""
-    from recon.operators import GatheredSense, demodulate_smaps
 
     img, smaps, b0map_hz, te, y_true_flat = _setup(seed_offset=30)
     Nx, Ny, Nz = smaps.shape[1:]
     full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
     t_frame = torch.full((Nx, Ny, Nz), te, device=DEVICE)  # only the mean/te matters at L=1
 
-    A_static = GatheredSense(demodulate_smaps(smaps, b0map_hz, te), full_mask)
+    static_phasor = torch.exp(1j * (2 * math.pi * te) * b0map_hz.to(torch.float32)).to(smaps.dtype)
+    A_static = SENSE(smaps * static_phasor.unsqueeze(0), full_mask)
     y_static = A_static.apply(img)
 
     A_l1 = _build_b0_operator(smaps, full_mask, b0map_hz, t_frame, L=1)
@@ -63,7 +162,7 @@ def test_more_segments_reduces_error_in_a_toy_grid():
     """NOT the realistic regime, despite the fixture's B0/ETL parameters
     looking real -- this grid has only 12 distinct echo times, so L>=12
     trivially resolves every one exactly (see the L16 assertion below).
-    recon/analysis.py's own module docstring documents this
+    recon/utils.py's own module docstring documents this
     explicitly: its finding "says nothing about whether L=6 ... is
     adequate at the real ETL=60 scale." See
     test_more_segments_reduces_error_at_real_scale below for the actual
@@ -87,9 +186,8 @@ def test_more_segments_reduces_error_in_a_toy_grid():
         y_hat = A.apply(img)
         return (y_hat - y_true_flat).norm().item() / y_true_flat.norm().item()
 
-    from recon.operators import GatheredSense
 
-    err_none = (GatheredSense(smaps, full_mask).apply(img) - y_true_flat).norm().item() \
+    err_none = (SENSE(smaps, full_mask).apply(img) - y_true_flat).norm().item() \
         / y_true_flat.norm().item()
     err_l1 = err(1)
     err_l8 = err(8)
@@ -112,7 +210,7 @@ def test_more_segments_reduces_error_in_a_toy_grid():
 def test_more_segments_reduces_error_at_real_scale():
     """The actual realistic-regime check (real ETL=60, real field-map
     range -300 to +70 Hz), regression-guarding the conclusion
-    recon/analysis.py's real-scale sweep found: L=32 (the
+    recon/utils.py's real-scale sweep found: L=32 (the
     production default, item 82) keeps relative forward-model error under
     1%, while L=6 (mirtorch's own Gmri default, no longer used here)
     doesn't come close -- a sharp, Nyquist-like phase transition around
@@ -120,7 +218,6 @@ def test_more_segments_reduces_error_at_real_scale():
     gradual curve. Reuses analysis.py's own real-scale ground
     truth/operator-construction helpers directly, rather than a third copy
     of them."""
-    from recon.analysis import _build_operator, _setup_real_scale
 
     img, smaps, b0map_hz, t_per_ky, y_true_flat = _setup_real_scale(seed=200)
     Nx, Ny, Nz = smaps.shape[1:]
@@ -149,8 +246,6 @@ def test_production_nbins_avoids_row_sum_warning(recwarn):
     root cause of a real signal-loss-plus-incoherent-noise failure --
     confirm the production default (nbins=128) doesn't trip
     _check_b_weight_row_sums' ill-conditioning warning, at real scale."""
-    from recon.analysis import _setup_real_scale
-    from recon.operators import build_encoding_operator_b0
 
     _img, smaps, b0map_hz, t_per_ky, _y_true_flat = _setup_real_scale(seed=201)
     Nx, Ny, Nz = smaps.shape[1:]
@@ -158,7 +253,7 @@ def test_production_nbins_avoids_row_sum_warning(recwarn):
     omega = torch.ones(Nx, Ny, Nz, Nt, dtype=torch.bool, device=smaps.device)
     echo_times_yz = t_per_ky.reshape(Ny, 1, 1).expand(Ny, Nz, Nt).contiguous()
 
-    build_encoding_operator_b0(smaps, omega, b0map_hz, echo_times_yz, L=32, nbins=128)
+    build_sense_b0(smaps, omega, b0map_hz, echo_times_yz, L=32, nbins=128)
 
     row_sum_warnings = [w for w in recwarn.list if "b_weights row sums" in str(w.message)]
     assert not row_sum_warnings, (
@@ -169,7 +264,7 @@ def test_production_nbins_avoids_row_sum_warning(recwarn):
 
 def test_adjoint_is_self_consistent():
     """Mirrors tests/test_recon_operators.py's adjoint check for the plain
-    GatheredSense, extended to the time-segmented operator."""
+    SENSE, extended to the time-segmented operator."""
     Nx, Ny, Nz, Nc, L = 6, 7, 5, 3, 4
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=40)
     samp = torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.5
@@ -188,23 +283,26 @@ def test_adjoint_is_self_consistent():
 
 
 def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
-    """build_encoding_operator_b0's BlockDiagonal-of-GatheredSenseB0 should
+    """build_sense_b0's BlockDiagonal-of-SENSE_B0 should
     apply identically to manually building each frame's operator the way
     _build_b0_operator does above, confirming the gather plumbing
     (echo_times_yz's idx % (Ny*Nz) lookup, per-frame idx) is wired
     correctly end to end. echo_times_s (Nx-expanded) is built here only
     for _build_b0_operator's own per-frame (Nx,Ny,Nz)-shaped contract, not
-    passed to build_encoding_operator_b0 itself (see its docstring)."""
+    passed to build_sense_b0 itself (see its docstring)."""
     Nx, Ny, Nz, Nc, Nt, L = 5, 6, 4, 2, 3, 3
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=50)
     b0map_hz = _complex_randn(Nx, Ny, Nz, seed=51).real * 100
 
-    omega = torch.stack([torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.4 for _ in range(Nt)], dim=-1)
+    g = torch.Generator(device=DEVICE).manual_seed(52)
+    omega = torch.stack(
+        [torch.rand(Nx, Ny, Nz, generator=g, device=DEVICE) > 0.4 for _ in range(Nt)], dim=-1
+    )
     counts = omega.sum(dim=(0, 1, 2))
     k = counts.min().item()
     omega = omega & (torch.cumsum(omega.reshape(-1, Nt), dim=0) <= k).reshape(Nx, Ny, Nz, Nt)
 
-    # build_encoding_operator_b0 now relies on every frame sampling from the
+    # build_sense_b0 now relies on every frame sampling from the
     # same *set* of distinct echo times (true of this repo's real
     # acquisitions -- see its own docstring), so this fixture must respect
     # that: tie each (iy,iz) to a value from a small fixed pool, identical
@@ -221,22 +319,30 @@ def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
     echo_times_2d = echo_times_yz.unsqueeze(-1).expand(Ny, Nz, Nt).contiguous()  # (Ny,Nz,Nt)
     echo_times_s = echo_times_2d.unsqueeze(0).expand(Nx, -1, -1, -1).contiguous()
 
-    A = build_encoding_operator_b0(smaps, omega, b0map_hz, echo_times_2d, L=L, nbins=10)
+    A = build_sense_b0(smaps, omega, b0map_hz, echo_times_2d, L=L, nbins=10)
 
     x = _complex_randn(Nx, Ny, Nz, Nt, seed=53)
     y_batched = A.apply(x)
 
+    # build_sense_b0 fits the segmentation once, on frame 0's distinct echo
+    # times; fit the hand-built reference on the same times so this checks
+    # the per-frame gather plumbing, not two different fits. (mri_exp_approx
+    # places segments at percentiles of the times it's given, so fitting on
+    # per-sample times with repeats would give a different, mask-dependent fit.)
+    idx0 = torch.nonzero(omega[..., 0].reshape(-1)).squeeze(-1)
+    fit_t_ms = torch.unique((echo_times_s[..., 0].reshape(-1)[idx0] * 1000).to(torch.float32))
     for it in range(Nt):
         A_manual = _build_b0_operator(
-            smaps, omega[..., it], b0map_hz, echo_times_s[..., it], L=L, nbins=10
+            smaps, omega[..., it], b0map_hz, echo_times_s[..., it], L=L, nbins=10,
+            fit_t_ms=fit_t_ms,
         )
         y_manual = A_manual.apply(x[..., it])
         torch.testing.assert_close(y_batched[..., it], y_manual, atol=1e-5, rtol=1e-4)
 
 
 def test_r2star_zero_map_matches_phase_only_operator():
-    """r2star_map=torch.zeros(...) should reproduce the r2star_map=None
-    operator's c_phasors exactly (up to float32 rounding). The two are
+    """build_sense_b0_r2star with an all-zero R2* map should reproduce
+    build_sense_b0's c_phasors exactly (up to float32 rounding). The two are
     built by genuinely different code paths -- None takes c_phasors
     straight from mri_exp_approx's own spatial output, r2star_map=zeros
     goes through this module's manual `torch.exp(tl * psi)` construction
@@ -248,7 +354,10 @@ def test_r2star_zero_map_matches_phase_only_operator():
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=70)
     b0map_hz = _complex_randn(Nx, Ny, Nz, seed=71).real * 100
 
-    omega = torch.stack([torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.4 for _ in range(Nt)], dim=-1)
+    g = torch.Generator(device=DEVICE).manual_seed(52)
+    omega = torch.stack(
+        [torch.rand(Nx, Ny, Nz, generator=g, device=DEVICE) > 0.4 for _ in range(Nt)], dim=-1
+    )
     counts = omega.sum(dim=(0, 1, 2))
     k = counts.min().item()
     omega = omega & (torch.cumsum(omega.reshape(-1, Nt), dim=0) <= k).reshape(Nx, Ny, Nz, Nt)
@@ -262,12 +371,12 @@ def test_r2star_zero_map_matches_phase_only_operator():
     echo_times_yz = distinct_times[yz_idx]  # (Ny,Nz)
     echo_times_2d = echo_times_yz.unsqueeze(-1).expand(Ny, Nz, Nt).contiguous()
 
-    A_none = build_encoding_operator_b0(smaps, omega, b0map_hz, echo_times_2d, L=L, nbins=10)
+    A_none = build_sense_b0(smaps, omega, b0map_hz, echo_times_2d, L=L, nbins=10)
     r2star_zero = torch.zeros(Nx, Ny, Nz, device=DEVICE)
-    A_zero = build_encoding_operator_b0(
-        smaps, omega, b0map_hz, echo_times_2d, L=L, nbins=10,
-        r2star_map=r2star_zero, t_ref_s=0.0,
+    A_zero = build_sense_b0_r2star(
+        smaps, omega, b0map_hz, echo_times_2d, r2star_zero, 0.0, L=L, nbins=10,
     )
+    assert isinstance(A_zero.A[0], SENSE_B0_R2star)
 
     x = _complex_randn(Nx, Ny, Nz, Nt, seed=73)
     torch.testing.assert_close(A_none.apply(x), A_zero.apply(x), atol=1e-5, rtol=1e-4)
@@ -279,7 +388,7 @@ def test_r2star_generalization_adjoint_is_self_consistent():
     recon/lowres_calib.py's flipped sign on the
     (unmerged) worktree-lowres-calib-recon branch (psi_recon =
     i*2*pi*Δf(r) + R2*(r)): the true adjoint identity <Ax,y> == <x,A^H y>
-    holds for ANY complex c_phasors under GatheredSenseB0's `.conj()`
+    holds for ANY complex c_phasors under SENSE_B0's `.conj()`
     adjoint -- including this module's decaying psi -- but fails for the
     branch's flipped-sign convenience (which is deliberately not a true
     adjoint; it's a matched-filter decay-compensation trick valid only in
@@ -304,7 +413,7 @@ def test_r2star_generalization_adjoint_is_self_consistent():
     tl_c = tl.to(torch.complex64)
     c_phasors = torch.exp(tl_c.reshape((L,) + (1,) * len(N)) * psi[None, ...]).to(smaps.dtype)
     pos = torch.arange(b_by_echo.shape[0], device=DEVICE)
-    A = GatheredSenseB0(smaps, samp, pos, b_by_echo.to(smaps.dtype), c_phasors)
+    A = SENSE_B0(smaps, samp, pos, b_by_echo.to(smaps.dtype), c_phasors)
     K = A.idx.numel()
 
     x = _complex_randn(Nx, Ny, Nz, seed=84)
@@ -331,7 +440,7 @@ def test_r2star_forward_model_decays_away_from_reference_time():
     |c_phasors| INCREASE with tl[l] instead of decrease (see the module
     docstring's measured tSNR-gets-worse regression).
 
-    Checked directly on |c_phasors| via build_encoding_operator_b0's own
+    Checked directly on |c_phasors| via build_sense_b0's own
     construction, rather than round-tripping through a forward FFT+gather
     simulation and comparing k-space-subset energies: a first attempt at
     that end-to-end approach gave a wildly wrong ratio, traced to a real
@@ -359,15 +468,14 @@ def test_r2star_forward_model_decays_away_from_reference_time():
     ) % n_distinct
     echo_times_yz = distinct_times[yz_idx].unsqueeze(-1)  # (Ny,Nz,Nt)
 
-    A = build_encoding_operator_b0(
-        smaps, omega, b0map_hz, echo_times_yz, L=L, nbins=20,
-        r2star_map=r2star_hz, t_ref_s=t_ref_s,
+    A = build_sense_b0_r2star(
+        smaps, omega, b0map_hz, echo_times_yz, r2star_hz, t_ref_s, L=L, nbins=20,
     )
     c_phasors = A.A[0].c_phasors  # (L,Nx,Ny,Nz)
 
     # |c_phasors[l]| should be spatially uniform (r2star_hz is) and equal
     # exp(-r2_uniform * |tl[l] - t_ref_s|) -- checked via the spread/bound
-    # below rather than re-deriving tl (build_encoding_operator_b0 doesn't
+    # below rather than re-deriving tl (build_sense_b0 doesn't
     # return it).
     mag = c_phasors.abs()
     per_segment_mag = mag.reshape(L, -1)
@@ -396,7 +504,7 @@ def test_estimate_spectral_norm_matches_full_sampling_unity_case():
     """Regression check for the refactor into a standalone helper: L=1,
     unit b_weights/c_phasors, full sampling should reduce to
     tests/test_recon_operators.py's own near-unity check for plain
-    GatheredSense with normalized smaps."""
+    SENSE with normalized smaps."""
     Nx, Ny, Nz, Nc = 8, 8, 6, 4
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=60)
     smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-8)
@@ -405,7 +513,7 @@ def test_estimate_spectral_norm_matches_full_sampling_unity_case():
     b_weights = torch.ones(Nx * Ny * Nz, 1, dtype=torch.complex64, device=DEVICE)
     pos = torch.arange(Nx * Ny * Nz, device=DEVICE)
     c_phasors = torch.ones(1, Nx, Ny, Nz, dtype=torch.complex64, device=DEVICE)
-    A = GatheredSenseB0(smaps, full_mask, pos, b_weights, c_phasors)
+    A = SENSE_B0(smaps, full_mask, pos, b_weights, c_phasors)
 
     x0 = _complex_randn(Nx, Ny, Nz, seed=61)
     sigma1 = estimate_spectral_norm(A, x0, niter=30)
@@ -421,7 +529,7 @@ def test_check_operator_unitary_silent_for_trivial_l1_case():
     b_weights = torch.ones(Nx * Ny * Nz, 1, dtype=torch.complex64, device=DEVICE)
     pos = torch.arange(Nx * Ny * Nz, device=DEVICE)
     c_phasors = torch.ones(1, Nx, Ny, Nz, dtype=torch.complex64, device=DEVICE)
-    A = GatheredSenseB0(smaps, full_mask, pos, b_weights, c_phasors)
+    A = SENSE_B0(smaps, full_mask, pos, b_weights, c_phasors)
 
     x0 = _complex_randn(Nx, Ny, Nz, seed=63)
     with warnings.catch_warnings():
@@ -433,7 +541,7 @@ def test_check_operator_unitary_silent_for_trivial_l1_case():
 def test_check_operator_unitary_warns_for_real_b0_correction():
     """A genuine (L>1, real field map) B0-corrected operator is not
     guaranteed unitary -- regression guard for the 2026-09-18 finding that
-    real GatheredSenseB0 operators measure sigma1 ~= 1.3, not ~1.0 (see
+    real SENSE_B0 operators measure sigma1 ~= 1.3, not ~1.0 (see
     operators.py's check_operator_unitary docstring for the real-data
     debugging session this documents). Doesn't hardcode that exact value
     (a different seed/field map would give a different number), just that

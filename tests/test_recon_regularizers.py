@@ -1,15 +1,25 @@
-"""Algorithm-invariant tests for recon/mslr.py, mirroring the cases in
-../mslr-recon/tests/kernel_tests.jl (patch round-trip, SVST shrinkage,
-unit-patch fast path). No golden Julia output is compared here -- see
-tests/test_recon_mslr.py / scratchpad validation for that; these
-tests check mathematical invariants that must hold regardless of backend.
+"""Algorithm-invariant tests for recon/regularizers.py. The low-rank cases
+mirror ../mslr-recon/tests/kernel_tests.jl (patch round-trip, SVST shrinkage,
+unit-patch fast path); the wavelet/TV cases check Wavelet3D's adjoint and
+isometry and the FBPD step-size bound on ||G||^2.
 """
 
 import pytest
 
 torch = pytest.importorskip("torch")
 
-from recon.mslr import SVST, img2patches, patch_nucnorm, patches2img, patchSVST  # noqa: E402
+from recon.regularizers import (  # noqa: E402
+    SVST,
+    LowRank,
+    SectionL1,
+    SumScales,
+    Wavelet3D,
+    WaveletTV,
+    img2patches,
+    patch_nucnorm,
+    patches2img,
+    patchSVST,
+)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -117,3 +127,56 @@ def test_patchsvst_chunking_matches_unchunked_result():
 
     assert torch.allclose(out_unchunked, out_chunked, atol=1e-4)
     assert abs(reg_unchunked.item() - reg_chunked.item()) < 1e-2
+
+
+def test_sum_scales_adjoint_is_self_consistent():
+    S = SumScales((4, 3, 2, 5), 3)
+    X = torch.randn(4, 3, 2, 5, 3, dtype=torch.complex64, device=DEVICE)
+    y = torch.randn(4, 3, 2, 5, dtype=torch.complex64, device=DEVICE)
+    lhs = torch.vdot(S.apply(X).reshape(-1), y.reshape(-1))
+    rhs = torch.vdot(X.reshape(-1), S.adjoint(y).reshape(-1))
+    assert abs(lhs - rhs).item() / abs(lhs).item() < 1e-5
+
+
+def test_lowrank_prox_cost_matches_its_own_cost_function():
+    """prox's free byproduct (nuclear norm of the thresholded result) must
+    equal cost() evaluated on that result."""
+    Nx, Ny, Nz, Nt = 8, 8, 4, 6
+    scales = [(Nx, Ny, Nz), (4, 4, 4)]
+    g = LowRank(scales, scales, (Nx, Ny, Nz, Nt), lambda_global=0.1)
+    X = torch.stack([_random_img(Nx, Ny, Nz, Nt, seed=s) for s in (1, 2)], dim=-1)
+    out = g.prox(X.clone(), 0.5)
+    assert abs(g.last_cost - g.cost(out)) / g.cost(out) < 1e-4
+
+
+@pytest.mark.parametrize("shape", [(16, 16, 8), (12, 10, 45), (4, 4, 4)])
+def test_wavelet3d_adjoint_and_isometry(shape):
+    """Odd/non-power-of-2 sizes (Nz=45 in real data) exercise the zero-pad path."""
+    W = Wavelet3D(shape, "db4", 3)
+    g = torch.Generator(device=DEVICE).manual_seed(0)
+    x = torch.randn(*shape, generator=g, device=DEVICE, dtype=torch.complex64)
+    y = torch.randn(W.size_out[0], generator=g, device=DEVICE, dtype=torch.complex64)
+    lhs = torch.vdot(W.apply(x), y)
+    rhs = torch.vdot(x.reshape(-1), W.adjoint(y).reshape(-1))
+    assert abs(lhs - rhs).item() / abs(lhs).item() < 1e-5
+    torch.testing.assert_close(W.adjoint(W.apply(x)), x, atol=1e-5, rtol=1e-5)
+
+
+def test_wavelet_tv_g_norm_bound_holds():
+    """FBPD's step sizes rely on G_norm_squared >= ||G||^2."""
+    shape = (12, 10, 9)
+    reg = WaveletTV(shape, 0.01, 0.02)
+    v = torch.randn(*shape, dtype=torch.complex64, device=DEVICE)
+    for _ in range(100):
+        v = reg.G.adjoint(reg.G.apply(v))
+        norm_sq = v.norm().item()
+        v = v / norm_sq
+    assert norm_sq <= reg.G_norm_squared
+
+
+def test_section_l1_thresholds_each_section_with_its_own_lambda():
+    prox = SectionL1([1.0, 2.0], [2, 3])
+    v = torch.tensor([3.0, -0.5, 3.0, -2.5, 1.0], device=DEVICE)
+    out = prox(v, 0.5)  # thresholds 0.5 and 1.0
+    expected = torch.tensor([2.5, 0.0, 2.0, -1.5, 0.0], device=DEVICE)
+    torch.testing.assert_close(out, expected)
