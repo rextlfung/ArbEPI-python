@@ -334,7 +334,8 @@ def _solve_wavelet_tv(
         t_frame = time.time()
         A_t = (1.0 / sigma1A) * A.A[it]
         y = ksp[:, :, it]
-        scale = 1.0 / torch.quantile(y[y != 0].abs().float(), 0.99).item()
+        # numpy, not torch.quantile, which rejects inputs over ~16M elements
+        scale = 1.0 / float(np.percentile(y[y != 0].abs().cpu().numpy(), 99))
         y_s = y * scale
 
         def dc_grad(x, A_t=A_t, y_s=y_s):
