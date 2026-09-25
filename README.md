@@ -242,25 +242,17 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
                                  MRIFieldmaps.jl (precon=:diag, not its own :ichol default -- see
                                  CLAUDE.md's preprocessing/ section for why), with its initial guess
                                  unwrapped via ROMEO.jl
-recon/                        Multi-Scale Low-Rank (MSLR) fMRI reconstruction, ported from
-                              ../mslr-recon (Julia/MIRT.jl) onto PyTorch/mirtorch
-  operators.py                  GatheredSense (gathered-k-space SENSE operator) + B0 correction:
-                                 GatheredSenseB0 (time-segmented, L=32 in production -- swept, not
-                                 guessed, see CLAUDE.md) and demodulate_smaps (static first stage)
-  mslr.py                       Multi-scale low-rank recon: run_recon (FISTA/POGM over locally-low-rank
-                                 patches, optional B0 correction), pogm_restart, patch SVST, and
-                                 save_result (ReconResult -> .h5/.nii.gz/.json)
-  hdf5_chunked_io.py            Chunk-aware .h5 reads (deliberately torch-free, shared by both venvs)
-  run_recon.py                  Real-data drivers (.venv-recon): `mslr-ref` (G+L from a ../mslr-recon
-                                 reference), `mslr-local`, `cg` (B0-corrected CG-SENSE)
-  L1-wavelet_TV_B0_SENSE.py     B0-informed L1-wavelet + TV regularized SENSE: torch B0 operator
-                                 bridged into sigpy's solver (.venv-recon; run with `python -m`)
-  lowres_calib.py               Low-res reconstruction of the fully sampled calibration region,
-                                 plain (.venv-preprocessing) or with `--b0`/`--r2star` B0-informed
-                                 correction (.venv-recon), plus a temporal-stability check
-  analysis.py                   One-off analysis: L accuracy sweep, L cost benchmark (see CLAUDE.md's
-                                 recon/ section for the numbers), and field-by-field validation vs.
-                                 real ../mslr-recon (Julia) output
+recon/                        Image reconstruction (.venv-recon), on PyTorch/mirtorch:
+                              min_x 0.5||Ax - y||^2 + g(x)
+  mri_operator.py               Encoding operators A: SENSE, SENSE_B0 (B0 phase accrual, time-segmented,
+                                 L=32 in production -- swept, see CLAUDE.md), SENSE_B0_R2star (+ R2* decay)
+  regularizers.py               g(x): LowRank (multi-scale low-rank, patch SVST), WaveletTV (3D wavelet + TV)
+  solvers.py                    pogm_restart (PGM/FPGM/POGM), cg
+  sense.py                      Iterative SENSE driver: --reg {none,lowrank,wavelet-tv}, --B0, --R2star
+  rss.py                        Root-sum-of-squares, GPU-batched over frames
+  utils.py                      I/O, operator norms, tSNR report, one-off L sweep/benchmark and
+                                 validation vs. ../mslr-recon (python -m recon.utils ...)
+  demo.ipynb                    Every recon type on one real dataset
 tests/                       Unit tests (pytest)
 docs/demo/                   Static images embedded in this README's Demo section
 ```
