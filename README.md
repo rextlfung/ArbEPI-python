@@ -244,9 +244,9 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
                                  unwrapped via ROMEO.jl
 recon/                        Image reconstruction (.venv-recon), on PyTorch/mirtorch:
                               min_x 0.5||Ax - y||^2 + g(x)
-  mri_operator.py               Encoding operators A: SENSE, SENSE_B0 (B0 phase accrual, time-segmented,
+  operators.py               Encoding operators A: SENSE, SENSE_B0 (B0 phase accrual, time-segmented,
                                  L=32 in production -- swept, see CLAUDE.md), SENSE_B0_R2star (+ R2* decay)
-  regularizers.py               g(x): LowRank (multi-scale low-rank, patch SVST), WaveletTV (3D wavelet + TV)
+  regularizers.py               g(x): MultiScaleLowRank (multi-scale low-rank, patch SVST), WaveletTV (3D wavelet + TV)
   solvers.py                    pogm_restart (PGM/FPGM/POGM), cg
   sense.py                      Iterative SENSE driver: --reg {none,lowrank,wavelet-tv}, --B0, --R2star
   rss.py                        Root-sum-of-squares, GPU-batched over frames

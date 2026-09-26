@@ -1,13 +1,13 @@
 """Iterative SENSE reconstruction: min_x f(x) + g(x).
 
 f(x) = 0.5 * ||A x - y||^2 is data consistency, with A one of the encoding
-operators in recon/mri_operator.py (SENSE, or SENSE_B0 / SENSE_B0_R2star with
+operators in recon/operators.py (SENSE, or SENSE_B0 / SENSE_B0_R2star with
 --B0 / --R2star). g(x) is the regularizer (recon/regularizers.py), and it
 decides the solver (recon/solvers.py):
 
     --reg none        g = 0                        -> conjugate gradient
     --reg lowrank     multi-scale low-rank         -> POGM (or FPGM / PGM)
-    --reg wavelet-tv  L1-wavelet + TV, per frame   -> FBPD (primal-dual)
+    --reg wavelet-tv  L1-wavelet + TV, per frame   -> PDHG (primal-dual)
 
     .venv-recon/bin/python -m recon.sense <datdir> <seqname> --reg lowrank \\
         --patch 6 6 6 --stride 3 3 3 [--B0 [--R2star]] [--frames 0,1,2] [--niter 200]
@@ -26,12 +26,10 @@ from dataclasses import dataclass, field
 import h5py
 import numpy as np
 import torch
-from mirtorch.alg import FBPD
-from mirtorch.prox import Const
 
-from recon.mri_operator import build_sense, build_sense_b0, build_sense_b0_r2star
-from recon.regularizers import LowRank, WaveletTV
-from recon.solvers import cg, pogm_restart
+from recon.operators import build_sense, build_sense_b0, build_sense_b0_r2star
+from recon.regularizers import MultiScaleLowRank, WaveletTV
+from recon.solvers import cg, pdhg, pogm_restart
 from recon.utils import (
     estimate_operator_noise_factor,
     estimate_spectral_norm,
@@ -40,6 +38,7 @@ from recon.utils import (
     load_echo_times,
     load_normalized_smaps,
     load_omega,
+    resolve_device,
     save_result,
 )
 
@@ -69,7 +68,7 @@ def run_sense(
     fn_smaps: str,
     reg: str = "lowrank",
     frames: list[int] | None = None,
-    device: torch.device | str = "cuda",
+    device: torch.device | str | None = None,
     fn_b0map: str | None = None,
     r2star_map: torch.Tensor | None = None,
     t_ref_s: float = 0.0,
@@ -99,6 +98,7 @@ def run_sense(
     r2star_map (1/s, EPI grid) as well, A also models R2* decay relative to
     t_ref_s, the nominal-TE echo time (SENSE_B0_R2star).
 
+    device: default "cuda" if available, else "cpu".
     sigma1A: spectral norm of A; measured by power iteration when None.
     lambda_global: lowrank weight scale; None means "use the acceleration
     factor R". normalize_noise (lowrank): rescale the data so image-domain
@@ -109,7 +109,7 @@ def run_sense(
         raise ValueError(f"reg={reg!r}, expected one of {REGULARIZERS}")
     if r2star_map is not None and fn_b0map is None:
         raise ValueError("r2star_map requires fn_b0map (R2* is modeled on top of B0)")
-    device = torch.device(device)
+    device = resolve_device(device)
 
     print("Loading sensitivity maps...")
     smaps, smaps_chw = load_normalized_smaps(fn_smaps, device)
@@ -237,7 +237,7 @@ def _solve_lowrank(
     device,
     common,
 ) -> ReconResult:
-    g = LowRank(patch_sizes, strides, shape, lambda_global)
+    g = MultiScaleLowRank(patch_sizes, strides, shape, lambda_global)
     S = g.synthesis  # (Nx,Ny,Nz,Nt,Nscales) -> (Nx,Ny,Nz,Nt)
     Nscales = g.Nscales
 
@@ -327,7 +327,7 @@ def _solve_wavelet_tv(
     dc_costs, reg_costs = [], []
     print(
         f"\nReconstructing {Nt} frame(s) with L1-wavelet + TV (lamb_l1={lamb_l1}, "
-        f"lamb_tv={lamb_tv}, {niters} FBPD iterations, operator normalized by 1/{sigma1A:.4f})..."
+        f"lamb_tv={lamb_tv}, {niters} PDHG iterations, operator normalized by 1/{sigma1A:.4f})..."
     )
     t_start = time.time()
     for it in range(Nt):
@@ -341,16 +341,8 @@ def _solve_wavelet_tv(
         def dc_grad(x, A_t=A_t, y_s=y_s):
             return A_t.adjoint(A_t.apply(x) - y_s)
 
-        solver = FBPD(
-            dc_grad,
-            Const(),
-            g.h_prox,
-            g_L=1.0,
-            G=g.G,
-            G_norm_squared=g.G_norm_squared,
-            max_iter=niters,
-        )
-        x = solver.run(torch.zeros(Nx, Ny, Nz, dtype=torch.complex64, device=ksp.device))
+        x0 = torch.zeros(Nx, Ny, Nz, dtype=torch.complex64, device=ksp.device)
+        x = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters)
         dc_costs.append(0.5 * (A_t.apply(x) - y_s).norm().item() ** 2)
         reg_costs.append(g.cost(x))
         X[..., it] = x / scale / sigma1A
@@ -402,7 +394,7 @@ def main(
         raise ValueError("R2star correction requires B0 correction")
     if B0 and fn_b0map is None:
         fn_b0map = os.path.join(recon_dir, f"{seqname}_b0map.h5")
-    device = kwargs.get("device", "cuda")
+    device = resolve_device(kwargs.get("device"))
 
     paths = set_seq_paths(load_config(datdir=datdir, seqnames=[seqname]), seqname)
     sp = load_seq_params(paths)
@@ -513,7 +505,7 @@ def _cli() -> None:
         help="iterations (default: none 150, lowrank 200, wavelet-tv 100)",
     )
     p.add_argument("--frames", default=None, help="frame indices, e.g. 0,1,2 or 0-9 (default: all)")
-    p.add_argument("--device", default="cuda")
+    p.add_argument("--device", default=None, help="default: cuda if available, else cpu")
     lr = p.add_argument_group("lowrank")
     lr.add_argument(
         "--patch",

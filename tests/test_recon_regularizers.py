@@ -10,7 +10,7 @@ torch = pytest.importorskip("torch")
 
 from recon.regularizers import (  # noqa: E402
     SVST,
-    LowRank,
+    MultiScaleLowRank,
     SectionL1,
     SumScales,
     Wavelet3D,
@@ -143,7 +143,7 @@ def test_lowrank_prox_cost_matches_its_own_cost_function():
     equal cost() evaluated on that result."""
     Nx, Ny, Nz, Nt = 8, 8, 4, 6
     scales = [(Nx, Ny, Nz), (4, 4, 4)]
-    g = LowRank(scales, scales, (Nx, Ny, Nz, Nt), lambda_global=0.1)
+    g = MultiScaleLowRank(scales, scales, (Nx, Ny, Nz, Nt), lambda_global=0.1)
     X = torch.stack([_random_img(Nx, Ny, Nz, Nt, seed=s) for s in (1, 2)], dim=-1)
     out = g.prox(X.clone(), 0.5)
     assert abs(g.last_cost - g.cost(out)) / g.cost(out) < 1e-4

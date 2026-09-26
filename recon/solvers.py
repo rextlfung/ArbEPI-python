@@ -1,6 +1,8 @@
 """Iterative solvers.
 
     pogm_restart  PGM / FPGM / POGM for min_x f(x) + g(x), f smooth, g prox-friendly
+    pdhg          primal-dual for min_x f(x) + h(G x), f smooth, h prox-friendly
+                  (for g = h o G with no closed-form prox, e.g. TV)
     cg            conjugate gradient on the normal equations A^H A x = A^H y
 """
 
@@ -8,6 +10,8 @@ import math
 from typing import Callable, Literal
 
 import torch
+from mirtorch.alg import FBPD
+from mirtorch.prox import Const
 
 Momentum = Literal["pgm", "fpgm", "pogm"]
 Restart = Literal["none", "gr", "fr"]
@@ -120,7 +124,7 @@ def pogm_restart(
             znew = unew + beta * (unew - uold) + gamma * (unew - xold) - ba_z * (xold - zold)
             zetanew = alpha * (1 + beta + gamma)
             # g_prox is allowed to mutate its argument in place (e.g.
-            # regularizers.LowRank.prox writes into X and returns it,
+            # regularizers.MultiScaleLowRank.prox writes into X and returns it,
             # for a small transient memory win) -- clone znew first so
             # `xnew is znew` never holds. Without this, xnew - znew below
             # is always exactly zero regardless of what g_prox computed
@@ -181,7 +185,7 @@ def cg(
     preprocessing/cg_sense.py's exact algorithm onto A.apply/A.adjoint.
 
     A: an operator with .apply(image)->k-space, .adjoint(k-space)->image,
-    the mirtorch LinearMap contract every recon/mri_operator.py builder returns.
+    the mirtorch LinearMap contract every recon/operators.py builder returns.
     ksp: (K,Nc,Nt) gathered k-space (see recon/utils.py's load_and_gather_ksp).
     shape: (Nx,Ny,Nz,Nt), the image-domain state shape A.adjoint returns.
 
@@ -218,3 +222,24 @@ def cg(
         rsold = rsnew
 
     return X, residuals
+
+
+def pdhg(
+    grad_f: Callable[[torch.Tensor], torch.Tensor],
+    f_L: float,
+    prox_h,
+    G,
+    G_norm_squared: float,
+    x0: torch.Tensor,
+    niter: int = 100,
+) -> torch.Tensor:
+    """min_x f(x) + h(G x): the Condat-Vu primal-dual method, i.e. PDHG with a
+    plain gradient step on the smooth term f, via mirtorch's FBPD.
+
+    grad_f: gradient of f, f_L its Lipschitz constant. prox_h: a mirtorch Prox
+    for h (FBPD applies it to h's convex conjugate via Moreau's identity).
+    G: a mirtorch LinearMap, G_norm_squared an upper bound on ||G||^2 (sets the
+    dual step size)."""
+    solver = FBPD(grad_f, Const(), prox_h, g_L=f_L, G=G, G_norm_squared=G_norm_squared,
+                  max_iter=niter)
+    return solver.run(x0)

@@ -657,7 +657,7 @@ multi-regularizer pattern: `G = Vstack([Wavelet, FiniteDifference])`,
 `proxg = prox.Stack([L1Reg(...,lamb_l1), L1Reg(...,lamb_tv)])`, solved via
 `PrimalDualHybridGradient`. Since the 2026-09-25 recon restructure it is the
 same `G = [W; D]` structure in torch (`recon/regularizers.py`'s `WaveletTV`),
-solved with mirtorch's `FBPD` (`recon/sense.py --reg wavelet-tv`).
+solved with `recon/solvers.py`'s `pdhg` (mirtorch's `FBPD`, Condat-Vu primal-dual; `recon/sense.py --reg wavelet-tv`).
 **Accepted, disclosed tradeoff**: none of this claims numerical parity with
 BART/MIRT (unlike `ge/`'s float-ULP-level MATLAB validation) --
 verification here is algorithm-invariant instead (round-trip/convergence
@@ -1024,15 +1024,14 @@ available during this port either, see the Commands section) and to
 
 Every iterative method in `recon/` solves `min_x 0.5*||A x - y||^2 + g(x)`,
 and the layout follows that split (restructured 2026-09-25 from a merged set
-of seven older modules; their module docstrings are preserved verbatim in
-`docs/recon-notes.md`):
+of older modules; see git history for those):
 
 | file | contents |
 |---|---|
-| `mri_operator.py` | the encoding operator A: `SENSE` (smaps -> FFT -> sample), `SENSE_B0` (time-segmented B0 phase accrual), `SENSE_B0_R2star` (phase accrual + R2* magnitude decay), and builders `build_sense`/`build_sense_b0`/`build_sense_b0_r2star` returning a per-frame `BlockDiagonal` |
-| `regularizers.py` | g(x): `LowRank` (multi-scale low-rank prox/cost, patch SVST, `SumScales`), `WaveletTV` (`Wavelet3D` + periodic finite differences, `SectionL1` prox) |
-| `solvers.py` | `pogm_restart` (PGM/FPGM/POGM with gradient restart + `conv_tol`), `cg` |
-| `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,lowrank,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, ...). `none` -> CG, `lowrank` -> POGM, `wavelet-tv` -> mirtorch `FBPD` (TV has no closed-form prox) |
+| `operators.py` | the encoding operator A: `SENSE` (smaps -> FFT -> sample), `SENSE_B0` (time-segmented B0 phase accrual), `SENSE_B0_R2star` (phase accrual + R2* magnitude decay), and builders `build_sense`/`build_sense_b0`/`build_sense_b0_r2star` returning a per-frame `BlockDiagonal` |
+| `regularizers.py` | g(x): `MultiScaleLowRank` (multi-scale low-rank prox/cost, patch SVST, `SumScales`), `WaveletTV` (`Wavelet3D` + periodic finite differences, `SectionL1` prox) |
+| `solvers.py` | `pogm_restart` (PGM/FPGM/POGM with gradient restart + `conv_tol`), `pdhg` (Condat-Vu primal-dual via mirtorch's `FBPD`, for regularizers without a closed-form prox), `cg` |
+| `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,lowrank,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, ...). `none` -> CG, `lowrank` -> POGM, `wavelet-tv` -> PDHG (TV has no closed-form prox). `--device` defaults to cuda if available, else cpu (everything also runs on CPU, slowly) |
 | `rss.py` | root-sum-of-squares, GPU-batched over frames |
 | `utils.py` | I/O (`read_frames_cropped`, `load_*`, `load_and_gather_ksp`, `save_result`, ...), operator norms (`estimate_spectral_norm`, `check_operator_unitary`, `estimate_operator_noise_factor`), `tsnr_report`, and the one-off `sweep`/`benchmark`/`validate` analyses (`python -m recon.utils {tsnr,sweep,benchmark,validate}`) |
 | `demo.ipynb` | runs every recon type on `20260915ball/2_6x_2.4mm` |
@@ -1042,7 +1041,7 @@ Outputs land in `<datdir>/recon/sense_<reg>[_b0|_b0r2star]/` and
 `cgsense*/`, `basic/`). The `lowrank` path is numerically identical to the
 pre-restructure `mslr.run_recon` (bit-for-bit on a seeded synthetic set, and
 on the first iterations of a real `20260915ball` run); `wavelet-tv` moved from
-sigpy's PDHG to mirtorch's FBPD, so its results are not identical to older
+sigpy's PDHG to mirtorch's FBPD (`solvers.pdhg`), so its results are not identical to older
 `cs_b0*` runs.
 
 It started as a Python/PyTorch port of the companion Julia repo `../mslr-recon`
@@ -1077,12 +1076,12 @@ top of `SENSE` -- see the "B0 off-resonance correction" subsection below for
 the design and investigation history. `utils.py`'s `sweep` and `benchmark`
 are the one-off analyses that produced the numbers cited there.
 
-**`recon/mri_operator.py`'s `SENSE`** is a custom `mirtorch.linear.
+**`recon/operators.py`'s `SENSE`** is a custom `mirtorch.linear.
 linearmaps.LinearMap` subclass, not `mirtorch.linear.mri.Sense` directly --
 deliberately, despite `Sense` (with `norm='ortho'`) implementing
 mathematically the exact same convention as `../mslr-recon/src/sense_gpu.jl`'s
 `Asense_gpu` (verified by adjoint self-consistency in
-`tests/test_recon_mri_operator.py`: both apply
+`tests/test_recon_operators.py`: both apply
 `fftshift(fftn(ifftshift(.)), norm='ortho')` forward and the mirror-image
 adjoint, which -- since `fftshift`/`ifftshift` are permutation matrices,
 `P^T = P^-1`, and ortho-normalized `fftn`/`ifftn` are mutually adjoint -- is
@@ -1096,8 +1095,8 @@ memory budget which assumes the *gathered* `(K,Nc)` representation
 `Asense_gpu` already uses, `K = Nx*Ny*Nz/R`). `SENSE` implements the
 identical forward/adjoint math but gathers to the `K` sampled locations,
 cutting every k-space-shaped tensor by the acceleration factor `R` -- this
-was a real, measured fix, not a preemptive optimization (`build_encoding_
-operator`+`gather_ksp` are the two entry points; `.A[it].idx` on the
+was a real, measured fix, not a preemptive optimization (`build_sense` +
+`utils.load_and_gather_ksp` are the two entry points; `.A[it].idx` on the
 returned `mirtorch.linear.BlockDiagonal` exposes each frame's own flat
 spatial sample indices for gathering a matching k-space target array).
 
@@ -1173,7 +1172,7 @@ and `patchSVST` sections) run for a few real iterations on the real
 almost exactly by summing these pieces. Meanwhile isolated single-call
 benchmarks confirm Fessler's expectation holds at the kernel level: Julia's
 `Asense_gpu` forward/adjoint (0.298s / 0.361s) is genuinely faster than
-`recon/mri_operator.py`'s equivalent (0.480s / 0.549s) and the two configs'
+`recon/operators.py`'s equivalent (0.480s / 0.549s) and the two configs'
 whole-volume SVD costs are comparable (Julia 0.158s vs Python 0.170s for
 the same `2592000x30` matrix) -- it's the two overheads above, not the
 underlying linear algebra, that flip the net result. (Aside, found while
@@ -1202,11 +1201,11 @@ operator, consuming `preprocessing/run_b0map.py`'s field map
 `echo_times`:
 
 - **Static single-segment correction (formerly `demodulate_smaps`, removed in the
-  2026-09-25 restructure; history in `docs/recon-notes.md`)** -- static, single-
+  2026-09-25 restructure; see git history)** -- static, single-
   segment correction: a per-voxel conjugate-phase phasor (evaluated at
   the nominal TE) pre-multiplied into `smaps` before the encoding operator
   is built, zero added per-iteration cost. Validated against a brute-force
-  synthetic ground truth (`tests/test_recon_b0_correction.py`): corrects
+  synthetic ground truth (the since-removed `tests/test_recon_b0_correction.py`): corrects
   the dominant geometric-shift component well in a small-phase-excursion
   regime (~98% forward-model error reduction), but only partially at this
   pipeline's *real* scale (B0 up to +-300-350 Hz over an ETL=60, ~72ms
@@ -1215,7 +1214,7 @@ operator, consuming `preprocessing/run_b0map.py`'s field map
   how off-resonance phase keeps accruing differently across the echo
   train. That gap is why time-segmented correction exists as a second
   stage, not a redundant one.
-- **`recon/mri_operator.py`'s `SENSE_B0`** -- the fuller,
+- **`recon/operators.py`'s `SENSE_B0`** -- the fuller,
   time-segmented stage, via `mirtorch.linear.mri.mri_exp_approx` (the same
   min-max frequency-segmentation fit `mirtorch`'s own NUFFT-based
   `Gmri`/`GmriGram` use). `build_sense_b0(smaps, omega,
@@ -1232,8 +1231,8 @@ operator, consuming `preprocessing/run_b0map.py`'s field map
   math a second time.
 
 **Optional T2*/T1 amplitude-decay correction, layered on top of the
-time-segmented stage.** `build_sense_b0_r2star`'s
-`r2star_map`/`t_ref_s` generalize the real off-resonance field Δf(r) to a
+time-segmented stage.** `SENSE_B0_R2star` (its `segment_phasors` holds the
+physics; built by `build_sense_b0_r2star(..., r2star_map, t_ref_s)`) generalize the real off-resonance field Δf(r) to a
 complex field ψ(r) = i*2*pi*Δf(r) - R2*(r), reusing the same
 `mri_exp_approx`-fit segment weights/placement (still solved from Δf(r)
 alone -- valid as long as R2*'s own decay-time product stays much smaller
@@ -1243,9 +1242,9 @@ phase. `build_sense_b0` is the phase-only operator; an all-zero R2* map reproduc
 `preprocessing/r2star_map.py`'s two-point log-ratio estimate on the same
 dual-echo deGRE data already used for Δf(r); `recon/sense.py --R2star`
 wires it end to end (estimates R2*, reads the nominal-TE reference time
-from `scan_info.mat`, and saves under a separate `mslr_b0complex/`
-output directory so a `--r2star` run never collides with a plain
-B0-only run at the same `L`).
+from `scan_info.mat`, and saves under a separate `sense_<reg>_b0r2star/`
+output directory so an `--R2star` run never collides with a plain
+B0-only run).
 
 **Sign convention diverges deliberately from the (unmerged, exploratory)
 `worktree-lowres-calib-recon` branch's `recon/lowres_calib_recon_b0complex.py` (its path on that branch)
@@ -1271,12 +1270,12 @@ into this operator would make `.apply()` model signal *growth*
 (unbounded as t grows) instead of decay -- wrong physically, and it would
 inflate the power-iteration spectral-norm estimate and collapse POGM's
 step size.
-`tests/test_recon_mri_operator.py`'s
+`tests/test_recon_operators.py`'s
 `test_r2star_generalization_adjoint_is_self_consistent` locks this in via
 an adjoint dot-product check (`<Ax,y> == <x,A^H y>`), which the branch's
 sign convention fails and this one passes;
-`test_r2star_zero_map_matches_phase_only_operator` locks in the
-`r2star_map=None`-is-a-strict-special-case-of-zero contract; and
+`test_r2star_zero_map_matches_phase_only_operator` locks in that an all-zero
+R2* map reproduces the phase-only `SENSE_B0`; and
 `test_r2star_forward_model_decays_away_from_reference_time` checks
 `c_phasors`' magnitude directly (not via a forward FFT+gather energy
 comparison -- a first attempt at that confounded a spatially-varying Δf
@@ -1288,12 +1287,12 @@ Both stages share one convention, derived from Sutton, Noll, Fessler
 inhomogeneities," IEEE TMI 2003) and cross-checked against
 `mirtorch.linear.mri.Gmri`'s own demo notebook, not just re-derived: the
 forward operator needs `exp(+i 2*pi*b0map_hz(r)*t)` multiplied into the
-image before the spatial-encoding FFT -- see `recon/mri_operator.py`'s
+image before the spatial-encoding FFT -- see `recon/operators.py`'s
 module docstring for the full sign derivation. `mri_exp_approx(b0, bins,
 lseg, t)` (read directly from mirtorch 0.3.1's own source, the pinned
 dependency) expects `b0` in **Hz** and `t` in **milliseconds** (it divides
 by 1000 internally, twice), and returns `tl` already in **seconds** -- so
-`mri_operator.py` passing `echo_times_s * 1000` against an unscaled-Hz
+`operators.py` passing `echo_times_s * 1000` against an unscaled-Hz
 field map is correct, not a units bug, and `-b0map_hz` (not `+`) is what
 composes correctly with `mri_exp_approx`'s own internal sign to reproduce
 the physically-correct convention above (matching `Gmri`'s own
@@ -1313,7 +1312,7 @@ computed `BT`), not a gradual improvement curve -- `L=6` gives only ~35%
 error reduction (barely better than no correction at all), while `L≈31-32`
 is needed to get relative forward-model error under 1%. **Chose `L=32`**
 as the production value (the smallest swept `L` clearing that 1% bar) --
-`mri_operator.py`'s `build_sense_b0`/`build_sense_b0_r2star` and
+`operators.py`'s `build_sense_b0`/`build_sense_b0_r2star` and
 `sense.py`'s `run_sense`/`--L` all default to `L=32`
 directly now, not overridden at each call site.
 
@@ -1329,7 +1328,7 @@ asymmetric -- roughly -300 to +70 Hz, not symmetric around 0), mirtorch's
 own `Gmri` default `nbins=20` puts nearly all the histogram's mass into
 1-3 bins near zero, making the `(nbins, L)` least-squares fit severely
 ill-conditioned everywhere else: measured per-sample `b_weights` row sums
-(`mri_operator.py`'s `_check_b_weight_row_sums` -- each row should sum to
+(`operators.py`'s `_check_b_weight_row_sums` -- each row should sum to
 ~1.0 when well-conditioned) ranged `[0.12, 2.89]` at `nbins=20` vs.
 `[0.9985, 1.0022]` at `nbins=100` on the same real data. `nbins=128`
 (comfortably past that threshold) is the production default; raise it

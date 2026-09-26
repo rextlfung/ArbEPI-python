@@ -78,7 +78,7 @@ def build_sense(smaps: torch.Tensor, omega: torch.Tensor) -> BlockDiagonal:
 
 
 class SENSE_B0(SENSE):
-    """SENSE (recon/mri_operator.py) plus time-segmented B0 correction.
+    """SENSE (recon/operators.py) plus time-segmented B0 correction.
     Subclasses SENSE and delegates to its _apply/_apply_adjoint
     for the per-segment FFT/gather and scatter/IFFT/coil-combine (the
     exact same math, once per segment, with c_phasors[l] pre-multiplied
@@ -149,14 +149,48 @@ class SENSE_B0(SENSE):
 
 
 class SENSE_B0_R2star(SENSE_B0):
-    """SENSE_B0 generalized from pure phase accrual to phase accrual plus
-    magnitude decay: the per-segment phasors c_phasors are exp(psi(r)*t_l)
-    with the complex field psi(r) = i*2*pi*Δf(r) - R2*(r), instead of the
-    pure phase exp(i*2*pi*Δf(r)*t_l). The forward/adjoint math is identical
-    (SENSE_B0's adjoint already conjugates c_phasors, which is the exact
-    adjoint for any complex c_phasors), so this class only exists to name the
-    physics it models -- see build_sense_b0_r2star for how c_phasors is built
-    and why its sign convention is the physical (decaying) one."""
+    """SENSE_B0 with magnitude decay as well as phase accrual.
+
+    The real off-resonance field df(r) becomes a complex field
+    psi(r) = i*2*pi*df(r) - R2*(r), and each segment's phasor is
+    exp(psi(r) * t_l) instead of exp(i*2*pi*df(r) * t_l). Times t_l are
+    measured from t_ref (the nominal TE), so decay factors straddle 1 and the
+    image is "the image at TE" rather than "the undecayed image at excitation".
+
+    Sign: this is the physical forward model (decaying as t grows). SENSE_B0's
+    adjoint conjugates the phasors, which is the exact adjoint for any complex
+    phasor, so no sign trick is needed. (An adjoint-only reconstruction can
+    flip the R2* sign to compensate decay; doing that here would make .apply()
+    model growth and break the adjoint test in tests/test_recon_operators.py.)
+
+    The forward/adjoint code is SENSE_B0's; what differs is the phasors, built
+    by segment_phasors. They're computed once and shared by every frame's
+    operator (see build_sense_b0_r2star), since an (L,*N) copy per frame
+    doesn't fit in GPU memory at real data sizes.
+    """
+
+    @staticmethod
+    def segment_phasors(
+        b0map_hz: torch.Tensor, r2star_map: torch.Tensor, tl: torch.Tensor, dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """(L,*N) phasors exp(psi(r) * tl[l]), psi = i*2*pi*b0map_hz - r2star_map.
+
+        b0map_hz (Hz), r2star_map (1/s): (*N,) on the EPI grid. tl: (L,) segment
+        times in seconds relative to t_ref, from mri_exp_approx."""
+        N = tuple(b0map_hz.shape)
+        assert tuple(r2star_map.shape) == N, f"r2star_map shape {tuple(r2star_map.shape)} != {N}"
+        r2_hz = r2star_map.to(torch.float32)
+        # Reusing the df-only segmentation fit (b_by_echo, tl) for the complex
+        # field is fine as long as R2*'s decay-time product is much smaller than
+        # df's bandwidth-time product.
+        t_span_s = float((tl.max() - tl.min()).item())
+        bt_df = float(b0map_hz.max() - b0map_hz.min()) * t_span_s
+        bt_r2 = float(r2_hz.max()) * t_span_s
+        print(f"  SENSE_B0_R2star: R2* decay-time product = {bt_r2:.4f} vs "
+              f"B0 bandwidth-time product = {bt_df:.2f} (should be much smaller)")
+        psi = 1j * 2 * math.pi * b0map_hz.to(torch.complex64) - r2_hz.to(torch.complex64)
+        tl_c = tl.to(torch.complex64).reshape((-1,) + (1,) * len(N))
+        return torch.exp(tl_c * psi[None, ...]).to(dtype)
 
 
 def _check_b_weight_row_sums(b: torch.Tensor, frame_idx: int | str, tol: float = 0.1) -> None:
@@ -331,95 +365,15 @@ def build_sense_b0_r2star(
     L: int = 32,
     nbins: int = 128,
 ) -> BlockDiagonal:
-    """Same as build_sense_b0 (see its docstring for smaps/omega/b0map_hz/
-    echo_times_yz/L/nbins), plus R2* magnitude decay:
-
-    r2star_map: (Nx,Ny,Nz) real, 1/s, same EPI grid as b0map_hz --
-    generalizes the real off-resonance field Δf(r) to a complex field
-    ψ(r) = i*2*pi*Δf(r) - R2*(r), so the same segmented-exponential
-    machinery corrects T2*/T1 amplitude decay alongside phase (motivation:
-    a given (ky,kz) location is acquired at a different echo index, hence
-    a different amount of decay, in different frames -- see
-    preprocessing/r2star_map.py and CLAUDE.md's recon/ "B0 off-resonance
-    correction" section). build_sense_b0 is the phase-only
-    operator; with r2star_map all zero this reduces to it up to the t_ref_s
-    time shift of the segmentation fit.
-
-    IMPORTANT, and NOT the sign convention used by
-    recon/lowres_calib.py on the (unmerged)
-    worktree-lowres-calib-recon branch: this operator is bidirectional
-    (recon/sense.py's run_sense calls both .apply() and .adjoint()
-    through POGM, and estimate_spectral_norm's power iteration needs both
-    too), so c_phasors here is built from the PHYSICAL forward exponent
-    exp(psi(r)*t) with psi(r) = i*2*pi*Δf(r) - R2*(r) -- decaying, not
-    growing, as t increases -- and SENSE_B0._apply_adjoint's
-    existing `c_phasors[l].conj()` is left untouched. That conjugate
-    already *is* the true mathematical adjoint of a per-voxel diagonal
-    scaling for ANY complex c_phasors, decaying or not (the adjoint of a
-    diagonal matrix is its conjugate, full stop -- no "does conjugating
-    undo the decay" question ever enters into whether `_apply_adjoint` is
-    correct). The branch's calib-region script instead flips the sign
-    (its psi_recon = i*2*pi*Δf + R2*) because it only ever calls
-    `.adjoint()`, never `.apply()`, on a non-iterative, adjoint-only
-    reconstruction, and wants matched-filter-style decay *compensation*
-    (an approximate deconvolution) rather than a faithful forward model.
-    Porting that flipped sign into *this* bidirectional operator would
-    make `.apply()` model signal growth (exp(+R2*(r)*t), unbounded as t
-    grows) instead of decay: wrong physically, and it would inflate
-    `estimate_spectral_norm`'s power-iteration estimate and collapse
-    POGM's step size. Do not "fix" this to match the branch --
-    tests/test_recon_operators_b0.py's
-    `test_r2star_generalization_adjoint_is_self_consistent` locks the
-    distinction in via an adjoint dot-product check, which the branch's
-    convention fails and this one passes.
-
-    t_ref_s: reference time (seconds since RF excitation) the R2* decay is
-    measured relative to. Only matters
-    once -R2*(r)*t enters the exponent: with t measured from excitation
-    (t_ref_s=0), short-T2* voxels get heavily down-weighted relative to
-    long-T2* ones in the segmentation fit (needlessly ill-conditioned),
-    and the reconstructed image would mean "the undecayed image at the
-    moment of excitation" rather than the standard T2*-weighted
-    image-at-TE convention. Pass the nominal-TE echo's acquisition time
-    (scan_info.mat's schedules[0,0,(ETL-1)//2,2] -- see
-    preprocessing/r2star_map.py's caller for how to read it) so decay
-    factors straddle 1 and the reconstruction target is "the image as it
-    would appear at the prescribed TE" -- matches
-    recon/lowres_calib.py's own TE-referencing for the
-    same reason (unlike the sign, this part of its design *is* reused
-    as-is). The phase-only build_sense_b0 needs no such shift: a
-    global time-reference change to Δf alone only rescales the image by a
-    per-voxel phase, and shifting it would perturb the exact bit-for-bit
-    match with the pre-R2* operator this function preserves whenever
-    it is the plain phase-only operator.
-    """
-    N = tuple(smaps.shape[1:])
-    assert tuple(r2star_map.shape) == N, (
-        f"r2star_map shape {tuple(r2star_map.shape)} != smaps grid {N}"
-    )
-    # Times are referenced to TE_nominal (t_ref_s) -- see docstring.
-    b_by_echo, _c, tl, unique_t_ms, pos_per_frame = _segment_fit(
+    """build_sense_b0 plus R2* decay (see SENSE_B0_R2star). r2star_map:
+    (Nx,Ny,Nz), 1/s, same grid as b0map_hz. t_ref_s: the nominal-TE echo's
+    time since excitation (scan_info.mat's schedules[0,0,(ETL-1)//2,2]); echo
+    times are measured from it. Other arguments as in build_sense_b0."""
+    b_by_echo, _c, tl, _t, pos_per_frame = _segment_fit(
         omega, b0map_hz, echo_times_yz, L, nbins, t_ref_s=t_ref_s,
     )
     b_by_echo = b_by_echo.to(smaps.dtype)
-
-    r2_hz = r2star_map.to(torch.float32)
-    t_span_s = float((unique_t_ms.max() - unique_t_ms.min()).item()) / 1000
-    bt_df = float(b0map_hz.max() - b0map_hz.min()) * t_span_s
-    bt_r2 = float(r2_hz.max()) * t_span_s
-    print(
-        f"  build_sense_b0_r2star: R2* decay-time product = {bt_r2:.4f} vs "
-        f"Δf's bandwidth-time product = {bt_df:.2f} (should be much smaller -- this "
-        "is what justifies reusing Δf-only-tuned b_by_echo/tl for the complex field; "
-        "see module docstring)."
-    )
-    # Physical forward exponent (decaying, not the branch script's
-    # flipped-sign reconstruction convenience) -- see docstring.
-    psi = 1j * 2 * math.pi * b0map_hz.to(torch.complex64) - r2_hz.to(torch.complex64)
-    tl_c = tl.to(torch.complex64)  # tl already in seconds (mri_exp_approx divides by 1000)
-    c_phasors = torch.exp(
-        tl_c.reshape((L,) + (1,) * len(N)) * psi[None, ...]
-    ).to(smaps.dtype)
+    c_phasors = SENSE_B0_R2star.segment_phasors(b0map_hz, r2star_map, tl, smaps.dtype)
     frames = [
         SENSE_B0_R2star(smaps, omega[..., it], pos, b_by_echo, c_phasors)
         for it, pos in enumerate(pos_per_frame)

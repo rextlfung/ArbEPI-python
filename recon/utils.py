@@ -26,10 +26,18 @@ from mirtorch.linear.mri import mri_exp_approx
 
 from preprocessing.matio import read_mat
 from preprocessing.nifti_io import save_recon_nifti
-from recon.mri_operator import SENSE, SENSE_B0, build_sense, build_sense_b0
+from recon.operators import SENSE, SENSE_B0, build_sense, build_sense_b0
 
 if TYPE_CHECKING:
     from recon.sense import ReconResult
+
+def resolve_device(device: torch.device | str | None = None) -> torch.device:
+    """device, or "cuda" if a GPU is available and "cpu" otherwise. Everything
+    in recon/ runs on either; CPU is just much slower."""
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    return torch.device(device)
+
 
 # ---------------------------------------------------------------- I/O
 
@@ -409,7 +417,7 @@ def estimate_operator_noise_factor(
     (K,Nc,Nt) for the full multi-frame BlockDiagonal `run_sense` uses).
 
     std is computed over the *nonzero* output only (excludes exact-zero,
-    masked-out-of-coil-support voxels -- see recon/mri_operator.py's smaps
+    masked-out-of-coil-support voxels -- see recon/operators.py's smaps
     combine): std() over the whole array would otherwise be diluted by
     whatever fraction of the grid the coil-sensitivity mask excludes (as
     large as ~57% on a real ball phantom), underestimating the actual
@@ -600,12 +608,12 @@ def _cli_tsnr() -> None:
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Real values, both taken directly from mri_operator.py's module docstring.
+# Real values, both taken directly from operators.py's module docstring.
 ETL = 60
 DT_ECHO_S = 0.0012
 B0_MIN_HZ, B0_MAX_HZ = -300.0, 70.0
 TE_S = 0.030  # nominal TE the echo train is centered on; only shifts all t_per_ky uniformly
-NBINS = 128  # matches mri_operator.py/sense.py's production default
+NBINS = 128  # matches operators.py/sense.py's production default
 
 
 def _complex_randn(*shape, seed):

@@ -6,7 +6,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from recon.mri_operator import build_sense  # noqa: E402
+from recon.operators import build_sense  # noqa: E402
 from recon.solvers import cg, pogm_restart  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

@@ -4,7 +4,7 @@ sqrt(sum_c |x_c|^2). Non-iterative, no sensitivity maps -- a quick first look.
 Frames are batched onto the GPU (as many per batch as fit in max_batch_bytes)
 and transformed together.
 
-    .venv-recon/bin/python -m recon.rss <datdir> <seqname> [--device cuda]
+    .venv-recon/bin/python -m recon.rss <datdir> <seqname> [--device cpu]
 
 Reads <datdir>/recon/<seqname>_epi_zf.h5 and writes
 <datdir>/recon/rss/<seqname>_recon.{nii.gz,json}.
@@ -19,11 +19,12 @@ import numpy as np
 import torch
 
 from preprocessing.nifti_io import save_recon_nifti
+from recon.utils import resolve_device
 
 
 def rss(ksp: torch.Tensor) -> torch.Tensor:
     """ksp: (Nx,Ny,Nz,Nc,Nb) zero-filled k-space -> (Nx,Ny,Nz,Nb) magnitude.
-    Uses the same centered, ortho-normalized IFFT as recon/mri_operator.py's SENSE."""
+    Uses the same centered, ortho-normalized IFFT as recon/operators.py's SENSE."""
     dims = (0, 1, 2)
     x = torch.fft.fftshift(
         torch.fft.ifftn(torch.fft.ifftshift(ksp, dim=dims), dim=dims, norm="ortho"), dim=dims
@@ -31,9 +32,10 @@ def rss(ksp: torch.Tensor) -> torch.Tensor:
     return x.abs().pow(2).sum(dim=3).sqrt()
 
 
-def run_rss(fn_ksp: str, device: str = "cuda", max_batch_bytes: float = 4e9) -> np.ndarray:
-    """(Nx,Ny,Nz,Nt) float32 RSS image of every frame in fn_ksp."""
-    device = torch.device(device)
+def run_rss(fn_ksp: str, device: str | None = None, max_batch_bytes: float = 4e9) -> np.ndarray:
+    """(Nx,Ny,Nz,Nt) float32 RSS image of every frame in fn_ksp. device: default
+    cuda if available, else cpu."""
+    device = resolve_device(device)
     with h5py.File(fn_ksp, "r") as f:
         d = f["ksp_epi_zf"]
         Nx, Ny, Nz, Nc, Nt = d.shape
@@ -48,7 +50,7 @@ def run_rss(fn_ksp: str, device: str = "cuda", max_batch_bytes: float = 4e9) -> 
     return img
 
 
-def main(datdir: str, seqname: str, device: str = "cuda") -> str:
+def main(datdir: str, seqname: str, device: str | None = None) -> str:
     from preprocessing.config import load_config, load_seq_params, set_seq_paths
 
     recon_dir = os.path.join(datdir, "recon")
@@ -70,7 +72,7 @@ def _cli() -> None:
     )
     parser.add_argument("datdir")
     parser.add_argument("seqname")
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--device", default=None, help="default: cuda if available, else cpu")
     args = parser.parse_args()
     main(args.datdir, args.seqname, args.device)
 

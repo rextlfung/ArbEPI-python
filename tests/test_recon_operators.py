@@ -1,4 +1,4 @@
-"""Tests for recon/mri_operator.py's SENSE, SENSE_B0 and SENSE_B0_R2star:
+"""Tests for recon/operators.py's SENSE, SENSE_B0 and SENSE_B0_R2star:
 adjoint self-consistency, spectral norms, and the B0 operators' accuracy
 against a brute-force, genuinely time-varying ground-truth forward model."""
 
@@ -12,7 +12,7 @@ pytest.importorskip("mirtorch")
 
 from mirtorch.linear.mri import mri_exp_approx  # noqa: E402
 
-from recon.mri_operator import (  # noqa: E402
+from recon.operators import (  # noqa: E402
     SENSE,
     SENSE_B0,
     SENSE_B0_R2star,

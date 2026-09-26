@@ -1,9 +1,9 @@
 """Regularizers g(x) and their proximal operators.
 
-    LowRank     multi-scale (locally) low-rank: nuclear norm of space x time patches
+    MultiScaleLowRank     multi-scale (locally) low-rank: nuclear norm of space x time patches
                 at one or more patch scales (Ong & Lustig 2016). Solved with POGM.
     WaveletTV   L1-wavelet + total variation. No closed-form prox, so it is solved
-                with a primal-dual method (mirtorch FBPD) instead of POGM.
+                with a primal-dual method (solvers.pdhg) instead of POGM.
 """
 
 import math
@@ -257,7 +257,7 @@ def patchSVST(
 class SumScales(LinearMap):
     """(Nx,Ny,Nz,Nt,Nscales) -> (Nx,Ny,Nz,Nt): the image is the sum of its
     per-scale components, X_recon = X[...,0] + ... + X[...,Nscales-1]. Data
-    consistency applies to this sum, so the LowRank data term is
+    consistency applies to this sum, so the MultiScaleLowRank data term is
     f(X) = 0.5 * ||A(SumScales(X)) - y||^2."""
 
     def __init__(self, img_shape: tuple[int, ...], Nscales: int):
@@ -271,7 +271,7 @@ class SumScales(LinearMap):
         return x.unsqueeze(-1).expand(*x.shape, self.Nscales).clone()
 
 
-class LowRank:
+class MultiScaleLowRank:
     """g(X) = sum_k lambda_k * sum_patches ||patch_k(X[...,k])||_* -- the
     multi-scale low-rank regularizer (Ong & Lustig 2016). One scale is a
     locally low-rank (LLR) prior; adding a whole-volume patch as a second scale
@@ -454,7 +454,7 @@ class SectionL1(Prox):
 class WaveletTV:
     """g(x) = lamb_l1 * ||W x||_1 + lamb_tv * ||D x||_1 on one 3D frame, with W
     an orthogonal 3D wavelet and D the periodic finite difference along x, y, z
-    (anisotropic TV). Written as h(G x) with G = [W; D], for mirtorch's FBPD
+    (anisotropic TV). Written as h(G x) with G = [W; D], for solvers.pdhg's
     primal-dual solver (TV has no closed-form prox, so POGM doesn't apply)."""
 
     def __init__(

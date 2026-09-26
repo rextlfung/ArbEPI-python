@@ -7,9 +7,8 @@
   also write a small low-res calibration k-space `.h5` (plus its sampling mask and
   echo times), so a quick look or a calibration-based recon doesn't need to read the
   full zero-filled volume. The old implementation, including its B0 / B0+R2*
-  adjoint-only variants and the temporal-stability check, is in git history (see
-  `docs/recon-notes.md` for its module docstrings). The stability check itself now
-  lives in `recon/utils.py`'s `tsnr_report`.
+  adjoint-only variants and the temporal-stability check, is in git history. The
+  stability check itself now lives in `recon/utils.py`'s `tsnr_report`.
 - **recon/ documentation pass.** Trim the long function docstrings carried over
-  from the old modules, and distill `docs/recon-notes.md` into human-readable
-  documentation.
+  from the old modules, and write human-readable documentation (the old module
+  docstrings are in git history, before the recon restructure).

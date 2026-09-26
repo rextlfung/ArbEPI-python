@@ -15,7 +15,7 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("mirtorch")
 
-from recon.mri_operator import build_sense  # noqa: E402
+from recon.operators import build_sense  # noqa: E402
 from recon.sense import run_sense  # noqa: E402
 from recon.utils import estimate_operator_noise_factor, load_omega  # noqa: E402
 
