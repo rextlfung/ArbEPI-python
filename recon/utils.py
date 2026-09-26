@@ -30,6 +30,7 @@ from recon.operators import SENSE, SENSE_B0, build_sense, build_sense_b0
 if TYPE_CHECKING:
     from recon.sense import ReconResult
 
+
 def resolve_device(device: torch.device | str | None = None) -> torch.device:
     """device, or "cuda" if a GPU is available and "cpu" otherwise. Everything
     in recon/ runs on either; CPU is just much slower."""
@@ -44,16 +45,9 @@ def resolve_device(device: torch.device | str | None = None) -> torch.device:
 def read_frames_cropped(
     fn: str, key: str, spatial_slices: tuple[slice, slice, slice] | None = None,
 ) -> np.ndarray:
-    """dataset shape (X, Y, Z, ..., T), chunked one frame per chunk along
-    the last (T) axis -- ksp_epi_zf's own convention. spatial_slices, when
-    given, is (x_slice, y_slice, z_slice) applied to the first three axes
-    of every frame as it's decompressed (see module docstring for why this
-    bounds peak memory to one frame instead of the whole dataset).
-    spatial_slices=None reproduces the previous whole-array
-    `load_array`/`_load_chunked` behavior exactly (still frame-by-frame
-    when chunked, to avoid the documented HDF5 chunk-cache pathology of a
-    single `d[()]` call on a dataset this large -- a bare `d[()]` was
-    measured at ~7 MB/s vs. ~500 MB/s reading one chunk at a time)."""
+    """Read an HDF5 dataset shaped (X, Y, Z, ..., T) one chunk at a time along
+    T, optionally cropping each frame to spatial_slices (x, y, z) as it's read.
+    Chunk-by-chunk reads are ~70x faster than a single d[()] on large files."""
     with h5py.File(fn, 'r') as f:
         d = f[key]
         chunked_by_frame = d.chunks is not None and d.chunks[-1] < d.shape[-1]
@@ -80,41 +74,16 @@ def read_frames_cropped(
 
 
 def load_array(fn: str, key: str) -> np.ndarray:
-    """.h5 written in plain numpy order (e.g. this repo's own preprocessing/
-    output, or mslr-recon's sigpy-export input path) -- no axis correction
-    needed, unlike hdf5storage-written .mat files (see preprocessing/matio.py).
-
-    Thin wrapper around recon/utils.py's read_frames_cropped
-    (shared with recon/lowres_calib.py, which needs the same
-    chunk-by-chunk-along-the-last-axis logic without pulling in this
-    module's torch/mirtorch imports -- see docs/review-findings.md item
-    200) -- returns the full array, since run_sense processes every frame
-    and has no crop to apply here."""
+    """Whole dataset `key` from an .h5 written in numpy axis order."""
     return read_frames_cropped(fn, key)
 
 
 def load_omega(
     fn_ksp: str, Nx: int, Ny: int, Nz: int, Nt: int, device: torch.device
 ) -> torch.Tensor:
-    """(Nx,Ny,Nz,Nt) sampling mask, broadcast across the readout axis
-    (kx doesn't affect which (ky,kz) locations were sampled).
-
-    Prefers the authoritative 'omegas' dataset preprocess.py writes into
-    the same file (preprocessing/preprocess.py's _build_omegas) over
-    inferring the mask from which complex64 k-space values happen to be
-    exactly zero: a real acquired sample that rounds to exactly 0+0j after
-    phase correction would otherwise silently become "not acquired", and
-    since that would be consistently wrong across every coil, a per-coil
-    consistency check can't catch it either -- so that check is only worth
-    doing in the fallback branch below, where it's actually load-bearing.
-    Falls back to the `!= 0` derivation, logged, for recon files written
-    before 'omegas' existed -- that fallback loads the whole dense ksp0
-    itself (there's no way around it, needing every coil's exact-zero
-    pattern), unlike the normal (has_omegas) path, which takes only
-    `device` and never touches ksp_epi_zf at all so callers can build the
-    encoding operator (and therefore load_and_gather_ksp's memory-bounded
-    per-frame path) before ever loading real k-space data.
-    """
+    """(Nx,Ny,Nz,Nt) bool sampling mask from the file's 'omegas' (Ny,Nz,Nt),
+    broadcast along kx. Files written before 'omegas' existed fall back to
+    the nonzero pattern of the k-space itself (reads the whole array)."""
     with h5py.File(fn_ksp, "r") as f:
         has_omegas = "omegas" in f
         if has_omegas:
@@ -137,25 +106,15 @@ def load_omega(
 
 
 def load_echo_times(fn_ksp: str, device: torch.device) -> torch.Tensor:
-    """(Ny,Nz,Nt) echo-time array (seconds since RF excitation), moved to
-    device at its native shape -- shared by both B0-recon call sites
-    (run_sense here and recon/sense.py's mslr-ref) so neither has to duplicate the
-    broadcast-to-(Nx,Ny,Nz,Nt) pattern build_sense_b0 no
-    longer needs (see its docstring and docs/review-findings.md item 90)."""
+    """(Ny,Nz,Nt) seconds since excitation of each sampled (ky,kz)."""
     return torch.from_numpy(load_array(fn_ksp, "echo_times").astype(np.float32)).to(device)
 
 
 def load_normalized_smaps(
     fn_smaps: str, device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Loads smaps and RSS-normalizes it. Returns (smaps, smaps_chw):
-    smaps is (Nx,Ny,Nz,Nc) complex64, each voxel's coil vector scaled to
-    unit RSS; smaps_chw is (Nc,Nx,Ny,Nz), the layout
-    build_sense{,_b0} expect. Shared by run_sense (here) and
-    sense.py, which used to duplicate this verbatim -- a real
-    desync risk since run_b0_recon's whole purpose is measuring sigma1A
-    for the operator run_sense builds moments later (see
-    docs/review-findings.md item 94)."""
+    """Sensitivity maps normalized to unit root-sum-of-squares per voxel.
+    Returns (smaps (Nx,Ny,Nz,Nc), smaps_chw (Nc,Nx,Ny,Nz), the operators' layout)."""
     smaps_raw = torch.from_numpy(load_array(fn_smaps, "smaps").astype(np.complex64)).to(device)
     smaps_rss = smaps_raw.abs().pow(2).sum(dim=-1, keepdim=True).sqrt()
     smaps = smaps_raw / (smaps_rss + torch.finfo(torch.float32).eps)
@@ -166,27 +125,9 @@ def load_normalized_smaps(
 def load_and_gather_ksp(
     fn_ksp: str, A: BlockDiagonal, device: torch.device, frames: list[int] | None = None,
 ) -> torch.Tensor:
-    """(K,Nc,Nt) k-space gathered at A's sampled locations. frames: the file's
-    frame index for each block of A (default: block it <- frame it).
-
-    Memory-bounded: reads and gathers one frame at a time directly from the HDF5 file
-    (one chunk each, per preprocessing/preprocess.py's one-frame-per-chunk
-    convention), so peak memory is bounded to a single frame's full dense
-    (Nx,Ny,Nz,Nc) volume rather than the whole (Nx,Ny,Nz,Nc,Nt) dataset.
-
-    Real numbers this matters for (2026-09-22, this repo's own real
-    4_93.5x_0.8mm dataset, Nx,Ny,Nz,Nc,Nt=270,270,180,32,60): the whole-
-    dataset load needs ~188GB (confirmed by a real torch.cuda.OutOfMemoryError
-    against a 47GB GPU trying exactly that -- see recon/utils.py's
-    module docstring for the matching ~201GB/~3.4GB numbers it already
-    documents for lowres_calib.py's own spatial-crop version of this same
-    bounding technique); one frame is ~3.1GB, comfortably fine.
-
-    A must already be built (from smaps/omega alone, not ksp0) before
-    calling this -- callers should get Nx/Ny/Nz/Nc/Nt from smaps' own
-    shape plus a cheap HDF5 shape peek instead of from a loaded ksp0, so
-    the operator-build order doesn't depend on ever loading the dense
-    array (see run_sense's/main_run's/run_cgsense_b0's own reordering)."""
+    """(K,Nc,Nt) k-space at A's sampled locations, read one frame at a time so
+    the dense (Nx,Ny,Nz,Nc,Nt) array is never in memory. frames: the file's
+    frame index for each block of A (default: block it <- frame it)."""
     Nt = len(A.A)
     frames = list(range(Nt)) if frames is None else list(frames)
     Nc = A.A[0].Nc
@@ -202,21 +143,15 @@ def load_and_gather_ksp(
 
 
 def nominal_te_s(scan_info_path: str, etl: int) -> float:
-    """The prescribed-TE echo's acquisition time (seconds since RF
-    excitation), frame/shot-invariant by construction (see CLAUDE.md's
-    mask2epi_radial paragraph) -- read directly from scan_info.mat rather
-    than re-derived, matching
-    recon/lowres_calib.py's own nominal_te_s on the
-    worktree-lowres-calib-recon branch."""
+    """Acquisition time (s since excitation) of the nominal-TE echo, the
+    center echo of the train, from scan_info.mat's schedules."""
     schedules = read_mat(scan_info_path, ["schedules"])["schedules"]  # (Nframes,Nshots,ETL,3)
     return float(schedules[0, 0, (etl - 1) // 2, 2])
 
 
 def read_julia_mat(path: str) -> dict:
-    """MAT.jl's matwrite output (v7.3, HDF5-backed): arrays are stored
-    axis-reversed on disk like hdf5storage's Python-side v7.3 writer (see
-    preprocessing/matio.py) -- reverse with .transpose(). Complex arrays are
-    stored as a {real, imag} compound dtype rather than natively."""
+    """Settings and results of a ../mslr-recon (Julia) run, from its v7.3 .mat.
+    Arrays are stored axis-reversed and complex values as {real, imag}."""
     scalar_keys = ("R", "sigma1A", "L", "Nscales", "lambda_global", "Niters", "conv_tol")
     array_keys = ("dc_costs", "reg_costs", "lambdas")
     out = {}
@@ -236,13 +171,9 @@ def read_julia_mat(path: str) -> dict:
 def save_result(
     fn_base: str, result: "ReconResult", fov: tuple[float, float, float], **extra_attrs
 ) -> None:
-    # Raw complex data first, deliberately: a run_sense() call can take tens
-    # of minutes, and save_recon_nifti (below) needs a plain numpy array,
-    # not a CUDA tensor -- getting that boundary wrong once already lost a
-    # completed real reconstruction (see git history / session notes), so
-    # the full-precision .h5 -- needing no such conversion care beyond the
-    # explicit .cpu().numpy() already here -- goes to disk before anything
-    # else gets a chance to fail.
+    """Write <fn_base>.h5 (complex image, per-scale components, sampling mask,
+    cost traces) and <fn_base>.nii.gz + .json (magnitude image, settings).
+    The .h5 is written first, so a finished run is saved even if the rest fails."""
     X_recon_np = result.X_recon.detach().cpu().numpy()
     with h5py.File(f"{fn_base}.h5", "w") as f:
         f.create_dataset("X_recon", data=X_recon_np)
@@ -287,8 +218,8 @@ def poweriter(
     niter: int = 200,
     tol: float = 1e-6,
 ) -> float:
-    """Estimate the spectral norm sigma1 = ||A||_2 via power iteration on the
-    normal operator A'A, given as its forward/adjoint applies."""
+    """Spectral norm ||A||_2 by power iteration on A^H A, stopping once the
+    estimate changes by less than tol (it converges from below)."""
     x = x0.clone()
     ratio_old = float("inf")
     for _ in range(niter):
@@ -303,48 +234,9 @@ def poweriter(
 
 
 def estimate_spectral_norm(A, x0: torch.Tensor, niter: int = 200, tol: float = 1e-6) -> float:
-    """Power iteration estimate of sigma1(A) -- delegates to
-    poweriter above (same computation, applied to A's own
-    forward/adjoint) rather than a second copy of the loop: unlike the
-    plain (unweighted) SENSE operator, a time-segmented
-    SENSE_B0/BlockDiagonal's spectral norm has no known closed form
-    (mri_exp_approx's B weights are a least-squares fit, not guaranteed
-    unit-norm/orthogonal), so it needs to be measured before trusting it as
-    POGM's Lipschitz-constant basis (`L = Nscales * sigma1A**2` in
-    recon/sense.py's run_sense) -- reusing the uncorrected operator's
-    own sigma1A here would be a guess, not a measurement.
-
-    Power iteration converges to sigma1 *from below*, so an under-converged
-    estimate under-estimates the Lipschitz constant and drives POGM's step
-    size the unsafe direction (too large, i.e. divergent) -- poweriter's
-    tol-based early stop only returns once the ratio has stabilized,
-    instead of trusting a fixed iteration count to have been enough.
-
-    For a BlockDiagonal A (this repo's per-frame-independent-block
-    contract -- build_sense/build_sense_b0 couple
-    nothing across frames), the spectral norm is exactly the max over the
-    blocks' own spectral norms: the singular values of
-    block_diag(A_1,...,An) are the union of each A_i's own singular
-    values. Measuring per-block instead of on the whole Nt-stacked
-    operator cuts the power iteration's buffer size by a factor of Nt --
-    the whole-operator x0/Ax/adjoint-out buffers are (*N,Nt)/(K,Nc,Nt)-
-    shaped, several of which are simultaneously live inside poweriter's
-    loop, while a single block's are just (*N,)/(K,Nc). This is what makes
-    the estimate tractable at this repo's largest dataset scale: a real
-    CUDA OOM (44.5/47.4 GB in use, "Tried to allocate 3.13 GiB") hit here
-    on 4_93.5x_0.8mm's (270,270,180)-grid, Nt=60, Nc=32 operator, where a
-    single (*N,Nt) buffer alone is 6.3 GB and several coexist -- see
-    CLAUDE.md's recon/ B0 subsection. x0 only needs to match a single
-    block's own size_in ((*N,), not (*N,Nt)) -- callers building an
-    operator via build_sense[_b0] should pass a per-frame-
-    shaped x0 regardless of whether A ends up being a lone operator (the
-    tests/test_recon_operators_b0.py case) or a BlockDiagonal (every real
-    production call site), since both now take the same shape.
-
-    A: any mirtorch LinearMap/BlockDiagonal (.apply/.adjoint). x0: any
-    nonzero starting tensor matching a single block's size_in (dtype/
-    device included) -- for a non-BlockDiagonal A, matching A's own
-    size_in directly."""
+    """sigma1(A) by power iteration. For a BlockDiagonal (one block per frame)
+    it is the max over the blocks, which keeps buffers at one frame's size.
+    x0: nonzero start of one block's input shape (*N,)."""
     if isinstance(A, BlockDiagonal):
         return max(poweriter(block.apply, block.adjoint, x0, niter=niter, tol=tol) for block in A.A)
     return poweriter(A.apply, A.adjoint, x0, niter=niter, tol=tol)
@@ -354,40 +246,9 @@ def check_operator_unitary(
     A, x0: torch.Tensor, name: str = 'A', tol: float = 0.05, niter: int = 200,
     poweriter_tol: float = 1e-6,
 ) -> float:
-    """Measures sigma1(A) (via estimate_spectral_norm) and warns if it's not
-    close to 1.0 -- added 2026-09-18 after a real debugging session where
-    exactly this gap (SENSE_B0's sigma1 = 1.29, not ~1.0 like the
-    plain SENSE's 0.9998) went undiagnosed for a while: sigpy's
-    L1-wavelet_TV_B0_SENSE.py-style L1-wavelet+TV regularization (lamb_l1/lamb_tv,
-    tuned against a genuinely unitary sigpy.mri.linop.Sense) silently needed
-    a ~100x larger lambda once the same pattern was reused with
-    recon/sense.py wrapping a non-unitary operator -- a fixed
-    lambda's *effective* regularization strength (relative to the data
-    term) shifts with the operator's own norm, both because sigpy's PDHG
-    step-size calibration (tau ~ 1/||A||^2 with sigma held fixed, see
-    sigpy/app.py's LinearLeastSquares._get_PrimalDualHybridGradient) slows
-    convergence of both the data and regularization terms together at a
-    fixed iteration budget, and because POGM's own Lipschitz constant
-    (recon/sense.py's run_sense: `L = Nscales * sigma1A**2`) is
-    directly sigma1(A)-dependent.
-
-    Call this once when building a *new* encoding operator (or composing
-    an existing one into a new solver/regularization scheme) rather than
-    assuming unitarity -- a plain Cartesian-FFT + RSS-normalized-smaps
-    operator (SENSE) genuinely is unitary (sigma1 ~= 1.0, tight
-    tolerance -- see tests/test_recon_operators.py) and should warn if it
-    ever isn't (a real regression). A time-segmented B0-corrected operator
-    (SENSE_B0) is *not* guaranteed unitary by construction --
-    mri_exp_approx's segmentation weights are a least-squares fit, not an
-    orthogonal/unit-norm decomposition (see estimate_spectral_norm's own
-    docstring) -- so a warning there is expected, not necessarily a bug;
-    it's a reminder to re-tune (or explicitly account for) lambda/step-size
-    choices made under a unitary-operator assumption, not an error to
-    silence.
-
-    Returns the measured sigma1(A) either way, so callers can reuse it
-    (e.g. as POGM's sigma1A) instead of measuring twice.
-    """
+    """Measure sigma1(A) and warn if it's not ~1. Regularization weights and
+    step sizes tuned for a unitary operator don't transfer to one that isn't
+    (e.g. the B0 operators, sigma1 ~1.2-1.9). Returns sigma1."""
     sigma1 = estimate_spectral_norm(A, x0, niter=niter, tol=poweriter_tol)
     if abs(sigma1 - 1.0) > tol:
         warnings.warn(
@@ -406,10 +267,7 @@ def check_operator_unitary(
 
 
 def object_mask(img: np.ndarray, thresh_frac: float = 0.2) -> np.ndarray:
-    """[Nx, Ny, Nz] bool, thresholded on the time-mean magnitude -- the
-    smaps eigenvalue mask already zeroes the true background (see
-    lowres_calib.py), so a simple relative threshold on what's left
-    cleanly separates object from noise-only voxels."""
+    """(Nx,Ny,Nz) bool: time-mean magnitude above thresh_frac of its maximum."""
     mean_img = img.mean(axis=-1)
     return mean_img > thresh_frac * mean_img.max()
 
@@ -417,14 +275,12 @@ def object_mask(img: np.ndarray, thresh_frac: float = 0.2) -> np.ndarray:
 def temporal_stability(img: np.ndarray, mask: np.ndarray, tr_s: float) -> dict:
     """img: [Nx, Ny, Nz, Nframes] magnitude. mask: [Nx, Ny, Nz] bool.
 
-    Returns a dict of the standard phantom-stability decomposition:
+    Returns the standard phantom-stability measures:
     - tsnr_map: [Nx, Ny, Nz], mean/std over time (NaN outside mask)
     - roi_signal: [Nframes], spatial mean over mask per frame
     - percent_fluctuation: 100 * std(residual after linear detrend) / mean(roi_signal)
     - percent_drift: 100 * (linear fit endpoint - start) / mean(roi_signal)
-    - roi_tsnr: mean(roi_signal) / std(roi_signal) (no detrend -- the raw,
-      undetrended ROI-average tSNR, for comparison against the
-      detrend-and-decompose numbers above)
+    - roi_tsnr: mean(roi_signal) / std(roi_signal), without detrending
     """
     Nframes = img.shape[-1]
     t = np.arange(Nframes)
@@ -535,12 +391,12 @@ def _cli_tsnr() -> None:
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Real values, both taken directly from operators.py's module docstring.
+# Real acquisition scale for the B0 studies below.
 ETL = 60
 DT_ECHO_S = 0.0012
 B0_MIN_HZ, B0_MAX_HZ = -300.0, 70.0
 TE_S = 0.030  # nominal TE the echo train is centered on; only shifts all t_per_ky uniformly
-NBINS = 128  # matches operators.py/sense.py's production default
+NBINS = 128  # production default
 
 
 def _complex_randn(*shape, seed):
@@ -553,10 +409,8 @@ def _complex_randn(*shape, seed):
 def _brute_force_time_varying_ksp(
     img: torch.Tensor, smaps: torch.Tensor, b0map_hz: torch.Tensor, t_per_ky: torch.Tensor
 ) -> torch.Tensor:
-    """Same construction as tests/test_recon_b0_correction.py's helper of the
-    same name -- one dense 3D FFT per ky, keeping only that ky's slice, so
-    the "ground truth" is genuinely time-varying rather than assembled from
-    any segmented approximation."""
+    """Exact time-varying B0 forward model (no segmentation): one full FFT per
+    ky row with that row's phase, keeping only that row. (Nc,Nx,Ny,Nz)."""
     Nc, Nx, Ny, Nz = smaps.shape
     dims = (1, 2, 3)
     y_true = torch.zeros(Nc, Nx, Ny, Nz, dtype=torch.complex64, device=DEVICE)
@@ -572,14 +426,14 @@ def _brute_force_time_varying_ksp(
 
 
 def _setup_real_scale(seed: int = 100):
+    """Small synthetic problem at the real echo-train length and field-map range,
+    with its exact k-space. Returns (img, smaps, b0map_hz, t_per_ky, y_true_flat)."""
     Nx, Ny, Nz, Nc = 16, ETL, 8, 4  # Ny=ETL matches the real echo train exactly
     img = _complex_randn(Nx, Ny, Nz, seed=seed)
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=seed + 1)
     smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-6)
 
-    # A smooth field map spanning exactly the documented real range, plus a
-    # little curvature (bounded so the range stays close to documented) --
-    # smooth and structured, like a real B0 map, not white noise.
+    # Smooth field map over the real range, with a little curvature.
     yy = torch.linspace(0, 1, Ny, device=DEVICE).reshape(1, Ny, 1)
     zz = torch.linspace(-1, 1, Nz, device=DEVICE).reshape(1, 1, Nz)
     b0map_hz = (B0_MIN_HZ + (B0_MAX_HZ - B0_MIN_HZ) * yy + 15.0 * zz**2).expand(Nx, Ny, Nz)
@@ -593,14 +447,13 @@ def _setup_real_scale(seed: int = 100):
 
 
 def _build_operator(smaps: torch.Tensor, b0map_hz: torch.Tensor, t_frame_s: torch.Tensor, L: int, nbins: int):
-    """Same construction as tests/test_recon_operators_b0.py's
-    _build_b0_operator, reimplemented here to avoid a recon/ -> tests/
-    import."""
+    """Fully sampled single-frame SENSE_B0 with the segmentation fit on every
+    sample's time."""
     Nx, Ny, Nz = smaps.shape[1:]
     full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
     idx = torch.nonzero(full_mask.reshape(-1), as_tuple=False).squeeze(-1)
     t_ms = (t_frame_s.reshape(-1)[idx] * 1000).to(torch.float32)
-    b0_neg = (-b0map_hz).to(torch.float32)  # sign convention, see operators.py's module docstring (static-stage section)
+    b0_neg = (-b0map_hz).to(torch.float32)  # sign convention: see operators.py
     b, c, _tl = mri_exp_approx(b0_neg, nbins, L, t_ms)
     N = (Nx, Ny, Nz)
     c = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)
@@ -609,6 +462,8 @@ def _build_operator(smaps: torch.Tensor, b0map_hz: torch.Tensor, t_frame_s: torc
 
 
 def sweep(L_values: list[int], nbins: int = NBINS):
+    """Forward-model error of SENSE_B0 vs the exact time-varying model, per L.
+    Returns (error without B0 correction, [(L, error), ...])."""
     img, smaps, b0map_hz, t_per_ky, y_true_flat = _setup_real_scale()
     Nx, Ny, Nz = smaps.shape[1:]
     t_frame = t_per_ky.reshape(1, Ny, 1).expand(Nx, Ny, Nz).contiguous()
@@ -651,21 +506,20 @@ def _cli_sweep() -> None:
           f"{converged_L if converged_L is not None else 'none in this sweep'}")
 
 
-# Real scale, from CLAUDE.md's recon/ section.
+# Real acquisition scale for the benchmark.
 _BENCH_SHAPE = (240, 240, 45, 18, 30)  # Nx, Ny, Nz, Nc, Nt
 _BENCH_R = 9
 
 
 def _build_inputs():
+    """Random operator inputs at _BENCH_SHAPE (cost depends only on shapes)."""
     Nx, Ny, Nz, Nc, Nt = _BENCH_SHAPE
     R = _BENCH_R
     torch.manual_seed(0)
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=0)
     smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-6)
 
-    # Same K per frame, K ~= Nx*Ny*Nz/R, built by keeping the first K flat
-    # indices of a random permutation shared in *structure* (not values)
-    # across frames -- exact sample locations don't matter for cost, only K.
+    # K = Nx*Ny*Nz/R random samples per frame.
     K = (Nx * Ny * Nz) // R
     omega = torch.zeros(Nx, Ny, Nz, Nt, dtype=torch.bool, device=DEVICE)
     for it in range(Nt):
@@ -678,9 +532,7 @@ def _build_inputs():
         -300.0 + 370.0 * torch.linspace(0, 1, Ny, device=DEVICE).reshape(1, Ny, 1)
     ).expand(Nx, Ny, Nz).contiguous()
 
-    # ETL distinct echo times, tied to (iy,iz) mod ETL so every frame's
-    # sampled times are a subset of the fixed pool -- matches
-    # build_sense_b0's frame-invariant-timing assumption.
+    # ETL distinct echo times, the same set in every frame (as build_sense_b0 requires).
     distinct_t_ms = torch.linspace(5.0, 5.0 + (ETL - 1) * 1.2, ETL, device=DEVICE)
     yz_idx = (
         torch.arange(Ny, device=DEVICE).reshape(Ny, 1) * Nz
@@ -695,7 +547,7 @@ def _build_inputs():
 def _time_forward_adjoint(A, x0, y0):
     torch.cuda.synchronize()
     t0 = time.perf_counter()
-    _ = A.apply(x0)  # timed for wall-clock cost, result unused -- same as the adjoint call below
+    _ = A.apply(x0)
     torch.cuda.synchronize()
     t_fwd = time.perf_counter() - t0
 
@@ -707,6 +559,7 @@ def _time_forward_adjoint(A, x0, y0):
 
 
 def benchmark(L_values: list[int]):
+    """Time and GPU memory of one forward + adjoint of SENSE and of SENSE_B0 per L."""
     assert DEVICE == "cuda", "this benchmark is only meaningful on GPU"
     Nx, Ny, Nz, Nc, Nt = _BENCH_SHAPE
     smaps, omega, b0map_hz, echo_times_s, K = _build_inputs()
@@ -715,7 +568,7 @@ def benchmark(L_values: list[int]):
 
     print(f"scale: Nx,Ny,Nz,Nc,Nt={Nx},{Ny},{Nz},{Nc},{Nt}  K/frame={K}  ETL={ETL}  nbins={NBINS}\n")
 
-    # Baseline: uncorrected SENSE (L=0 sentinel, no segmentation loop at all)
+    # Baseline: plain SENSE
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.empty_cache()
     A0 = build_sense(smaps, omega)
@@ -754,6 +607,8 @@ def _cli_benchmark() -> None:
 
 
 def validate(fn_ksp: str, fn_smaps: str, fn_julia_mat: str) -> bool:
+    """Re-run a ../mslr-recon (Julia) reconstruction with its own settings and
+    compare costs, iteration count and image. Returns True if all checks pass."""
     from recon.sense import run_sense  # lazy: sense.py imports this module
 
     ref = read_julia_mat(fn_julia_mat)
@@ -790,11 +645,7 @@ def validate(fn_ksp: str, fn_smaps: str, fn_julia_mat: str) -> bool:
     dc_p, dc_j = np.array(result.dc_costs[:n]), np.array(ref["dc_costs"][:n])
     reg_p, reg_j = np.array(result.reg_costs[:n]), np.array(ref["reg_costs"][:n])
     check("dc_cost[-1]", dc_p[-1], dc_j[-1])
-    # Multi-scale reg_cost (Nscales>1, summing nuclear norms across scales
-    # including a giant whole-volume SVD) accumulates more floating-point
-    # noise than a single-scale reg_cost -- measured ~1-2e-4 on both real
-    # G+L runs (radial and laminar) vs ~1e-6 for single-scale L/G, so this
-    # check alone gets a looser tolerance rather than loosening every check.
+    # Multi-scale nuclear norms accumulate more float32 noise (~1-2e-4 measured).
     check("reg_cost[-1]", reg_p[-1], reg_j[-1], rtol=5e-4)
     dc_max_rel = float((np.abs(dc_p - dc_j) / np.abs(dc_j)).max())
     reg_max_rel = float((np.abs(reg_p - reg_j) / np.abs(reg_j)).max())
@@ -819,8 +670,7 @@ def _cli_validate() -> None:
     parser.add_argument("--smaps", default=None)
     args = parser.parse_args()
 
-    # <recon_dir>/mslr/<subdir>/<name>.mat -> <recon_dir>/ArbEPI_epi_zf.h5,
-    # matching experiments/20260822ball.jl's own `datasets` table.
+    # <recon_dir>/mslr/<subdir>/<name>.mat -> <recon_dir>/ArbEPI_epi_zf.h5
     recon_dir = os.path.dirname(os.path.dirname(os.path.dirname(args.fn_julia_mat)))
     fn_ksp = args.ksp or os.path.join(recon_dir, "ArbEPI_epi_zf.h5")
     fn_smaps = args.smaps or os.path.join(recon_dir, "smaps_ArbEPI_sigpy.h5")

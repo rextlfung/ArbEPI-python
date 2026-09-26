@@ -40,12 +40,14 @@ def pogm_restart(
     conv_tol: float = 0.0,
     conv_min_iter: int = 10,
 ):
-    """x, out = pogm_restart(x0, fcost, fgrad_fn, f_L; ...)
+    """Minimize f(x) + g(x) by PGM, FPGM or POGM (Kim & Fessler) with restart.
 
-    `fun(iter, xk, yk, is_restart, fcostnew, rel_change)` is called once per
-    iteration (iter=0 for the initial point, rel_change=nan there) and its
-    return values are collected into `out`, mirroring the Julia signature
-    exactly (see mirt_mod.jl point 7)."""
+    fcost, fgrad_fn: f and its gradient; f_L: Lipschitz constant of the
+    gradient (step size 1/f_L). g_prox(z, c): prox of c*g. restart: "gr"
+    (gradient), "fr" (function value) or "none". Stops early once the relative
+    change of the iterate falls below conv_tol (0 disables this).
+    fun(iter, xk, yk, is_restart, fcost, rel_change) is called every iteration,
+    iter 0 being the start. Returns (x, list of fun's return values)."""
     if mom not in ("pgm", "fpgm", "pogm"):
         raise ValueError(f"mom={mom}")
     if restart not in ("none", "gr", "fr"):
@@ -123,14 +125,8 @@ def pogm_restart(
             ba_z = beta * alpha / zetaold
             znew = unew + beta * (unew - uold) + gamma * (unew - xold) - ba_z * (xold - zold)
             zetanew = alpha * (1 + beta + gamma)
-            # g_prox is allowed to mutate its argument in place (e.g.
-            # regularizers.MultiScaleLowRank.prox writes into X and returns it,
-            # for a small transient memory win) -- clone znew first so
-            # `xnew is znew` never holds. Without this, xnew - znew below
-            # is always exactly zero regardless of what g_prox computed
-            # (the two names alias the same mutated tensor), and zold at
-            # :156 also ends up aliasing xold next iteration, silently
-            # zeroing POGM's momentum correction terms every iteration.
+            # g_prox may write into its argument (MultiScaleLowRank.prox does), so
+            # pass a copy: xnew must not alias znew.
             xnew = g_prox(znew.clone(), zetanew)
 
             iz = 1.0 / zetanew
@@ -181,19 +177,11 @@ def cg(
     A, ksp: torch.Tensor, shape: tuple[int, int, int, int], num_iter: int = 20,
     tol: float = 1e-6,
 ) -> tuple[torch.Tensor, list[float]]:
-    """CG on E^H E x = E^H y (E = A here), ported from
-    preprocessing/cg_sense.py's exact algorithm onto A.apply/A.adjoint.
+    """Conjugate gradient on A^H A x = A^H ksp, starting from 0.
 
-    A: an operator with .apply(image)->k-space, .adjoint(k-space)->image,
-    the mirtorch LinearMap contract every recon/operators.py builder returns.
-    ksp: (K,Nc,Nt) gathered k-space (see recon/utils.py's load_and_gather_ksp).
-    shape: (Nx,Ny,Nz,Nt), the image-domain state shape A.adjoint returns.
-
-    Returns (X, residuals): X is (Nx,Ny,Nz,Nt) complex64, residuals is
-    len(iterations)+1 relative residual norms (residuals[0] = 1.0 by
-    construction, matching preprocessing/cg_sense.py's rel_res definition
-    sqrt(rsnew/rs0)) -- for a convergence-trace sidecar, same spirit as
-    ReconResult's rel_changes.
+    A: an operator from recon/operators.py. ksp: (K,Nc,Nt). shape: (Nx,Ny,Nz,Nt).
+    Returns (X, residuals), residuals[i] = ||r_i|| / ||r_0|| (residuals[0] = 1);
+    stops early once below tol.
     """
     B = A.adjoint(ksp)  # (Nx,Ny,Nz,Nt)
     X = torch.zeros_like(B)

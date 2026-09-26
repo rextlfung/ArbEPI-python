@@ -1,9 +1,8 @@
 """Regularizers g(x) and their proximal operators.
 
-    MultiScaleLowRank     multi-scale (locally) low-rank: nuclear norm of space x time patches
-                at one or more patch scales (Ong & Lustig 2016). Solved with POGM.
-    WaveletTV   L1-wavelet + total variation. No closed-form prox, so it is solved
-                with a primal-dual method (solvers.pdhg) instead of POGM.
+    MultiScaleLowRank  nuclear norm of space x time patches at one or more patch
+                       scales (Ong & Lustig 2016). Has a closed-form prox: POGM.
+    WaveletTV          L1-wavelet + total variation. No closed-form prox: PDHG.
 """
 
 import math
@@ -19,10 +18,8 @@ from mirtorch.prox import Prox
 def _reg_weights(
     patch_sizes: list[tuple[int, int, int]], Nt: int, N_voxels: int, lambda_global: float
 ) -> list[float]:
-    """Ong & Lustig 2016 eq. (4): lambda_k = sqrt(p_k) + sqrt(Nt) +
-    sqrt(log(N_voxels*Nt / max(p_k, Nt))), p_k = voxels per patch. Natural
-    log (paper states the weight only up to a constant; lambda_global absorbs
-    any rescaling -- see reconstruct.jl's own comment on this choice)."""
+    """Ong & Lustig eq. 4 times lambda_global: lambda_k = sqrt(p_k) + sqrt(Nt)
+    + sqrt(log(N_voxels*Nt / max(p_k, Nt))), p_k = voxels per patch."""
     lambdas = []
     for ps in patch_sizes:
         p_k = math.prod(ps)
@@ -36,18 +33,14 @@ def _patch_starts(n: int, patch: int, stride: int) -> list[int]:
     return [min(i * stride, n - patch) for i in range(nsteps + 1)]
 
 
-_DEFAULT_SVD_CHUNK_BYTES = 4_000_000_000  # see SVST's docstring for the benchmark this is based on
+_DEFAULT_SVD_CHUNK_BYTES = 4_000_000_000  # per batched SVD call; see SVST
 
 
 def _all_patch_starts(
     shape: tuple[int, int, int], patch_size: tuple[int, int, int], stride_size: tuple[int, int, int]
 ) -> tuple[list[tuple[int, int, int]], tuple[int, int, int]]:
-    """Every (sx,sy,sz) patch start position over `shape`, plus the clamped
-    (psx,psy,psz) patch size actually used (patch_size capped to each
-    axis' own image size) -- shared by img2patches/patches2img (unchanged,
-    still used directly by tests and reg_cost's chunked path below) and
-    patchSVST's own chunked gather/scatter (which never materializes the
-    full per-scale patch tensor -- see patchSVST's docstring)."""
+    """All (sx,sy,sz) patch start positions over `shape`, and the patch size
+    actually used (capped at the image size along each axis)."""
     Nx, Ny, Nz = shape
     psx, psy, psz = (min(p, n) for p, n in zip(patch_size, shape))
     starts_x = _patch_starts(Nx, psx, stride_size[0])
@@ -67,8 +60,7 @@ def _chunk_size_for_budget(
 def _gather_patch_chunk(
     img: torch.Tensor, starts_chunk: list[tuple[int, int, int]], patch_size: tuple[int, int, int]
 ) -> torch.Tensor:
-    """(len(starts_chunk), prod(patch_size), Nt) -- img2patches' own gather,
-    restricted to one chunk of patch positions."""
+    """(len(starts_chunk), prod(patch_size), Nt) patches at the given starts."""
     psx, psy, psz = patch_size
     Nt = img.shape[-1]
     return torch.stack(
@@ -134,9 +126,7 @@ def patch_nucnorm(P: torch.Tensor) -> torch.Tensor:
 
 
 def _svst_batch(X: torch.Tensor, beta: float) -> tuple[torch.Tensor, torch.Tensor]:
-    """One un-chunked SVST batch -- see SVST's docstring for the algorithm;
-    this is exactly its former body, factored out so SVST can call it
-    per-chunk without duplicating the math."""
+    """SVST of one batch of patches (see SVST)."""
     fro = torch.linalg.matrix_norm(X, ord="fro")
     zero_mask = fro <= beta
     mask_mnn = zero_mask[..., None, None]
@@ -161,32 +151,11 @@ def SVST(
     reg = per-batch-element sum(max(sigma - beta, 0)), the nuclear norm of the
     thresholded result -- a free byproduct of the SVD already computed.
 
-    Whenever ||X||_F <= beta, every singular value is <= beta too (sigma_max <=
-    ||X||_F), so the result is exactly zero -- not an approximation. Forcing
-    those entries to exact zero *before* the SVD (rather than just zeroing the
-    output after) avoids feeding a near-zero-magnitude matrix through
-    torch.linalg.svd: repeated soft-thresholding near this boundary can produce
-    subnormal-magnitude patches, and the mslr-recon Julia port found cuSOLVER's
-    GPU SVD returns all-NaN (not just imprecise) on those -- CPU LAPACK handles
-    them fine, but the guard is applied on both backends here since it's cheap
-    and exact either way.
+    Patches with ||X||_F <= beta are set to exactly zero before the SVD (their
+    result is zero anyway): cuSOLVER returns NaN on subnormal-magnitude input.
 
-    max_chunk_bytes: torch.linalg.svd runs on Np patches at once, chunked
-    along the patch (batch) dimension so no single call needs more than
-    ~max_chunk_bytes for X's own storage (U's output is comparable size,
-    so peak memory is a small multiple of this, not of the full Np-patch
-    batch). A single un-chunked call scales memory linearly with patch
-    count and can exceed real GPU capacity at fine resolution/large grids
-    -- measured for this repo's real 4_93.5x_0.8mm dataset at its
-    patch_size=(18,18,18): ~90GB unchunked (15979 patches) against a 49GB
-    GPU. Chunking was benchmarked (2026-09-22, same GPU, dataset-3-scale
-    23958x729x60 patches) at chunk sizes 1000-8000 patches: wall-clock
-    time was within noise of the unchunked call (0.95-1.00x) -- cuSOLVER's
-    batched SVD is already compute-saturated at these chunk sizes, so this
-    is a real fix for memory with no meaningful runtime cost, not a
-    speed/memory tradeoff. 4GB keeps every chunk far below the point where
-    the benchmark showed any slowdown, for any patch_size/Nt this repo
-    uses today.
+    max_chunk_bytes: patches are processed in batches of at most this many
+    bytes, which bounds memory with no measurable slowdown.
     """
     item_bytes = X.element_size() * X.shape[-2] * X.shape[-1]
     chunk_size = max(1, max_chunk_bytes // item_bytes)
@@ -202,9 +171,7 @@ def SVST(
 
 
 def _unit_block_svst(img: torch.Tensor, beta: float) -> tuple[torch.Tensor, torch.Tensor]:
-    """patch_size=[1,1,1]: SVST of each (1,Nt) voxel time series reduces to a
-    vector soft-threshold (see recon.jl's derivation: SVD of a 1xNt row is
-    U=[1], S=[||x||], Vh=x/||x||). Avoids ~Nvox individual 1x1 SVDs."""
+    """1x1x1 patches: SVST of a 1 x Nt row is a soft-threshold of its norm."""
     norms = torch.linalg.vector_norm(img, dim=-1, keepdim=True)
     scale = torch.clamp(1.0 - beta / norms, min=0.0)  # beta/0=inf -> -inf -> clamped to 0
     result = img * scale
@@ -220,16 +187,9 @@ def patchSVST(
     Returns (img_thresholded, reg), reg = nuclear norm of the result summed
     over all patches (sum of thresholded singular values), free from the SVD.
 
-    Unlike img2patches+SVST+patches2img (mathematically identical, and
-    still what small/test-scale callers use), this never materializes the
-    full (Np, prod(patch_size), Nt) patch tensor -- it gathers, SVST's, and
-    scatters one memory-budgeted chunk of patches at a time (same budget/
-    rationale as SVST's own max_chunk_bytes -- see its docstring for the
-    benchmark showing this costs no meaningful wall-clock time). Needed for
-    real large-grid/fine-resolution reconstructions: this repo's real
-    4_93.5x_0.8mm dataset at patch_size=(18,18,18) would need ~45GB just
-    for the unchunked P tensor alone (before SVST's own U/Vh), against a
-    49GB GPU."""
+    Same result as img2patches -> SVST -> patches2img (overlaps averaged), but
+    processes one memory-budgeted chunk of patches at a time instead of
+    building the full patch tensor."""
     Nx, Ny, Nz, Nt = img.shape
     starts, (psx, psy, psz) = _all_patch_starts((Nx, Ny, Nz), patch_size, stride_size)
     if (psx, psy, psz) == (1, 1, 1):
@@ -272,13 +232,11 @@ class SumScales(LinearMap):
 
 
 class MultiScaleLowRank:
-    """g(X) = sum_k lambda_k * sum_patches ||patch_k(X[...,k])||_* -- the
-    multi-scale low-rank regularizer (Ong & Lustig 2016). One scale is a
-    locally low-rank (LLR) prior; adding a whole-volume patch as a second scale
-    gives the global + local (G+L) decomposition.
+    """g(X) = sum_k lambda_k sum_patches ||patch_k(X[...,k])||_* (Ong & Lustig).
 
-    X: (Nx,Ny,Nz,Nt,Nscales), one component per patch scale. lambda_k is set
-    by the closed-form _reg_weights formula times lambda_global.
+    X: (Nx,Ny,Nz,Nt,Nscales), one component per patch scale; the image is their
+    sum (self.synthesis). One local scale is locally low rank; a whole-volume
+    patch is globally low rank. lambda_k from _reg_weights.
     """
 
     def __init__(
@@ -298,8 +256,6 @@ class MultiScaleLowRank:
         self.last_cost = 0.0  # g(X) of the most recent prox output, free from its SVDs
 
     def cost(self, X: torch.Tensor) -> float:
-        # Chunked gather (patchSVST's own _all_patch_starts/_gather_patch_chunk),
-        # so this never materializes a scale's full patch tensor either.
         total = 0.0
         for k in range(self.Nscales):
             img_k = X[..., k]
