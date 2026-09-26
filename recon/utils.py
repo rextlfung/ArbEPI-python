@@ -253,11 +253,9 @@ def check_operator_unitary(
     if abs(sigma1 - 1.0) > tol:
         warnings.warn(
             f"check_operator_unitary: {name}'s sigma1(A) = {sigma1:.4f}, not close to 1.0 "
-            f"(tol={tol}) -- this operator is not unitary. Any regularization weight "
-            "(lambda_l1/lambda_tv/lambda_global/...) or step size tuned assuming a unitary "
-            "operator (e.g. L1-wavelet_TV_B0_SENSE.py's lamb_l1=lamb_tv=0.005 default, tuned against a "
-            "genuinely unitary sigpy.mri.linop.Sense) will not transfer directly -- expect to "
-            "re-tune, or explicitly normalize the operator/data by sigma1(A) first.",
+            f"(tol={tol}) -- this operator is not unitary. Regularization weights or "
+            "step sizes tuned for a unitary operator won't transfer; normalize the "
+            "operator by sigma1(A) or re-tune.",
             stacklevel=2,
         )
     return sigma1
@@ -439,14 +437,17 @@ def _setup_real_scale(seed: int = 100):
     b0map_hz = (B0_MIN_HZ + (B0_MAX_HZ - B0_MIN_HZ) * yy + 15.0 * zz**2).expand(Nx, Ny, Nz)
     b0map_hz = b0map_hz.contiguous().clamp(B0_MIN_HZ, B0_MAX_HZ + 15.0)
 
-    t_per_ky = TE_S + (torch.arange(Ny, device=DEVICE, dtype=torch.float32) - (Ny - 1) / 2) * DT_ECHO_S
+    echo_idx = torch.arange(Ny, device=DEVICE, dtype=torch.float32)
+    t_per_ky = TE_S + (echo_idx - (Ny - 1) / 2) * DT_ECHO_S
 
     y_true = _brute_force_time_varying_ksp(img, smaps, b0map_hz, t_per_ky)
-    y_true_flat = y_true.reshape(Nc, -1).T  # (K,Nc), C-order -- matches SENSE's own flatten
+    y_true_flat = y_true.reshape(Nc, -1).T  # (K,Nc), same flatten as SENSE
     return img, smaps, b0map_hz, t_per_ky, y_true_flat
 
 
-def _build_operator(smaps: torch.Tensor, b0map_hz: torch.Tensor, t_frame_s: torch.Tensor, L: int, nbins: int):
+def _build_operator(
+    smaps: torch.Tensor, b0map_hz: torch.Tensor, t_frame_s: torch.Tensor, L: int, nbins: int
+):
     """Fully sampled single-frame SENSE_B0 with the segmentation fit on every
     sample's time."""
     Nx, Ny, Nz = smaps.shape[1:]
@@ -497,7 +498,7 @@ def _cli_sweep() -> None:
     for L, err in results:
         vs_uncorr = err / err_uncorrected
         vs_l6 = err / err6 if err6 else float("nan")
-        marker = "  <- current default" if L == 6 else ""
+        marker = "  <- production default" if L == 32 else ""
         print(f"{L:>4} {err:>10.4f} {vs_uncorr:>9.2%} {vs_l6:>9.2%}{marker}")
 
     target = 0.01
@@ -566,7 +567,8 @@ def benchmark(L_values: list[int]):
     x0 = _complex_randn(Nx, Ny, Nz, Nt, seed=1)
     y0 = _complex_randn(K, Nc, Nt, seed=2)
 
-    print(f"scale: Nx,Ny,Nz,Nc,Nt={Nx},{Ny},{Nz},{Nc},{Nt}  K/frame={K}  ETL={ETL}  nbins={NBINS}\n")
+    print(f"scale: Nx,Ny,Nz,Nc,Nt={Nx},{Ny},{Nz},{Nc},{Nt}  K/frame={K}  "
+          f"ETL={ETL}  nbins={NBINS}\n")
 
     # Baseline: plain SENSE
     torch.cuda.reset_peak_memory_stats()
@@ -576,8 +578,10 @@ def benchmark(L_values: list[int]):
     peak0 = torch.cuda.max_memory_allocated() / 1e9
     del A0
     torch.cuda.empty_cache()
-    print(f"{'config':>18} {'build_mem_GB':>13} {'peak_apply_GB':>14} {'fwd_s':>8} {'adj_s':>8} {'fwd+adj_s':>10}")
-    print(f"{'uncorrected':>18} {'-':>13} {peak0:>14.2f} {t_fwd:>8.3f} {t_adj:>8.3f} {t_fwd + t_adj:>10.3f}")
+    row = "{:>18} {:>13} {:>14} {:>8} {:>8} {:>10}"
+    print(row.format("config", "build_mem_GB", "peak_apply_GB", "fwd_s", "adj_s", "fwd+adj_s"))
+    print(row.format("uncorrected", "-", f"{peak0:.2f}", f"{t_fwd:.3f}", f"{t_adj:.3f}",
+                     f"{t_fwd + t_adj:.3f}"))
 
     results = []
     for L in L_values:
@@ -593,7 +597,8 @@ def benchmark(L_values: list[int]):
         t_fwd, t_adj = _time_forward_adjoint(A, x0, y0)
         peak_apply = torch.cuda.max_memory_allocated() / 1e9
 
-        print(f"{'L=' + str(L):>18} {build_mem:>13.2f} {peak_apply:>14.2f} {t_fwd:>8.3f} {t_adj:>8.3f} {t_fwd + t_adj:>10.3f}")
+        print(row.format(f"L={L}", f"{build_mem:.2f}", f"{peak_apply:.2f}", f"{t_fwd:.3f}",
+                         f"{t_adj:.3f}", f"{t_fwd + t_adj:.3f}"))
         results.append((L, build_mem, peak_apply, t_fwd, t_adj))
         del A
         torch.cuda.empty_cache()

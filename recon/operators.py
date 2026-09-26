@@ -164,7 +164,7 @@ def _check_b_weight_row_sums(b: torch.Tensor, frame_idx: int | str, tol: float =
             f"build_sense_b0: frame {frame_idx}'s b_weights row sums "
             f"range [{lo:.4f}, {hi:.4f}] (want close to 1.0) -- the segmentation fit "
             f"looks ill-conditioned (nbins too coarse for b0map_hz's dynamic range is "
-            f"the known cause; see CLAUDE.md's recon/ section). Reconstructing with "
+            f"the known cause; see recon/README.md). Reconstructing with "
             f"this operator is likely to show signal loss and/or incoherent noise.",
             stacklevel=2,
         )
