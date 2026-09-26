@@ -1022,6 +1022,10 @@ available during this port either, see the Commands section) and to
 
 ### `recon/` -- image reconstruction (RSS, iterative SENSE with B0/R2* and low-rank / wavelet-TV priors), on `mirtorch`
 
+User-facing documentation (setup, commands, inputs/outputs, the operators,
+regularizers and scaling conventions) is `recon/README.md`; this section keeps
+the design history behind it.
+
 Every iterative method in `recon/` solves `min_x 0.5*||A x - y||^2 + g(x)`,
 and the layout follows that split (restructured 2026-09-25 from a merged set
 of older modules; see git history for those):

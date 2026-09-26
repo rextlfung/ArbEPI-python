@@ -9,6 +9,6 @@
   full zero-filled volume. The old implementation, including its B0 / B0+R2*
   adjoint-only variants and the temporal-stability check, is in git history. The
   stability check itself now lives in `recon/utils.py`'s `tsnr_report`.
-- **recon/ documentation pass.** Trim the long function docstrings carried over
-  from the old modules, and write human-readable documentation (the old module
-  docstrings are in git history, before the recon restructure).
+- **recon/ docstring pass.** Trim the long function docstrings carried over
+  from the old modules now that `recon/README.md` documents the design (the
+  old module docstrings are in git history, before the recon restructure).

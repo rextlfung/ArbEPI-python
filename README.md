@@ -242,7 +242,7 @@ preprocessing/                Raw-data -> reconstructed-image pipeline, ported f
                                  MRIFieldmaps.jl (precon=:diag, not its own :ichol default -- see
                                  CLAUDE.md's preprocessing/ section for why), with its initial guess
                                  unwrapped via ROMEO.jl
-recon/                        Image reconstruction (.venv-recon), on PyTorch/mirtorch:
+recon/                        Image reconstruction (.venv-recon), on PyTorch/mirtorch -- see recon/README.md:
                               min_x 0.5||Ax - y||^2 + g(x)
   operators.py               Encoding operators A: SENSE, SENSE_B0 (B0 phase accrual, time-segmented,
                                  L=32 in production -- swept, see CLAUDE.md), SENSE_B0_R2star (+ R2* decay)
