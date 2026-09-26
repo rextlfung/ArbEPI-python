@@ -51,10 +51,10 @@ recon = [
     "mirtorch>=0.3.1",
     "h5py>=3.10",
     "nibabel>=5.0",
-    # Not for GPU-array interop (no cupy here -- see recon/sigpy_torch_bridge.py's
-    # module docstring) -- just its Wavelet/FiniteDifference/prox/PDHG machinery,
-    # reused via a numpy<->torch bridge rather than reimplemented.
-    "sigpy>=0.1.26",
+    "PyWavelets",  # wavelet filter taps for recon/regularizers.py's Wavelet3D
+    "scipy>=1.10",  # preprocessing/grid_resize.py, used for the R2* map
+    "matplotlib",  # recon/utils.py's tSNR report figures
+    "ipykernel",  # to run recon/demo.ipynb in this venv
 ]
 
 [tool.setuptools]

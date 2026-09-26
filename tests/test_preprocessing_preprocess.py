@@ -245,3 +245,34 @@ def test_build_omegas_marks_scheduled_locations():
             for e in range(ETL):
                 iy, iz = schedules[frame, s, e]
                 assert omegas[iy, iz, frame]
+
+
+def test_measure_noise_var_is_one_for_whitened_noise_and_tracks_scale():
+    """Noise-scan readouts pushed through whitening, coil compression and
+    regridding (uniform kx, so density compensation is ~1) come out with unit
+    variance per complex sample, and scale with the input noise level."""
+    from preprocessing.coils import (
+        apply_whitening,
+        coil_compression_matrix,
+        compute_coil_covariance,
+        compute_whitening_matrix,
+    )
+    from preprocessing.preprocess import measure_noise_var
+
+    rng = np.random.default_rng(0)
+    nx, ncoils, etl, ntrains, fov_cm = 32, 6, 4, 50, 20.0
+    white = (rng.standard_normal((nx, etl * ntrains, ncoils))
+             + 1j * rng.standard_normal((nx, etl * ntrains, ncoils))) / np.sqrt(2)
+    mix = rng.standard_normal((ncoils, ncoils)) + 1j * rng.standard_normal((ncoils, ncoils))
+    noise = (white @ mix.T).transpose(0, 2, 1)  # [Nfid, Ncoils, Nacq], correlated coils
+    W = compute_whitening_matrix(noise.transpose(0, 2, 1))
+    cov = compute_coil_covariance(apply_whitening(noise.transpose(0, 2, 1), W))
+    cc = coil_compression_matrix(cov, 4)
+    kmax = nx / (2 * fov_cm)
+    kx = np.linspace(-kmax, kmax, nx, endpoint=False)
+    a = np.zeros(2)
+
+    v = measure_noise_var(noise, W, cc, kx, kx, a, nx, etl, fov_cm)
+    assert abs(v - 1) < 0.1, v
+    v_half = measure_noise_var(noise, W / 2, cc, kx, kx, a, nx, etl, fov_cm)
+    assert abs(v_half / v - 0.25) < 1e-6
