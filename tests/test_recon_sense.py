@@ -288,3 +288,18 @@ def test_run_sense_lowrank_normalizes_operator_by_sigma1(tmp_path):
     torch.testing.assert_close(r.X_recon, 2.0 * x_true, atol=1e-2, rtol=1e-2)
     r = run_sense(**common, normalize_operator=False)
     torch.testing.assert_close(r.X_recon, x_true, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("reg", ["none", "lowrank", "wavelet-tv"])
+def test_save_result_writes_h5_nifti_and_json_for_every_regularizer(tmp_path, reg):
+    """CG's result has no regularizer cost; saving must still work."""
+    pytest.importorskip("nibabel")
+    from recon.utils import save_result
+
+    _, fn_ksp, fn_smaps = _phantom_setup(tmp_path, Nt=2)
+    extra = dict(patch_sizes=[(4, 4, 4)], strides=[(2, 2, 2)]) if reg == "lowrank" else {}
+    r = run_sense(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg=reg, niters=3, device=DEVICE, **extra)
+    fn_base = str(tmp_path / f"out_{reg}")
+    save_result(fn_base, r, fov=(0.2, 0.2, 0.05), seqname="test")
+    for ext in (".h5", ".nii.gz", ".json"):
+        assert (tmp_path / f"out_{reg}{ext}").exists()

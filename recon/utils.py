@@ -269,7 +269,7 @@ def save_result(
         runtime_s=result.runtime_s,
         n_iters=len(result.dc_costs) - 1,
         final_dc_cost=result.dc_costs[-1],
-        final_reg_cost=result.reg_costs[-1],
+        final_reg_cost=result.reg_costs[-1] if result.reg_costs else None,
         **result.meta,
         **extra_attrs,
     )
