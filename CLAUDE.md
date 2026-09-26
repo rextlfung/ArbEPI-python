@@ -1038,11 +1038,39 @@ of older modules; see git history for those):
 
 Outputs land in `<datdir>/recon/sense_<reg>[_b0|_b0r2star]/` and
 `<datdir>/recon/rss/` (older runs used `mslr_b0/`, `mslr_local*/`, `cs_b0*/`,
-`cgsense*/`, `basic/`). The `lowrank` path is numerically identical to the
-pre-restructure `mslr.run_recon` (bit-for-bit on a seeded synthetic set, and
-on the first iterations of a real `20260915ball` run); `wavelet-tv` moved from
-sigpy's PDHG to mirtorch's FBPD (`solvers.pdhg`), so its results are not identical to older
-`cs_b0*` runs.
+`cgsense*/`, `basic/`). `wavelet-tv` moved from sigpy's PDHG to mirtorch's
+FBPD (`solvers.pdhg`), so its results are not identical to older `cs_b0*` runs.
+
+**Data and operator scaling for the low-rank lambda weights (2026-09-26).**
+Ong & Lustig (arXiv 1507.08751, Sec. IV eq. 3-4 and Sec. VI) set
+`lambda_i ~ E[||G||*_(i)] = sqrt(m_i) + sqrt(n_i) + sqrt(log(MN/max(m_i, n_i)))`
+for `G` a unit-variance i.i.d. Gaussian matrix -- i.e. the weights assume
+unit-variance white noise in the matrix being decomposed. The paper only
+decomposes fully observed matrices (its DCE-MRI example is fully sampled
+image data); with an MRI forward model, `run_sense` meets that assumption
+the way `../mslr-recon` does -- unit-variance k-space noise and a unit-norm
+operator:
+- **k-space noise**: `preprocess()` pushes the noise-scan readouts through
+  the same whitening -> coil compression -> regridding -> odd/even phase
+  correction as the EPI data (`measure_noise_var`) and records the result as
+  the `noise_var` attr of `<seqname>_epi_zf.h5`; `run_sense` divides the
+  k-space by `sqrt(noise_var)`. Whitening targets 1 -- measured 0.93
+  (`2_6x_2.4mm`) and 1.05 (`1_1x_5.4mm`) on `20260915ball` -- so this is
+  normally a few-percent correction. Files written before this lack the attr
+  and are used as is; `preprocess.record_noise_var(cfg, paths)` backfills it.
+  Estimating the noise from the acquired k-space itself doesn't work on these
+  high-SNR datasets: the outer (ky, kz) shell and even the x-background of
+  hybrid (x, ky, kz) space (where kx is fully sampled, so there's no aliasing)
+  read E|n|^2 ~ 500-10000, dominated by signal leakage, not noise.
+- **operator**: `lowrank` divides A by `sigma1A` (`normalize_operator`,
+  default on). `SENSE` with RSS-normalized smaps already has sigma1 ~ 1; the
+  B0 operators measure ~1.2-1.9.
+- Neither scaling is undone on the output (not quantitative imaging). The
+  previous approach (dividing the data by std(A^H n), which made image-domain
+  noise unit variance and so weakened lambda by ~sqrt(R)) is gone.
+- `lambda_global` defaults to R: the formula calibrates the weights for noise
+  alone, and incoherent aliasing, though noise-like, has more structure and
+  needs stronger regularization.
 
 It started as a Python/PyTorch port of the companion Julia repo `../mslr-recon`
 (multi-scale locally-low-rank fMRI reconstruction, Ong & Lustig 2016),

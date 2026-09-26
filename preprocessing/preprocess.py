@@ -238,6 +238,121 @@ def process_epi_frame(
     return scatter_frame(ksp_cart, schedule_frame, Ny, Nz)
 
 
+def calibrate_odd_even(
+    ksp_cal_raw: np.ndarray,
+    W: np.ndarray,
+    cc_matrix: np.ndarray,
+    cfg: PreprocessingConfig,
+    paths: SeqPaths,
+    Nx: int,
+    ETL: int,
+    fov_x_cm: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """STEP 4: calibration scan -> (kxo, kxe, a), the delay-corrected odd/even
+    readout trajectories and the odd/even phase model applied to every EPI frame.
+
+    ksp_cal_raw: [Nfid, Ncoils, N_cal] raw calibration readouts."""
+    Nfid = ksp_cal_raw.shape[0]
+    ksp_cal = apply_whitening(ksp_cal_raw.transpose(0, 2, 1), W)  # [Nfid, N_cal, Ncoils]
+    ksp_cal = apply_coil_compression(ksp_cal, cc_matrix)  # [Nfid, N_cal, Nvcoils]
+
+    kxo0, kxe0 = load_kxoe(paths.scan_info)
+    delay = seq_delay(cfg, paths.seqname)
+    print(f'Applying k-space center offset: {delay:.2f} samples')
+    kxo, kxe = apply_delay(kxo0, kxe0, Nfid, delay)
+
+    # MATLAB permutes ksp_cal to [Nfid,Nvcoils,N_cal] then immediately
+    # permutes back to [Nfid,N_cal,Nvcoils] for this reshape -- a no-op
+    # round trip skipped here, not a change to the algorithm (see module
+    # docstring).
+    Nvcoils = cc_matrix.shape[0]
+    ksp_cal = ksp_cal.reshape(Nfid, ETL, -1, Nvcoils, order='F')
+    ETL_even = ETL - (ETL % 2)
+    a = compute_oephase(ksp_cal[:, :ETL_even, :, :], kxo, kxe, Nx, fov_x_cm)
+    print(f'  Constant phase offset: {a[0]:.4f} rad')
+    print(f'  Linear phase offset:   {a[1]:.4f} rad/fov')
+    return kxo, kxe, a
+
+
+def measure_noise_var(
+    ksp_noise: np.ndarray,
+    W: np.ndarray,
+    cc_matrix: np.ndarray,
+    kxo: np.ndarray,
+    kxe: np.ndarray,
+    a: np.ndarray,
+    Nx: int,
+    ETL: int,
+    fov_x_cm: float,
+) -> float:
+    """Thermal-noise variance E|n|^2 per complex sample of the final k-space.
+
+    Runs the noise-scan readouts through exactly what every EPI readout goes
+    through (whitening, coil compression, ramp-sampling regridding, odd/even
+    phase correction), grouped ETL at a time as if they were echo trains.
+    Whitening targets 1; recon/ divides the k-space by sqrt(this) so its
+    lambda weights see unit-variance noise even if some step changes the
+    noise level. The noise scan has no signal, so unlike any estimate from
+    the acquired k-space, this can't be biased by structured content.
+
+    ksp_noise: [Nfid, Ncoils, Nacq] raw noise readouts (Nacq >= ETL)."""
+    Nfid, _, Nacq = ksp_noise.shape
+    n_trains = Nacq // ETL
+    if n_trains == 0:
+        raise ValueError(f'measure_noise_var: noise scan has {Nacq} readouts, fewer than ETL={ETL}')
+    x = ksp_noise[:, :, : n_trains * ETL].transpose(0, 2, 1)  # [Nfid, Nacq, Ncoils]
+    x = apply_coil_compression(apply_whitening(x, W), cc_matrix)  # [Nfid, Nacq, Nvcoils]
+    # Same reshape as process_epi_frame: consecutive readouts form one echo train.
+    x = x.transpose(0, 2, 1).reshape(Nfid, x.shape[-1], ETL, n_trains, order='F')
+    x = x.transpose(0, 2, 3, 1)  # [Nfid, ETL, n_trains, Nvcoils]
+    cart = epiphasecorrect(rampsampepi2cart(x, kxo, kxe, Nx, fov_x_cm), a)
+    return float(np.mean(np.abs(cart) ** 2))
+
+
+def record_noise_var(cfg: PreprocessingConfig, paths: SeqPaths, write: bool = True) -> float:
+    """Backfill measure_noise_var's result into an existing <seqname>_epi_zf.h5
+    (attr 'noise_var') written before preprocess() recorded it. Re-reads the
+    noise and calibration scans. The coil-compression matrix comes from
+    <seqname>_gre.h5, or is recomputed from the deGRE scan exactly as STEP 2
+    does if that cache predates storing it. Needs GERecon (.venv-preprocessing).
+    write=False only computes and returns the value."""
+    from preprocessing.raw_io import read_archive
+
+    seq_params = load_seq_params(paths)
+    ksp_noise = read_archive(paths.noise)
+    W = compute_whitening_matrix(ksp_noise.transpose(0, 2, 1))
+    with h5py.File(os.path.join(cfg.datdir, 'recon', f'{paths.seqname}_gre.h5'), 'r') as f:
+        cc_matrix = f['cc_matrix'][()] if 'cc_matrix' in f else None
+    if cc_matrix is None:
+        print('  no cc_matrix in the deGRE cache -- recomputing it from the deGRE scan (STEP 2)')
+        ksp_gre = unflatten_gre_echoes(
+            read_archive(cfg.fn_gre), seq_params.Ny_degre, seq_params.Nz_degre,
+            seq_params.n_echoes_degre,
+        )[..., cfg.gre_echo_idx, :]
+        cov = compute_coil_covariance(apply_whitening(ksp_gre, W))
+        Nvcoils, _ = select_nvcoils(cov, cfg.cc_energy_thresh, floor=int(2 * seq_params.R))
+        cc_matrix = coil_compression_matrix(cov, Nvcoils)
+    with h5py.File(paths.recon, 'r') as f:
+        Nvcoils_saved = f['ksp_epi_zf'].shape[3]
+    if cc_matrix.shape[0] != Nvcoils_saved:
+        raise ValueError(
+            f'record_noise_var: compression gives {cc_matrix.shape[0]} virtual coils but '
+            f'{paths.recon} has {Nvcoils_saved} -- the settings have changed since preprocessing'
+        )
+    fov_x_cm = seq_params.fov[0] * 100
+    kxo, kxe, a = calibrate_odd_even(
+        read_archive(paths.cal), W, cc_matrix, cfg, paths, seq_params.Nx, seq_params.ETL, fov_x_cm,
+    )
+    noise_var = measure_noise_var(
+        ksp_noise, W, cc_matrix, kxo, kxe, a, seq_params.Nx, seq_params.ETL, fov_x_cm,
+    )
+    if write:
+        with h5py.File(paths.recon, 'a') as f:
+            f.attrs['noise_var'] = noise_var
+    print(f'{paths.seqname}: noise_var = {noise_var:.4f}' + (f' -> {paths.recon}' if write else ''))
+    return noise_var
+
+
 def resume_start_frame(mf: h5py.File, epi_reader, shots_per_frame: int) -> int:
     """Frame index to resume STEP 6's per-frame loop from, given a checkpoint
     file already open for append. `epi_reader` (an ArchiveReader or anything
@@ -396,24 +511,11 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
             f'preprocess: Calibration Nfid ({ksp_cal_raw.shape[0]}) != '
             f'noise Nfid ({Nfid}) -- wrong noise file?'
         )
-    ksp_cal = apply_whitening(ksp_cal_raw.transpose(0, 2, 1), W)  # [Nfid, N_cal, Ncoils]
-    ksp_cal = apply_coil_compression(ksp_cal, cc_matrix)  # [Nfid, N_cal, Nvcoils]
+    kxo, kxe, a = calibrate_odd_even(ksp_cal_raw, W, cc_matrix, cfg, paths, Nx, ETL, fov[0] * 100)
+    del ksp_cal_raw
 
-    kxo0, kxe0 = load_kxoe(paths.scan_info)
-    delay = seq_delay(cfg, paths.seqname)
-    print(f'Applying k-space center offset: {delay:.2f} samples')
-    kxo, kxe = apply_delay(kxo0, kxe0, Nfid, delay)
-
-    # MATLAB permutes ksp_cal to [Nfid,Nvcoils,N_cal] then immediately
-    # permutes back to [Nfid,N_cal,Nvcoils] for this reshape -- a no-op
-    # round trip skipped here, not a change to the algorithm (see module
-    # docstring).
-    ksp_cal = ksp_cal.reshape(Nfid, ETL, -1, Nvcoils, order='F')
-    ETL_even = ETL - (ETL % 2)
-    a = compute_oephase(ksp_cal[:, :ETL_even, :, :], kxo, kxe, Nx, fov[0] * 100)
-    print(f'  Constant phase offset: {a[0]:.4f} rad')
-    print(f'  Linear phase offset:   {a[1]:.4f} rad/fov')
-    del ksp_cal
+    noise_var = measure_noise_var(ksp_noise, W, cc_matrix, kxo, kxe, a, Nx, ETL, fov[0] * 100)
+    print(f'  Thermal-noise variance after the full pipeline: {noise_var:.4f} (target 1)')
 
     # STEP 5 -- sampling schedule (tiny; needed before allocating the output)
     schedules, echo_times = load_schedules(paths.scan_info)
@@ -450,6 +552,7 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
             mf.create_dataset('echo_times', data=_build_echo_times(schedules, echo_times, Ny, Nz))
             mf.attrs['n_frames_discard'] = NframesDiscard
             start_frame = 0
+        mf.attrs['noise_var'] = noise_var
 
         print(f'Processing frames {start_frame + 1}-{Nframes} ({shots_per_frame} shots/frame)...')
         for frame in range(start_frame, Nframes):

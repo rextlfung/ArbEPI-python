@@ -18,7 +18,6 @@ Reads <datdir>/recon/{<seqname>_epi_zf.h5, smaps_<seqname>_sigpy.h5,
 """
 
 import argparse
-import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -31,7 +30,6 @@ from recon.operators import build_sense, build_sense_b0, build_sense_b0_r2star
 from recon.regularizers import MultiScaleLowRank, WaveletTV
 from recon.solvers import cg, pdhg, pogm_restart
 from recon.utils import (
-    estimate_operator_noise_factor,
     estimate_spectral_norm,
     load_and_gather_ksp,
     load_array,
@@ -79,10 +77,10 @@ def run_sense(
     # lowrank
     patch_sizes: list[tuple[int, int, int]] | None = None,
     strides: list[tuple[int, int, int]] | None = None,
-    lambda_global: float | None = 1.0,
+    lambda_global: float | None = None,
     mom: str = "fpgm",
     conv_tol: float = 1e-5,
-    normalize_noise: bool = True,
+    normalize_operator: bool = True,
     # wavelet-tv
     lamb_l1: float = 0.005,
     lamb_tv: float = 0.005,
@@ -100,10 +98,18 @@ def run_sense(
 
     device: default "cuda" if available, else "cpu".
     sigma1A: spectral norm of A; measured by power iteration when None.
-    lambda_global: lowrank weight scale; None means "use the acceleration
-    factor R". normalize_noise (lowrank): rescale the data so image-domain
-    thermal noise has unit variance, which the Ong & Lustig lambda formula
-    assumes; undone on the returned image.
+
+    Scaling (not undone on the output, which is not quantitative):
+    - the k-space is divided by sqrt(noise_var), the post-preprocessing
+      thermal-noise variance preprocess() records in fn_ksp; ~1 when
+      whitening works, and skipped for files written before it was recorded.
+    - lowrank: A is divided by sigma1A (normalize_operator), so A is
+      unit-norm like the unitary operator the lambda formula assumes.
+
+    lambda_global (lowrank): scales the Ong & Lustig weights, which are
+    calibrated for unit-variance noise; None (default) means the acceleration
+    factor R, since incoherent aliasing needs stronger regularization than
+    noise alone.
     """
     if reg not in REGULARIZERS:
         raise ValueError(f"reg={reg!r}, expected one of {REGULARIZERS}")
@@ -167,6 +173,18 @@ def run_sense(
 
     print("Loading k-space (gathered per frame, never materializing the dense array)...")
     ksp = load_and_gather_ksp(fn_ksp, A, device, frames=frames)  # (K,Nc,Nt)
+    with h5py.File(fn_ksp, "r") as f:
+        noise_var = f.attrs.get("noise_var")
+    if noise_var is None:
+        print(
+            "  no 'noise_var' recorded in the k-space file; assuming whitened unit-variance noise"
+        )
+    else:
+        print(
+            f"  thermal-noise variance {noise_var:.4f} (recorded by preprocessing) "
+            f"-- dividing k-space by {np.sqrt(noise_var):.4f}"
+        )
+        ksp = ksp / float(np.sqrt(noise_var))
     if device.type == "cuda":
         torch.cuda.empty_cache()
         free_gb, total_gb = (x / 1e9 for x in torch.cuda.mem_get_info())
@@ -192,8 +210,7 @@ def run_sense(
         mom,
         niters,
         conv_tol,
-        normalize_noise,
-        device,
+        normalize_operator,
         common,
     )
 
@@ -233,27 +250,17 @@ def _solve_lowrank(
     mom,
     niters,
     conv_tol,
-    normalize_noise,
-    device,
+    normalize_operator,
     common,
 ) -> ReconResult:
     g = MultiScaleLowRank(patch_sizes, strides, shape, lambda_global)
     S = g.synthesis  # (Nx,Ny,Nz,Nt,Nscales) -> (Nx,Ny,Nz,Nt)
     Nscales = g.Nscales
 
-    noise_std = 1.0
-    if normalize_noise:
-        noise_std = estimate_operator_noise_factor(A, tuple(ksp.shape), ksp.dtype, device)
-        print(
-            f"  Operator noise-propagation factor = {noise_std:.4f} "
-            f"-- rescaling ksp/X0 by 1/{noise_std:.4f}"
-        )
-        if not (math.isfinite(noise_std) and 1e-6 < noise_std < 1e9):
-            raise ValueError(
-                f"noise_std={noise_std} is non-finite or implausible; refusing to divide by it"
-            )
-        ksp = ksp / noise_std
-
+    if normalize_operator:
+        print(f"  Normalizing A by 1/sigma1A = 1/{sigma1A:.4f}")
+        A = (1.0 / sigma1A) * A
+        sigma1A = 1.0
     L = Nscales * sigma1A**2  # Lipschitz constant of grad f for f(X) = 0.5||A S X - y||^2
     print(f"Regularization weights lambdas = {[round(lam, 6) for lam in g.lambdas]}")
 
@@ -287,9 +294,6 @@ def _solve_lowrank(
     X_recon = S.apply(X)
     print(f"Wall-clock: {runtime_s:.1f} s, {runtime_s / max(len(dc_costs) - 1, 1):.2f} s/iter")
 
-    if normalize_noise:
-        X = X * noise_std
-        X_recon = X_recon * noise_std
     return ReconResult(
         X=X,
         X_recon=X_recon,
@@ -307,8 +311,7 @@ def _solve_lowrank(
             lambda_global=lambda_global,
             patch_sizes=g.patch_sizes,
             strides=g.strides,
-            normalize_noise=normalize_noise,
-            noise_std=noise_std,
+            normalize_operator=normalize_operator,
         ),
         **common,
     )

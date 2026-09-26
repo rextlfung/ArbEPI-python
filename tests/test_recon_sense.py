@@ -7,7 +7,6 @@ for that), just confirmation the full pipeline (operators + lowrank + solvers
 + I/O) is wired together correctly.
 """
 
-import math
 
 import h5py
 import pytest
@@ -17,7 +16,7 @@ pytest.importorskip("mirtorch")
 
 from recon.operators import build_sense  # noqa: E402
 from recon.sense import run_sense  # noqa: E402
-from recon.utils import estimate_operator_noise_factor, load_omega  # noqa: E402
+from recon.utils import load_omega  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -193,88 +192,6 @@ def test_run_recon_recovers_signal_without_regularization(tmp_path):
     assert rel_err < 0.05
 
 
-def test_run_recon_normalize_noise_round_trip_preserves_recovery(tmp_path):
-    """normalize_noise=True internally rescales ksp/X0 by
-    1/estimate_operator_noise_factor(A) and undoes it on the returned
-    X/X_recon -- this factor is a property of the encoding operator alone
-    (see run_sense's normalize_noise docstring for why it's no longer
-    measured from the k-space data itself, 2026-09-22), so the round trip
-    should recover the same ground truth regardless of the data's own
-    scale or injected noise level, confirming un-normalizing doesn't
-    introduce a bias."""
-    Nx, Ny, Nz, Nc, Nt = 10, 10, 6, 4, 4
-    torch.manual_seed(42)
-    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=10)
-    smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-8)
-    x_true = 5000.0 * _complex_randn(Nx, Ny, Nz, Nt, seed=11)  # real-scanner-unit-like amplitude
-    omega = torch.stack(
-        [torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.3 for _ in range(Nt)], dim=-1
-    )
-    counts = omega.sum(dim=(0, 1, 2))
-    k = counts.min().item()
-    omega = omega & (torch.cumsum(omega.reshape(-1, Nt), dim=0) <= k).reshape(Nx, Ny, Nz, Nt)
-
-    A = build_sense(smaps, omega)
-    K = A.A[0].idx.numel()
-    true_noise_std = 1.5
-    ksp_gathered = A.apply(x_true) + true_noise_std * _complex_randn(K, Nc, Nt, seed=22)
-    ksp_dense = torch.zeros(Nx, Ny, Nz, Nc, Nt, dtype=torch.complex64, device=DEVICE)
-    ksp_dense_flat = ksp_dense.reshape(-1, Nc, Nt)
-    for it in range(Nt):
-        ksp_dense_flat[A.A[it].idx, :, it] = ksp_gathered[:, :, it]
-    ksp_np = ksp_dense.cpu().numpy()
-    smaps_np = smaps.permute(1, 2, 3, 0).contiguous().cpu().numpy()
-
-    fn_ksp = tmp_path / "ksp3.h5"
-    fn_smaps = tmp_path / "smaps3.h5"
-    with h5py.File(fn_ksp, "w") as f:
-        f.create_dataset("ksp_epi_zf", data=ksp_np)
-    with h5py.File(fn_smaps, "w") as f:
-        f.create_dataset("smaps", data=smaps_np)
-
-    result = run_sense(
-        fn_ksp=str(fn_ksp),
-        fn_smaps=str(fn_smaps),
-        patch_sizes=[(1, 1, 1)],
-        strides=[(1, 1, 1)],
-        niters=300,
-        sigma1A=1.0,
-        device=DEVICE,
-        mom="pogm",
-        conv_tol=0.0,
-        lambda_global=0.0,
-        normalize_noise=True,
-    )
-
-    rel_err = (result.X_recon - x_true).norm().item() / x_true.norm().item()
-    assert rel_err < 0.15  # a modicum of real noise is now present, unlike the noiseless case above
-    assert result.meta["normalize_noise"] is True
-    assert math.isfinite(result.meta["noise_std"]) and result.meta["noise_std"] > 0
-
-
-def test_estimate_operator_noise_factor_is_stable_and_matches_unitary_case():
-    """The operator's own noise-propagation factor (run_sense's actual
-    normalize_noise mechanism, replacing the unreliable image-domain
-    background estimate above) should be (a) reproducible across
-    independent random draws, and (b) exactly 1.0 for a fully-sampled,
-    RSS-normalized-smaps operator, which is unitary by construction (see
-    tests/test_recon_operators.py's own near-unity spectral-norm check --
-    the same invariant, just probed via noise propagation instead of power
-    iteration)."""
-    Nx, Ny, Nz, Nc = 10, 10, 6, 4
-    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=200)
-    smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-8)
-    full_mask = torch.ones(Nx, Ny, Nz, 1, dtype=torch.bool, device=DEVICE)
-    A = build_sense(smaps, full_mask)
-
-    factors = [
-        estimate_operator_noise_factor(A, (Nx * Ny * Nz, Nc, 1), torch.complex64, DEVICE, n_trials=10)
-        for _ in range(3)
-    ]
-    assert max(factors) - min(factors) < 0.02, f"unstable across draws: {factors}"
-    assert abs(factors[0] - 1.0) < 0.05
-
-
 def _write_dataset(tmp_path, smaps, omega, x_true, tag):
     """Dense zero-filled ksp_epi_zf.h5 + smaps.h5 for a known image, in the
     layout preprocessing/ writes. smaps (Nc,Nx,Ny,Nz) must be RSS-normalized
@@ -342,3 +259,32 @@ def test_run_sense_rejects_r2star_without_b0(tmp_path):
     with pytest.raises(ValueError, match="requires fn_b0map"):
         run_sense(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg="none", device=DEVICE,
                   r2star_map=torch.zeros(16, 16, 4, device=DEVICE))
+
+
+def test_run_sense_divides_kspace_by_recorded_noise_var(tmp_path):
+    """preprocess() records the post-pipeline thermal-noise variance as the
+    'noise_var' attr; run_sense divides the k-space by its square root (and
+    does not undo it). CG on fully sampled data then returns x_true / 2 for
+    noise_var = 4, and x_true itself when no noise_var is recorded."""
+    x_true, fn_ksp, fn_smaps = _phantom_setup(tmp_path, Nt=1)
+    r = run_sense(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg="none", niters=30, device=DEVICE)
+    torch.testing.assert_close(r.X_recon, x_true, atol=1e-3, rtol=1e-3)
+    with h5py.File(fn_ksp, "a") as f:
+        f.attrs["noise_var"] = 4.0
+    r = run_sense(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg="none", niters=30, device=DEVICE)
+    torch.testing.assert_close(r.X_recon, x_true / 2, atol=1e-3, rtol=1e-3)
+
+
+def test_run_sense_lowrank_normalizes_operator_by_sigma1(tmp_path):
+    """With normalize_operator (the default), lowrank solves with A / sigma1A
+    and doesn't undo it, so with no regularization it recovers
+    sigma1A * x_true; normalize_operator=False recovers x_true."""
+    x_true, fn_ksp, fn_smaps = _phantom_setup(tmp_path, Nt=2)
+    common = dict(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg="lowrank", patch_sizes=[(1, 1, 1)],
+                  strides=[(1, 1, 1)], lambda_global=0.0, niters=100, conv_tol=0.0,
+                  sigma1A=2.0, device=DEVICE)
+    r = run_sense(**common)
+    assert r.meta["normalize_operator"] is True and r.L == 1.0
+    torch.testing.assert_close(r.X_recon, 2.0 * x_true, atol=1e-2, rtol=1e-2)
+    r = run_sense(**common, normalize_operator=False)
+    torch.testing.assert_close(r.X_recon, x_true, atol=1e-2, rtol=1e-2)

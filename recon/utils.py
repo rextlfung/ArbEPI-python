@@ -2,8 +2,7 @@
 
     I/O              read_frames_cropped, load_*, load_and_gather_ksp, nominal_te_s,
                      read_julia_mat, save_result
-    operator norms   poweriter, estimate_spectral_norm, check_operator_unitary,
-                     estimate_operator_noise_factor
+    operator norms   poweriter, estimate_spectral_norm, check_operator_unitary
     tSNR             object_mask, temporal_stability, tsnr_report
     analysis         sweep, benchmark, validate (one-off studies, not the production path)
 
@@ -403,78 +402,6 @@ def check_operator_unitary(
     return sigma1
 
 
-def estimate_operator_noise_factor(
-    A, size_out: tuple, dtype: torch.dtype, device: torch.device, n_trials: int = 20,
-    max_frames: int = 4,
-) -> float:
-    """Mean image-domain std from propagating synthetic unit-variance
-    complex Gaussian k-space noise through A.adjoint(), averaged over
-    n_trials independent draws. A clean, signal-free measurement of the
-    operator's own noise-propagation factor -- no real data involved, so
-    no risk of the real-signal contamination that made estimate_noise_std
-    unreliable on real, tightly-masked data (see its docstring's
-    2026-09-19 bug writeup). size_out: A's k-space-domain shape (e.g.
-    (K,Nc,Nt) for the full multi-frame BlockDiagonal `run_sense` uses).
-
-    std is computed over the *nonzero* output only (excludes exact-zero,
-    masked-out-of-coil-support voxels -- see recon/operators.py's smaps
-    combine): std() over the whole array would otherwise be diluted by
-    whatever fraction of the grid the coil-sensitivity mask excludes (as
-    large as ~57% on a real ball phantom), underestimating the actual
-    noise level *within* the region normalize_noise's calibration actually
-    needs to be correct for (the masked-out region is exactly zero in
-    every reconstruction anyway, regardless of any regularization
-    threshold, so its "noise level" is neither real nor relevant).
-
-    For a multi-frame BlockDiagonal A, this samples up to max_frames of its
-    blocks (evenly spaced across the frame index, e.g. frames 0/20/40/59 of
-    60) and averages their own per-block factors, rather than calling
-    A.adjoint() on the whole stacked operator -- a real CUDA OOM on
-    4_93.5x_0.8mm (270,270,180 grid, Nt=60, Nc=32): even a single such call
-    needs a 6.3GB (*N,Nt) adjoint-output buffer on top of the operator's
-    own resident memory, and every A.A[t] block shares smaps (and, for a
-    B0-corrected operator, c_phasors) with every other block, differing
-    only in sampling pattern -- so a handful of frames' own noise
-    propagation already characterizes the whole operator (matching
-    estimate_spectral_norm's analogous per-block reasoning, empirically
-    confirmed there: sigma1 varied only 3.45-3.51 across frames 0/20/40/59
-    of that same 60-frame operator). Also several times faster: each
-    per-block adjoint call is Nt times cheaper than the whole-operator one,
-    so sampling max_frames << Nt frames costs a small fraction of the
-    original per-call time.
-    """
-    if isinstance(A, BlockDiagonal) and len(A.A) > 1:
-        Nt = len(A.A)
-        n_sample = min(max_frames, Nt)
-        frame_idx = torch.linspace(0, Nt - 1, steps=n_sample).round().long().unique().tolist()
-        block_size_out = tuple(size_out[:-1])  # (K,Nc) -- drop the Nt axis
-        factors = [
-            estimate_operator_noise_factor(
-                A.A[t], block_size_out, dtype, device, n_trials=n_trials, max_frames=max_frames,
-            )
-            for t in frame_idx
-        ]
-        return float(np.mean(factors))
-
-    stds = []
-    for _ in range(n_trials):
-        noise_k = (
-            torch.randn(*size_out, dtype=torch.float32, device=device)
-            + 1j * torch.randn(*size_out, dtype=torch.float32, device=device)
-        ) / math.sqrt(2)
-        img_noise = A.adjoint(noise_k.to(dtype))
-        nonzero = img_noise[img_noise.abs() > 0]
-        stds.append(nonzero.std().item() if nonzero.numel() > 0 else img_noise.std().item())
-        # Explicitly drop this trial's buffers before the next iteration --
-        # a real bug found alongside the whole-operator issue above: without
-        # this, img_noise (a full (*N,) or (*N,Nt) tensor) and nonzero (a
-        # same-size-order copy of it) both stay referenced by these local
-        # names until reassigned next loop, so peak memory across n_trials
-        # includes two full trials' worth of dead buffers rather than one.
-        del noise_k, img_noise, nonzero
-    return float(np.mean(stds))
-
-
 # ---------------------------------------------------------------- tSNR
 
 
@@ -833,6 +760,7 @@ def validate(fn_ksp: str, fn_smaps: str, fn_julia_mat: str) -> bool:
 
     result = run_sense(
         reg="lowrank",
+        normalize_operator=False,  # Julia uses A as is
         fn_ksp=fn_ksp,
         fn_smaps=fn_smaps,
         patch_sizes=ref["patch_sizes"],
