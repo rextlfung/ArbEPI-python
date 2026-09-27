@@ -33,21 +33,14 @@ from preprocessing.nifti_io import save_recon_nifti
 
 
 def _ift3(d: np.ndarray) -> np.ndarray:
-    """Centered inverse 3D FFT, batched over the trailing (coil) axis.
-    Ports toppe.utils.ift3.m's sub_ift3: fftshift(ifftn(fftshift(D))) per
-    coil -- note this is fftshift on *both* sides, not the more common
-    ifftshift-before/fftshift-after pairing, replicated literally rather
-    than switched to the conventional spelling. These are NOT shift-
-    equivalent on an odd-length axis (a one-sample circular shift of the
-    k-space input, i.e. a pure linear phase ramp in image space) --
-    params.py's N_degre has Nz_degre=21 (odd), so this does bite on that
-    grid. Safe here only because every consumer of this function takes a
-    magnitude (the removed RSS driver) or a difference of two same-grid transforms
-    (preprocessing/julia/b0map.jl's mirror of this convention), both of
-    which cancel the ramp -- a future complex-valued consumer would
-    inherit it silently."""
+    """Centered inverse 3D FFT, batched over the trailing (coil) axis:
+    fftshift(ifftn(ifftshift(D))), the standard pairing used everywhere else
+    in this pipeline. toppe.utils.ift3.m's fftshift-on-both-sides spelling,
+    which this used to replicate, agrees for even axes and differs by a
+    linear phase ramp on odd ones (docs/review-findings.md item 251);
+    preprocessing/julia/b0map.jl's ifft3c uses the same pairing as this."""
     axes = (0, 1, 2)
-    return np.fft.fftshift(np.fft.ifftn(np.fft.fftshift(d, axes=axes), axes=axes), axes=axes)
+    return np.fft.fftshift(np.fft.ifftn(np.fft.ifftshift(d, axes=axes), axes=axes), axes=axes)
 
 
 def main(datdir: str, seqname: str) -> None:

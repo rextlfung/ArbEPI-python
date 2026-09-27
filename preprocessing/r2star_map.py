@@ -51,7 +51,7 @@ from preprocessing.grid_resize import resize_to_epi_grid
 
 def _ift3(d: np.ndarray) -> np.ndarray:
     axes = (0, 1, 2)
-    return np.fft.fftshift(np.fft.ifftn(np.fft.fftshift(d, axes=axes), axes=axes), axes=axes)
+    return np.fft.fftshift(np.fft.ifftn(np.fft.ifftshift(d, axes=axes), axes=axes), axes=axes)
 
 
 def _rss_echo_images(ksp_echoes: np.ndarray) -> np.ndarray:

@@ -136,7 +136,7 @@ Python side (matching every other h5 file this pipeline writes for its own
 use -- see preprocessing/config.py's `.h5`-vs-`.mat` convention note).
 =#
 
-using FFTW: ifft, fftshift
+using FFTW: ifft, fftshift, ifftshift
 using HDF5: h5open, attributes
 using MRIFieldmaps: b0map, coil_combine
 using ROMEO: unwrap
@@ -150,11 +150,12 @@ write_numpy_array(file, name::AbstractString, arr) =
     file[name] = permutedims(arr, reverse(1:ndims(arr)))
 
 fftshift3(x) = fftshift(x, (1, 2, 3))
+ifftshift3(x) = ifftshift(x, (1, 2, 3))
 
-"Centered inverse 3D FFT -- same fftshift(ifft(fftshift(.))) convention as
-preprocessing/run_rss.py's `_ift3` (applied here per echo/coil to bring
+"Centered inverse 3D FFT -- fftshift(ifft(ifftshift(.))), the same pairing as
+preprocessing/gre_diagnostics.py's `_ift3` (applied here per echo/coil to bring
 each fully-sampled Cartesian deGRE k-space volume to image space)."
-ifft3c(x) = fftshift3(ifft(fftshift3(x), (1, 2, 3)))
+ifft3c(x) = fftshift3(ifft(ifftshift3(x), (1, 2, 3)))
 
 function load_gre_images(gre_h5_path::AbstractString)
     ksp, TE = h5open(gre_h5_path, "r") do f

@@ -20,18 +20,10 @@ it, but it isn't needed for this diagnostic (mirrors calibrate_delay.m).
 
 import numpy as np
 
-from preprocessing.coils import apply_whitening, compute_whitening_matrix
+from preprocessing.coils import compute_whitening_matrix
 from preprocessing.config import SeqPaths, load_seq_params
-from preprocessing.epi_gridding import rampsampepi2cart
-from preprocessing.oephase import getoephase
-from preprocessing.preprocess import apply_delay, load_kxoe
-
-
-def _matlab_round(x: float) -> int:
-    """See preprocessing/oephase.py's _matlab_round (also duplicated in
-    grid_resize.py) -- MATLAB rounds half away from zero; only ever called
-    here on a non-negative value."""
-    return int(np.floor(x + 0.5))
+from preprocessing.oephase import matlab_round
+from preprocessing.preprocess import apply_delay, compute_oephase, load_kxoe, prepare_cal_data
 
 
 def select_best_delay(report: dict) -> float:
@@ -78,22 +70,16 @@ def calibrate_delay(
             f'calibrate_delay: Calibration Nfid ({ksp_cal_raw.shape[0]}) != '
             f'noise Nfid ({Nfid}) -- wrong noise file?'
         )
-    ksp_cal = apply_whitening(ksp_cal_raw.transpose(0, 2, 1), W)  # [Nfid, N_cal, Ncoils]
-    ksp_cal = ksp_cal.reshape(Nfid, ETL, -1, ksp_cal.shape[-1], order='F')
-    ETL_even = ETL - (ETL % 2)
-    ksp_cal = ksp_cal[:, :ETL_even, :, :]
+    ksp_cal = prepare_cal_data(ksp_cal_raw, W, None, ETL)  # [Nfid, ETL_even, N_shots, Ncoils]
 
     kxo0, kxe0 = load_kxoe(paths.scan_info)
 
     report: dict = {'delay': [], 'a1': [], 'a2': [], 'wrap_count': []}
     for d in delay_range:
         kxo, kxe = apply_delay(kxo0, kxe0, Nfid, d)
+        a, th = compute_oephase(ksp_cal, kxo, kxe, Nx, fov[0] * 100)
 
-        oephase_data = rampsampepi2cart(ksp_cal, kxo, kxe, Nx, fov[0] * 100)
-        oephase_data = np.fft.ifftshift(np.fft.ifft(np.fft.fftshift(oephase_data), n=Nx, axis=0))
-        a, th = getoephase(np.mean(oephase_data, axis=2))
-
-        rows = slice(_matlab_round(Nx / 4), _matlab_round(3 * Nx / 4))
+        rows = slice(matlab_round(Nx / 4), matlab_round(3 * Nx / 4))
         cols = slice(th.shape[1] // 2, th.shape[1])
         d_th = np.diff(th[rows, cols], axis=0)
         wrap_count = int(np.sum(np.abs(d_th) > wrap_thresh))

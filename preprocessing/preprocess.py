@@ -52,9 +52,8 @@ from preprocessing.config import (
 )
 from preprocessing.epi_gridding import rampsampepi2cart
 from preprocessing.matio import read_mat
-from preprocessing.nifti_io import save_recon_nifti
 from preprocessing.oephase import epiphasecorrect, getoephase
-from preprocessing.smaps import estimate_smaps, process_smaps
+from preprocessing.smaps import load_smaps
 
 # raw_io imports GERecon, GE's proprietary (non-pip) SDK -- deliberately not
 # imported at module level, so every other function here (and the tests for
@@ -111,30 +110,46 @@ def apply_delay(
 
 def compute_oephase(
     ksp_cal: np.ndarray, kxo: np.ndarray, kxe: np.ndarray, nx: int, fov_x_cm: float
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """Estimate the odd/even ghost-correction linear-phase model `a` from
     an unencoded (no phase-encoding blips) calibration echo train.
 
-    ksp_cal: [Nfid, ETL, N_cal_shots, Nvcoils] whitened, coil-compressed
-        calibration data (ETL already truncated to even, see preprocess()).
-    Ports preprocess.m's STEP 4 oephase computation.
+    ksp_cal: [Nfid, ETL_even, N_cal_shots, Nc] calibration data from
+        prepare_cal_data().
+    Returns (a, th): getoephase's model and its per-echo-pair phase mismatch.
+    Ports preprocess.m's STEP 4 oephase computation, but with the same
+    centered-IFFT pairing (ifftshift in, fftshift out) on axis 0 that
+    oephase.py's epiphasecorrect applies the model with, so `a` is estimated
+    and applied in the same pixel frame. The MATLAB original's
+    fftshift-in/ifftshift-out spelling agrees for even nx but lands one pixel
+    over for odd nx (docs/review-findings.md item 251).
     """
     oephase_data = rampsampepi2cart(ksp_cal, kxo, kxe, nx, fov_x_cm)
-    # ifftshift-in/fftshift-out on axis 0 -- the standard centered-IFFT
-    # pairing, matching oephase.py's epiphasecorrect (see its docstring)
-    # rather than the MATLAB original's literal fftshift-in/ifftshift-out
-    # spelling. Identical to the old spelling at this repo's current
-    # Nx=240 (even) -- only a real difference for an odd nx. fftshift/
-    # ifftshift with no axes argument still shift *every* axis (not just
-    # axis 0): safe here regardless of parity, since etl (axis 1) is
-    # asserted even by getoephase, the cal-shots axis (axis 2) is averaged
-    # out by np.mean below (order-invariant), and the coil axis (axis 3)
-    # is summed over in getoephase (also order-invariant) -- so a circular
-    # reorder on either of those axes has no effect on the result.
-    oephase_data = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(oephase_data), n=nx, axis=0))
+    oephase_data = np.fft.fftshift(
+        np.fft.ifft(np.fft.ifftshift(oephase_data, axes=0), n=nx, axis=0), axes=0
+    )
     oephase_mean = np.mean(oephase_data, axis=2)  # average over cal shots (MATLAB dim 3)
-    a, _ = getoephase(oephase_mean)
-    return a
+    return getoephase(oephase_mean)
+
+
+def prepare_cal_data(
+    ksp_cal_raw: np.ndarray, W: np.ndarray, cc_matrix: np.ndarray | None, ETL: int
+) -> np.ndarray:
+    """Calibration readouts [Nfid, Ncoils, N_cal] -> [Nfid, ETL_even, N_cal_shots, Nc]:
+    whitened, optionally coil-compressed, grouped into echo trains, and truncated
+    to an even ETL (getoephase pairs odd/even echoes). Shared by
+    calibrate_odd_even and calibrate_delay.py's delay sweep."""
+    Nfid = ksp_cal_raw.shape[0]
+    ksp_cal = apply_whitening(ksp_cal_raw.transpose(0, 2, 1), W)  # [Nfid, N_cal, Ncoils]
+    if cc_matrix is not None:
+        ksp_cal = apply_coil_compression(ksp_cal, cc_matrix)  # [Nfid, N_cal, Nvcoils]
+    # MATLAB permutes ksp_cal to [Nfid,Nvcoils,N_cal] then immediately
+    # permutes back to [Nfid,N_cal,Nvcoils] for this reshape -- a no-op
+    # round trip skipped here, not a change to the algorithm (see module
+    # docstring).
+    ksp_cal = ksp_cal.reshape(Nfid, ETL, -1, ksp_cal.shape[-1], order='F')
+    ETL_even = ETL - (ETL % 2)
+    return ksp_cal[:, :ETL_even, :, :]
 
 
 def unflatten_gre_echoes(
@@ -253,22 +268,14 @@ def calibrate_odd_even(
 
     ksp_cal_raw: [Nfid, Ncoils, N_cal] raw calibration readouts."""
     Nfid = ksp_cal_raw.shape[0]
-    ksp_cal = apply_whitening(ksp_cal_raw.transpose(0, 2, 1), W)  # [Nfid, N_cal, Ncoils]
-    ksp_cal = apply_coil_compression(ksp_cal, cc_matrix)  # [Nfid, N_cal, Nvcoils]
+    ksp_cal = prepare_cal_data(ksp_cal_raw, W, cc_matrix, ETL)
 
     kxo0, kxe0 = load_kxoe(paths.scan_info)
     delay = seq_delay(cfg, paths.seqname)
     print(f'Applying k-space center offset: {delay:.2f} samples')
     kxo, kxe = apply_delay(kxo0, kxe0, Nfid, delay)
 
-    # MATLAB permutes ksp_cal to [Nfid,Nvcoils,N_cal] then immediately
-    # permutes back to [Nfid,N_cal,Nvcoils] for this reshape -- a no-op
-    # round trip skipped here, not a change to the algorithm (see module
-    # docstring).
-    Nvcoils = cc_matrix.shape[0]
-    ksp_cal = ksp_cal.reshape(Nfid, ETL, -1, Nvcoils, order='F')
-    ETL_even = ETL - (ETL % 2)
-    a = compute_oephase(ksp_cal[:, :ETL_even, :, :], kxo, kxe, Nx, fov_x_cm)
+    a, _ = compute_oephase(ksp_cal, kxo, kxe, Nx, fov_x_cm)
     print(f'  Constant phase offset: {a[0]:.4f} rad')
     print(f'  Linear phase offset:   {a[1]:.4f} rad/fov')
     return kxo, kxe, a
@@ -464,43 +471,13 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
         if seq_params.TE_degre is not None:
             f.attrs['TE_degre'] = np.asarray(seq_params.TE_degre)
 
-    # STEP 3 -- sensitivity maps (before EPI is loaded, so ksp_gre can be freed)
-    # Nvcoils-compressed only -- this cache, like before, gets its
-    # smaps_degre/emap_degre and the uncompressed-coil set backfilled
-    # lazily by smaps.py's load_smaps() the first time something (recon_
-    # frames.py, run_b0map.py) actually needs them, rather than duplicating
-    # that estimation here.
-    fn_smaps = os.path.join(cfg.datdir, 'recon', f'smaps_{paths.seqname}_sigpy.h5')
-    smaps = None
+    # STEP 3 -- sensitivity maps (before EPI is loaded, so ksp_gre can be freed).
+    # Delegates to load_smaps, which calibrates once on ksp_gre_uncompressed and
+    # projects through cc_matrix, and writes the cache (with its Ncoils attr) and
+    # NIfTI itself. Estimating inline here instead used to write a cache that
+    # load_smaps then rejected and re-estimated (docs/review-findings.md item 252).
     if cfg.do_sense:
-        smaps_valid = False
-        if os.path.exists(fn_smaps):
-            with h5py.File(fn_smaps, 'r') as f:
-                smaps_valid = f.attrs.get('Nvcoils') == Nvcoils
-        if smaps_valid:
-            print(f'Loading precomputed sensitivity maps from {fn_smaps}')
-            with h5py.File(fn_smaps, 'r') as f:
-                smaps = f['smaps'][()]
-        else:
-            print('Estimating sensitivity maps via sigpy ESPIRiT...')
-            smaps_raw, emap = estimate_smaps(ksp_gre, crop=cfg.crop)
-            smaps = process_smaps(
-                smaps_raw, emap, tuple(seq_params.fov_degre), tuple(fov),
-                (Nx, Ny, Nz), cfg.crop,
-                smooth_sigma_mm=cfg.smaps_smooth_sigma_mm,
-                zero_pad_z=cfg.zero_pad_z,
-            )
-            with h5py.File(fn_smaps, 'w') as f:
-                f.create_dataset('smaps_raw', data=smaps_raw)
-                f.create_dataset('emap', data=emap)
-                f.create_dataset('smaps', data=smaps)
-                f.attrs['Nvcoils'] = Nvcoils
-        # Coil axis stands in for save_recon_nifti's "frames" axis -- FSLeyes'
-        # volume slider then scrolls through per-coil maps, magnitude-only
-        # (NIfTI has no complex dtype; see nifti_io module docstring).
-        save_recon_nifti(
-            fn_smaps[: -len('.h5')], smaps, fov=fov, seqname=paths.seqname, Nvcoils=Nvcoils,
-        )
+        load_smaps(cfg, paths, seq_params, zero_pad_z=cfg.zero_pad_z)
     del ksp_gre, ksp_gre_all
 
     # STEP 4 -- calibration data -> odd/even phase offsets a, trajectory kxo/kxe

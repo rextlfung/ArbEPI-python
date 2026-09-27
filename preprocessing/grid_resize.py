@@ -52,12 +52,7 @@ alignment convention either way.
 import numpy as np
 from scipy import ndimage
 
-
-def _matlab_round(x: float) -> int:
-    """MATLAB's round() rounds half away from zero; only ever called here on
-    a non-negative value (see preprocessing/oephase.py's own copy, which
-    handles negatives too, for the general case)."""
-    return int(np.floor(x + 0.5))
+from preprocessing.oephase import matlab_round
 
 
 def resize_to_epi_grid(
@@ -112,8 +107,8 @@ def resize_to_epi_grid(
     # z_frac*Nz_src is always in [0, Nz_src/2) given the FOV check above, so
     # plain floor(x+0.5) rounding suffices.
     z_frac = (fov_src[2] - fov[2]) / fov_src[2] / 2
-    z_start = _matlab_round(z_frac * Nz_src)
-    z_end = _matlab_round(Nz_src - z_frac * Nz_src)
+    z_start = matlab_round(z_frac * Nz_src)
+    z_end = matlab_round(Nz_src - z_frac * Nz_src)
     if z_start < 0 or z_end > Nz_src or z_start >= z_end:
         raise ValueError(
             f'resize_to_epi_grid: computed z crop [{z_start}, {z_end}) '

@@ -2715,6 +2715,36 @@ consolidation). No items needed closing this pass.
   there's no regression coverage either way. Fix: add `mask[y0, x0] = 1`
   immediately after the seed's rejection-sampling loop, mirroring how
   every other accepted point is recorded.
+- [x] **251. `preprocessing/calibrate_delay.py` estimated the odd/even
+  phase in a different pixel frame than production applies it in (odd Nx
+  only).** [measured 2026-09-27 against `4f8bf5f`] The delay sweep
+  reimplemented `preprocess.compute_oephase` inline with the MATLAB
+  `ifftshift(ifft(fftshift(.)))` spelling, while `compute_oephase` and
+  `oephase.epiphasecorrect` use `fftshift(ifft(ifftshift(.)))`. Identical
+  for even Nx (every dataset so far: 40, 90, 240, 270); for odd Nx the
+  two land one pixel apart, so the sweep's `a[0]` is biased by `a[1]/Nx`
+  relative to the frame `epiphasecorrect` applies it in (synthetic Nx=63,
+  `a1`=2: residual `a0` after correction 0.0315 = 2/63; Nx=64: 0). `a[1]`,
+  the term `select_best_delay` minimizes, is unaffected, so this never
+  changed a chosen delay on real data. Fixed: `compute_oephase` returns
+  `(a, th)`, the cal-data preparation both sites duplicated is factored
+  into `preprocess.prepare_cal_data`, and the sweep calls both;
+  `test_oephase_estimate_and_correction_share_a_pixel_frame` (Nx 63/64)
+  guards it. Same pass: `gre_diagnostics._ift3`, `r2star_map._ift3` and
+  `julia/b0map.jl`'s `ifft3c` moved from toppe's fftshift-on-both-sides
+  spelling to the standard pairing (every consumer cancelled the odd-axis
+  phase ramp -- magnitude, echo ratio, echo phase difference -- so no
+  output changes; the julia tests re-validate it).
+- [x] **252. Every `preprocess()` run estimated ESPIRiT maps twice, and
+  the EPI-grid `smaps` depended on which code path ran first.**
+  [measured 2026-09-27 against `4f8bf5f`, by reading the cache-validity
+  logic] STEP 3 calibrated independently on the compressed `ksp_gre` and
+  wrote `smaps_<seq>_sigpy.h5` with only an `Nvcoils` attr;
+  `smaps.load_smaps` (called by `run_b0map`) then saw `cc_matrix` in the
+  GRE cache but no `Ncoils` attr and invalidated the whole cache,
+  re-estimating via the single-calibration projection path -- a second
+  ESPIRiT run, and a different `smaps` than the one STEP 3 had just
+  exported to NIfTI. Fixed: STEP 3 calls `load_smaps`.
 
 ## Consistency & documentation
 
@@ -4001,6 +4031,13 @@ consolidation). No items needed closing this pass.
   default='cuda')` (and `description=__doc__`) to `_cli_mslr_ref`, and
   thread `device=args.device` into its `main_mslr_ref(...)` call,
   matching `_cli_mslr_local`/`_cli_cg`.
+- [x] **253. Three copies of `_matlab_round`, two of them different.**
+  [measured 2026-09-27 against `4f8bf5f`] `oephase.py`'s handled negative
+  values (half away from zero both ways); `grid_resize.py`'s and
+  `calibrate_delay.py`'s were `floor(x + 0.5)`, wrong for negative ties
+  (only ever called on non-negative values, so no live bug). Fixed: one
+  public `oephase.matlab_round` (the general version), imported by the
+  other two.
 
 ## Test & tooling health
 

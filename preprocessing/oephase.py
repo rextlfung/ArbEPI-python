@@ -8,10 +8,10 @@ than redesigned.
 import numpy as np
 
 
-def _matlab_round(x: float) -> int:
+def matlab_round(x: float) -> int:
     """MATLAB's round() rounds half away from zero; numpy/Python round to
     even. Only matters at exact .5 ties, but replicated for fidelity since
-    it gates mask boundaries in getoephase below."""
+    it gates mask boundaries (getoephase, calibrate_delay, grid_resize)."""
     return int(np.floor(x + 0.5)) if x >= 0 else int(np.ceil(x - 0.5))
 
 
@@ -73,8 +73,8 @@ def getoephase(x: np.ndarray, threshold: float = 0.1) -> tuple[np.ndarray, np.nd
     # Spatial mask: keep only the center half of x (exclude edge background).
     rssim = np.sqrt(np.sum(np.abs(xc) ** 2, axis=2))  # [nx, etl]
     mask = rssim > threshold * rssim.max()
-    lo = _matlab_round(nx / 4)
-    hi = _matlab_round(3 * nx / 4)
+    lo = matlab_round(nx / 4)
+    hi = matlab_round(3 * nx / 4)
     mask[:lo, :] = False
     mask[hi - 1:, :] = False
 

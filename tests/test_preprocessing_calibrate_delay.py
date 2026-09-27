@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 # calibrate_delay.py imports epi_gridding.py at module scope, which needs
@@ -8,7 +9,8 @@ import pytest
 # gates on torch/mirtorch.
 pytest.importorskip("sigpy")
 
-from preprocessing.calibrate_delay import _matlab_round, select_best_delay  # noqa: E402
+from preprocessing.calibrate_delay import select_best_delay  # noqa: E402
+from preprocessing.oephase import matlab_round  # noqa: E402
 
 
 def test_select_best_delay_picks_zero_wrap_closest_to_zero_a2():
@@ -37,7 +39,41 @@ def test_matlab_round_rounds_half_away_from_zero():
     # Nx=90 is a real value used in this project (see README) and lands
     # exactly on a .5 tie for Nx/4 -- Python's banker's-rounding round()
     # would give 22 here, MATLAB's round() gives 23.
-    assert _matlab_round(90 / 4) == 23
-    assert _matlab_round(3 * 90 / 4) == 68
-    assert _matlab_round(2.4) == 2
-    assert _matlab_round(2.5) == 3
+    assert matlab_round(90 / 4) == 23
+    assert matlab_round(3 * 90 / 4) == 68
+    assert matlab_round(2.4) == 2
+    assert matlab_round(2.5) == 3
+    assert matlab_round(-2.5) == -3
+
+
+@pytest.mark.parametrize('nx', [63, 64])
+def test_oephase_estimate_and_correction_share_a_pixel_frame(nx):
+    """compute_oephase's estimate, applied by epiphasecorrect to the same
+    gridded data, removes the odd/even mismatch -- at odd nx too, where the
+    MATLAB fftshift/ifftshift spelling calibrate_delay used to have inline
+    lands one pixel away from epiphasecorrect's frame (review item 251)."""
+    import sigpy
+
+    from preprocessing.epi_gridding import rampsampepi2cart
+    from preprocessing.oephase import epiphasecorrect, getoephase
+    from preprocessing.preprocess import compute_oephase
+
+    etl, nshots, ncoils, fov_cm = 8, 2, 3, 20.0
+    kx = (np.arange(nx) - nx // 2) / fov_cm  # uniform samples: gridding is ~an exact resample
+    xc = (np.arange(nx) - nx / 2 + 0.5) / nx  # getoephase's x coordinate
+    profile = np.exp(-(((np.arange(nx) - nx / 2) / (nx / 5)) ** 2))
+    rng = np.random.default_rng(0)
+    coil = rng.standard_normal(ncoils) + 1j * rng.standard_normal(ncoils)
+    img = profile[:, None, None, None] * coil[None, None, None, :] * np.ones((1, etl, nshots, 1))
+    img[:, 1::2] *= np.exp(1j * (0.4 + 2.0 * xc))[:, None, None, None]
+    # Ramp-sampled data: forward NUFFT of each echo's profile at the kx samples.
+    ksp = np.moveaxis(sigpy.nufft(np.moveaxis(img, 0, -1), (kx * fov_cm)[:, None]), -1, 0)
+
+    a, _ = compute_oephase(ksp, kx, kx, nx, fov_cm)
+    corrected = epiphasecorrect(rampsampepi2cart(ksp, kx, kx, nx, fov_cm), a)
+
+    # Re-estimate the odd/even mismatch on the corrected data, in
+    # epiphasecorrect's own image frame: it must be gone.
+    x_corr = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(corrected, axes=0), axis=0), axes=0)
+    a_residual, _ = getoephase(np.mean(x_corr, axis=2))
+    np.testing.assert_allclose(a_residual, 0, atol=1e-6)
