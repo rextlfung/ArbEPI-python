@@ -1,50 +1,20 @@
-"""1D NUFFT-based ramp-sample-to-Cartesian regridding for EPI.
+"""Ramp-sampled EPI readouts -> Cartesian kx, by 1D NUFFT.
 
-Ports hmriutils' rampsampepi2cart.m / rampsamp2cart.m / reconecho.m, using
-sigpy's NUFFT instead of MIRT's Gmri (see CLAUDE.md for why BART/MIRT were
-dropped in favor of sigpy + plain numpy). Same algorithm -- density-
-compensated adjoint NUFFT, then forward FFT to grid.
+Ports hmriutils' rampsampepi2cart.m / rampsamp2cart.m / reconecho.m with
+sigpy's NUFFT in place of MIRT's Gmri: a density-compensated adjoint NUFFT
+(dcf = |diff(kx)|) to image space, then an FFT back to a Cartesian grid. Odd
+and even echoes use their own trajectories (kxo, kxe).
 
-sigpy's nufft coord convention is "cycles/FOV" -- Nyquist at +-N/2 for an
-N-point axis -- which is exactly kx (cycles/cm) * fov (cm), the same
-scaling MIRT's Gmri([fov*kx(:)], ...) used.
-
-sigpy's nufft_adjoint batches with the non-uniform-sample axis *last* and
-oshape's leading dims as the batch (verified empirically -- opposite of this
-module's [nr, ...] convention), hence the transposes in rampsamp2cart below.
-
-**Absolute-scale fix (2026-09-21)**: this module's docstring previously
-claimed sigpy's differing normalization vs MIRT's Gmri was a harmless,
-already-flagged tradeoff ("relative image structure is what matters...any
-global scale factor washes out downstream") -- true for RSS combine and
-unregularized SENSE (both scale-invariant), but false once real,
-noise-calibrated regularization (recon/mslr.py's normalize_noise,
-_reg_weights' unit-variance-noise assumption) needs the *absolute* scale
-correct. Real background k-space/image noise measured ~70-800x (method-
-dependent) away from the unit-variance whitening (preprocess/coils.py)
-guarantees, traced to exactly this gap.
-
-reconecho.m (hmriutils' reference this module ports) is explicit about its
-own normalization: `x = A'*(y.*dcf)/nx` -- an EXPLICIT /nx after MIRT's
-Gmri adjoint (`A'`), followed by a *plain, unnormalized* `fft` back to
-k-space (rampsamp2cart.m's nufft branch: `dc = fftshift(fft(fftshift(x)))`
--- no norm='ortho' or equivalent). sigpy.nufft/nufft_adjoint, unlike raw
-MIRT Gmri adjoint, already carry their own internal 1/sqrt(N) prescale
-(confirmed directly in sigpy/fourier.py's nufft: `output /=
-prod(shape)**0.5`) -- adjoint-consistency means sigpy.nufft_adjoint applies
-that same 1/sqrt(N), not MIRT's implicit unnormalized-then-explicit-/nx
-convention. The gap between "already has 1/sqrt(nx) built in" and "needs
-1/nx total, per reconecho.m" is exactly one more factor of 1/sqrt(nx) --
-applied below, right after nufft_adjoint, so the plain/unnormalized final
-fft stays byte-for-byte faithful to rampsamp2cart.m's own forward step
-(deliberately NOT changed to norm='ortho' -- that would be a different,
-not-MATLAB-matching convention, even though it happens to produce the same
-net scale here). Confirmed via two independent routes: (1) a controlled
-synthetic test with uniform (uniformly-spaced) kx -- where density
-compensation degenerates to all-ones, isolating this factor -- measures
-this exact sqrt(nx) gap to 4 significant figures across nx in
-{32,64,128,256} (see tests/test_preprocess_epi_gridding.py); (2) this
-analytical derivation from reconecho.m's own explicit normalization line.
+- sigpy's coordinates are in cycles/FOV (Nyquist at +-N/2), i.e. kx (cycles/cm)
+  x fov (cm), as with Gmri([fov*kx(:)], ...).
+- sigpy batches over leading axes with the sample axis last, hence the
+  transposes in rampsamp2cart.
+- Absolute scale: reconecho.m divides Gmri's (unnormalized) adjoint by nx, then
+  applies a plain fft. sigpy's nufft_adjoint already includes 1/sqrt(nx), so one
+  more 1/sqrt(nx) is applied here. This matters because recon's regularization
+  weights assume unit-variance noise; without it the noise level was off by
+  ~sqrt(nx). tests/test_preprocess_epi_gridding.py checks the scale against an
+  orthonormal FFT with uniform kx.
 """
 
 import numpy as np
@@ -77,10 +47,7 @@ def rampsamp2cart(dr: np.ndarray, kx: np.ndarray, nx: int, fov_cm: float) -> np.
     dr2 = dr.reshape(nr, -1).T  # [M, nr], batch-first for sigpy
     ximg = sigpy.nufft_adjoint(dr2 * dcf[None, :], coord, oshape=dr2.shape[:1] + (nx,))
     ximg = ximg.T  # [nx, M]
-    # See module docstring's "Absolute-scale fix" -- matches reconecho.m's
-    # explicit `/nx` after MIRT's (unnormalized) Gmri adjoint, given
-    # sigpy.nufft_adjoint already includes its own 1/sqrt(nx).
-    ximg = ximg / np.sqrt(nx)
+    ximg = ximg / np.sqrt(nx)  # reconecho.m's /nx; sigpy already applied 1/sqrt(nx)
 
     dc = np.fft.fftshift(np.fft.fft(np.fft.fftshift(ximg, axes=0), axis=0), axes=0)
     return dc.reshape((nx,) + dr_shape[1:])

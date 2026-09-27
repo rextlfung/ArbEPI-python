@@ -94,22 +94,16 @@ def getoephase(x: np.ndarray, threshold: float = 0.1) -> tuple[np.ndarray, np.nd
 
 
 def epiphasecorrect(d: np.ndarray, a: np.ndarray) -> np.ndarray:
-    """Odd/even phase correction for EPI: subtract the a[0]+a[1]*x linear
-    phase model (from getoephase) from every even-indexed echo, in image
-    space. Ports epiphasecorrect.m.
+    """Odd/even phase correction: in image space along x, multiply every
+    even-indexed echo by exp(-i(a[0] + a[1] x)) (getoephase's model).
+    Ports epiphasecorrect.m.
 
-    d: [nx, etl, ...] raw (Cartesian) EPI data.
+    d: [nx, etl, ...] Cartesian EPI k-space.
 
-    Uses the standard `fftshift(ifft(ifftshift(.)))` / `fftshift(fft(
-    ifftshift(.)))` centered-FFT pairing on axis 0 (not the `fftshift`-
-    on-both-sides spelling epiphasecorrect.m's own MATLAB source uses) --
-    verified to round-trip to the identity (unmodified `d` in, unmodified
-    `d` out) to float64 precision for both even and odd `nx`, unlike the
-    MATLAB spelling, which only round-trips for even `nx` (identical to
-    this spelling there, so no behavior change at this repo's current
-    Nx=240; a real, not just cosmetic, difference for an odd `nx`). Same
-    convention question as preprocess.py's compute_oephase and
-    sigpy_recon.py's _ift3 -- see docs/review-findings.md item 44.
+    Uses the standard centered-FFT pairing along x, which round-trips exactly
+    for odd nx too (the MATLAB source's fftshift-on-both-sides spelling only
+    does for even nx; review item 44). preprocess.compute_oephase estimates
+    `a` in this same frame (item 251).
     """
     nx, etl = d.shape[0], d.shape[1]
     d_shape = d.shape

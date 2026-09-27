@@ -240,6 +240,8 @@ def test_rerun_with_a_kept_cache_skips_stage_a(dataset):
     with h5py.File(out, 'r') as f:
         assert f['ksp_epi_zf'].shape[3] == 2
         np.testing.assert_allclose(f.attrs['oephase_a'], A_FIXED)  # the cache's a
+    with pytest.warns(UserWarning, match='gridded with delay'):
+        preprocess(_cfg(dataset, keep_cache=True, delay=0.5, estimate_smaps=False), SEQ)
 
 
 def test_resume_after_a_crash_matches_an_uninterrupted_run(dataset):

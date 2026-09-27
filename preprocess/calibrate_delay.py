@@ -1,21 +1,16 @@
-"""Automated k-space center delay tuning from odd/even ghost-correction
-diagnostics. Ports calibrate_delay.m.
+"""Tune the readout's k-space center offset (cfg.delay) from the calibration
+scan. Ports calibrate_delay.m.
 
-Automates the manual "adjust the delay until the odd/even phase-vs-x plot
-stops wrapping" procedure: getoephase fits a constant + linear model to the
-raw (unwrapped-along-x) odd/even phase difference and explicitly assumes no
-phase wrap; once the k-space delay is far enough off that the true phase
-ramp exceeds +-pi within the object support, that fit becomes unreliable.
-This sweeps delay_range and, for each value, counts adjacent-pixel phase
-jumps > wrap_thresh in the object support (a direct wrap detector,
-mirroring visual inspection of phase(x)); among delays with zero detected
-wraps, picks the one whose fitted linear term is closest to zero -- a
-properly time-aligned trajectory should leave only a constant (coil/RF)
-phase offset, no residual spatial ramp.
+A wrong delay puts a linear phase ramp between odd and even echoes; once the
+ramp passes +-pi inside the object, getoephase's no-wrap linear fit breaks.
+For each candidate delay this counts adjacent-pixel jumps > wrap_thresh in
+the odd/even phase over the object, and picks, among delays with no wraps,
+the one whose fitted linear term is closest to zero (a correctly aligned
+readout leaves only a constant offset). Needs only the noise and calibration
+scans, so it is cheap.
 
-Only needs the noise and calibration scans (no GRE/smaps), so it's cheap to
-sweep. Coil compression isn't used here: odd/even phase content survives
-it, but it isn't needed for this diagnostic (mirrors calibrate_delay.m).
+    from preprocess.preprocess import PreprocessConfig, set_seq_paths
+    best, report = calibrate_delay(set_seq_paths(PreprocessConfig(datdir), seqname))
 """
 
 import numpy as np

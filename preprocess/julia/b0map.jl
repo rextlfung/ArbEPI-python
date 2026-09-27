@@ -1,138 +1,40 @@
 #=
-b0map.jl -- B0 field map estimation from the dual-echo deGRE.
+b0map.jl -- B0 field map from the dual-echo deGRE, with MRIFieldmaps.jl's
+`b0map` (C Y Lin, J A Fessler, "Efficient Regularized Field Map Estimation in
+3D MRI", IEEE TCI 2020; https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl).
 
 Called by preprocess/b0map.py's estimate_b0map, which writes a temporary h5
-holding `ksp_gre_echoes` (whitened deGRE k-space, every echo) with a
-`TE_degre` attribute in seconds, and optionally `smaps_degre`/`emap_degre`.
-Writes a regularized B0
-field map in Hz, via MRIFieldmaps.jl's `b0map`, ../MRIFieldmaps.jl reference
-https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl,
-algorithm: C Y Lin, J A Fessler, "Efficient Regularized Field Map
-Estimation in 3D MRI", IEEE TCI 2020).
+with `ksp_gre_echoes` [Nx, Ny, Nz, n_echoes, Ncoils] (whitened k-space), a
+`TE_degre` attribute (s), and optionally `smaps_degre`/`emap_degre`.
 
-Usage:
     julia --project=preprocess/julia preprocess/julia/b0map.jl \
-        <gre_h5_path> <output_h5_path> [smaps_h5_path] [eig_mask_threshold] \
-        [mask_threshold] [precon]
+        <gre_h5> <output_h5> [smaps_h5] [eig_mask_threshold] [mask_threshold] [precon]
 
-`precon` (default `:diag`, overriding `b0map`'s own default `:ichol`) is
-its NCG preconditioner -- the one parameter actually worth overriding here.
-`l2b`/`niter` (its regularization weight and NCG iteration count) are
-deliberately *not* exposed, despite an earlier investigation adding and
-sweeping both: `l2b` turned out to have essentially no effect on the fitted
-field map's smoothness under `:ichol`, regardless of `niter` -- traced to
-`:ichol`'s preconditioner (`H = spdiagm(hcurv) + CC`) being built from the
-*same* `CC = beta * C'C` roughness-penalty operator that appears in the
-gradient (`grad = hderiv + CC*w`): as `beta` grows, both numerator and
-denominator become CC-dominated and the preconditioned step `H^-1 * grad`
-collapses toward `-w` independent of `beta` (confirmed empirically:
-mean|Laplacian| roughness flat at ~8.2-8.4 for `l2b` in [-6, 28], a
-16384x-to-270-million-x range in beta, at both niter=30 and a fully
-2000-iteration-converged run). Switching `precon` to `:diag` instead fixes
-this directly -- `:diag`'s own preconditioner (`Hdiag = hcurv + diag(CC)`)
-doesn't have the same numerator/denominator cancellation, since it only
-uses `CC`'s diagonal, not the full matrix -- and gets a substantially
-smoother field map (roughness ~4x lower than `:ichol`'s at MRIFieldmaps'
-own `l2b`/`niter` defaults, -6.0/30, visibly confirmed in a real
-reconstruction: B0-corrected image roughness dropped from +61 excess over
-an uncorrected baseline to +19.5 -- see git history / session notes for the
-comparison figures). With `precon=:diag` fixing the actual problem, `l2b`
-reverts to being a non-load-bearing knob not worth the CLI surface area of
-exposing.
+Writes `b0map_hz`, `finit_hz` and `mask` on the deGRE grid.
 
-Independent corroboration from MRIFieldmaps.jl's own maintainer: its
-[`02-b0map.jl` example/docs](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl/blob/main/docs/lit/examples/02-b0map.jl)
-compares `:I`/`:diag`/`:chol`/`:ichol` on its own canonical test case and
-closes with "it is interesting that in this Julia implementation the
-diagonal preconditioner seems to be as effective as the incomplete
-Cholesky preconditioner" -- i.e. this isn't specific to our data/problem,
-it's a known characteristic of this package's Julia port (unlike the
-original MATLAB implementation, where `ichol` is the expected/reliable
-win). That upstream comparison is about final RMSE-vs-wall-time, though,
-not about `l2b` sensitivity specifically -- it doesn't independently
-confirm the numerator/denominator-cancellation mechanism above, which was
-traced directly in this pipeline's own code.
-
-`mask_threshold` (default 0.1, matching MRIFieldmaps' own `b0init` default)
-sets the fraction of peak first-echo magnitude below which a voxel is
-excluded from the fit. An explicit mask is *not* optional here (unlike
-b0map's own `mask` keyword, which defaults to `trues(size(finit))`):
-MRIFieldmaps' no-smap coil combine (`coil_combine`) divides by each voxel's
-sum-of-squares coil magnitude, and any voxel whose magnitude is *exactly*
-zero -- confirmed empirically with a synthetic all-zero-background test
-volume -- produces 0/0 = NaN there; Julia's `maximum` propagates a single
-NaN through the whole array, which zeroes out the "good pixel" background
-threshold inside `b0init` and returns an all-NaN field map. Real scanner
-data never has an exactly-zero voxel (thermal noise), so this wouldn't
-reproduce in practice, but masking out background explicitly is the
-standard/expected use of this package regardless (its own README example
-and `b0init` both build a `finit` this same way) and removes any
-sensitivity to this edge case.
-
-Coil sensitivity maps (`smap`) are now passed, when `smaps_h5_path` is
-given: preprocess() resizes the same ESPIRiT calibration it uses for the
-*EPI* grid onto *this* deGRE grid too (`smaps_degre`, `emap_degre`), so
-`smap`'s shape matches `images`' spatial dims exactly, satisfying `b0map`'s
-`smap` shape check. This replaces MRIFieldmaps' own phase-contrast
-coil-combine fallback (`coil_combine(images, nothing)`, Bernstein et al.,
-MRM 1994, eqn 13) with a true matched-filter combine
-(`coil_combine(images, smap)`, same reference, eqn 13's `smap`-provided
-branch) -- the fallback weights each coil by its own noisy first-echo
-image (`y1`) rather than a smooth sensitivity estimate, so its combine
-noise directly reflects each coil's raw per-voxel SNR, worst exactly in
-this pipeline's low-per-coil-SNR object-center regions (see the `l2b`
-paragraph above). `emap_degre` (ESPIRiT's dominant-eigenvalue map, also
-resized to this grid) is thresholded the same way `smaps.py`'s own
-`eig_mask` is and ANDed into `mask` -- a cheap, ESPIRiT-informed
-complement to the magnitude-only mask below, since it's already being
-loaded here regardless. When `smaps_h5_path` is empty (default), behavior
-is unchanged from before: no `smap`, `mask` is magnitude-only.
-
-`finit` (the NCG solve's starting point) is built here via
-[ROMEO.jl](https://github.com/korbinian90/ROMEO.jl) (Dymerska et al.,
-"Phase unwrapping with a rapid opensource minimum spanning tree algorithm
-(ROMEO)", MRM 2021) rather than left to `b0map`'s own default. Passed a
-plain two-point phase difference, `b0map`'s NCG solve can converge to the
-wrong 2π branch wherever `finit` itself is wrong by a full cycle -- its
-data-fit term is periodic (see the module-level algorithm note below), but
-that only guarantees a *locally* consistent optimum, not that NCG finds
-its way to the globally correct branch from a badly-aliased start. This
-was measurable, not theoretical: on a synthetic field map exceeding the
-default `finit`'s +-1/(2 dTE) unambiguous range (dTE = 2 ms => +-250 Hz),
-`b0map` fed the unwrapped `finit` recovered the true field to 34 Hz RMSE;
-fed the plain wrapped `finit`, 207 Hz RMSE -- it converged to a local
-minimum that reproduced the aliasing instead of correcting it.
-
-Which array to unwrap is *not* `angle.(zdata[...,1])` -- `coil_combine`'s
-phase-contrast formula (`zdata_e = sum_c conj(y_{c,1}/sos) * y_{c,e}`)
-makes the reference echo's own combined phase identically zero by
-construction (`conj(y_{c,1}) * y_{c,1} / sos` sums to a real positive
-number for every voxel), confirmed empirically -- a first attempt at
-spatially unwrapping `zdata[...,1]` changed exactly zero voxels, on data
-that plainly needed it. The physically meaningful signal is
-`zdata[...,2]`: for this two-echo case it reduces to exactly `y2 * conj(y1)
-/ sos`, i.e. the same wrapped phase *difference* `b0init` itself computes
-(`angle.(y2 .* conj(y1))`) -- so it's this one 3D volume that gets handed
-to `ROMEO.unwrap`, and its own magnitude (a coherence-like quantity in
-[0, 1] from the phase-contrast combine, not the raw image amplitude --
-naturally lower wherever the two echoes disagree, i.e. exactly where
-`unwrap` should trust the local phase less) is what weights it. Only the
-first two echoes are used, matching `MRIFieldmaps.b0init`'s own
-restriction to two-point phase difference in the non-water-fat case --
-consistent with this pipeline only ever acquiring a two-echo deGRE.
-
-Axis order, both directions: HDF5.jl stores/reads arrays reversed relative
-to h5py/numpy (row-major C convention on disk vs. Julia's column-major
-convention in memory) -- verified empirically against a real preprocess.py
-GRE cache: a Python-written `(Nx, Ny, Nz, n_echoes, Ncoils)` dataset comes
-back from `read` as `(Ncoils, n_echoes, Nz, Ny, Nx)`, and
-`permutedims(raw, reverse(1:ndims(raw)))` recovers the correct array (same
-correction preprocess/matio.py documents and applies in the opposite
-direction, for hdf5storage-written files read back by h5py). The reverse
-permutedims is applied here on *write* too, so this script's own output
-lands on disk already in numpy axis order and needs no correction from the
-Python side (matching every other h5 file this pipeline writes for its own
-use -- see preprocess/config.py's `.h5`-vs-`.mat` convention note).
+Choices:
+- precon = :diag, not MRIFieldmaps' default :ichol. With :ichol the
+  preconditioner is built from the same roughness operator as the gradient, so
+  the regularization weight l2b had almost no effect (roughness flat for l2b in
+  [-6, 28]) and the map was speckled; :diag gave a ~4x smoother map and cut
+  B0-correction speckle in reconstructions ~3x. l2b/niter stay at the library
+  defaults (-6, 30).
+- The fit mask is mandatory: first-echo magnitude above mask_threshold x peak
+  (MRIFieldmaps' b0init default 0.1), ANDed with emap > eig_mask_threshold when
+  maps are given. Without a mask, an exactly-zero voxel gives 0/0 in the coil
+  combine and the NaN spreads to the whole map.
+- With sensitivity maps, coils are combined with them (matched filter) instead
+  of MRIFieldmaps' phase-contrast fallback, which weights each coil by its own
+  noisy first-echo image.
+- The starting point finit is ROMEO-unwrapped (Dymerska et al., MRM 2021) phase
+  difference / (2 pi dTE). b0map's NCG only finds the local optimum near its
+  start, so a wrapped start keeps the aliasing: on a +-450 Hz synthetic field
+  (dTE 2 ms, naive range +-250 Hz) the error was 207 Hz RMSE wrapped vs <60 Hz
+  unwrapped. The unwrapped array is the phase-contrast combine's echo 2,
+  y2 conj(y1)/sos (its echo 1 is identically real), weighted by its magnitude.
+- Axis order: HDF5.jl reads h5py-written arrays with axes reversed, so arrays
+  are permuted with reverse(1:ndims) on read and on write; the output is in
+  numpy axis order.
 =#
 
 using FFTW: ifft, fftshift, ifftshift
@@ -151,9 +53,8 @@ write_numpy_array(file, name::AbstractString, arr) =
 fftshift3(x) = fftshift(x, (1, 2, 3))
 ifftshift3(x) = ifftshift(x, (1, 2, 3))
 
-"Centered inverse 3D FFT -- fftshift(ifft(ifftshift(.))), the same pairing as
-preprocess/gre_diagnostics.py's `_ift3` (applied here per echo/coil to bring
-each fully-sampled Cartesian deGRE k-space volume to image space)."
+"Centered inverse 3D FFT, fftshift(ifft(ifftshift(.))) -- the same pairing as
+preprocess/utils.py's `ift3c`."
 ifft3c(x) = fftshift3(ifft(ifftshift3(x), (1, 2, 3)))
 
 function load_gre_images(gre_h5_path::AbstractString)
