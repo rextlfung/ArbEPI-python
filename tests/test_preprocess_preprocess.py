@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("sigpy")
 pytest.importorskip("nibabel")
 
-from preprocessing.preprocess import (  # noqa: E402
+from preprocess.preprocess import (  # noqa: E402
     _build_echo_times,
     _build_omegas,
     apply_delay,
@@ -168,7 +168,7 @@ def test_resume_start_frame_no_checkpoint_does_not_advance_reader():
 
 
 def _write_hdf5storage_style(path, arrays: dict):
-    """See tests/test_preprocessing_matio.py's copy of this helper -- writes
+    """See tests/test_preprocess_matio.py's copy of this helper -- writes
     datasets axis-reversed, mimicking hdf5storage's on-disk convention,
     without depending on hdf5storage itself (not in the preprocessing
     venv)."""
@@ -251,13 +251,13 @@ def test_measure_noise_var_is_one_for_whitened_noise_and_tracks_scale():
     """Noise-scan readouts pushed through whitening, coil compression and
     regridding (uniform kx, so density compensation is ~1) come out with unit
     variance per complex sample, and scale with the input noise level."""
-    from preprocessing.coils import (
+    from preprocess.coils import (
         apply_whitening,
         coil_compression_matrix,
         compute_coil_covariance,
         compute_whitening_matrix,
     )
-    from preprocessing.preprocess import measure_noise_var
+    from preprocess.preprocess import measure_noise_var
 
     rng = np.random.default_rng(0)
     nx, ncoils, etl, ntrains, fov_cm = 32, 6, 4, 50, 20.0

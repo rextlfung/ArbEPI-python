@@ -1,7 +1,7 @@
 #=
 b0map.jl -- B0 field map estimation from preprocess.py's dual-echo GRE cache.
 
-Consumes `<seqname>_gre.h5` (written by preprocessing/preprocess.py STEP 2:
+Consumes `<seqname>_gre.h5` (written by preprocess/preprocess.py STEP 2:
 whitened + coil-compressed k-space, every deGRE echo, plus a `TE_degre`
 attribute in seconds) and writes `<seqname>_b0map.h5` (a regularized B0
 field map in Hz, via MRIFieldmaps.jl's `b0map`, ../MRIFieldmaps.jl reference
@@ -10,7 +10,7 @@ algorithm: C Y Lin, J A Fessler, "Efficient Regularized Field Map
 Estimation in 3D MRI", IEEE TCI 2020).
 
 Usage:
-    julia --project=preprocessing/julia preprocessing/julia/b0map.jl \
+    julia --project=preprocess/julia preprocess/julia/b0map.jl \
         <gre_h5_path> <output_h5_path> [smaps_h5_path] [eig_mask_threshold] \
         [mask_threshold] [precon]
 
@@ -69,7 +69,7 @@ and `b0init` both build a `finit` this same way) and removes any
 sensitivity to this edge case.
 
 Coil sensitivity maps (`smap`) are now passed, when `smaps_h5_path` is
-given: `preprocessing/smaps.py`'s `load_smaps` resizes the same
+given: `preprocess/smaps.py`'s `load_smaps` resizes the same
 `cal_size`-cropped ESPIRiT calibration (`smaps_raw`/`emap`) it already
 produces for the *EPI* grid onto *this* deGRE grid too (`smaps_degre`,
 `emap_degre`, in `<datdir>/recon/smaps_<seqname>_sigpy.h5`), so `smap`'s
@@ -128,12 +128,12 @@ convention in memory) -- verified empirically against a real preprocess.py
 GRE cache: a Python-written `(Nx, Ny, Nz, n_echoes, Ncoils)` dataset comes
 back from `read` as `(Ncoils, n_echoes, Nz, Ny, Nx)`, and
 `permutedims(raw, reverse(1:ndims(raw)))` recovers the correct array (same
-correction preprocessing/matio.py documents and applies in the opposite
+correction preprocess/matio.py documents and applies in the opposite
 direction, for hdf5storage-written files read back by h5py). The reverse
 permutedims is applied here on *write* too, so this script's own output
 lands on disk already in numpy axis order and needs no correction from the
 Python side (matching every other h5 file this pipeline writes for its own
-use -- see preprocessing/config.py's `.h5`-vs-`.mat` convention note).
+use -- see preprocess/config.py's `.h5`-vs-`.mat` convention note).
 =#
 
 using FFTW: ifft, fftshift, ifftshift
@@ -153,7 +153,7 @@ fftshift3(x) = fftshift(x, (1, 2, 3))
 ifftshift3(x) = ifftshift(x, (1, 2, 3))
 
 "Centered inverse 3D FFT -- fftshift(ifft(ifftshift(.))), the same pairing as
-preprocessing/gre_diagnostics.py's `_ift3` (applied here per echo/coil to bring
+preprocess/gre_diagnostics.py's `_ift3` (applied here per echo/coil to bring
 each fully-sampled Cartesian deGRE k-space volume to image space)."
 ifft3c(x) = fftshift3(ifft(ifftshift3(x), (1, 2, 3)))
 
@@ -212,7 +212,7 @@ function main(
     mask = magnitude_mask(images, threshold)
     println("  magnitude mask: $(count(mask)) / $(length(mask)) voxels above $(threshold) x peak magnitude")
 
-    # Optional: real sensitivity maps (preprocessing/smaps.py's ESPIRiT
+    # Optional: real sensitivity maps (preprocess/smaps.py's ESPIRiT
     # calibration, resized to this deGRE grid) in place of MRIFieldmaps'
     # phase-contrast coil-combine fallback -- see module docstring. Its
     # eigenvalue map is also used to tighten the magnitude-based mask

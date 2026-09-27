@@ -23,10 +23,10 @@ import sigpy as sp
 import sigpy.mri.app as mri_app
 from scipy import ndimage
 
-from preprocessing.coils import apply_coil_compression
-from preprocessing.config import PreprocessingConfig, SeqParams, SeqPaths
-from preprocessing.grid_resize import resize_to_epi_grid
-from preprocessing.nifti_io import save_recon_nifti
+from preprocess.coils import apply_coil_compression
+from preprocess.config import PreprocessingConfig, SeqParams, SeqPaths
+from preprocess.grid_resize import resize_to_epi_grid
+from preprocess.nifti_io import save_recon_nifti
 
 
 def _default_device() -> sp.Device:
@@ -398,7 +398,7 @@ def load_smaps(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, np.ndarray | None]:
     """(smaps, smaps_degre, emap_degre, nvcoils, smaps_degre_uncompressed):
     sensitivity maps on the EPI grid (the SENSE encoding operator's own
-    grid), the *deGRE* grid (for preprocessing/julia/b0map.jl's `smap`
+    grid), the *deGRE* grid (for preprocess/julia/b0map.jl's `smap`
     argument -- see its module docstring for why passing real smaps
     there, instead of leaving B0 field-map estimation to MRIFieldmaps'
     phase-contrast coil-combine fallback, is expected to reduce field-map

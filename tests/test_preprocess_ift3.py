@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("matplotlib")
 pytest.importorskip("nibabel")
 
-from preprocessing.gre_diagnostics import _ift3  # noqa: E402
+from preprocess.gre_diagnostics import _ift3  # noqa: E402
 
 
 def test_ift3_inverts_centered_forward_fft():

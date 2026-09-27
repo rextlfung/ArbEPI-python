@@ -1,6 +1,6 @@
 # recon/ — image reconstruction
 
-Turns the zero-filled k-space written by `preprocessing/` into images. There
+Turns the zero-filled k-space written by `preprocess/` into images. There
 are two kinds of reconstruction:
 
 - **RSS** (`rss.py`): zero-filled inverse FFT per coil, then root-sum-of-squares
@@ -42,14 +42,14 @@ uv pip install --python .venv-recon/bin/python -e ".[recon,test]"
 ```
 
 Run everything from the repository root (`recon/` imports helpers from
-`preprocessing/`). Install the torch build matching your CUDA version first if
+`preprocess/`). Install the torch build matching your CUDA version first if
 the default wheel doesn't fit your GPU. Everything also runs on CPU, just much more slowly; the
 device defaults to `cuda` when a GPU is available and `cpu` otherwise
 (`--device` overrides it).
 
 ## Inputs
 
-All read from `<datdir>/recon/`, as written by `preprocessing/`:
+All read from `<datdir>/recon/`, as written by `preprocess/`:
 
 | File | Contents | Needed for |
 |---|---|---|
@@ -145,7 +145,7 @@ interpolation weights. The weights come from mirtorch's `mri_exp_approx`.
 $\psi(r) = i 2\pi \Delta f(r) - R_2^*(r)$, and each segment's phasor is
 $e^{\psi(r)(t_l - t_{\text{ref}})}$. $t_{\text{ref}}$ is the nominal TE, so the
 reconstruction target is "the image at TE". The R2* map is estimated from the
-dual-echo deGRE data (`preprocessing/r2star_map.py`). The physics lives in
+dual-echo deGRE data (`preprocess/r2star_map.py`). The physics lives in
 `SENSE_B0_R2star.segment_phasors`, which is computed once and shared by every
 frame (a separate copy per frame doesn't fit in GPU memory).
 
@@ -198,7 +198,7 @@ forward model, a **unit-norm operator**. `run_sense` arranges both:
    normally a few-percent correction (0.93–1.14 on the `20260915ball` and
    `20260918ball` datasets). Files written before the attribute existed are
    used as they are (a message says so);
-   `preprocessing.preprocess.record_noise_var(cfg, paths)` adds it.
+   `preprocess.preprocess.record_noise_var(cfg, paths)` adds it.
    The noise level can't be estimated from the acquired k-space itself on
    these high-SNR datasets: every candidate region is dominated by signal
    leakage, not noise.

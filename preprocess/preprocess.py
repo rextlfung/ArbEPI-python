@@ -9,13 +9,13 @@ error, Pearson r = 0.999997 (after fitting a single overall scale factor,
 since RSS's own coil normalization differs by convention), with metadata
 (Nvcoils, Nframes, matrix size, TR) matching exactly. This confirms the
 whole pipeline (whitening, coil compression, EPI gridding, odd/even phase
-correction, k-space scatter) end to end -- see CLAUDE.md's `preprocessing/`
+correction, k-space scatter) end to end -- see CLAUDE.md's `preprocess/`
 section for the full writeup. Every building block was also independently
 verified before that (raw_io, coils, epi_gridding, oephase, smaps -- see
 their own test files), and the scatter step that places gridded k-space
 into the zero-filled volume has a dedicated location-encoding test
 (test_scatter_frame_places_data_at_correct_indices in
-tests/test_preprocessing_preprocess.py) that exercises the exact
+tests/test_preprocess_preprocess.py) that exercises the exact
 permute/reshape chain this file uses.
 
 Every MATLAB permute/reshape in preprocess.m is translated mechanically:
@@ -35,7 +35,7 @@ import h5py
 import numpy as np
 from scipy.interpolate import interp1d
 
-from preprocessing.coils import (
+from preprocess.coils import (
     apply_coil_compression,
     apply_whitening,
     coil_compression_matrix,
@@ -43,17 +43,17 @@ from preprocessing.coils import (
     compute_whitening_matrix,
     select_nvcoils,
 )
-from preprocessing.config import (
+from preprocess.config import (
     PreprocessingConfig,
     SeqParams,
     SeqPaths,
     load_seq_params,
     seq_delay,
 )
-from preprocessing.epi_gridding import rampsampepi2cart
-from preprocessing.matio import read_mat
-from preprocessing.oephase import epiphasecorrect, getoephase
-from preprocessing.smaps import load_smaps
+from preprocess.epi_gridding import rampsampepi2cart
+from preprocess.matio import read_mat
+from preprocess.oephase import epiphasecorrect, getoephase
+from preprocess.smaps import load_smaps
 
 # raw_io imports GERecon, GE's proprietary (non-pip) SDK -- deliberately not
 # imported at module level, so every other function here (and the tests for
@@ -192,7 +192,7 @@ def scatter_frame(
     echo-slowest (Fortran/column-major order) to match each other -- this
     mirrors preprocess.m's own comment ("column-major reshape gives
     shot-outer order, matching permute([1 3 2 4])"); see
-    test_preprocessing_preprocess.py for a location-encoding test that
+    test_preprocess_preprocess.py for a location-encoding test that
     verifies this pairing is correct end to end.
     """
     Nx, ETL, Nshots, Nvcoils = ksp_frame_cart.shape
@@ -323,7 +323,7 @@ def record_noise_var(cfg: PreprocessingConfig, paths: SeqPaths, write: bool = Tr
     <seqname>_gre.h5, or is recomputed from the deGRE scan exactly as STEP 2
     does if that cache predates storing it. Needs GERecon (.venv-preprocessing).
     write=False only computes and returns the value."""
-    from preprocessing.raw_io import read_archive
+    from preprocess.raw_io import read_archive
 
     seq_params = load_seq_params(paths)
     ksp_noise = read_archive(paths.noise)
@@ -387,7 +387,7 @@ def preprocess(cfg: PreprocessingConfig, paths: SeqPaths) -> None:
     cal (odd/even phase) -> EPI (streamed frame-by-frame, checkpointed).
     Writes paths.recon.
     """
-    from preprocessing.raw_io import ArchiveReader, read_archive
+    from preprocess.raw_io import ArchiveReader, read_archive
 
     seq_params: SeqParams = load_seq_params(paths)
     Nx, Ny, Nz, ETL, R = seq_params.Nx, seq_params.Ny, seq_params.Nz, seq_params.ETL, seq_params.R

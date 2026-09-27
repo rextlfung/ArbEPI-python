@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from preprocessing.coils import (
+from preprocess.coils import (
     apply_coil_compression,
     apply_whitening,
     coil_compression_matrix,

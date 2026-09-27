@@ -1,6 +1,6 @@
 import numpy as np
 
-from preprocessing.cg_sense import _fftc, cg_sense
+from preprocess.cg_sense import _fftc, cg_sense
 
 
 def _gaussian_coil_sens(nx, ny, center, sigma):

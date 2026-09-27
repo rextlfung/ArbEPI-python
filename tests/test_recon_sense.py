@@ -1,6 +1,6 @@
 """End-to-end tests for recon/sense.py's run_sense: simulates a
 small synthetic multi-coil Cartesian acquisition, writes it out in the same
-.h5 layout preprocessing/ produces (ksp_epi_zf, smaps), and checks that MSLR
+.h5 layout preprocess/ produces (ksp_epi_zf, smaps), and checks that MSLR
 reconstruction runs to completion with a monotonically-behaved cost and no
 NaNs -- not a golden-output comparison (see the plan's real-data validation
 for that), just confirmation the full pipeline (operators + lowrank + solvers
@@ -46,7 +46,7 @@ def _write_synthetic_dataset(tmp_path, Nx, Ny, Nz, Nc, Nt, R, fn_prefix="ksp"):
     A = build_sense(smaps, omega)
     ksp_gathered = A.apply(x_true)  # (K,Nc,Nt)
 
-    # Real ksp_epi_zf.h5 files (this repo's own preprocessing/ output, or
+    # Real ksp_epi_zf.h5 files (this repo's own preprocess/ output, or
     # mslr-recon's sigpy-export path) are dense zero-filled arrays, not
     # gathered -- scatter back using each frame's own operator indices so
     # run_sense's internal gather_ksp() recovers exactly ksp_gathered.
@@ -194,7 +194,7 @@ def test_run_recon_recovers_signal_without_regularization(tmp_path):
 
 def _write_dataset(tmp_path, smaps, omega, x_true, tag):
     """Dense zero-filled ksp_epi_zf.h5 + smaps.h5 for a known image, in the
-    layout preprocessing/ writes. smaps (Nc,Nx,Ny,Nz) must be RSS-normalized
+    layout preprocess/ writes. smaps (Nc,Nx,Ny,Nz) must be RSS-normalized
     (run_sense normalizes whatever it loads)."""
     Nc, Nx, Ny, Nz = smaps.shape
     Nt = omega.shape[-1]

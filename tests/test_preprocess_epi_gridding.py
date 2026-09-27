@@ -8,7 +8,7 @@ sigpy = pytest.importorskip("sigpy")
 import hdf5storage  # noqa: E402
 
 from params import load_params  # noqa: E402
-from preprocessing.epi_gridding import rampsamp2cart, rampsampepi2cart  # noqa: E402
+from preprocess.epi_gridding import rampsamp2cart, rampsampepi2cart  # noqa: E402
 from sampling.gen_sampling_masks import gen_sampling_masks  # noqa: E402
 from sequences.ArbEPI import generate_arbepi  # noqa: E402
 
@@ -97,7 +97,7 @@ def test_rampsampepi2cart_recovers_object_under_real_pope_readout_trajectory(tmp
     the assembled asymmetric-POPE-ramp readout (lib/make_readout_grads.py,
     default params.ro_slew_rise/ro_slew_fall = 100/120 T/m/s), the same
     values sequences/ArbEPI.py writes to scan_info.mat and
-    preprocessing/preprocess.py feeds straight into rampsampepi2cart.
+    preprocess/preprocess.py feeds straight into rampsampepi2cart.
     kx correctness/coverage/Nyquist under POPE is independently verified by
     test_arbepi_kx_coverage_and_nyquist -- this checks the downstream
     regridded *image* is still recovered accurately, not just that the

@@ -1,7 +1,7 @@
 import h5py
 import numpy as np
 
-from preprocessing.matio import read_mat, read_mat_array
+from preprocess.matio import read_mat, read_mat_array
 
 
 def _write_hdf5storage_style(path, arrays: dict):

@@ -91,7 +91,7 @@ def run_sense(
 ) -> ReconResult:
     """Reconstruct the frames of fn_ksp with regularizer `reg`.
 
-    fn_b0map: a preprocessing/run_b0map.py output; when given, A models B0
+    fn_b0map: a preprocess/run_b0map.py output; when given, A models B0
     phase accrual (SENSE_B0), using fn_ksp's per-sample 'echo_times'. With
     r2star_map (1/s, EPI grid) as well, A also models R2* decay relative to
     t_ref_s, the nominal-TE echo time (SENSE_B0_R2star).
@@ -385,8 +385,8 @@ def main(
     to run_sense. For reg='lowrank', a GPU out-of-memory error falls back from
     POGM to FPGM to PGM (less solver state each time). Returns the output
     path without extension."""
-    from preprocessing.config import load_config, load_seq_params, set_seq_paths
-    from preprocessing.r2star_map import estimate_r2star_map_epi_grid
+    from preprocess.config import load_config, load_seq_params, set_seq_paths
+    from preprocess.r2star_map import estimate_r2star_map_epi_grid
     from recon.utils import nominal_te_s
 
     recon_dir = os.path.join(datdir, "recon")

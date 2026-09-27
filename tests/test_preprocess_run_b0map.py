@@ -1,8 +1,8 @@
-"""End-to-end test of preprocessing/julia/b0map.jl via preprocessing/run_b0map.py.
+"""End-to-end test of preprocess/julia/b0map.jl via preprocess/run_b0map.py.
 
-Requires a `julia` executable on PATH with preprocessing/julia/'s
+Requires a `julia` executable on PATH with preprocess/julia/'s
 Project.toml/Manifest.toml already instantiated (`julia
---project=preprocessing/julia -e 'import Pkg; Pkg.instantiate()'`) -- skipped
+--project=preprocess/julia -e 'import Pkg; Pkg.instantiate()'`) -- skipped
 entirely otherwise, the same tolerance this repo already extends to
 MATLAB-based comparisons (see CLAUDE.md) and to raw_io.py's GERecon
 dependency.
@@ -19,8 +19,8 @@ import pytest
 # run_b0map.py imports nifti_io.py at module scope, which needs nibabel.
 nib = pytest.importorskip("nibabel")
 
-from preprocessing.config import load_config  # noqa: E402
-from preprocessing.run_b0map import run_b0map  # noqa: E402
+from preprocess.config import load_config  # noqa: E402
+from preprocess.run_b0map import run_b0map  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     shutil.which('julia') is None, reason='julia executable not found on PATH'
@@ -258,7 +258,7 @@ def test_b0map_jl_errors_without_te_degre_attr(tmp_path):
     with h5py.File(gre_path, 'w') as f:
         f.create_dataset('ksp_gre_echoes', data=np.zeros((4, 4, 4, 2, 1), dtype=np.complex64))
 
-    julia_dir = os.path.join(os.path.dirname(__file__), '..', 'preprocessing', 'julia')
+    julia_dir = os.path.join(os.path.dirname(__file__), '..', 'preprocess', 'julia')
     script = os.path.join(julia_dir, 'b0map.jl')
     result = subprocess.run(
         ['julia', f'--project={julia_dir}', script, str(gre_path), str(tmp_path / 'out.h5')],

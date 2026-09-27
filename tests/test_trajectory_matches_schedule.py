@@ -70,7 +70,7 @@ def test_arbepi_schedule_echo_times(tmp_path):
     """scan_info.mat's 'schedules' carries a 3rd channel, echo time (s
     since RF excitation) per acquisition, alongside (ky, kz) -- see
     sequences/ArbEPI.py's echo_times computation and
-    preprocessing/preprocess.py's load_schedules(), which splits this back
+    preprocess/preprocess.py's load_schedules(), which splits this back
     out for (ky, kz)-only consumers."""
     import hdf5storage
 
@@ -143,7 +143,7 @@ def test_noise_nfid_matches_arbepi(tmp_path):
     same as generate_arbepi()/generate_epical(), not params.sys directly.
     Regression test for a real bug where noise.py bypassed that helper and
     got a shorter Nfid, which preprocessing's calibration guard rejects
-    outright (see preprocessing/preprocess.py's Nfid mismatch check)."""
+    outright (see preprocess/preprocess.py's Nfid mismatch check)."""
     import hdf5storage
 
     p = _small_params(tmp_path)
@@ -239,7 +239,7 @@ def test_arbepi_kx_oversamples_when_nyquist_rate_exceeds_max_grad(tmp_path):
     preprocessing's rampsamp2cart-based regridding is exercised against
     this oversampled trajectory already, via
     test_rampsampepi2cart_recovers_object_under_real_pope_readout_trajectory
-    in tests/test_preprocessing_epi_gridding.py, which builds a sequence
+    in tests/test_preprocess_epi_gridding.py, which builds a sequence
     with these same params and successfully regrids the resulting
     (oversampled, Nfid > what exact-Nyquist would need) kxo/kxe back onto
     the Nx-sized target grid."""

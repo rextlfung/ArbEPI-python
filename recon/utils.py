@@ -23,8 +23,8 @@ import torch
 from mirtorch.linear import BlockDiagonal
 from mirtorch.linear.mri import mri_exp_approx
 
-from preprocessing.matio import read_mat
-from preprocessing.nifti_io import save_recon_nifti
+from preprocess.matio import read_mat
+from preprocess.nifti_io import save_recon_nifti
 from recon.operators import SENSE, SENSE_B0, build_sense, build_sense_b0
 
 if TYPE_CHECKING:

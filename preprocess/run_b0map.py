@@ -3,18 +3,18 @@
 Unlike the removed recon/sigpy_recon.py's drivers (pure-Python Stage 2
 drivers), this shells out to Julia -- MRIFieldmaps.jl
 (https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl) has no Python
-port, and CLAUDE.md's preprocessing/ section previously described B0
+port, and CLAUDE.md's preprocess/ section previously described B0
 estimation as "the external Julia package's job", left for a separate
 consumer outside this repo. This module brings that step in-repo instead,
 the same way raw_io.py isolates GE's proprietary GERecon SDK to one module
-rather than porting it: preprocessing/julia/b0map.jl is a self-contained
-Julia project (preprocessing/julia/Project.toml + Manifest.toml, pinned)
+rather than porting it: preprocess/julia/b0map.jl is a self-contained
+Julia project (preprocess/julia/Project.toml + Manifest.toml, pinned)
 invoked as a subprocess, not embedded via PythonCall/juliacall -- there is
 no other Julia dependency anywhere else in this pipeline to justify that
 weight.
 
 Depends on preprocess()'s STEP 2 output (`<seqname>_gre.h5`, whitened +
-coil-compressed dual-echo GRE k-space + TE_degre), so run_preprocessing()
+coil-compressed dual-echo GRE k-space + TE_degre), so batch_preprocess()
 must have already completed for each seqname before this.
 
 Also computes (or loads, if already cached by a prior run of the removed recon/sigpy_recon.py)
@@ -46,10 +46,10 @@ import subprocess
 import h5py
 import numpy as np
 
-from preprocessing.config import PreprocessingConfig, load_config, load_seq_params, set_seq_paths
-from preprocessing.grid_resize import resize_to_epi_grid
-from preprocessing.nifti_io import save_recon_nifti
-from preprocessing.smaps import load_smaps
+from preprocess.config import PreprocessingConfig, load_config, load_seq_params, set_seq_paths
+from preprocess.grid_resize import resize_to_epi_grid
+from preprocess.nifti_io import save_recon_nifti
+from preprocess.smaps import load_smaps
 
 _JULIA_DIR = os.path.join(os.path.dirname(__file__), 'julia')
 _JULIA_SCRIPT = os.path.join(_JULIA_DIR, 'b0map.jl')

@@ -380,7 +380,7 @@ def load_params(output_dir: str = 'output') -> Params:
     # res_degre[2]=2mm needs ceil(40.5/2)=21 voxels, giving
     # fov_degre[2]=42mm exactly, not some in-between value 2mm voxels
     # can't actually represent. z needs fov_degre[2] >= fov[2]
-    # specifically (preprocessing/smaps.py's process_smaps raises
+    # specifically (preprocess/smaps.py's process_smaps raises
     # otherwise); x/y get the same treatment for consistency even though
     # nothing currently enforces it there. This replaces the old
     # independent 216mm x/y, 42mm z values.
@@ -393,7 +393,7 @@ def load_params(output_dir: str = 'output') -> Params:
     # the deGRE slab covers the EPI slab with room to spare even when a
     # single deGRE is shared across EPI variants whose z-FOVs differ by a
     # rounding step (e.g. 144mm vs 145.8mm at 2.4mm vs 5.4mm res) -- avoids
-    # needing preprocessing/grid_resize.py's zero_pad_z workaround, since
+    # needing preprocess/grid_resize.py's zero_pad_z workaround, since
     # the z crop path handles any deGRE z-FOV >= the EPI's. x/y must still
     # match the EPI FOV exactly (grid_resize.py raises otherwise).
     degre_z_margin = 4e-3

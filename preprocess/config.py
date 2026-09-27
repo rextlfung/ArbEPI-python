@@ -1,4 +1,4 @@
-"""Central configuration for the EPI preprocessing/reconstruction pipeline.
+"""Central configuration for the EPI preprocess/reconstruction pipeline.
 
 Ports ../epi-preprocessing/config.m + set_seq_paths.m. Mirrors params.py's
 load_params() pattern: a dataclass returned by a factory function, passed
@@ -82,7 +82,7 @@ class PreprocessingConfig:
     num_iter: int = 100
     Nframes: float = float('inf')
 
-    # B0 field map estimation (run_b0map.py -> preprocessing/julia/b0map.jl).
+    # B0 field map estimation (run_b0map.py -> preprocess/julia/b0map.jl).
     # Fraction of peak first-echo GRE magnitude below which a voxel is
     # excluded from the fit -- matches MRIFieldmaps.jl's own b0init default.
     b0map_mask_thresh: float = 0.1
@@ -151,7 +151,7 @@ def set_seq_paths(cfg: PreprocessingConfig, seqname: str) -> SeqPaths:
         # .h5, not .mat: everything preprocess.py itself writes (this file,
         # the GRE/smaps caches) is plain numpy-order h5py, the opposite
         # on-disk axis convention from the hdf5storage-written .mat files
-        # this pipeline reads (scan_info.mat -- see preprocessing/matio.py).
+        # this pipeline reads (scan_info.mat -- see preprocess/matio.py).
         # A .mat extension here would silently invite reading it with
         # hdf5storage.loadmat, which would return every multi-axis array
         # transposed.

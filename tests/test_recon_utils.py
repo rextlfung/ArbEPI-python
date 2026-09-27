@@ -1,7 +1,7 @@
 """recon/utils.py's read_frames_cropped: both branches (chunked
 one frame per chunk vs. not chunked along the last axis) x both modes
 (spatial_slices=None vs. given) against a location-encoding synthetic
-dataset, in the same style as test_preprocessing_preprocess.py's
+dataset, in the same style as test_preprocess_preprocess.py's
 scatter_frame test -- each element is given a value encoding its own
 (x, y, z, c, t) index, so a wrong crop/reshape is caught directly rather
 than only by a shape check. Also: load_and_gather_ksp's frame selection,

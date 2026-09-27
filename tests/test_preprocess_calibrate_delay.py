@@ -3,14 +3,14 @@ import pytest
 
 # calibrate_delay.py imports epi_gridding.py at module scope, which needs
 # sigpy -- not itself used in this test, but the whole module fails to
-# import without it. See CLAUDE.md's "preprocessing/" section: sigpy/
+# import without it. See CLAUDE.md's "preprocess/" section: sigpy/
 # nibabel live in the optional `preprocessing` extra, not the core
 # dependency set, so this must be gated the same way tests/test_recon_*.py
 # gates on torch/mirtorch.
 pytest.importorskip("sigpy")
 
-from preprocessing.calibrate_delay import select_best_delay  # noqa: E402
-from preprocessing.oephase import matlab_round  # noqa: E402
+from preprocess.calibrate_delay import select_best_delay  # noqa: E402
+from preprocess.oephase import matlab_round  # noqa: E402
 
 
 def test_select_best_delay_picks_zero_wrap_closest_to_zero_a2():
@@ -54,9 +54,9 @@ def test_oephase_estimate_and_correction_share_a_pixel_frame(nx):
     lands one pixel away from epiphasecorrect's frame (review item 251)."""
     import sigpy
 
-    from preprocessing.epi_gridding import rampsampepi2cart
-    from preprocessing.oephase import epiphasecorrect, getoephase
-    from preprocessing.preprocess import compute_oephase
+    from preprocess.epi_gridding import rampsampepi2cart
+    from preprocess.oephase import epiphasecorrect, getoephase
+    from preprocess.preprocess import compute_oephase
 
     etl, nshots, ncoils, fov_cm = 8, 2, 3, 20.0
     kx = (np.arange(nx) - nx // 2) / fov_cm  # uniform samples: gridding is ~an exact resample

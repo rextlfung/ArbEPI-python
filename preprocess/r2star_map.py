@@ -28,7 +28,7 @@ and clips to a physically sane R2* range to avoid a handful of low-SNR
 voxels producing wild outliers that would otherwise poison the complex
 field's segmentation fit.
 
-Per-echo image reconstruction matches preprocessing/gre_diagnostics.py's
+Per-echo image reconstruction matches preprocess/gre_diagnostics.py's
 own RSS coil combine exactly (same _ift3 convention, same per-echo
 sqrt(sum_c|.|^2)), so the R2* map is consistent with the same GRE images
 that script already renders for visual QA.
@@ -46,7 +46,7 @@ import os
 import h5py
 import numpy as np
 
-from preprocessing.grid_resize import resize_to_epi_grid
+from preprocess.grid_resize import resize_to_epi_grid
 
 
 def _ift3(d: np.ndarray) -> np.ndarray:

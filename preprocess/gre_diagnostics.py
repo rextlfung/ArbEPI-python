@@ -1,6 +1,6 @@
 """One-off diagnostic: reconstruct the dual-echo deGRE images from the
 whitened+coil-compressed GRE cache (<seqname>_gre.h5's ksp_gre_echoes,
-written by preprocess.py's STEP 2 -- see CLAUDE.md's preprocessing/ section)
+written by preprocess.py's STEP 2 -- see CLAUDE.md's preprocess/ section)
 into a viewable NIfTI, and dump PNG snapshots of both echo magnitudes plus
 the B0 field-map pipeline's intermediate volumes (finit_hz,
 b0map_hz_degre, mask_degre -- the deGRE-grid arrays run_b0map.py's post-
@@ -18,7 +18,7 @@ b0map.jl's own image-space conversion uses in Julia (see its module
 docstring in CLAUDE.md). It used to live in recon/sigpy_recon.py's RSS driver.
 
 Usage (from repo root, .venv-preprocessing):
-    .venv-preprocessing/bin/python -m preprocessing.gre_diagnostics <datdir> <seqname>
+    .venv-preprocessing/bin/python -m preprocess.gre_diagnostics <datdir> <seqname>
 """
 
 import argparse
@@ -28,8 +28,8 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 
-from preprocessing.config import load_config, load_seq_params, set_seq_paths
-from preprocessing.nifti_io import save_recon_nifti
+from preprocess.config import load_config, load_seq_params, set_seq_paths
+from preprocess.nifti_io import save_recon_nifti
 
 
 def _ift3(d: np.ndarray) -> np.ndarray:
@@ -38,7 +38,7 @@ def _ift3(d: np.ndarray) -> np.ndarray:
     in this pipeline. toppe.utils.ift3.m's fftshift-on-both-sides spelling,
     which this used to replicate, agrees for even axes and differs by a
     linear phase ramp on odd ones (docs/review-findings.md item 251);
-    preprocessing/julia/b0map.jl's ifft3c uses the same pairing as this."""
+    preprocess/julia/b0map.jl's ifft3c uses the same pairing as this."""
     axes = (0, 1, 2)
     return np.fft.fftshift(np.fft.ifftn(np.fft.ifftshift(d, axes=axes), axes=axes), axes=axes)
 

@@ -31,7 +31,7 @@ voxel-center positions by a systematic ~0.27mm mean / 0.63mm max error;
 `grid_mode=True` cuts that to ~0.006mm mean, with the residual ~0.39mm error
 confined to the two outermost voxels on each axis, an unavoidable
 extrapolation artifact of upsampling past the source grid's own edge voxel
-centers -- see `tests/test_preprocessing_grid_resize.py`'s
+centers -- see `tests/test_preprocess_grid_resize.py`'s
 `test_resize_to_epi_grid_matches_analytic_ramp_at_voxel_centers`).
 `mode='nearest'` clamps that edge extrapolation to the boundary voxel's own
 value rather than blending toward 0 (`grid_mode=True`'s other `mode` options
@@ -52,7 +52,7 @@ alignment convention either way.
 import numpy as np
 from scipy import ndimage
 
-from preprocessing.oephase import matlab_round
+from preprocess.oephase import matlab_round
 
 
 def resize_to_epi_grid(

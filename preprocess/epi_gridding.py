@@ -21,7 +21,7 @@ unregularized SENSE (both scale-invariant), but false once real,
 noise-calibrated regularization (recon/mslr.py's normalize_noise,
 _reg_weights' unit-variance-noise assumption) needs the *absolute* scale
 correct. Real background k-space/image noise measured ~70-800x (method-
-dependent) away from the unit-variance whitening (preprocessing/coils.py)
+dependent) away from the unit-variance whitening (preprocess/coils.py)
 guarantees, traced to exactly this gap.
 
 reconecho.m (hmriutils' reference this module ports) is explicit about its
@@ -43,7 +43,7 @@ net scale here). Confirmed via two independent routes: (1) a controlled
 synthetic test with uniform (uniformly-spaced) kx -- where density
 compensation degenerates to all-ones, isolating this factor -- measures
 this exact sqrt(nx) gap to 4 significant figures across nx in
-{32,64,128,256} (see tests/test_preprocessing_epi_gridding.py); (2) this
+{32,64,128,256} (see tests/test_preprocess_epi_gridding.py); (2) this
 analytical derivation from reconecho.m's own explicit normalization line.
 """
 

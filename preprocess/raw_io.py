@@ -1,6 +1,6 @@
 """Raw ScanArchive reading via GE's Orchestra Python SDK (GERecon).
 
-Ports orc_read.m. This is the one module in preprocessing/ allowed to import
+Ports orc_read.m. This is the one module in preprocess/ allowed to import
 GERecon -- see CLAUDE.md for why: GE's raw k-space payload is an opaque
 proprietary byte blob inside the HDF5 container (confirmed via `h5dump -H` --
 H5T_STD_U8LE, no structured type info), and even the MRI community's own

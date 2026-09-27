@@ -12,13 +12,13 @@ import pytest
 pytest.importorskip("sigpy")
 pytest.importorskip("nibabel")
 
-from preprocessing.coils import (  # noqa: E402
+from preprocess.coils import (  # noqa: E402
     apply_coil_compression,
     coil_compression_matrix,
     compute_coil_covariance,
 )
-from preprocessing.config import PreprocessingConfig, SeqParams, SeqPaths  # noqa: E402
-from preprocessing.smaps import load_smaps  # noqa: E402
+from preprocess.config import PreprocessingConfig, SeqParams, SeqPaths  # noqa: E402
+from preprocess.smaps import load_smaps  # noqa: E402
 
 
 def _gaussian_coil_sens(n, centers, sigma):

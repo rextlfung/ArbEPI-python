@@ -2,7 +2,7 @@ import h5py
 import numpy as np
 import pytest
 
-from preprocessing.config import (
+from preprocess.config import (
     PreprocessingConfig,
     SeqPaths,
     load_config,

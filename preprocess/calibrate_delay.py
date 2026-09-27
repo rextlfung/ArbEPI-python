@@ -20,10 +20,10 @@ it, but it isn't needed for this diagnostic (mirrors calibrate_delay.m).
 
 import numpy as np
 
-from preprocessing.coils import compute_whitening_matrix
-from preprocessing.config import SeqPaths, load_seq_params
-from preprocessing.oephase import matlab_round
-from preprocessing.preprocess import apply_delay, compute_oephase, load_kxoe, prepare_cal_data
+from preprocess.coils import compute_whitening_matrix
+from preprocess.config import SeqPaths, load_seq_params
+from preprocess.oephase import matlab_round
+from preprocess.preprocess import apply_delay, compute_oephase, load_kxoe, prepare_cal_data
 
 
 def select_best_delay(report: dict) -> float:
@@ -52,7 +52,7 @@ def calibrate_delay(
     """Returns (best_delay, report); report has one entry per swept delay:
     {'delay': [...], 'a1': [...], 'a2': [...], 'wrap_count': [...]}.
     """
-    from preprocessing.raw_io import read_archive
+    from preprocess.raw_io import read_archive
 
     if delay_range is None:
         delay_range = np.arange(-6, 6 + 0.05, 0.05)

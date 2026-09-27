@@ -18,7 +18,7 @@ import h5py
 import numpy as np
 import torch
 
-from preprocessing.nifti_io import save_recon_nifti
+from preprocess.nifti_io import save_recon_nifti
 from recon.utils import resolve_device
 
 
@@ -51,7 +51,7 @@ def run_rss(fn_ksp: str, device: str | None = None, max_batch_bytes: float = 4e9
 
 
 def main(datdir: str, seqname: str, device: str | None = None) -> str:
-    from preprocessing.config import load_config, load_seq_params, set_seq_paths
+    from preprocess.config import load_config, load_seq_params, set_seq_paths
 
     recon_dir = os.path.join(datdir, "recon")
     sp = load_seq_params(set_seq_paths(load_config(datdir=datdir, seqnames=[seqname]), seqname))

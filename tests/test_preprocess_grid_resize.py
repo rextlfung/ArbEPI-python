@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from preprocessing.grid_resize import resize_to_epi_grid
+from preprocess.grid_resize import resize_to_epi_grid
 
 
 def test_resize_to_epi_grid_identity_when_grids_match():
