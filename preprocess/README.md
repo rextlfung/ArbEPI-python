@@ -196,6 +196,26 @@ object voxel's SNR kept (matched-filter combine, R = 1), median / worst 5%:
 The previous rule (PCA, 90% energy, at least 2R) kept 14 coils and lost ~16% SNR
 at the object's periphery; GCC at 99% keeps 10 coils and ~1.4%.
 
+Those numbers are at R = 1. Under acceleration the loss is larger, because fewer
+coils also means more noise amplification in the unfolding. Reconstructing
+`2_6x_2.4mm` (R = 6) with unregularized CG-SENSE (30 iterations, 20 frames,
+plain SENSE), compared with all 32 coils:
+
+| virtual coils | mean-image difference | tSNR relative to 32 coils | CG time |
+|---|---|---|---|
+| GCC 6 | 15.1% | 0.70 | 2.7 s |
+| GCC 8 | 7.2% | 0.80 | 3.5 s |
+| GCC 10 (the 99% default) | 3.8% | 0.88 | 4.3 s |
+| GCC 12 | 1.8% | 0.94 | 5.1 s |
+| PCA 14 (previous rule) | 9.0% | 0.84 | 5.8 s |
+| 32 (`compress=False`) | — | 1 | 13.9 s |
+
+GCC with 10 coils beats the previous 14-coil PCA on both counts at ~3× less recon
+time than 32 coils. Unregularized CG is the worst case for noise amplification
+(regularized recon should narrow the gap, not measured here). Where SNR matters
+more than recon time, raise `cc_energy_thresh` (0.995 gives ~12 coils here) or set
+`Nvcoils`; `compress=False` keeps everything.
+
 ### Maps (from the dual-echo deGRE)
 
 - **Sensitivity maps**: one ESPIRiT calibration (sigpy) on the whitened,
@@ -255,10 +275,12 @@ best, report = calibrate_delay(set_seq_paths(PreprocessConfig(datdir=DAT), "2_6x
 ## Performance
 
 On `2_6x_2.4mm` (90×90×60, 60 frames × 900 readouts, 32 coils; deGRE 108×108×72):
-the full default run takes about 6 minutes, roughly 2 for Stage A, the rest for
-ESPIRiT, the B0 fit and writing. Rerunning from a kept cache with different
-compression settings takes about 1 minute (ESPIRiT included). The whitened
-32-coil cache is ~1.2 GB; the default output ~0.75 GB.
+the full default run takes 6–7 minutes (346 s alone on the machine), under 2 of
+them for Stage A and the rest for ESPIRiT, the B0 fit and writing. Rerunning from
+a kept cache with different compression settings takes about 1 minute without
+the maps (62 s for 6 virtual coils) and about 4 with ESPIRiT. The whitened
+32-coil cache is ~1.2 GB; the default output (10 virtual coils) ~0.75 GB, and
+~1.8 GB uncompressed.
 
 ## Validation
 

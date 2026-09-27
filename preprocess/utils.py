@@ -234,10 +234,7 @@ def plot_gre_b0_diagnostics(fn_output: str, out_dir: str | None = None) -> list[
     initialization, the fitted field map and the fit mask, at the center slice
     and a quarter-way slice. For telling apart GRE-data problems from
     field-map-estimation problems. Returns the PNG paths."""
-    import matplotlib
-
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure  # not pyplot: leaves the caller's backend alone
 
     with h5py.File(fn_output, 'r') as f:
         g = f['degre']
@@ -264,7 +261,8 @@ def plot_gre_b0_diagnostics(fn_output: str, out_dir: str | None = None) -> list[
 
     paths = []
     for iz in (img.shape[2] // 2, img.shape[2] // 4):
-        fig, axes = plt.subplots(1, len(panels), figsize=(3.2 * len(panels), 3.4), squeeze=False)
+        fig = Figure(figsize=(3.2 * len(panels), 3.4))
+        axes = fig.subplots(1, len(panels), squeeze=False)
         for ax, (title, vol, cmap, clim) in zip(axes[0], panels):
             kw = dict(vmin=clim[0], vmax=clim[1]) if clim else {}
             im = ax.imshow(vol[:, :, iz].T, origin='lower', cmap=cmap, **kw)
@@ -276,6 +274,5 @@ def plot_gre_b0_diagnostics(fn_output: str, out_dir: str | None = None) -> list[
         fig.tight_layout()
         path = os.path.join(out_dir, f'{stem}_gre_b0_z{iz}.png')
         fig.savefig(path, dpi=120)
-        plt.close(fig)
         paths.append(path)
     return paths

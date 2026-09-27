@@ -697,8 +697,12 @@ PCA; `coils.gcc_compression` reuses `pca_compression`'s eigenvector convention
 (u^H of sum c c^H) to avoid that. `coils.gcc_calibration` crops/pads the
 deGRE's kx to the EPI Nx (shared x FOV) so per-x matrices land on EPI x
 positions, and uses a central 24x24 (ky, kz) block (all of ky-kz gave the same
-numbers). See `preprocess/README.md` for the reconstruction comparison across
-coil counts.
+numbers). Caveat, measured by reconstruction (`2_6x_2.4mm`, R = 6,
+unregularized CG-SENSE, 20 frames): the R = 1 retention metric understates the
+loss under acceleration -- GCC 10 coils gave tSNR 0.88 of the 32-coil recon
+(GCC 12: 0.94, GCC 8: 0.80, the old PCA 14: 0.84) at ~3x less recon time.
+The 99% default was kept as the user's call; `cc_energy_thresh` 0.995 gives 12
+coils here (table in `preprocess/README.md`).
 
 **Odd/even frame (review item 251).** `compute_oephase` and `epiphasecorrect`
 use the same centered-IFFT pairing along x, so `a` is estimated and applied in
