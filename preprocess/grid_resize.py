@@ -52,7 +52,7 @@ alignment convention either way.
 import numpy as np
 from scipy import ndimage
 
-from preprocess.oephase import matlab_round
+from preprocess.utils import matlab_round
 
 
 def resize_to_epi_grid(

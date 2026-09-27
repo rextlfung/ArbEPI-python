@@ -2,21 +2,21 @@ import h5py
 import numpy as np
 import pytest
 
-# preprocess.py imports epi_gridding.py (sigpy) and nifti_io.py (nibabel) at
-# module scope -- not used by these tests directly, but the whole module
-# fails to import without both.
+# preprocess.py imports epi_gridding.py (sigpy) at module scope.
 pytest.importorskip("sigpy")
-pytest.importorskip("nibabel")
 
 from preprocess.preprocess import (  # noqa: E402
+    PreprocessConfig,
     _build_echo_times,
     _build_omegas,
     apply_delay,
-    load_schedules,
     resume_start_frame,
     scatter_frame,
+    seq_delay,
+    set_seq_paths,
     unflatten_gre_echoes,
 )
+from preprocess.utils import load_schedules  # noqa: E402
 
 
 def test_unflatten_gre_echoes_places_data_at_correct_indices():
@@ -247,7 +247,29 @@ def test_build_omegas_marks_scheduled_locations():
                 assert omegas[iy, iz, frame]
 
 
-def test_measure_noise_var_is_one_for_whitened_noise_and_tracks_scale():
+def test_config_defaults_and_paths():
+    cfg = PreprocessConfig(datdir='/data/', seqnames=['a'])
+    assert cfg.fn_gre == '/data/scanarchives/gre.h5'
+    assert cfg.outdir == '/data/recon'
+    assert cfg.compress and cfg.cc_method == 'gcc' and cfg.Nvcoils is None
+    paths = set_seq_paths(cfg, 'caipi')
+    assert paths.scan_info == '/data/seqs/caipi/scan_info.mat'
+    assert paths.cal == '/data/scanarchives/caipi_cal.h5'
+    assert paths.noise == '/data/scanarchives/caipi_noise.h5'
+    assert paths.epi == '/data/scanarchives/caipi_epi.h5'
+    assert paths.cache == '/data/recon/caipi_gridded.h5'
+    assert paths.output == '/data/recon/caipi_preprocessed.h5'
+    with pytest.raises(ValueError):
+        PreprocessConfig(datdir='/data/', cc_method='svd')
+
+
+def test_seq_delay_scalar_and_per_sequence():
+    assert seq_delay(PreprocessConfig(datdir='/d', delay=-1.5), 'a') == -1.5
+    cfg = PreprocessConfig(datdir='/d', delay={'a': -1.0, 'b': 2.0})
+    assert seq_delay(cfg, 'a') == -1.0 and seq_delay(cfg, 'b') == 2.0
+
+
+def test_grid_noise_variance_is_one_for_whitened_noise_and_tracks_scale():
     """Noise-scan readouts pushed through whitening, coil compression and
     regridding (uniform kx, so density compensation is ~1) come out with unit
     variance per complex sample, and scale with the input noise level."""
@@ -257,7 +279,10 @@ def test_measure_noise_var_is_one_for_whitened_noise_and_tracks_scale():
         compute_coil_covariance,
         compute_whitening_matrix,
     )
-    from preprocess.preprocess import measure_noise_var
+    from preprocess.preprocess import grid_noise
+
+    def measure_noise_var(*args):
+        return float(np.mean(np.abs(grid_noise(*args)) ** 2))
 
     rng = np.random.default_rng(0)
     nx, ncoils, etl, ntrains, fov_cm = 32, 6, 4, 50, 20.0

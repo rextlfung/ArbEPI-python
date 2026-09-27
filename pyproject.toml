@@ -52,7 +52,7 @@ recon = [
     "h5py>=3.10",
     "nibabel>=5.0",
     "PyWavelets",  # wavelet filter taps for recon/regularizers.py's Wavelet3D
-    "scipy>=1.10",  # preprocess/grid_resize.py, used for the R2* map
+    "scipy>=1.10",  # needed by mirtorch; floor pinned here
     "matplotlib",  # recon/utils.py's tSNR report figures
     "ipykernel",  # to run recon/demo.ipynb in this venv
 ]

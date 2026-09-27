@@ -20,10 +20,10 @@ it, but it isn't needed for this diagnostic (mirrors calibrate_delay.m).
 
 import numpy as np
 
+from preprocess import utils
 from preprocess.coils import compute_whitening_matrix
-from preprocess.config import SeqPaths, load_seq_params
-from preprocess.oephase import matlab_round
-from preprocess.preprocess import apply_delay, compute_oephase, load_kxoe, prepare_cal_data
+from preprocess.preprocess import SeqPaths, apply_delay, compute_oephase, prepare_cal_data
+from preprocess.utils import load_kxoe, load_seq_params, matlab_round
 
 
 def select_best_delay(report: dict) -> float:
@@ -52,19 +52,17 @@ def calibrate_delay(
     """Returns (best_delay, report); report has one entry per swept delay:
     {'delay': [...], 'a1': [...], 'a2': [...], 'wrap_count': [...]}.
     """
-    from preprocess.raw_io import read_archive
-
     if delay_range is None:
         delay_range = np.arange(-6, 6 + 0.05, 0.05)
 
-    seq_params = load_seq_params(paths)
+    seq_params = load_seq_params(paths.scan_info)
     Nx, ETL, fov = seq_params.Nx, seq_params.ETL, seq_params.fov
 
-    ksp_noise = read_archive(paths.noise)
+    ksp_noise = utils.read_archive(paths.noise)
     Nfid = ksp_noise.shape[0]
     W = compute_whitening_matrix(ksp_noise.transpose(0, 2, 1))
 
-    ksp_cal_raw = read_archive(paths.cal)
+    ksp_cal_raw = utils.read_archive(paths.cal)
     if ksp_cal_raw.shape[0] != Nfid:
         raise ValueError(
             f'calibrate_delay: Calibration Nfid ({ksp_cal_raw.shape[0]}) != '

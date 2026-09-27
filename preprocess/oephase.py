@@ -7,12 +7,7 @@ than redesigned.
 
 import numpy as np
 
-
-def matlab_round(x: float) -> int:
-    """MATLAB's round() rounds half away from zero; numpy/Python round to
-    even. Only matters at exact .5 ties, but replicated for fidelity since
-    it gates mask boundaries (getoephase, calibrate_delay, grid_resize)."""
-    return int(np.floor(x + 0.5)) if x >= 0 else int(np.ceil(x - 0.5))
+from preprocess.utils import matlab_round
 
 
 def smooth_custom(x: np.ndarray, span: int = 5) -> np.ndarray:

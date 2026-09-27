@@ -1,9 +1,10 @@
 #=
-b0map.jl -- B0 field map estimation from preprocess.py's dual-echo GRE cache.
+b0map.jl -- B0 field map estimation from the dual-echo deGRE.
 
-Consumes `<seqname>_gre.h5` (written by preprocess/preprocess.py STEP 2:
-whitened + coil-compressed k-space, every deGRE echo, plus a `TE_degre`
-attribute in seconds) and writes `<seqname>_b0map.h5` (a regularized B0
+Called by preprocess/b0map.py's estimate_b0map, which writes a temporary h5
+holding `ksp_gre_echoes` (whitened deGRE k-space, every echo) with a
+`TE_degre` attribute in seconds, and optionally `smaps_degre`/`emap_degre`.
+Writes a regularized B0
 field map in Hz, via MRIFieldmaps.jl's `b0map`, ../MRIFieldmaps.jl reference
 https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl,
 algorithm: C Y Lin, J A Fessler, "Efficient Regularized Field Map
@@ -69,11 +70,9 @@ and `b0init` both build a `finit` this same way) and removes any
 sensitivity to this edge case.
 
 Coil sensitivity maps (`smap`) are now passed, when `smaps_h5_path` is
-given: `preprocess/smaps.py`'s `load_smaps` resizes the same
-`cal_size`-cropped ESPIRiT calibration (`smaps_raw`/`emap`) it already
-produces for the *EPI* grid onto *this* deGRE grid too (`smaps_degre`,
-`emap_degre`, in `<datdir>/recon/smaps_<seqname>_sigpy.h5`), so `smap`'s
-shape now matches `images`' spatial dims exactly, satisfying `b0map`'s
+given: preprocess() resizes the same ESPIRiT calibration it uses for the
+*EPI* grid onto *this* deGRE grid too (`smaps_degre`, `emap_degre`), so
+`smap`'s shape matches `images`' spatial dims exactly, satisfying `b0map`'s
 `smap` shape check. This replaces MRIFieldmaps' own phase-contrast
 coil-combine fallback (`coil_combine(images, nothing)`, Bernstein et al.,
 MRM 1994, eqn 13) with a true matched-filter combine
@@ -160,12 +159,11 @@ ifft3c(x) = fftshift3(ifft(ifftshift3(x), (1, 2, 3)))
 function load_gre_images(gre_h5_path::AbstractString)
     ksp, TE = h5open(gre_h5_path, "r") do f
         haskey(f, "ksp_gre_echoes") ||
-            error("b0map.jl: '$gre_h5_path' has no 'ksp_gre_echoes' dataset -- " *
-                  "was it written by a params.mat snapshot without TE_degre (pre-dual-echo deGRE)?")
+            error("b0map.jl: '$gre_h5_path' has no 'ksp_gre_echoes' dataset.")
         ksp = read_numpy_array(f, "ksp_gre_echoes")  # (Nx, Ny, Nz, n_echoes, Ncoils)
         haskey(attributes(f), "TE_degre") ||
             error("b0map.jl: '$gre_h5_path' has no 'TE_degre' attribute -- " *
-                  "regenerate params.mat via the current sequences/ArbEPI.py before preprocessing.")
+                  "the acquisition's scan_info.mat predates the dual-echo deGRE.")
         TE = read(attributes(f)["TE_degre"])
         (ksp, TE)
     end

@@ -5682,8 +5682,11 @@ consolidation). No items needed closing this pass.
   drop the re-clamp and use `rho_calib = side_frac` directly (or, if
   belt-and-suspenders is wanted, an `assert` instead of a silent
   re-clamp).
-- [ ] **246. `preprocessing/config.py`'s `PreprocessingConfig` dataclass
+- [x] **246. `preprocessing/config.py`'s `PreprocessingConfig` dataclass
   carries seven fields with zero readers anywhere in the current tree.**
+  [resolved 2026-09-27: config.py was removed in the `preprocess/`
+  restructure; the new `preprocess.preprocess.PreprocessConfig` has none of
+  the seven fields.]
   [measured 2026-09-23 against `100056a`: repo-wide grep for
   `cfg.<field>`/`config.<field>` patterns, including in
   `recon/lowres_calib.py` (the one `recon/` module that still takes
@@ -5704,8 +5707,10 @@ consolidation). No items needed closing this pass.
   Fix: delete the seven fields (and the stale comment block above them),
   or, if any are meant to gate future functionality, add a one-line note
   saying so.
-- [ ] **250. `preprocessing/cg_sense.py` has zero production callers
+- [x] **250. `preprocessing/cg_sense.py` has zero production callers
   anywhere in the current tree -- only its own unit test exercises it.**
+  [resolved 2026-09-27: deleted with its test in the `preprocess/`
+  restructure; recon/solvers.py's `cg` is the CG implementation.]
   [measured 2026-09-24 against `3ab2854`] `grep -rn "cg_sense\|_fftc\|
   _ifftc" --include=*.py .` (excluding the module's own definitions)
   shows the only caller of `cg_sense()` is

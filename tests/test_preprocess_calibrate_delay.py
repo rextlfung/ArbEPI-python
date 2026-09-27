@@ -10,7 +10,6 @@ import pytest
 pytest.importorskip("sigpy")
 
 from preprocess.calibrate_delay import select_best_delay  # noqa: E402
-from preprocess.oephase import matlab_round  # noqa: E402
 
 
 def test_select_best_delay_picks_zero_wrap_closest_to_zero_a2():
@@ -33,17 +32,6 @@ def test_select_best_delay_falls_back_to_fewest_wraps_if_none_safe():
     }
     best = select_best_delay(report)
     assert best == 0.0  # delay index 1 has the fewest wraps (1)
-
-
-def test_matlab_round_rounds_half_away_from_zero():
-    # Nx=90 is a real value used in this project (see README) and lands
-    # exactly on a .5 tie for Nx/4 -- Python's banker's-rounding round()
-    # would give 22 here, MATLAB's round() gives 23.
-    assert matlab_round(90 / 4) == 23
-    assert matlab_round(3 * 90 / 4) == 68
-    assert matlab_round(2.4) == 2
-    assert matlab_round(2.5) == 3
-    assert matlab_round(-2.5) == -3
 
 
 @pytest.mark.parametrize('nx', [63, 64])

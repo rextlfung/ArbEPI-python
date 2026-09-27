@@ -177,4 +177,6 @@ def test_rampsamp2cart_absolute_scale_matches_ortho_fft_for_uniform_kx():
         significant = np.abs(k_ref) > 0.05 * np.abs(k_ref).max()
         assert significant.sum() > nx // 4
         median_ratio = np.median(ratio[significant])
-        assert abs(median_ratio - 1.0) < 0.1, f'nx={nx}: median scale ratio {median_ratio:.4f}, expected ~1.0'
+        assert abs(median_ratio - 1.0) < 0.1, (
+            f'nx={nx}: median scale ratio {median_ratio:.4f}, expected ~1.0'
+        )

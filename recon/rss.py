@@ -6,7 +6,7 @@ and transformed together.
 
     .venv-recon/bin/python -m recon.rss <datdir> <seqname> [--device cpu]
 
-Reads <datdir>/recon/<seqname>_epi_zf.h5 and writes
+Reads <datdir>/recon/<seqname>_preprocessed.h5 and writes
 <datdir>/recon/rss/<seqname>_recon.{nii.gz,json}.
 """
 
@@ -18,7 +18,7 @@ import h5py
 import numpy as np
 import torch
 
-from preprocess.nifti_io import save_recon_nifti
+from preprocess.utils import save_recon_nifti
 from recon.utils import resolve_device
 
 
@@ -51,17 +51,17 @@ def run_rss(fn_ksp: str, device: str | None = None, max_batch_bytes: float = 4e9
 
 
 def main(datdir: str, seqname: str, device: str | None = None) -> str:
-    from preprocess.config import load_config, load_seq_params, set_seq_paths
-
     recon_dir = os.path.join(datdir, "recon")
-    sp = load_seq_params(set_seq_paths(load_config(datdir=datdir, seqnames=[seqname]), seqname))
+    fn_pre = os.path.join(recon_dir, f"{seqname}_preprocessed.h5")
+    with h5py.File(fn_pre, "r") as f:
+        fov = tuple(f.attrs["fov"])
     t_start = time.time()
-    img = run_rss(os.path.join(recon_dir, f"{seqname}_epi_zf.h5"), device)
+    img = run_rss(fn_pre, device)
     runtime_s = time.time() - t_start
     out_dir = os.path.join(recon_dir, "rss")
     os.makedirs(out_dir, exist_ok=True)
     fn_out = os.path.join(out_dir, f"{seqname}_recon")
-    save_recon_nifti(fn_out, img, fov=sp.fov, seqname=seqname, runtime_s=runtime_s)
+    save_recon_nifti(fn_out, img, fov=fov, seqname=seqname, runtime_s=runtime_s)
     print(f"Wrote {fn_out}.nii.gz + .json ({runtime_s:.1f}s)")
     return fn_out
 
