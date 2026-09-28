@@ -26,7 +26,6 @@ are documented and set. Start there. Ported from the MATLAB
 | `b0map.py` + `julia/` | B0 field map: runs `julia/b0map.jl` (MRIFieldmaps.jl + ROMEO.jl) |
 | `r2star.py` | R2* fit over the deGRE echoes (see [R2*](#r2-a-placeholder)) |
 | `grid_resize.py` | deGRE grid → EPI grid (z crop + edge-aligned resample) |
-| `calibrate_delay.py` | Sweep the readout k-space center offset (`delay`) |
 | `utils.py` | ScanArchive, `scan_info.mat` and NIfTI I/O; small numerics; QA figures |
 | `demo.ipynb` | Worked example on `20260915ball/2_6x_2.4mm` |
 
@@ -91,7 +90,7 @@ From Python:
 ```python
 from preprocess.preprocess import PreprocessConfig, preprocess
 
-cfg = PreprocessConfig(datdir=DAT, delay=-1.0, Nvcoils=None, keep_cache=True)
+cfg = PreprocessConfig(datdir=DAT, Nvcoils=None, keep_cache=True)
 out = preprocess(cfg, "2_6x_2.4mm")  # -> <datdir>/recon/2_6x_2.4mm_preprocessed.h5
 ```
 
@@ -115,11 +114,12 @@ looks), plain numpy-order HDF5:
 | `W` | (Ncoils, Ncoils) | whitening matrix |
 | `cc_matrix`, `cc_evals` | (Nx, Nv, Ncoils), (Nx, Ncoils) | GCC matrices and per-x eigenvalues (PCA: (Nv, Ncoils), (Ncoils,)) |
 | `degre/` | deGRE grid | QA volumes: `img_echoes`, `b0map_hz`, `finit_hz`, `mask`, `smaps`, `emap`, `r2star` |
+| `delay_sweep/` | (241,) each | readout-delay calibration: `delay`, `a1`, `a2` (odd/even constant and linear term), `wrap_count` |
 
 Attributes: `noise_var` (thermal-noise variance of `ksp_epi_zf` per complex
 sample), `whitened`, `coil_compressed`, `cc_method`, `Ncoils`, `Nc_out`,
 `Nvcoils`, `Nvcoils_source` (`energy` or `user`), `cc_energy_kept`, `oephase_a`,
-`delay`, `t_ref_s` (nominal TE), `TE_degre`, `fov`, `fov_degre`,
+`delay` (calibrated readout delay, samples), `t_ref_s` (nominal TE), `TE_degre`, `fov`, `fov_degre`,
 `n_frames_discard`, `r2star_method`.
 
 Also written: `<seq>_smaps`, `<seq>_b0map` and `<seq>_r2star` as `.nii.gz` +
@@ -137,18 +137,31 @@ kept too.
    recon's low-rank λ weights, PCA/GCC, ESPIRiT and SENSE (which has no noise
    covariance term). Without a noise scan, `W = I` and `whitened = False` (recon
    warns).
-2. **Odd/even phase.** Opposite-direction readouts leave a phase difference
+2. **Readout delay.** The k-space center offset of the ramp-sampled readout
+   (`delay`, in samples) depends on the scanner and readout, and a wrong value
+   shows up as a linear odd/even phase that, once it passes ±π inside the object,
+   wraps and breaks the fit below. It is calibrated for every sequence, on its own
+   calibration scan (whitened, uncompressed): each delay from −6 to +6 samples in
+   steps of 0.05 is tried, the adjacent-pixel jumps above π in the odd/even phase
+   over the central half of x are counted, and among the delays with none the one
+   with the smallest linear term is kept (a correctly aligned readout leaves only a
+   constant). A warning is raised if every delay wraps or the pick is at the edge
+   of the range. The sweep is stored in the output (`delay_sweep/`). The old fixed
+   default, −1.0, was 0.75–2 samples off on every session checked
+   (20260912–20260924) and wrapped the phase on 20260920ball (calibrated +1.00)
+   and 20260924ball (+0.35).
+3. **Odd/even phase.** Opposite-direction readouts leave a phase difference
    between odd and even echoes that ghosts the image by FOV/2. From the calibration
    scan (no phase encoding) the phase between neighboring echo pairs is fit as
    `a[0] + a[1]·x` (`oephase.getoephase`) on whitened, uncompressed data, and
    `epiphasecorrect` removes it from every even echo. On `20260915ball` the coil
    basis used for the estimate (raw, whitened, compressed) moved `a` by less than
    the estimate's own noise (half-split of the calibration shots).
-3. **Per frame**: regrid the ramp-sampled readouts onto Cartesian kx (1D NUFFT,
+4. **Per frame**: regrid the ramp-sampled readouts onto Cartesian kx (1D NUFFT,
    density-compensated; separate trajectories for odd and even echoes, shifted by
-   `delay`), apply the odd/even correction, and scatter each (shot, echo) into its
-   (ky, kz) slot of the zero-filled grid.
-4. **Noise**: the noise-scan readouts go through the same gridding and correction,
+   the calibrated delay), apply the odd/even correction, and scatter each (shot,
+   echo) into its (ky, kz) slot of the zero-filled grid.
+5. **Noise**: the noise-scan readouts go through the same gridding and correction,
    so `noise_var` can later be measured in the output coil space.
 
 The EPI archive is streamed frame by frame and the cache is checkpointed after
@@ -262,24 +275,29 @@ With `compress=False` the cache file itself becomes the output. The cache is
 deleted unless `keep_cache`; keeping it lets a rerun with other compression
 settings skip Stage A (see the end of `demo.ipynb`).
 
-## Tuning the readout delay
+## Checking the readout delay
 
-A wrong `delay` shows up as a large, wrapping linear odd/even phase.
-`calibrate_delay(paths)` sweeps delays over the calibration scan and picks the one
-with no phase wraps and the smallest linear term:
+The calibration is automatic (Stage A, step 2); to see how clear-cut it was, plot
+the stored sweep. The chosen delay sits in a run of zero-wrap delays, where `a2`
+crosses zero:
 
 ```python
-from preprocess.calibrate_delay import calibrate_delay
-from preprocess.preprocess import PreprocessConfig, set_seq_paths
-
-best, report = calibrate_delay(set_seq_paths(PreprocessConfig(datdir=DAT), "2_6x_2.4mm"))
+with h5py.File(f"{DAT}/recon/2_6x_2.4mm_preprocessed.h5") as f:
+    s = {k: f["delay_sweep"][k][()] for k in ("delay", "a2", "wrap_count")}
+    best = f.attrs["delay"]
 ```
+
+`demo.ipynb` plots it. A calibration scan that is itself bad (motion, no signal
+in the central half of x) shows up as wraps at every delay, and a warning.
 
 ## Performance
 
 On `2_6x_2.4mm` (90×90×60, 60 frames × 900 readouts, 32 coils; deGRE 108×108×72):
 the full default run takes 6–7 minutes (346 s alone on the machine), under 2 of
-them for Stage A and the rest for ESPIRiT, the B0 fit and writing. Rerunning from
+them for Stage A and the rest for ESPIRiT, the B0 fit and writing. The delay
+sweep (241 delays on the 32-coil calibration scan) adds about 1 minute to Stage A
+(65 s including the archive reads, measured with two other preprocessing runs on
+the machine). Rerunning from
 a kept cache with different compression settings takes about 1 minute without
 the maps (62 s for 6 virtual coils) and about 4 with ESPIRiT. The whitened
 32-coil cache is ~1.2 GB; the default output (15 virtual coils) ~1.0 GB, and

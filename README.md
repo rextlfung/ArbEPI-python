@@ -231,7 +231,6 @@ preprocess/                Raw ScanArchives -> one reconstruction-ready file per
   b0map.py                      B0 field map via julia/b0map.jl (MRIFieldmaps.jl + ROMEO.jl)
   r2star.py                     R2* fit over the deGRE echoes (a placeholder with the dual-echo deGRE)
   grid_resize.py                deGRE grid -> EPI grid
-  calibrate_delay.py            Readout k-space center offset sweep
   utils.py                      ScanArchive (GERecon), scan_info.mat and NIfTI I/O; QA figures
   julia/                        Self-contained Julia project (Project.toml + Manifest.toml, pinned)
   demo.ipynb                    Every step on one real dataset, and the settings table

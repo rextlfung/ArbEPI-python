@@ -4038,6 +4038,25 @@ consolidation). No items needed closing this pass.
   (only ever called on non-negative values, so no live bug). Fixed: one
   public `oephase.matlab_round` (the general version), imported by the
   other two.
+- [x] **254. The readout delay was a fixed config value (default −1.0) that
+  was wrong on every session checked.** [measured 2026-09-27/28 against
+  `ab49d4e`, one sequence per session, `calibrate_delay`'s sweep on the
+  whitened, uncompressed calibration scan] Calibrated delays: 20260912xiaokai
+  −0.25, 20260915ball −0.15, 20260918ball −0.10, 20260920ball +1.00,
+  20260922xiaokai −0.10, 20260924ball +0.35 -- 0.75 to 2 samples from the
+  default. At −1.0 the odd/even phase wraps on 20260920ball and 20260924ball
+  (getoephase's no-wrap linear fit then fails); on 20260915ball the ghost
+  level was the same at −1.0 and −0.15, so the other sessions were off but
+  unharmed. Fixed: `PreprocessConfig.delay` removed; Stage A always
+  calibrates the delay per sequence (`preprocess.sweep_delay`/
+  `select_best_delay`, folded in from `calibrate_delay.py`), warns when every
+  candidate wraps or the pick is at the sweep's edge, and stores the sweep as
+  `delay_sweep/` in the cache and output. Test:
+  `test_readout_delay_is_calibrated_from_the_cal_scan` (synthetic cal scan
+  with a known delay). Separate, still open: a FOV/2 ghost in the
+  20260924ball RSS images persists at the calibrated delay (outside/inside
+  intensity ratio 0.305 at −1.0 vs 0.203 at +0.35, frame 5 of Series 4), so
+  it has another cause.
 
 ## Test & tooling health
 

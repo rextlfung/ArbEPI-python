@@ -1,15 +1,12 @@
 import numpy as np
 import pytest
 
-# calibrate_delay.py imports epi_gridding.py at module scope, which needs
-# sigpy -- not itself used in this test, but the whole module fails to
-# import without it. See CLAUDE.md's "preprocess/" section: sigpy/
-# nibabel live in the optional `preprocessing` extra, not the core
-# dependency set, so this must be gated the same way tests/test_recon_*.py
-# gates on torch/mirtorch.
+# preprocess.py imports epi_gridding.py at module scope, which needs sigpy
+# (the optional `preprocessing` extra), so gate on it the same way
+# tests/test_recon_*.py gates on torch/mirtorch.
 pytest.importorskip("sigpy")
 
-from preprocess.calibrate_delay import select_best_delay  # noqa: E402
+from preprocess.preprocess import select_best_delay  # noqa: E402
 
 
 def test_select_best_delay_picks_zero_wrap_closest_to_zero_a2():
@@ -38,7 +35,7 @@ def test_select_best_delay_falls_back_to_fewest_wraps_if_none_safe():
 def test_oephase_estimate_and_correction_share_a_pixel_frame(nx):
     """compute_oephase's estimate, applied by epiphasecorrect to the same
     gridded data, removes the odd/even mismatch -- at odd nx too, where the
-    MATLAB fftshift/ifftshift spelling calibrate_delay used to have inline
+    MATLAB fftshift/ifftshift spelling calibrate_delay.py used to have inline
     lands one pixel away from epiphasecorrect's frame (review item 251)."""
     import sigpy
 
