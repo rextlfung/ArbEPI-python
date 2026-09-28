@@ -314,10 +314,8 @@ def tsnr_report(
     figure (ROI signal + linear fit, central-slice tSNR map, last-minus-first
     frame; one column per input) next to the first input. Returns
     {label: stats}."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     import nibabel as nib
+    from matplotlib.figure import Figure  # not pyplot: leaves the caller's backend alone
 
     results = {}
     for fn in fn_recons:
@@ -336,7 +334,8 @@ def tsnr_report(
 
     out_base = fn_recons[0].removesuffix(".nii.gz") + "_tsnr"
     labels = list(results)
-    fig, axes = plt.subplots(3, len(labels), figsize=(5 * len(labels), 13), squeeze=False)
+    fig = Figure(figsize=(5 * len(labels), 13))
+    axes = fig.subplots(3, len(labels), squeeze=False)
     for j, label in enumerate(labels):
         img, mask, stats = results[label]
         iz = img.shape[2] // 2
@@ -350,18 +349,17 @@ def tsnr_report(
         tsnr_slice = stats["tsnr_map"][:, :, iz].T
         im = axes[1, j].imshow(tsnr_slice, origin="lower", cmap="viridis", vmin=0)
         axes[1, j].set_title(f"tSNR, z={iz}")
-        plt.colorbar(im, ax=axes[1, j], fraction=0.046)
+        fig.colorbar(im, ax=axes[1, j], fraction=0.046)
         diff = img[:, :, iz, -1] - img[:, :, iz, 0]
         vmax = np.percentile(np.abs(diff[mask[:, :, iz]]), 99) if mask[:, :, iz].any() else 1
         im = axes[2, j].imshow(diff.T, origin="lower", cmap="RdBu_r", vmin=-vmax, vmax=vmax)
         axes[2, j].set_title(f"last minus first frame, z={iz}")
-        plt.colorbar(im, ax=axes[2, j], fraction=0.046)
+        fig.colorbar(im, ax=axes[2, j], fraction=0.046)
         for ax in axes[1:, j]:
             ax.set_xticks([])
             ax.set_yticks([])
-    plt.tight_layout()
-    plt.savefig(f"{out_base}.png", dpi=130)
-    plt.close(fig)
+    fig.tight_layout()
+    fig.savefig(f"{out_base}.png", dpi=130)
     print(f"Wrote {out_base}.png")
     return {label: stats for label, (_, _, stats) in results.items()}
 
