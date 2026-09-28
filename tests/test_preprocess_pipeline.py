@@ -260,6 +260,21 @@ def test_resume_after_a_crash_matches_an_uninterrupted_run(dataset):
     assert _rel(ksp, ref) < 1e-5
 
 
+def test_cache_left_by_a_failed_start_is_replaced(dataset):
+    """A run that fails during calibration leaves a cache file with no
+    attributes; the next run must start over instead of failing on it."""
+    cfg = _cfg(dataset, cc_method='pca', estimate_smaps=False)
+    cache = set_seq_paths(cfg, SEQ).cache
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    with h5py.File(cache, 'w'):
+        pass
+    out = preprocess(cfg, SEQ, a=A_FIXED)
+    with h5py.File(out, 'r') as f:
+        ksp, cc, W = f['ksp_epi_zf'][()], f['cc_matrix'][()], f['W'][()]
+    ref, _ = _reference(dataset, W, cc)
+    assert _rel(ksp, ref) < 1e-5
+
+
 @pytest.mark.skipif(shutil.which('julia') is None, reason='julia not on PATH')
 def test_full_pipeline_with_b0(dataset):
     out = preprocess(_cfg(dataset, estimate_b0=True), SEQ, a=A_FIXED)
