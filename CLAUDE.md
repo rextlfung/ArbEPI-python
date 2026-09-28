@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Python/pypulseq port of [../ArbEPI](../ArbEPI) (MATLAB/Pulseq). Generates
 fast, vendor-agnostic 3D-EPI MRI pulse sequences from arbitrary 2D
 `(ky, kz)` sampling masks in the phase-encode-partition plane. Only entry
-points and global config (`main.py`, `params.py`, `scanners.py`) sit at
-the repo root, mirroring `../ArbEPI` having `params.m`/`main.m` directly
+points and global config (`main.py`, `demo.ipynb`, `params.py`,
+`scanners.py`) sit at the repo root, mirroring `../ArbEPI` having `params.m`/`main.m` directly
 at its own root — everything else lives under
 `lib/`/`sequences/`/`sampling/`/`plotting/`/`ge/`, matching
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
@@ -541,9 +541,14 @@ no longer called them, for the same reason.
   wired into `main.py --plot`, which now runs *before* the `--ge` export
   step (both independently depend only on `scan_info.mat`/`ArbEPI.seq`, not
   on each other) so the diagnostic plots are still written even if `--ge`
-  fails. `docs/demo/` holds static copies of one `--plot` run's output,
-  embedded in README's Demo section — not regenerated automatically, so
-  re-copy from `output/` by hand if the plots change materially.
+  fails. `demo.ipynb` (repo root) is `main.py` step by step with these
+  same plots shown inline, plus a second `'laminar'` build (into
+  `output/laminar/`) for a radial-vs-laminar comparison and the `--ge`
+  feasibility check; its saved outputs are from the shipped defaults, so
+  re-run it (`uv run --with nbconvert --with ipykernel jupyter nbconvert
+  --to notebook --execute --inplace demo.ipynb`) after changes that
+  alter the plots. It replaced README's old Demo section and its static
+  `docs/demo/` images.
 - **Poisson-disc sampling** (`sampling/pd_sample.py`): a local
   reimplementation of `sigpy.mri.poisson`'s algorithm, not a dependency on
   the `sigpy` package — see README's Scope section for the three

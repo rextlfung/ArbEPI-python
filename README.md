@@ -1,6 +1,6 @@
 # ArbEPI-python: Python/pypulseq port of ArbEPI
 
-Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](../pypulseq) as the Pulseq layer. Generates fast, vendor-agnostic 3D-EPI sequences from arbitrary 2D `(ky, kz)` sampling masks in the phase-encode-partition plane.
+Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](https://github.com/imr-framework/pypulseq) as the Pulseq layer. Generates fast, vendor-agnostic 3D-EPI sequences from arbitrary 2D `(ky, kz)` sampling masks in the phase-encode-partition plane, exports them to GE (`.pge`), and preprocesses and reconstructs the resulting scanner data (`preprocess/`, `recon/`).
 
 ## Getting started
 
@@ -14,19 +14,19 @@ Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](../pypulseq
    | Parameter | Meaning | Default |
    |---|---|---|
    | `scanner` | Scanner hardware profile: `'GE_MR750'` or `'GE_UHP'` (see `scanners.py`) | `'GE_MR750'` |
-   | `res` | Voxel resolution `[x, y, z]`, m | `[0.9, 0.9, 0.9] mm` |
-   | `N` | Acquisition matrix size `[Nx, Ny, Nz]` (`fov = N * res`) | `[240, 240, 45]` |
-   | `TE` | Nominal echo time, s | `34.9 ms` |
-   | `volume_tr` | Time to acquire one full 3D volume, s | `2 s` |
+   | `res` | Voxel resolution `[x, y, z]`, m | `[2.4, 2.4, 2.4] mm` |
+   | `N` | Acquisition matrix size `[Nx, Ny, Nz]` (`fov = N * res`) | `[90, 90, 60]` |
+   | `TE` | Nominal echo time, s | `30 ms` |
+   | `volume_tr` | Time to acquire one full 3D volume, s | `1 s` |
    | `duration` | Total scan duration across all frames, s | `60 s` |
    | `T1` | Tissue T1, s (sets the Ernst-angle flip angle) | `1.3 s` |
    | `discard_duration` | Frames to discard at the start of the scan (steady-state warm-up), s | `0` |
    | `ETL` | Echo train length (echoes per shot) | `60` |
    | `custom_mask_path` | Path to your own `(ky, kz[, t])` sampling mask `.mat` file, or `None` to use `sampling_method` below (see [Using custom ky-kz-t sampling masks](#using-custom-ky-kz-t-sampling-masks)) | `None` |
-   | `R` | Acceleration factor on the `(ky, kz)` sampling pattern (ignored if `custom_mask_path` is set) | `9` |
+   | `R` | Acceleration factor on the `(ky, kz)` sampling pattern (ignored if `custom_mask_path` is set) | `6` |
    | `sampling_method` | ky-kz(-t) sampling pattern: `'pd'`, `'caipi'`, `'ticaipi'`, or `'rand'` (ignored if `custom_mask_path` is set) | `'pd'` |
    | `seed` | Sampling-mask RNG seed: an int for a reproducible mask, or `None` for a fresh one each run (ignored if `custom_mask_path` is set) | `0` |
-   | `epi_trajectory` | Echo-train ordering within each shot: `'laminar'` or `'radial'` (see [Demo](#demo) below) — always required, even with a custom mask | `'radial'` |
+   | `epi_trajectory` | Echo-train ordering within each shot: `'laminar'` or `'radial'` (see [Trajectory computation](#trajectory-computation-libmask2epipy) below, and `demo.ipynb` for a side-by-side comparison) — always required, even with a custom mask | `'radial'` |
    | `Ncoils` | Number of receive coil channels (for the noise prescan) | `32` |
 
    Everything below that section in `load_params()` is pre-tuned for this sequence's hardware/PNS/timing constraints (see `CLAUDE.md`) and typically doesn't need to change.
@@ -50,11 +50,16 @@ Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](../pypulseq
    omegas = resolve_omegas(params)
    generate_arbepi(omegas, params)   # writes output/ArbEPI.seq, output/scan_info.mat
    generate_epical(params)           # writes output/EPIcal.seq
-   generate_degre(params)            # writes output/deGRE.seq (dual-echo, for coil sensitivity maps + B0 field map)
    generate_noise(params)            # writes output/noise.seq
+   generate_degre(params)            # writes output/deGRE.seq (dual-echo, for coil sensitivity maps + B0 field map)
    ```
-   `generate_epical` and `generate_noise` must run after `generate_arbepi` — they load `output/scan_info.mat`. All outputs go to `params.output_dir` (default `output/`, gitignored).
-4. Add `--plot` to also write diagnostic plots (`mask.png`, `psf.png`, `trajectory.png`, `one_tr.png`) via `plotting/plot_last_run.py`, and/or `--ge` to also export each sequence to GE `.pge` (see [GE export](#ge-export-pge) below):
+   `generate_epical` and `generate_noise` must run after `generate_arbepi` — they load `output/scan_info.mat`. `generate_degre` can run standalone, but run it after `generate_arbepi` too: it patches its realized echo-time pair (`TE_degre`) into `scan_info.mat` when that file exists. All outputs go to `params.output_dir` (default `output/`, gitignored).
+
+   `demo.ipynb` runs these same steps and shows the diagnostic plots (sampling mask, PSF, radial-vs-laminar trajectory, one-TR pulse diagram, PNS) and the GE feasibility check along the way:
+   ```
+   uv run --with jupyter jupyter lab demo.ipynb
+   ```
+4. Add `--plot` to also write diagnostic plots (`mask.png`, `psf.png`, `trajectory.png`, `one_tr.png`, `PNS_one_tr.png`) via `plotting/plot_last_run.py`, and/or `--ge` to also export each sequence to GE `.pge` (see [GE export](#ge-export-pge) below):
    ```
    uv run python main.py --plot --ge
    ```
@@ -77,17 +82,17 @@ If you already have your own `(ky, kz)` or `(ky, kz, t)` sampling pattern — de
    ```
    `epi_trajectory` (`'laminar'` or `'radial'`) is still required either way: `mask2epi_{laminar,radial}` still partitions whatever mask you provide into `Nshots` EPI trajectories of length `ETL`, regardless of where the mask came from.
 3. Run `main.py` exactly as usual (`uv run python main.py`, optionally with `--plot`/`--ge`). `load_params()` loads and validates the mask up front — every frame must sample the same number of `(ky, kz)` locations, and that count must divide evenly by `ETL`, since `Nshots = samples_per_frame / ETL` (see `lib/mask2epi.py`'s `Nshots * ETL == n_samples` assertion) — and derives `Nshots` and an effective `R` (`Ny*Nz / samples_per_frame`, for display/`scan_info.mat` bookkeeping only, no longer a design input) from it. An invalid mask raises a `ValueError` explaining exactly what to fix before any sequence generation starts.
-4. **Re-verify PNS and the achieved TE — a custom mask changes the numbers this repo's own defaults were tuned against.** The default `blip_slew`/`ro_slew_rise`/`ro_slew_fall` in `params.py` sit close to GE's 80% normal-mode PNS limit (as little as ~0.2% margin — see `CLAUDE.md`'s "PNS finding history"), tuned against this repo's own Poisson-disc masks; a custom mask can produce very different consecutive-sample ky/kz steps (`lib/mask2epi.py`'s `max_blip_steps`), which directly changes blip amplitude and the resulting PNS. Run `uv run python main.py --ge` (or just `check_ge_feasibility`, see [GE export](#ge-export-pge) below) and, if PNS comes back over 80%, lower `blip_slew` (`params.py` itself documents dropping it back to `100` as the safe fallback). Separately, `lib/calc_te_tr_delays.py` only *warns*, never raises, if your mask's ky/kz steps make the prescribed `TE` unreachable — it silently falls back to a shorter, achievable TE instead — so check its printed output (or `scan_info.mat`'s `schedules[..., 2]`) after your first build with a new mask.
+4. **Re-verify PNS and the achieved TE — a custom mask changes the numbers this repo's own defaults were tuned against.** The default `blip_slew`/`ro_slew_rise`/`ro_slew_fall` in `params.py` were tuned to sit close to GE's 80% normal-mode PNS limit against this repo's own Poisson-disc masks (see `CLAUDE.md`'s "PNS finding history"); a custom mask can produce very different consecutive-sample ky/kz steps (`lib/mask2epi.py`'s `max_blip_steps`), which directly changes blip amplitude and the resulting PNS. Run `uv run python main.py --ge` (or just `check_ge_feasibility`, see [GE export](#ge-export-pge) below) and, if PNS comes back over 80%, lower `blip_slew` (the 2026-08-27 sweep measured `blip_slew=100` about 1.5 percentage points below the shipped `105`). Separately, `lib/calc_te_tr_delays.py` only *warns*, never raises, if your mask's ky/kz steps make the prescribed `TE` unreachable — it silently falls back to the minimum achievable TE, which is longer than the one you asked for — so check its printed output (or `scan_info.mat`'s `schedules[..., 2]`) after your first build with a new mask.
 
 Under the hood this is `sampling/external_mask.py`'s `load_external_mask`/`resolve_custom_omegas`, called from `params.py`'s `load_params()` to build the full `(Ny, Nz, Nframes)` array (`params.custom_omegas`) and derive `Nshots`/`R` from it — see that field's comment in `params.py` for the details.
 
 ## Scope
 
-This port covers Pulseq `.seq` sequence generation only. A few things from the original MATLAB repo are handled differently — see below.
+The sequence-generation side (`params.py`, `main.py`, `sampling/`, `lib/`, `sequences/`, `plotting/`) is the port of the MATLAB original; `ge/`, `preprocess/` and `recon/` port other toolchains (see [References](#references)). A few things from the original MATLAB repo are handled differently — see below.
 
-- **GE `.pge` export**: `ge/` is a pure-Python port of the PulCeq/pge2 toolchain (`seq2ceq`, `writeceq`, and the `pge2.pns`/`check_grad_acoustics` feasibility checks), and is the operative path for `ge/ge_export.py`/`main.py --ge` — no MATLAB round trip, no sibling `../pulseq`/`../toppe`/`../PulCeq`/`../ArbEPI` checkouts required. Validated field-by-field and, for two of the four default sequences, byte-for-byte against real MATLAB output, including end to end through `main.py --ge` itself (see `ge/`'s module docstrings and `CLAUDE.md`). See [GE export](#ge-export-pge) below.
+- **GE `.pge` export**: `ge/` is a pure-Python port of the PulCeq/pge2 toolchain (`seq2ceq`, `writeceq`, and the `pge2.pns`/`check_grad_acoustics` feasibility checks), and is the operative path for `ge/ge_export.py`/`main.py --ge` — no MATLAB round trip, no sibling `../pulseq`/`../toppe`/`../PulCeq`/`../ArbEPI` checkouts required. Validated field-by-field and, for two of the four default sequences at the time (before `GRE` became today's dual-echo `deGRE`), byte-for-byte against real MATLAB output, including end to end through `main.py --ge` itself (see `ge/`'s module docstrings and `CLAUDE.md`). See [GE export](#ge-export-pge) below.
 - **Fat-sat RF pulse**: the MATLAB original designs this via GE's `toppe.utils.rf.makeslr` (min-phase SLR), which has no Python equivalent. This port uses pypulseq's built-in `make_gauss_pulse` instead — a simpler design with a less sharp spectral profile.
-- **Plotting** (`plotting/plotting.py`) covers the sampling mask, k-space trajectory, point-spread-function, and single-TR pulse-diagram plots. The interactive scroll/slider mask viewer from the MATLAB repo is not ported. The single-TR plot (`plot_one_tr`) isn't a custom pulse-diagram renderer — it's a thin wrapper around pypulseq's own `Sequence.plot()`. Mask/PSF/trajectory plots take an optional `frame_idx` to select one frame out of a multi-frame run; see `plotting/plotting.py`'s module docstring for why the per-frame trajectory plot draws through exact-sliced ADC samples rather than the fine continuous line pypulseq's `calculate_kspace()` returns for the whole sequence. `plotting/plot_last_run.py` drives all of this against the most recent `output/` run (`python main.py --plot`, or standalone via `python -m plotting.plot_last_run`).
+- **Plotting** (`plotting/plotting.py`) covers the sampling mask, k-space trajectory, point-spread-function, and single-TR pulse-diagram plots. The interactive scroll/slider mask viewer from the MATLAB repo is not ported. The single-TR plot (`plot_one_tr`) isn't a custom pulse-diagram renderer — it's a thin wrapper around pypulseq's own `Sequence.plot()`. Mask/PSF/trajectory plots take an optional `frame_idx` to select one frame out of a multi-frame run; see `plotting/plotting.py`'s module docstring for why the per-frame trajectory plot draws through exact-sliced ADC samples rather than the fine continuous line pypulseq's `calculate_kspace()` returns for the whole sequence. `plotting/plot_last_run.py` drives all of this against the most recent `output/` run (`uv run python main.py --plot`, or standalone via `uv run python -m plotting.plot_last_run`).
 - **Poisson-disc sampling** (`sampling/pd_sample.py`) is a local reimplementation, not a dependency on [SigPy](https://github.com/mikgroup/sigpy) (whose `sigpy.mri.poisson` both `../ArbEPI/lib/pd_sample.m` and this module's algorithm are based on). SigPy was tried directly and rejected: its own `poisson()` has an unbounded `while slope_min < slope_max` binary-search loop with no iteration cap, which hangs forever on small/coarse grids where no achievable density slope lands within `tol` of the target acceleration (reproduced independently of any code in this repo — confirmed via `sigpy.mri.poisson` alone). Separately, both `../ArbEPI/lib/pd_sample.m` and this module's own first version had a *different* bug (not reseeding the point-placement RNG identically on every binary-search iteration, unlike real SigPy), which made the search non-convergent and slow rather than truly infinite. A third bug (a missing `nx*ny` active-list cap that real SigPy has) let the point-placement active list grow unboundedly in the same radius-floor/dense-center regime. `pd_sample.py`'s docstring has the full writeup of all three; the local implementation fixes all of them and adds a bounded outer-search iteration cap (`max_search_iters`) that SigPy itself lacks. The point-placement core is still JIT-compiled with [numba](https://numba.pydata.org/) -- a narrow, single-function dependency (unlike depending on the `sigpy` package wholesale) -- since even with all three fixes it's an inherently sequential loop that can run hundreds of thousands of iterations for worst-case seeds, and pure Python can't get there without JIT (measured ~1-12s/frame in pure Python vs. ~0.02-0.2s/frame JIT-compiled, at production scale).
 
 ## Requirements
@@ -98,30 +103,9 @@ Managed with [uv](https://docs.astral.sh/uv/):
 uv sync --extra test
 ```
 
-Depends on `pypulseq` (from PyPI), numpy, scipy, matplotlib, hdf5storage, numba, and tqdm (see `pyproject.toml`; versions pinned in `uv.lock`).
+Depends on `pypulseq` (from PyPI), numpy, scipy, matplotlib, hdf5storage, numba, and tqdm (see `pyproject.toml`; versions pinned in `uv.lock`). Optional extras: `test` (pytest), `lint` (ruff), and `preprocessing` / `recon`, each of which gets its own venv (see [Architecture](#architecture)).
 
-## Demo
-
-Diagnostic plots from a default-params run (`main.py --plot`; see `plotting/plot_last_run.py`), R = 9, `sampling_method='pd'`:
-
-| | |
-|---|---|
-| ![Sampling mask](docs/demo/mask.png) | ![Point spread function](docs/demo/psf.png) |
-| 2D Poisson-disc `(ky, kz)` sampling mask, one frame | Point spread function for that mask |
-
-`epi_trajectory` selects how `mask2epi_*` partitions that mask into each shot's echo train — `'laminar'` (ky non-decreasing rows) vs. `'radial'` (every shot a spoke through k-space center). Everything below is from the same `params.seed` (so the same sampling mask), one run per `epi_trajectory` value; `main.py --plot` always writes `trajectory.png`/`one_tr.png` for whichever setting was active, renamed here for side-by-side comparison:
-
-| `epi_trajectory = 'laminar'` | `epi_trajectory = 'radial'` |
-|---|---|
-| ![Laminar trajectory](docs/demo/trajectory_laminar.png) | ![Radial trajectory](docs/demo/trajectory_radial.png) |
-
-And the single-TR pulse diagram (`plot_one_tr`, a thin wrapper around pypulseq's own `Sequence.plot()`) for one shot under each ordering — note `radial`'s larger, single-echo Gy blip spike (~t=38ms) vs. `laminar`'s comparatively even blip sizes throughout the train:
-
-| `epi_trajectory = 'laminar'` | `epi_trajectory = 'radial'` |
-|---|---|
-| ![Laminar single-TR pulse diagram](docs/demo/one_tr_laminar.png) | ![Radial single-TR pulse diagram](docs/demo/one_tr_radial.png) |
-
-## Algorithms (`lib/mask2epi.py`)
+## Trajectory computation (`lib/mask2epi.py`)
 
 `mask2epi_laminar`/`mask2epi_radial` turn a 2D `(ky, kz)` sampling mask (`Ny × Nz` booleans, `n` of them `True`) into `Nshots` EPI echo trains of `ETL` samples each (`Nshots * ETL == n`), i.e. a partition of the sampled points into `Nshots` groups plus, within each group, a visiting order — the sequence in which the readout gradient steps from one `(ky, kz)` sample to the next. This splits into two genuinely different sub-problems: **partitioning** (which shot does each point belong to) and **ordering** (the sequence within a shot). Partitioning is sampling-pattern design and differs completely between the two variants (below); ordering is a path-optimization problem shared by both, and is the more interesting half algorithmically.
 
@@ -135,7 +119,7 @@ The edge weight used throughout is a **physically weighted Chebyshev distance**:
 weighted_step(dy, dz) = max(|dy| * Δky, |dz| * Δkz),   Δk = (1/FOVy, 1/FOVz)
 ```
 
-not raw index distance `max(|dy|, |dz|)`. This repo's FOV is anisotropic (216 mm in y, 40.5 mm in z), so one index-step in `kz` corresponds to about 5× the physical gradient area of one index-step in `ky`; an unweighted metric would let the optimizer "save" index-distance by trading a cheap `ky` step for an expensive `kz` step, optimizing the wrong quantity entirely.
+not raw index distance `max(|dy|, |dz|)`. The FOV is generally anisotropic (216 mm in y, 144 mm in z at the default protocol), so one index-step in `kz` corresponds to a different physical gradient area than one index-step in `ky` (1.5× as much here, ~5× at the earlier 216 × 40.5 mm protocol); an unweighted metric would let the optimizer "save" index-distance by trading a cheap `ky` step for an expensive `kz` step, optimizing the wrong quantity entirely.
 
 ### Partitioning
 
@@ -169,11 +153,11 @@ from ge.ge_export import export_to_ge
 export_to_ge('output/ArbEPI.seq', 'output/ArbEPI', params)
 ```
 
-`export_to_ge` runs a feasibility check (hardware limits, PNS, acoustic-resonance — see below) and raises `RuntimeError` if it fails, then writes the `.pge` via `ge/seq2ceq.py` + `ge/writeceq.py`. Verified end-to-end on a small test sequence and on a full-scale default-params run (`main.py`'s output): the resulting `.pge` files match freshly-regenerated real MATLAB output (`seq2ceq`/`pge2.writeceq`) byte-for-byte for two of the four default sequences and to within a single float32 ULP on a derived header field for the other two — see `CLAUDE.md` for the full record.
+`export_to_ge` runs a feasibility check (hardware limits, PNS, acoustic-resonance — see below) and raises `RuntimeError` if it fails, then writes the `.pge` via `ge/seq2ceq.py` + `ge/writeceq.py`. Verified end-to-end on a small test sequence and on a full-scale default-params run (`main.py`'s output at the time): the resulting `.pge` files matched freshly-regenerated real MATLAB output (`seq2ceq`/`pge2.writeceq`) byte-for-byte for two of the four default sequences and to within a single float32 ULP on a derived header field for the other two. That validation predates the single-echo `GRE` → dual-echo `deGRE` change and has not been re-run since — see `CLAUDE.md` for the full record.
 
 **Hardware limits are keyed off the `scanner` variable set in `params.py`** (`GE_MR750` or `GE_UHP`, see `scanners.py`): `load_params()` builds `params.spec` (a `ScannerSpec`) once and derives `sys.max_grad`/`sys.max_slew` for `.seq` generation from the same instance that `ge/check.py`/`ge/writeceq.py` read directly, so they can't drift out of sync with each other. `main.py --ge` also calls `ge.ge_export.check_ge_feasibility()` on all four sequences — running the hardware/PNS/acoustics check without writing a `.pge` — *before* exporting any of them, so an infeasibility surfaces immediately instead of after several full exports. PNS is a physiological safety limit, not a hardware one — `PNSwt` (a separate `Params` field, not part of `ScannerSpec`, since it's phantom-vs-human scan context) defaults to the IEC 60601-2-33:2022-recommended `[0.8, 1.0, 0.7]`; `[0, 0, 0]` disables the PNS check entirely and is only appropriate for phantom/non-human scanning. PNS export-blocking uses a deliberately looser threshold than IEC's own "normal operating mode" line: `main.py --ge` only fails (raises `RuntimeError`) above the 100% "first controlled mode" threshold (genuinely predicted stimulation), not IEC's 80% normal-mode line — 80–100% is reported as a `WARN`, not a hard failure, since (unlike the real scanner's own interlock) a Python check has no operational consequence to blocking a `.seq` file that's still within a standard-defined, permitted mode; see `ge/check.py`'s `PNS_NORMAL_MODE_THRESHOLD`/`FeasibilityReport.ok` for the reasoning. Acoustic-resonance is checked but never blocks export — it's a `WARN` in the report, matching MATLAB's own `check_grad_acoustics.m`, which only ever calls `warning(...)`, never `error(...)`, when over threshold.
 
-**Default sequences now measure under the 80% normal-mode PNS line.** `PNSwt` was `[0, 0, 0]` for most of this port's lifetime, so PNS was never actually evaluated in any `--ge` run (weight zero makes the per-channel contribution zero regardless of the real waveform); turning on the real weights (validated against MATLAB's per-instance pipeline to ~0.02 percentage points via `ge/pns.py`) revealed `EPIcal`/`ArbEPI`/`deGRE` all far over the limit (113–115% for the EPI sequences at full hardware slew). The resolution is a PNS-optimized *asymmetric* EPI readout (POPE, [Huber et al. 2026](https://doi.org/10.64898/2026.07.22.739360)): the readout trapezoid's ramp-up slew is throttled (`params.ro_slew_rise`) while the ramp-down (`ro_slew_fall`) runs faster, since nerve-integration PNS models peak at the *end* of each sustained slew event. With the empirically tuned defaults in `params.py` (rise/fall/blip 100/120/105 T/m/s), the full ArbEPI build measures ~79.8% peak PNS at a ~0.9 ms shorter minimum TE than a symmetric 100 T/m/s derate — see `CLAUDE.md`'s PNS section for the sweep record, including why the fall/rise ratio stays mild here (the y/z blips play centered on the readout reversal, so aggressive fall/blip slews RSS-combine into a 3-channel hotspot on this whole-body gradient). `uv run python -m plotting.compare_readout_pns` rebuilds the symmetric-vs-POPE comparison (two full sequences, identical nominal parameters and sampling masks) and writes per-variant and overlay PNS figures to `output/compare_pope/`. A regression test (`test_arbepi_default_params_peak_pns_under_normal_mode_limit`) guards the <80% property; PNS is scan-context-dependent, so re-check after changing scanner, mask seed, `R`/`ETL`, or resolution.
+**Default sequences now measure under the 80% normal-mode PNS line.** `PNSwt` was `[0, 0, 0]` for most of this port's lifetime, so PNS was never actually evaluated in any `--ge` run (weight zero makes the per-channel contribution zero regardless of the real waveform); turning on the real weights (validated against MATLAB's per-instance pipeline to ~0.02 percentage points via `ge/pns.py`) revealed `EPIcal`/`ArbEPI`/`GRE` (the single-echo predecessor of `deGRE`) all at or over the limit at full hardware slew (113.2%/114.7%/100.6% on GE_UHP). The resolution is a PNS-optimized *asymmetric* EPI readout (POPE, [Huber et al. 2026](https://doi.org/10.64898/2026.07.22.739360)): the readout trapezoid's ramp-up slew is throttled (`params.ro_slew_rise`) while the ramp-down (`ro_slew_fall`) runs faster, since nerve-integration PNS models peak at the *end* of each sustained slew event. The defaults in `params.py` (rise/fall/blip 100/120/105 T/m/s) come from an empirical sweep (2026-08-27) on the earlier 240 × 240 × 45 protocol, where the full ArbEPI build measured ~79.8% peak PNS at a ~0.9 ms shorter minimum TE than a symmetric 100 T/m/s derate. Those numbers depend on the protocol; for the current build, run `main.py --ge` or see `docs/review-findings.md`'s "Current baseline" table. See `CLAUDE.md`'s PNS section for the sweep record, including why the fall/rise ratio stays mild here (the y/z blips play centered on the readout reversal, so aggressive fall/blip slews RSS-combine into a 3-channel hotspot on this whole-body gradient). `uv run python -m plotting.compare_readout_pns` rebuilds the symmetric-vs-POPE comparison (two full sequences, identical nominal parameters and sampling masks) and writes per-variant and overlay PNS figures to `output/compare_pope/`. A regression test (`test_arbepi_default_params_peak_pns_under_normal_mode_limit`) guards the <80% property; PNS is scan-context-dependent, so re-check after changing scanner, mask seed, `R`/`ETL`, or resolution.
 
 ## Copy to scanner (`ge/coppe.py`)
 
@@ -187,12 +171,13 @@ See [`ge/README.md`](ge/README.md) for usage, SSH key setup, and troubleshooting
 
 ## Architecture
 
-Only entry points and tightly-coupled global config sit at the repo root — mirroring `../ArbEPI` having `params.m`/`main.m` directly at its repo root — everything else lives in a subpackage grouped by role:
+Only entry points (`main.py`, `demo.ipynb`) and tightly-coupled global config sit at the repo root — mirroring `../ArbEPI` having `params.m`/`main.m` directly at its repo root — everything else lives in a subpackage grouped by role:
 
 ```
 params.py                   Params dataclass + load_params() (replaces params.m)
 scanners.py                 ScannerSpec hardware profiles (GE_MR750, GE_UHP)
 main.py                     Generate all 4 sequences, mirrors ArbEPI/main.m; --plot/--ge flags
+demo.ipynb                  main.py step by step, with the diagnostic plots and the GE feasibility check
 sampling/                   Sampling mask generators (caipi, ticaipi, pd, rand); external_mask.py
                               is a manual escape hatch for a collaborator-supplied mask, not a
                               fifth params.sampling_method -- see CLAUDE.md
@@ -214,6 +199,7 @@ ge/                      Pure-Python GE .pge toolchain (Pulseq -> GE), wired int
   writeceq.py                  Ceq -> binary .pge (port of writeceq.m)
   read_pge.py                  .pge binary reader, used only for validation
   pns.py                       PNS check (port of pge2.pns.m)
+  validate_pns.py              Compares pns.py/acoustics.py against MATLAB reference output (not a pytest test)
   acoustics.py                 Acoustic-resonance check (port of check_grad_acoustics.m)
   check.py                     Combines hardware/PNS/acoustics into one FeasibilityReport
   validate_against_matlab.py   Field-by-field / byte-for-byte comparison vs. MATLAB output
@@ -239,23 +225,26 @@ recon/                        Image reconstruction (.venv-recon), on PyTorch/mir
   operators.py               Encoding operators A: SENSE, SENSE_B0 (B0 phase accrual, time-segmented,
                                  L=32 in production -- swept, see CLAUDE.md), SENSE_B0_R2star (+ R2* decay)
   regularizers.py               g(x): MultiScaleLowRank (multi-scale low-rank, patch SVST), WaveletTV (3D wavelet + TV)
-  solvers.py                    pogm_restart (PGM/FPGM/POGM), cg
+  solvers.py                    pogm_restart (PGM/FPGM/POGM), pdhg (Condat-Vu, via mirtorch), cg
   sense.py                      Iterative SENSE driver: --reg {none,lowrank,wavelet-tv}, --B0, --R2star
   rss.py                        Root-sum-of-squares, GPU-batched over frames
   utils.py                      I/O, operator norms, tSNR report, one-off L sweep/benchmark and
                                  validation vs. ../mslr-recon (python -m recon.utils ...)
   demo.ipynb                    Every recon type on one real dataset
 tests/                       Unit tests (pytest)
-docs/demo/                   Static images embedded in this README's Demo section
+docs/review-findings.md      Numbered backlog of code-review findings (open and resolved)
+docs/TODO.md                 Planned work
 ```
 
 Index convention: internal computation is 0-based throughout (mask2epi's `schedule`, sampling masks, etc.). `output/scan_info.mat` is written with `schedules`' (ky, kz) channels converted to 1-based (matching what MATLAB-side reconstruction code expects) — `parts` is already a 1-based shot label with 0 = unsampled, so it needs no conversion.
 
 `output/scan_info.mat` (kxo/kxe, schedules/parts, and a snapshot of the scan scalars `preprocess/` needs — consolidating what used to be three separate files, `samp_locs.mat`/`params.mat`/`kxoe<Nx>.mat`) is written via `hdf5storage` in MATLAB v7.3 format (HDF5-based), matching the original MATLAB code's `save(..., '-v7.3')`. `scipy.io.savemat`/`loadmat` cannot write or read v7.3 at all — use `hdf5storage.loadmat` (or `h5py` directly) to read these files from Python, not `scipy.io.loadmat`.
 
-See [../ArbEPI/README.md](../ArbEPI/README.md) for background on the sampling methods and `mask2epi_laminar`'s original (MATLAB) partitioning design — see [Algorithms](#algorithms-libmask2epipy) above for the ordering optimization and `mask2epi_radial`, both this port's own addition with no MATLAB counterpart.
+See [../ArbEPI/README.md](../ArbEPI/README.md) for background on the sampling methods and `mask2epi_laminar`'s original (MATLAB) partitioning design — see [Trajectory computation](#trajectory-computation-libmask2epipy) above for the ordering optimization and `mask2epi_radial`, both this port's own addition with no MATLAB counterpart.
 
 `preprocess/` is a separate `pyproject.toml` optional-dependency group (`preprocessing`) with its own venv (Python 3.10, since GE's Orchestra SDK is ABI-locked to it) -- see [preprocess/README.md](preprocess/README.md) for setup, usage, outputs and design. The SDK itself is distributed as a GitHub release, accessible by request: [GEHC-External/MR-Orchestra-SDK-Python](https://github.com/GEHC-External/MR-Orchestra-SDK-Python/releases).
+
+`recon/` is likewise its own optional-dependency group (`recon`: PyTorch, mirtorch, ...) in a dedicated venv (`.venv-recon`), since torch has no reason to share one with the Python-3.10-locked `preprocessing` extra -- see [recon/README.md](recon/README.md) for setup, commands, inputs and outputs.
 
 ## References
 
@@ -265,12 +254,15 @@ Source repositories this port is derived from or ports code from:
 - [rextlfung/epi-preprocessing](https://github.com/rextlfung/epi-preprocessing) — the MATLAB original `preprocess/` ports.
 - [HarmonizedMRI/PulCeq](https://github.com/HarmonizedMRI/PulCeq) — `ge/` ports `seq2ceq.m`/`writeceq.m`/`pge2.pns.m`/`check_grad_acoustics.m` from here.
 - [HarmonizedMRI/B0shimming](https://github.com/HarmonizedMRI/B0shimming) — `sequences/deGRE.py` is adapted from this repo's `writeB0.m`.
+- `../mslr-recon` (Julia, MIRT.jl) — the multi-scale low-rank reconstruction `recon/` started as a port of, and was validated against on real scanner data (see `CLAUDE.md`).
 
 Libraries this repo depends on:
 
 - [pypulseq](https://github.com/imr-framework/pypulseq) — Pulseq sequence assembly (MIT).
-- [SigPy](https://github.com/mikgroup/sigpy) — ESPIRiT sensitivity maps, NUFFT gridding, L1-wavelet/TV regularized reconstruction (BSD); `sampling/pd_sample.py` is also an independent reimplementation of `sigpy.mri.poisson`'s Poisson-disc algorithm (see that module's docstring for the bugs found in both it and the MATLAB original that motivated the reimplementation).
+- [SigPy](https://github.com/mikgroup/sigpy) — ESPIRiT sensitivity maps and NUFFT ramp-sample gridding in `preprocess/` (BSD); `sampling/pd_sample.py` is also an independent reimplementation of `sigpy.mri.poisson`'s Poisson-disc algorithm (see that module's docstring for the bugs found in both it and the MATLAB original that motivated the reimplementation).
 - [Numba](https://numba.pydata.org/) — JIT compilation for `pd_sample.py`'s point-placement core.
+- [PyTorch](https://pytorch.org/) and [MIRTorch](https://github.com/guanhuaw/MIRTorch) — the linear operators, time-segmented B0 approximation (`mri_exp_approx`) and primal-dual solver behind `recon/` (BSD).
+- [PyWavelets](https://github.com/PyWavelets/pywt) — wavelet filter taps for `recon/regularizers.py`'s `Wavelet3D` (MIT).
 - [BART](https://mrirecon.github.io/bart/) — considered for coil compression/whitening/parallel imaging and explicitly dropped in favor of plain numpy + SigPy (see `CLAUDE.md`); noted here since several docstrings describe what this repo does *instead* of calling it.
 - [MRIFieldmaps.jl](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl) — B0 field map estimation (MIT), invoked as a subprocess from `preprocess/b0map.py` via the self-contained Julia project in `preprocess/julia/`; requires a separate `julia` install (see `preprocess/README.md`), not otherwise part of this repo's Python dependency set.
 - [ROMEO.jl](https://github.com/korbinian90/ROMEO.jl) — phase unwrapping (MIT), used by `preprocess/julia/b0map.jl` to build the field map solve's initial guess; same Julia project as MRIFieldmaps.jl above.
@@ -286,4 +278,8 @@ Algorithms and standards:
 - Golden-angle ordering: Winkelmann S, Schaeffter T, Koehler T, Eggers H, Doessel O. "An optimal radial profile order based on the Golden Ratio for time-resolved MRI." *IEEE Trans Med Imaging.* 2007;26(1):68-76. ([open-access copy](https://pmc.ncbi.nlm.nih.gov/articles/PMC9189059/); applied in `lib/mask2epi.py`'s `_golden_angle_shot_order`, see that function's docstring.)
 - Regularized B0 field map estimation: Lin CY, Fessler JA. "Efficient Regularized Field Map Estimation in 3D MRI." *IEEE Trans Comput Imaging.* 2020;7:60-73. (Implemented by MRIFieldmaps.jl, invoked from `preprocess/julia/b0map.jl`.)
 - Phase unwrapping: Dymerska B, Eckstein K, Bachrata B, Siow B, Trattnig S, Shmueli K, Robinson SD. "Phase unwrapping with a rapid opensource minimum spanning tree algorithm (ROMEO)." *Magn Reson Med.* 2021;85(4):2294-2308. (Implemented by ROMEO.jl, used in `b0map.jl` to build the field map solve's initial guess -- see the script's header for why the naive two-point guess isn't safe to use directly.)
+- Coil compression: Zhang T, Pauly JM, Vasanawala SS, Lustig M. "Coil compression for accelerated imaging with Cartesian sampling." *Magn Reson Med.* 2013;69(2):571-582. (GCC, `preprocess/coils.py`.)
+- Multi-scale low rank: Ong F, Lustig M. "Beyond low rank + sparse: multiscale low rank matrix decomposition." *IEEE J Sel Top Signal Process.* 2016;10(4):672-687, [arXiv:1507.08751](https://arxiv.org/abs/1507.08751). (`recon/regularizers.py`'s `MultiScaleLowRank` and its lambda weights.)
+- Time-segmented B0 correction: Sutton BP, Noll DC, Fessler JA. "Fast, iterative image reconstruction for MRI in the presence of field inhomogeneities." *IEEE Trans Med Imaging.* 2003;22(2):178-188. (`recon/operators.py`'s `SENSE_B0` sign convention.)
+- PNS-optimized EPI readout (POPE): Huber et al., "PNS Optimized Pulses for EPI," bioRxiv 2026, [doi:10.64898/2026.07.22.739360](https://doi.org/10.64898/2026.07.22.739360). (`lib/make_readout_grads.py`'s asymmetric readout.)
 - Peripheral nerve stimulation: IEC 60601-2-33:2022, the PNS prediction model `ge/pns.py` implements (ported from PulCeq's `pge2.pns.m`).

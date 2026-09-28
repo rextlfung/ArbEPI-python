@@ -3003,7 +3003,7 @@ consolidation). No items needed closing this pass.
   see git history at <commit>" note) so every source-code citation
   resolves, or replace the four source-code citations with a description
   of the fix in prose instead of a dangling item number.
-- [ ] **114. `README.md`'s `--plot` file list is missing `PNS_one_tr.png`.**
+- [x] **114. `README.md`'s `--plot` file list is missing `PNS_one_tr.png`.**
   [measured; citation updated 2026-09-17 against `ad2fdc4` -- shifted from
   `README.md:48` to `:57` (Getting Started step 4 now, after the
   custom-mask-flow/config-table reorg), substance unchanged]
@@ -3016,6 +3016,7 @@ consolidation). No items needed closing this pass.
   the whole README: `PNS_one_tr.png` is never mentioned anywhere in it,
   even though it's part of every `--plot` run's actual output and part of
   `plot_last_run`'s own printed confirmation message.
+  Resolved 2026-09-28: README's Getting started step 4 now lists `PNS_one_tr.png`.
 - [ ] **123. `ge/check.py`'s module docstring quotes the same stale
   `deGRE.seq` acoustics figure (0.2456) that item 111 already found and
   corrected in CLAUDE.md and this file's own baseline table -- a third,
@@ -3586,7 +3587,7 @@ consolidation). No items needed closing this pass.
   `read_frames_cropped` docstring noting the dataset is now
   gzip-compressed and that the cited throughput figure predates that
   change.
-- [ ] **191. README.md's Architecture file tree omits `ge/validate_pns.py`
+- [x] **191. README.md's Architecture file tree omits `ge/validate_pns.py`
   from its `ge/` subsection, even though CLAUDE.md cites it by name as
   `ge/pns.py`'s MATLAB-validation script.** [measured, low severity]
   `README.md:209-221` lists all 12 other `ge/*.py` modules with a one-line
@@ -3607,6 +3608,7 @@ consolidation). No items needed closing this pass.
   `read_pge.py` or `pns.py` in `README.md`'s `ge/` tree, e.g.
   `validate_pns.py   Validates ge/pns.py against real MATLAB pge2.pns.m
   output (not a pytest test)`.
+  Resolved 2026-09-28: README's `ge/` tree now lists `validate_pns.py`.
 - [x] **201.** Closed as resolved (no longer applicable) 2026-09-18: this
   item flagged `preprocessing/r2star_map.py`'s module docstring for citing
   `recon/lowres_calib_recon_b0complex.py` as an in-repo consumer without
@@ -3780,7 +3782,7 @@ consolidation). No items needed closing this pass.
   cheap to fix. Fix: change "item 63" to "item 168" at
   `lib/make_excitation_pulse.py:45` (or drop the citation entirely, since
   the surrounding prose already explains the mechanism inline).
-- [ ] **225. README.md's Architecture file tree for `preprocessing/` omits
+- [x] **225. README.md's Architecture file tree for `preprocessing/` omits
   two real modules: `grid_resize.py` and `r2star_map.py`.** [measured]
   `ls preprocessing/*.py` shows 17 files (excluding `__init__.py`);
   README's tree (lines ~222-244) lists 15, and `grep -n
@@ -3799,6 +3801,7 @@ consolidation). No items needed closing this pass.
   recent `recon/`-tree rewrite (item 207) didn't happen to touch (`r2star_map.py`
   predates that rewrite by some margin). Fix: add one line each to
   README's `preprocessing/` tree block.
+  Resolved by the 2026-09-27 `preprocess/` restructure: README's `preprocess/` tree lists `grid_resize.py` and `r2star.py` (the successor of `r2star_map.py`).
 - [ ] **226. `recon/L1-wavelet_TV_B0_SENSE.py`'s "Formerly
   `run_recon_sigpy_b0.py`" docstring section is garbled from a bad
   merge-time search/replace, listing the same filename three times where
@@ -3955,7 +3958,7 @@ consolidation). No items needed closing this pass.
   (`recon/lowres_calib.py`'s `nominal_te_s`), and consider actually
   deduplicating the two functions -- a small, uncontroversial conciseness
   fix once the reference is correct.
-- [ ] **241. README.md's Demo section caption still says the shown
+- [x] **241. README.md's Demo section caption still says the shown
   default-params run used `R = 9`, but the shipped default has been
   `R = 6` since commit `0b9c25f` (2026-09-15's ABCD-protocol switch).**
   [measured 2026-09-23 against `100056a`; `git log --follow -p --
@@ -3970,6 +3973,7 @@ consolidation). No items needed closing this pass.
   explicitly flag old numbers as historical, this one presents `R = 9` as
   current fact. Fix: update to `R = 6` (or drop the specific number and
   just say "at the shipped default params").
+  Resolved 2026-09-28: README's Demo section and its `docs/demo/` images were removed, replaced by `demo.ipynb`, which plots the current defaults.
 - [ ] **242. Extends item 160: two more test-file comments claim
   "(Ny, Nz, R) = (240, 45, 9)" is "the repo's own shipped default,"
   uncited by item 160's own file list.** [measured 2026-09-23 against
