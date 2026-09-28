@@ -33,8 +33,9 @@ def balanced_factors(N: Sequence[int], R: int) -> tuple[int, int]:
     depend on -- when Ry | Ny and Rz | Nz exactly. Picking a
     better-FOV-matched pair that *doesn't* divide evenly (an earlier version
     of this function did) silently breaks that invariant instead of merely
-    giving a suboptimal split. At (Ny, Nz, R) = (240, 60, 4) (this repo's
-    default `res`), the dividing candidates are (1,4)/(2,2)/(4,1); the
+    giving a suboptimal split. For example, at (Ny, Nz, R) = (240, 60, 4)
+    with 0.9 mm voxels (a hypothetical config, FOV 216 x 54 mm), the
+    dividing candidates are (1,4)/(2,2)/(4,1); the
     FOV-weighted pick among them is (4, 1) (exact ratio match, score 0),
     not the most-square (2, 2) -- worst-case aliasing period improves from
     54/2 = 27mm (unequal: 216/2 = 108mm on the other axis) to 54/1 = 54mm

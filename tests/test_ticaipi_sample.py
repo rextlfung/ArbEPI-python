@@ -25,12 +25,20 @@ def test_ticaipi_cycles_with_period_R():
     assert np.array_equal(m0, m_period)
 
 
-def test_ticaipi_sample_does_not_raise_at_shipped_default_dims():
+def test_ticaipi_sample_does_not_raise_at_former_default_dims():
     # Regression test for docs/review-findings.md item 147: at the repo's
-    # own shipped default (Ny, Nz, R) = (240, 45, 9), balanced_factors used
+    # default at the time, (Ny, Nz, R) = (240, 45, 9), balanced_factors used
     # to pick a non-dividing (Ry, Rz) = (9, 1), tripping this module's own
     # divisibility guard (added by item 103). balanced_factors's fix
     # (restricting to dividing pairs) should keep this working.
     N, R = [240, 45], 9
     for frame_idx in range(3):
         ticaipi_sample(N, R, frame_idx)
+
+
+def test_ticaipi_sample_does_not_raise_at_current_default_dims():
+    from params import load_params
+
+    p = load_params()
+    for frame_idx in range(3):
+        ticaipi_sample([p.Ny, p.Nz], p.R, frame_idx)

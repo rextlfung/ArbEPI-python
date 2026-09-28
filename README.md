@@ -8,7 +8,7 @@ Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](https://git
    ```
    uv sync --extra test
    ```
-   (see [Requirements](#requirements) below for the dependency list).
+   Add `--extra lint` for ruff. Dependencies are listed in `pyproject.toml` and pinned in `uv.lock`; `preprocess/` and `recon/` each use their own venv (see [Architecture](#architecture)).
 2. Edit `params.py`'s `load_params()` to configure the experiment. The "USER CONFIGURATION" section near the top of that function holds the basics:
 
    | Parameter | Meaning | Default |
@@ -59,7 +59,7 @@ Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](https://git
    ```
    uv run --with jupyter jupyter lab demo.ipynb
    ```
-4. Add `--plot` to also write diagnostic plots (`mask.png`, `psf.png`, `trajectory.png`, `one_tr.png`, `PNS_one_tr.png`) via `plotting/plot_last_run.py`, and/or `--ge` to also export each sequence to GE `.pge` (see [GE export](#ge-export-pge) below):
+4. Add `--plot` to also write diagnostic plots (`mask.png`, `psf.png`, `trajectory.png`, `one_tr.png`, `PNS_one_tr.png`) via `plotting/plot_last_run.py`, and/or `--ge` to also export each sequence to GE `.pge` (see [GE export](#executing-on-ge-scanners) below):
    ```
    uv run python main.py --plot --ge
    ```
@@ -82,28 +82,9 @@ If you already have your own `(ky, kz)` or `(ky, kz, t)` sampling pattern — de
    ```
    `epi_trajectory` (`'laminar'` or `'radial'`) is still required either way: `mask2epi_{laminar,radial}` still partitions whatever mask you provide into `Nshots` EPI trajectories of length `ETL`, regardless of where the mask came from.
 3. Run `main.py` exactly as usual (`uv run python main.py`, optionally with `--plot`/`--ge`). `load_params()` loads and validates the mask up front — every frame must sample the same number of `(ky, kz)` locations, and that count must divide evenly by `ETL`, since `Nshots = samples_per_frame / ETL` (see `lib/mask2epi.py`'s `Nshots * ETL == n_samples` assertion) — and derives `Nshots` and an effective `R` (`Ny*Nz / samples_per_frame`, for display/`scan_info.mat` bookkeeping only, no longer a design input) from it. An invalid mask raises a `ValueError` explaining exactly what to fix before any sequence generation starts.
-4. **Re-verify PNS and the achieved TE — a custom mask changes the numbers this repo's own defaults were tuned against.** The default `blip_slew`/`ro_slew_rise`/`ro_slew_fall` in `params.py` were tuned to sit close to GE's 80% normal-mode PNS limit against this repo's own Poisson-disc masks (see `CLAUDE.md`'s "PNS finding history"); a custom mask can produce very different consecutive-sample ky/kz steps (`lib/mask2epi.py`'s `max_blip_steps`), which directly changes blip amplitude and the resulting PNS. Run `uv run python main.py --ge` (or just `check_ge_feasibility`, see [GE export](#ge-export-pge) below) and, if PNS comes back over 80%, lower `blip_slew` (the 2026-08-27 sweep measured `blip_slew=100` about 1.5 percentage points below the shipped `105`). Separately, `lib/calc_te_tr_delays.py` only *warns*, never raises, if your mask's ky/kz steps make the prescribed `TE` unreachable — it silently falls back to the minimum achievable TE, which is longer than the one you asked for — so check its printed output (or `scan_info.mat`'s `schedules[..., 2]`) after your first build with a new mask.
+4. **Re-verify PNS and the achieved TE — a custom mask changes the numbers this repo's own defaults were tuned against.** The default `blip_slew`/`ro_slew_rise`/`ro_slew_fall` in `params.py` were tuned to sit close to GE's 80% normal-mode PNS limit against this repo's own Poisson-disc masks (see `CLAUDE.md`'s "PNS finding history"); a custom mask can produce very different consecutive-sample ky/kz steps (`lib/mask2epi.py`'s `max_blip_steps`), which directly changes blip amplitude and the resulting PNS. Run `uv run python main.py --ge` (or just `check_ge_feasibility`, see [GE export](#executing-on-ge-scanners) below) and, if PNS comes back over 80%, lower `blip_slew` (the 2026-08-27 sweep measured `blip_slew=100` about 1.5 percentage points below the shipped `105`). Separately, `lib/calc_te_tr_delays.py` only *warns*, never raises, if your mask's ky/kz steps make the prescribed `TE` unreachable — it silently falls back to the minimum achievable TE, which is longer than the one you asked for — so check its printed output (or `scan_info.mat`'s `schedules[..., 2]`) after your first build with a new mask.
 
 Under the hood this is `sampling/external_mask.py`'s `load_external_mask`/`resolve_custom_omegas`, called from `params.py`'s `load_params()` to build the full `(Ny, Nz, Nframes)` array (`params.custom_omegas`) and derive `Nshots`/`R` from it — see that field's comment in `params.py` for the details.
-
-## Scope
-
-The sequence-generation side (`params.py`, `main.py`, `sampling/`, `lib/`, `sequences/`, `plotting/`) is the port of the MATLAB original; `ge/`, `preprocess/` and `recon/` port other toolchains (see [References](#references)). A few things from the original MATLAB repo are handled differently — see below.
-
-- **GE `.pge` export**: `ge/` is a pure-Python port of the PulCeq/pge2 toolchain (`seq2ceq`, `writeceq`, and the `pge2.pns`/`check_grad_acoustics` feasibility checks), and is the operative path for `ge/ge_export.py`/`main.py --ge` — no MATLAB round trip, no sibling `../pulseq`/`../toppe`/`../PulCeq`/`../ArbEPI` checkouts required. Validated field-by-field and, for two of the four default sequences at the time (before `GRE` became today's dual-echo `deGRE`), byte-for-byte against real MATLAB output, including end to end through `main.py --ge` itself (see `ge/`'s module docstrings and `CLAUDE.md`). See [GE export](#ge-export-pge) below.
-- **Fat-sat RF pulse**: the MATLAB original designs this via GE's `toppe.utils.rf.makeslr` (min-phase SLR), which has no Python equivalent. This port uses pypulseq's built-in `make_gauss_pulse` instead — a simpler design with a less sharp spectral profile.
-- **Plotting** (`plotting/plotting.py`) covers the sampling mask, k-space trajectory, point-spread-function, and single-TR pulse-diagram plots. The interactive scroll/slider mask viewer from the MATLAB repo is not ported. The single-TR plot (`plot_one_tr`) isn't a custom pulse-diagram renderer — it's a thin wrapper around pypulseq's own `Sequence.plot()`. Mask/PSF/trajectory plots take an optional `frame_idx` to select one frame out of a multi-frame run; see `plotting/plotting.py`'s module docstring for why the per-frame trajectory plot draws through exact-sliced ADC samples rather than the fine continuous line pypulseq's `calculate_kspace()` returns for the whole sequence. `plotting/plot_last_run.py` drives all of this against the most recent `output/` run (`uv run python main.py --plot`, or standalone via `uv run python -m plotting.plot_last_run`).
-- **Poisson-disc sampling** (`sampling/pd_sample.py`) is a local reimplementation, not a dependency on [SigPy](https://github.com/mikgroup/sigpy) (whose `sigpy.mri.poisson` both `../ArbEPI/lib/pd_sample.m` and this module's algorithm are based on). SigPy was tried directly and rejected: its own `poisson()` has an unbounded `while slope_min < slope_max` binary-search loop with no iteration cap, which hangs forever on small/coarse grids where no achievable density slope lands within `tol` of the target acceleration (reproduced independently of any code in this repo — confirmed via `sigpy.mri.poisson` alone). Separately, both `../ArbEPI/lib/pd_sample.m` and this module's own first version had a *different* bug (not reseeding the point-placement RNG identically on every binary-search iteration, unlike real SigPy), which made the search non-convergent and slow rather than truly infinite. A third bug (a missing `nx*ny` active-list cap that real SigPy has) let the point-placement active list grow unboundedly in the same radius-floor/dense-center regime. `pd_sample.py`'s docstring has the full writeup of all three; the local implementation fixes all of them and adds a bounded outer-search iteration cap (`max_search_iters`) that SigPy itself lacks. The point-placement core is still JIT-compiled with [numba](https://numba.pydata.org/) -- a narrow, single-function dependency (unlike depending on the `sigpy` package wholesale) -- since even with all three fixes it's an inherently sequential loop that can run hundreds of thousands of iterations for worst-case seeds, and pure Python can't get there without JIT (measured ~1-12s/frame in pure Python vs. ~0.02-0.2s/frame JIT-compiled, at production scale).
-
-## Requirements
-
-Managed with [uv](https://docs.astral.sh/uv/):
-
-```
-uv sync --extra test
-```
-
-Depends on `pypulseq` (from PyPI), numpy, scipy, matplotlib, hdf5storage, numba, and tqdm (see `pyproject.toml`; versions pinned in `uv.lock`). Optional extras: `test` (pytest), `lint` (ruff), and `preprocessing` / `recon`, each of which gets its own venv (see [Architecture](#architecture)).
 
 ## Trajectory computation (`lib/mask2epi.py`)
 
@@ -144,9 +125,9 @@ Radial additionally pins two things before searching, neither of which laminar n
 
 Full derivation, empirical results (bottleneck-only vs. two-pass vs. three-pass path length and crossing-count comparisons), and pointers to the brute-force-verified unit tests live in `lib/mask2epi.py`'s module and per-function docstrings.
 
-## GE export (`.pge`)
+## Executing on GE scanners
 
-Pure Python, no MATLAB install or sibling-repo checkouts required:
+Sequences are exported to GE's `.pge` format in pure Python, with no MATLAB install or sibling-repo checkouts required:
 
 ```python
 from ge.ge_export import export_to_ge
@@ -159,9 +140,7 @@ export_to_ge('output/ArbEPI.seq', 'output/ArbEPI', params)
 
 **Default sequences now measure under the 80% normal-mode PNS line.** `PNSwt` was `[0, 0, 0]` for most of this port's lifetime, so PNS was never actually evaluated in any `--ge` run (weight zero makes the per-channel contribution zero regardless of the real waveform); turning on the real weights (validated against MATLAB's per-instance pipeline to ~0.02 percentage points via `ge/pns.py`) revealed `EPIcal`/`ArbEPI`/`GRE` (the single-echo predecessor of `deGRE`) all at or over the limit at full hardware slew (113.2%/114.7%/100.6% on GE_UHP). The resolution is a PNS-optimized *asymmetric* EPI readout (POPE, [Huber et al. 2026](https://doi.org/10.64898/2026.07.22.739360)): the readout trapezoid's ramp-up slew is throttled (`params.ro_slew_rise`) while the ramp-down (`ro_slew_fall`) runs faster, since nerve-integration PNS models peak at the *end* of each sustained slew event. The defaults in `params.py` (rise/fall/blip 100/120/105 T/m/s) come from an empirical sweep (2026-08-27) on the earlier 240 × 240 × 45 protocol, where the full ArbEPI build measured ~79.8% peak PNS at a ~0.9 ms shorter minimum TE than a symmetric 100 T/m/s derate. Those numbers depend on the protocol; for the current build, run `main.py --ge` or see `docs/review-findings.md`'s "Current baseline" table. See `CLAUDE.md`'s PNS section for the sweep record, including why the fall/rise ratio stays mild here (the y/z blips play centered on the readout reversal, so aggressive fall/blip slews RSS-combine into a 3-channel hotspot on this whole-body gradient). `uv run python -m plotting.compare_readout_pns` rebuilds the symmetric-vs-POPE comparison (two full sequences, identical nominal parameters and sampling masks) and writes per-variant and overlay PNS figures to `output/compare_pope/`. A regression test (`test_arbepi_default_params_peak_pns_under_normal_mode_limit`) guards the <80% property; PNS is scan-context-dependent, so re-check after changing scanner, mask seed, `R`/`ETL`, or resolution.
 
-## Copy to scanner (`ge/coppe.py`)
-
-For internal UM fMRI lab use: `ge/coppe.py` is a Python port of `../toppe/+toppe/+utils/coppe.m` that copies a folder of `.pge` files (e.g. `output/*.pge`) to a scanner over SSH, auto-allocating an unused `pge2` entry number for each and printing the resulting filename → entry-number mapping to enter on the scanner console.
+**Copying to the scanner.** For internal UM fMRI lab use: `ge/coppe.py` is a Python port of `../toppe/+toppe/+utils/coppe.m` that copies a folder of `.pge` files (e.g. `output/*.pge`) to a scanner over SSH, auto-allocating an unused `pge2` entry number for each and printing the resulting filename → entry-number mapping to enter on the scanner console.
 
 ```
 uv run python ge/coppe.py
@@ -245,6 +224,15 @@ See [../ArbEPI/README.md](../ArbEPI/README.md) for background on the sampling me
 `preprocess/` is a separate `pyproject.toml` optional-dependency group (`preprocessing`) with its own venv (Python 3.10, since GE's Orchestra SDK is ABI-locked to it) -- see [preprocess/README.md](preprocess/README.md) for setup, usage, outputs and design. The SDK itself is distributed as a GitHub release, accessible by request: [GEHC-External/MR-Orchestra-SDK-Python](https://github.com/GEHC-External/MR-Orchestra-SDK-Python/releases).
 
 `recon/` is likewise its own optional-dependency group (`recon`: PyTorch, mirtorch, ...) in a dedicated venv (`.venv-recon`), since torch has no reason to share one with the Python-3.10-locked `preprocessing` extra -- see [recon/README.md](recon/README.md) for setup, commands, inputs and outputs.
+
+## Differences vs. MATLAB original
+
+The sequence-generation side (`params.py`, `main.py`, `sampling/`, `lib/`, `sequences/`, `plotting/`) is the port of the MATLAB original; `ge/`, `preprocess/` and `recon/` port other toolchains (see [References](#references)). A few things from the original MATLAB repo are handled differently — see below.
+
+- **GE `.pge` export**: `ge/` is a pure-Python port of the PulCeq/pge2 toolchain (`seq2ceq`, `writeceq`, and the `pge2.pns`/`check_grad_acoustics` feasibility checks), and is the operative path for `ge/ge_export.py`/`main.py --ge` — no MATLAB round trip, no sibling `../pulseq`/`../toppe`/`../PulCeq`/`../ArbEPI` checkouts required. Validated field-by-field and, for two of the four default sequences at the time (before `GRE` became today's dual-echo `deGRE`), byte-for-byte against real MATLAB output, including end to end through `main.py --ge` itself (see `ge/`'s module docstrings and `CLAUDE.md`). See [Executing on GE scanners](#executing-on-ge-scanners) above.
+- **Fat-sat RF pulse**: the MATLAB original designs this via GE's `toppe.utils.rf.makeslr` (min-phase SLR), which has no Python equivalent. This port uses pypulseq's built-in `make_gauss_pulse` instead — a simpler design with a less sharp spectral profile.
+- **Plotting** (`plotting/plotting.py`) covers the sampling mask, k-space trajectory, point-spread-function, and single-TR pulse-diagram plots. The interactive scroll/slider mask viewer from the MATLAB repo is not ported. The single-TR plot (`plot_one_tr`) isn't a custom pulse-diagram renderer — it's a thin wrapper around pypulseq's own `Sequence.plot()`. Mask/PSF/trajectory plots take an optional `frame_idx` to select one frame out of a multi-frame run; see `plotting/plotting.py`'s module docstring for why the per-frame trajectory plot draws through exact-sliced ADC samples rather than the fine continuous line pypulseq's `calculate_kspace()` returns for the whole sequence. `plotting/plot_last_run.py` drives all of this against the most recent `output/` run (`uv run python main.py --plot`, or standalone via `uv run python -m plotting.plot_last_run`).
+- **Poisson-disc sampling** (`sampling/pd_sample.py`) is a local reimplementation, not a dependency on [SigPy](https://github.com/mikgroup/sigpy) (whose `sigpy.mri.poisson` both `../ArbEPI/lib/pd_sample.m` and this module's algorithm are based on). SigPy was tried directly and rejected: its own `poisson()` has an unbounded `while slope_min < slope_max` binary-search loop with no iteration cap, which hangs forever on small/coarse grids where no achievable density slope lands within `tol` of the target acceleration (reproduced independently of any code in this repo — confirmed via `sigpy.mri.poisson` alone). Separately, both `../ArbEPI/lib/pd_sample.m` and this module's own first version had a *different* bug (not reseeding the point-placement RNG identically on every binary-search iteration, unlike real SigPy), which made the search non-convergent and slow rather than truly infinite. A third bug (a missing `nx*ny` active-list cap that real SigPy has) let the point-placement active list grow unboundedly in the same radius-floor/dense-center regime. `pd_sample.py`'s docstring has the full writeup of all three; the local implementation fixes all of them and adds a bounded outer-search iteration cap (`max_search_iters`) that SigPy itself lacks. The point-placement core is still JIT-compiled with [numba](https://numba.pydata.org/) -- a narrow, single-function dependency (unlike depending on the `sigpy` package wholesale) -- since even with all three fixes it's an inherently sequential loop that can run hundreds of thousands of iterations for worst-case seeds, and pure Python can't get there without JIT (measured ~1-12s/frame in pure Python vs. ~0.02-0.2s/frame JIT-compiled, at production scale).
 
 ## References
 

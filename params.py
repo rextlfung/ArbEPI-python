@@ -193,12 +193,12 @@ def load_params(output_dir: str = 'output') -> Params:
     fov = N * res
     Nx, Ny, Nz = int(N[0]), int(N[1]), int(N[2])
 
-    # Nominal echo time, s. NOTE: this sits close to the minimum achievable
-    # TE for the default ETL/R/scanner/slews below (see CLAUDE.md's "PNS
-    # finding history") -- raising ETL, lowering R, or changing resolution
-    # can make this value unreachable. calc_te_tr_delays only *warns* and
-    # silently falls back to zero padding delay if so, so check its output
-    # after changing any of the above.
+    # Nominal echo time, s. The minimum achievable TE depends on ETL, R,
+    # resolution, scanner and the slews below (at the current defaults it
+    # is well under 30 ms), and raising ETL, lowering R, or finer resolution
+    # can push it past this value. calc_te_tr_delays only *warns* and then
+    # silently uses the minimum instead, so check its output after changing
+    # any of the above.
     TE = 30e-3
     # Time to acquire one full 3D volume (all shots), s. Must clear min_tr
     # (Nshots * per-shot min TR, printed as a warning by calc_te_tr_delays

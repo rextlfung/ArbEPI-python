@@ -101,12 +101,13 @@ def test_arbepi_default_params_peak_pns_under_normal_mode_limit(tmp_path):
     the old symmetric-derate design measured ~84% (see CLAUDE.md's PNS
     section), and PNSwt = 0 before that disabled the check entirely.
 
-    Builds every frame, not just frame 0: with `blip_slew=105` leaving only
-    ~0.2% PNS margin, a 1-frame build (frame 0) undershoots the real peak --
-    frames 3/6/10/11/14 play the largest kz blip step, which frame 0 never
-    sees (measured 78.92% at frame 0 vs. 79.84% at frame 10, the true
-    worst-frame peak; see docs/review-findings.md item 38). Costs ~10s
-    instead of ~1s, accepted for a hard safety regression bound."""
+    Builds every frame, not just frame 0: frames differ in their largest
+    blip step, so a 1-frame build can undershoot the true worst-frame peak.
+    Under the earlier 240x240x45 default protocol, which left only ~0.2%
+    margin, that gap decided the outcome (78.92% at frame 0 vs. 79.84% at
+    frame 10; see docs/review-findings.md item 38). The current default
+    has far more margin (see that file's "Current baseline" table), but a
+    hard safety bound should still check the worst frame."""
     import warnings
     from dataclasses import replace
 

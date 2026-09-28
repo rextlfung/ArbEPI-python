@@ -108,11 +108,12 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # Derated system for all non-readout gradients (excitation, fat-sat,
     # prephasers, spoilers), from the params.slew_derate knob: this
     # sequence is slew-, not amplitude-, PNS-limited (measured on a full
-    # build: capping max_grad alone barely moved peak PNS, 125.9% ->
-    # 124.6%, while a symmetric max_slew=100 T/m/s brought it to 84.3%;
-    # the asymmetric POPE readout ramps -- see lib/make_readout_grads.py's
-    # module docstring and params.py's ro_slew_rise/ro_slew_fall -- take it
-    # under the 80% normal-mode limit). See CLAUDE.md's PNS section.
+    # build of the earlier 240x240x45 GE_UHP protocol: capping max_grad
+    # alone barely moved peak PNS, 125.9% -> 124.6%, while a symmetric
+    # max_slew=100 T/m/s brought it to 84.3%; the asymmetric POPE readout
+    # ramps -- see lib/make_readout_grads.py's module docstring and
+    # params.py's ro_slew_rise/ro_slew_fall -- took it under the 80%
+    # normal-mode limit). See CLAUDE.md's PNS section.
     sys = derated_sys(params)
 
     # Excitation pulse

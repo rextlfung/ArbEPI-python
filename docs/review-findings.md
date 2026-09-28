@@ -655,92 +655,50 @@ flag its two siblings both have); and a conciseness/dead-code finding in
 the tree since its former caller was deleted by the `recon/`
 consolidation). No items needed closing this pass.
 
-## Current baseline (2026-09-24, against `3ab2854`)
+## Current baseline (2026-09-28, against `fc86045` plus that day's comment/test-only edits)
 
-- `uv run ruff check .` (after `uv sync --extra test --extra lint`): **48
-  errors -- 47 `E501` + 1 `E402`**, unchanged from the previous pass
-  (up from 33 at `e04d9aa`; the pre-`e04d9aa` pass's `I001` hit, in the
-  now-deleted `recon/cg_sense_b0.py`, is gone). Independently re-confirmed
-  by direct run this pass (not just trusted from a subagent report), and
-  expected to be identical: `git diff 6921c8c HEAD --stat` shows no
-  source file changed since the last measurement, only this doc itself
-  (true again this pass -- no source file has changed since `6921c8c` at
-  all).
-  Full current list: `ge/check.py` (1),
-  `ge/validate_against_matlab.py` (2), `ge/writeceq.py` (1),
-  `lib/calc_te_tr_delays.py` (2), `lib/make_readout_grads.py` (2),
-  `params.py` (1), `plotting/plotting.py` (2),
-  `preprocessing/gre_diagnostics.py` (2), `preprocessing/run_b0map.py`
-  (1, new since the last baseline), `sampling/pd_sample.py` (1),
-  `sequences/ArbEPI.py` (2), `sequences/EPIcal.py` (2), `sequences/noise.py`
-  (1), `tests/test_gen_gaussian_pdf.py` (1), and an entirely new
-  `recon/`-side set from the module restructuring: `recon/analysis.py`
-  (7), `recon/lowres_calib.py` (11), `recon/operators.py` (1),
-  `recon/run_recon.py` (4), plus three new-test-file hits
-  (`tests/test_preprocessing_epi_gridding.py` (1),
-  `tests/test_recon_b0_correction.py` (1, the `E402`),
-  `tests/test_recon_mslr.py` (2)). Every file outside `recon/` has an
-  identical error count to the previous pass -- the net increase is
-  entirely `recon/`'s file churn plus one new `preprocessing/run_b0map.py`
-  hit and the new test files.
-- `uv run pytest` (plain main venv, fresh `.venv`, `rm -rf output` first):
-  **154 passed, 16 skipped**, unchanged from the previous pass
-  (independently re-confirmed by direct run this pass; down from 17
-  skipped at `e04d9aa`, net test-file churn from the `recon/`
-  restructuring -- all skips are `could not import 'sigpy'/'nibabel'/
-  'torch'`, expected with no `preprocessing`/`recon` extras synced,
-  **zero** GERecon-gated). The `preprocessing`/`recon`-extras numbers and
-  the whole-sequence feasibility table below were **not re-run this
-  pass either** (both need a separate Python-3.10 venv with a multi-GB
-  torch/mirtorch install, and this pass's environment again has no GPU) --
-  carried forward unchanged from the last pass that directly measured
-  them, which remains valid since `git diff 6921c8c HEAD --stat` confirms
-  no source file has changed since, only this doc itself. With `--extra
-  preprocessing` only synced (Python 3.10): **186 passed, 13 skipped** (8
-  torch-gated + 5 `julia executable not found on PATH`, all in
-  `tests/test_preprocessing_run_b0map.py`, zero GERecon-gated). With
-  `--extra preprocessing --extra recon` both synced (Python 3.10,
-  torch/mirtorch installed, CPU-only -- no CUDA device): **cannot report a
-  clean pass/skip count** -- see item 224 (a module-level `assert DEVICE
-  == "cuda"` left over from the pre-merge `benchmark_b0_cost.py` now
-  breaks `import recon.run_recon` on any CPU-only machine, still open and
-  unfixed this pass). With `--continue-on-collection-errors`: **232
-  passed, 5 skipped, 2 failed, 1 collection error**, all four
-  non-passing results traced to that single assert (`recon/analysis.py:248`).
-  `tests/test_recon_*.py` alone: **51 passed, 2 failed, 1 collection
-  error** (0 skipped -- no `julia` dependency in this subset). This
-  remains a real regression in test/tooling health relative to `e04d9aa`
-  (the pre-merge `sweep_time_segments.py`/`benchmark_b0_cost.py` split had
-  no such module-level assert blocking a plain import). Item 216's
-  previously-flagged flaky unseeded-RNG test
-  (`test_build_encoding_operator_b0_matches_manual_per_frame_construction`)
-  was not independently re-run this pass (no `recon` extras synced) --
-  still open regardless, per item 216's own updated citations above.
-- Whole-sequence feasibility (`uv run python main.py --ge`, full
-  default-params build, Python 3.10 with `preprocessing`+`recon` extras
-  synced): **carried forward, not re-measured this pass either** (see
-  above). No `calc_te_tr_delays` TE-feasibility warning fired at that
-  measurement:
+Everything below was re-measured directly on 2026-09-28; nothing is carried
+forward from an earlier pass. The previous baseline (2026-09-24, against
+`3ab2854`) is in git history.
+
+- `uv run ruff check .` (after `uv sync --extra test --extra lint`): **19
+  errors, all `E501`** (down from 48; the `recon/`/`preprocess/`
+  restructures removed every file behind the old `E402`/`recon/` hits).
+  By file: `ge/check.py` (1), `ge/validate_against_matlab.py` (2),
+  `ge/writeceq.py` (1), `lib/calc_te_tr_delays.py` (2),
+  `lib/make_readout_grads.py` (2), `params.py` (1), `plotting/plotting.py`
+  (2), `sampling/pd_sample.py` (1), `sequences/ArbEPI.py` (2),
+  `sequences/EPIcal.py` (2), `sequences/noise.py` (1),
+  `tests/test_gen_gaussian_pdf.py` (1), `tests/test_recon_regularizers.py`
+  (1). `demo.ipynb` is clean.
+- `pytest` per venv (`-p no:cacheprovider`, full suite each time):
+
+  | venv | result | skips |
+  |---|---|---|
+  | `.venv` (Python 3.13, `test` + `lint` extras) | **162 passed, 13 skipped** | 13 import skips: `sigpy` (6 preprocess files), `nibabel` (2), `torch` (5 recon files) |
+  | `.venv-preprocessing` (Python 3.10, GERecon) | **207 passed, 5 skipped** | 5 `torch` import skips (recon files) |
+  | `.venv-recon` (Python 3.12, torch 2.13 + CUDA, RTX A6000; `julia` on PATH) | **269 passed, 0 skipped** | none |
+
+  No failures or collection errors anywhere. Item 224 is resolved: the
+  `recon/` restructure moved the `assert DEVICE == "cuda"` inside
+  `recon/utils.py`'s `benchmark()`, so importing the module no longer
+  needs a GPU (not re-run on a CPU-only machine).
+- Whole-sequence feasibility (`ge.ge_export.check_ge_feasibility`, the
+  check `main.py --ge` runs, on a full default-params build: GE_MR750,
+  2.4 mm, 90x90x60, R=6, ETL=60, TE 30 ms, seed=0). Measured four times
+  that day (`main.py`-equivalent builds and `demo.ipynb` runs); the range
+  is the gradient-spoiler RNG, deliberately unseeded (item 176):
 
   | sequence | peak PNS | acoustics | max grad | max slew | max B1 |
   |---|---|---|---|---|---|
-  | `ArbEPI.seq` | 69.9% | 0.0231 | 28.82 mT/m | 119.2 T/m/s | 0.0440 G |
-  | `EPIcal.seq` | 64.8% | 0.0231 | 28.63 mT/m | 119.2 T/m/s | 0.0440 G |
+  | `ArbEPI.seq` | 69.4-70.2% | 0.0231 | 28.82-28.83 mT/m | 119.2 T/m/s | 0.0440 G |
+  | `EPIcal.seq` | 64.0-65.1% | 0.0231 | 28.25-28.48 mT/m | 119.2 T/m/s | 0.0440 G |
   | `deGRE.seq` | 77.4% | 0.2556 | 49.76 mT/m | 174.3 T/m/s | 0.0583 G |
   | `noise.seq` | 0.0% | 0.0000 | 0.00 mT/m | 0.0 T/m/s | 0.0334 G |
 
-  All four numbers are within measurement noise of the previous pass's
-  table (`ArbEPI.seq` peak PNS 69.8%->69.9%, `EPIcal.seq` peak PNS
-  66.9%->64.8% and max grad 28.68->28.63 mT/m, everything else identical
-  to the last significant digit shown) -- expected run-to-run variation
-  from the sampling mask's/spoiler RNG's own randomization (both
-  deliberately unseeded per item 176's resolution), not a code change (no
-  sequence-generation source file differs from the previous pass; only
-  `recon/`/`preprocessing/` changed, and neither is on this build path).
-  This directly reconfirms item 111/123's "0.2556, not 0.2456" finding.
-  Item 123's finding
-  (`ge/check.py`'s docstring still quoting the stale 0.2456 instead of
-  0.2556) remains open and unchanged.
+  All `OK`; no `calc_te_tr_delays` warning, realized TE 30.00 ms, echo
+  spacing 0.696 ms. `deGRE.seq` now has the least PNS margin of the four
+  (2.6 percentage points), not `ArbEPI.seq`.
 
 ## Correctness
 
@@ -2504,7 +2462,7 @@ consolidation). No items needed closing this pass.
   this pass). Fix: re-multiply `b0map_hz`/`r2star` by their own resized
   boolean mask after the cubic-spline resize, mirroring
   `process_smaps`'s pattern exactly.
-- [ ] **224. `recon/analysis.py`'s module-level `assert DEVICE == "cuda"`
+- [x] **224. `recon/analysis.py`'s module-level `assert DEVICE == "cuda"`
   breaks import of `recon.run_recon` (and two `recon/operators_b0.py`
   tests) on any CPU-only machine, including one with the full `recon`
   extra installed.** [measured] This bare assert (`recon/analysis.py:248`)
@@ -2528,6 +2486,7 @@ consolidation). No items needed closing this pass.
   such module-level assert). Fix: move the assert inside
   `_cli_benchmark`'s body (or the `benchmark()` function itself), so
   importing the module and running `sweep`/`validate` on CPU still work.
+  Resolved by the 2026-09-25 `recon/` restructure: `recon/analysis.py` is gone, and the assert now sits inside `recon/utils.py`'s `benchmark()` (line ~554), not at module level, so `import recon.utils` works without CUDA.
 - [ ] **231. `recon/run_recon.py`'s `--r2star` path crashes on any dataset
   whose EPI z-FOV exceeds deGRE's fixed z-FOV, because `main_mslr_ref`/
   `run_cgsense_b0` never thread a `zero_pad_z` parameter through to
@@ -2928,7 +2887,7 @@ consolidation). No items needed closing this pass.
   `_matlab_round` docstring now says "also duplicated in grid_resize.py",
   the real third copy, instead of `smaps.py` (which has no such
   function).
-- [ ] **111. `deGRE.seq`'s acoustics number is stale in both CLAUDE.md and
+- [x] **111. `deGRE.seq`'s acoustics number is stale in both CLAUDE.md and
   this file's own "Current baseline" table -- real is 0.2556, not
   0.2456.** [measured] This pass's fresh `main.py --ge` build (reproduced
   twice, deterministic under the fixed `seed=0`) measures `deGRE.seq`
@@ -2946,6 +2905,7 @@ consolidation). No items needed closing this pass.
   run's scope to edit (only `docs/review-findings.md` may be modified this
   pass) but should be updated to match the next time CLAUDE.md itself is
   touched.
+  Resolved 2026-09-28: CLAUDE.md no longer quotes a number; it says `deGRE.seq` is under the 0.3 threshold and points at the "Current baseline" table (0.2556 again at this date).
 - [ ] **112. `recon/analysis.py`'s `sweep` subcommand still describes `L=6`
   as "the current production default" and cites a test name item 85
   renamed.** [measured; citation updated 2026-09-22 against `6921c8c` --
@@ -3017,7 +2977,7 @@ consolidation). No items needed closing this pass.
   even though it's part of every `--plot` run's actual output and part of
   `plot_last_run`'s own printed confirmation message.
   Resolved 2026-09-28: README's Getting started step 4 now lists `PNS_one_tr.png`.
-- [ ] **123. `ge/check.py`'s module docstring quotes the same stale
+- [x] **123. `ge/check.py`'s module docstring quotes the same stale
   `deGRE.seq` acoustics figure (0.2456) that item 111 already found and
   corrected in CLAUDE.md and this file's own baseline table -- a third,
   previously-unflagged occurrence.** [measured] `ge/check.py`'s module
@@ -3032,6 +2992,7 @@ consolidation). No items needed closing this pass.
   docstring to 0.2556, or better, point at this file's "Current baseline"
   table the way the surrounding paragraph already does for the `ArbEPI`
   number, so it can't drift out of sync again.
+  Resolved 2026-09-28: `ge/check.py`'s docstring no longer quotes current magnitudes (0.2456, or the stale ArbEPI 0.1484); it labels the MATLAB-reproduction numbers historical and points at the "Current baseline" table.
 - [ ] **124. `recon/mslr.py`'s `run_recon` docstring still claims
   `echo_times` gets "broadcast across Nx here," directly contradicting the
   actual post-item-90 implementation in the same file.** [measured;
@@ -3295,7 +3256,7 @@ consolidation). No items needed closing this pass.
   (`custom_mask_path`/`custom_omegas`) from the `load_params()`-local
   `custom_mask_key` variable, instead of listing all three as dataclass
   fields.
-- [ ] **160. `sampling/caipi_sample.py`'s `balanced_factors` docstring (and
+- [x] **160. `sampling/caipi_sample.py`'s `balanced_factors` docstring (and
   `tests/test_caipi_sample.py`'s matching comment) mislabels a hypothetical
   example as "this repo's default."** [measured, low severity; substance
   updated 2026-09-17 against `ad2fdc4` -- the comparison baseline below is
@@ -3326,6 +3287,7 @@ consolidation). No items needed closing this pass.
   something unambiguous, e.g. "(at this repo's default 0.9mm `res`, with a
   hypothetical Nz/R chosen to survive the restriction)", in both
   `caipi_sample.py` and the test file's matching comment.
+  Resolved 2026-09-28: `caipi_sample.py`'s docstring and the test comment now call (240, 60, 4) a hypothetical config at 0.9 mm voxels.
 - [x] **176. `sequences/ArbEPI.py` and `sequences/EPIcal.py` both seed their
   per-shot spoiler-randomization RNG with the identical literal `0`,
   undocumented as to whether the sharing is intentional.** [verified, low
@@ -3498,7 +3460,7 @@ consolidation). No items needed closing this pass.
   against real MSLR output. Fix: add the three laminar rows (or a pointer
   to CLAUDE.md's fuller six-row table) to
   `recon/analysis.py:97-109`.
-- [ ] **185. CLAUDE.md's "Plotting" paragraph undercounts
+- [x] **185. CLAUDE.md's "Plotting" paragraph undercounts
   `plotting/plot_last_run.py`'s functions -- "four" should be "five" -- and
   has been wrong since the sentence was written.** [measured, low severity]
   `CLAUDE.md`'s Plotting paragraph says "`plotting/plot_last_run.py` drives
@@ -3516,6 +3478,7 @@ consolidation). No items needed closing this pass.
   different file. Fix: change "four" to "five", optionally naming
   `plot_pns_one_tr` alongside `plot_one_tr` the way the paragraph already
   singles out `plot_one_tr`.
+  Resolved 2026-09-28: CLAUDE.md now says five plotting functions, naming `plot_pns_one_tr`.
 - [ ] **188. `<seqname>_b0map.h5`'s cache path is hand-built independently in
   two files -- a third, previously-untracked instance of item 133's already-
   documented pattern.** [measured; citation updated 2026-09-17 against
@@ -3847,7 +3810,7 @@ consolidation). No items needed closing this pass.
   docstring overstates coverage or a swept value was dropped when the test
   was finalized. Fix: add `256` to the loop, or correct the docstring's
   claimed range.
-- [ ] **228. `pyproject.toml`'s `recon` extra comment cites a file deleted
+- [x] **228. `pyproject.toml`'s `recon` extra comment cites a file deleted
   by the `recon/` consolidation, and CLAUDE.md's `recon`-extra dependency
   list is now incomplete.** [measured] `pyproject.toml`'s comment on the
   `recon` extra's `sigpy>=0.1.26` dependency ("...see
@@ -3863,6 +3826,7 @@ consolidation). No items needed closing this pass.
   `sigpy_torch_bridge.py` was first introduced. Fix: retarget the
   `pyproject.toml` comment at `recon/L1-wavelet_TV_B0_SENSE.py`, and add
   `sigpy` to CLAUDE.md's recon-extra dependency list.
+  Resolved by the 2026-09-25 `recon/` restructure: the `recon` extra no longer lists `sigpy`, so neither the comment nor CLAUDE.md's list refers to the deleted bridge module. The extra's comment was reworded again on 2026-09-28 to point at `recon/README.md`.
 - [ ] **229. Three `preprocessing/` docstrings still cite deleted `recon/`
   files (`sigpy_recon.py`, `recon_frames.py`) unqualified, as if they
   still exist.** [measured] `recon/sigpy_recon.py` and
@@ -3884,7 +3848,7 @@ consolidation). No items needed closing this pass.
   docstrings are the only unqualified survivors repo-wide. Fix: reword all
   three sites to say "the removed `recon/<file>.py`," matching the
   convention every other sibling reference already follows.
-- [ ] **237. `params.py`'s `TE = 30e-3` comment claims TE "sits close to
+- [x] **237. `params.py`'s `TE = 30e-3` comment claims TE "sits close to
   the minimum achievable" for the default config -- true for the old
   240x240x45 protocol this comment was written for, not the current
   90x90x60 ABCD default.** [measured 2026-09-23 against `100056a`:
@@ -3902,7 +3866,8 @@ consolidation). No items needed closing this pass.
   already fixed) was never updated to match. Fix: drop the "close to
   minimum" framing, or point at a measured number/regression test the way
   the now-fixed slew comment does.
-- [ ] **238. `sequences/ArbEPI.py`'s `derated_sys()` comment cites
+  Resolved 2026-09-28: `params.py`'s TE comment drops the "close to the minimum" framing and says the minimum is well under 30 ms at the current defaults.
+- [x] **238. `sequences/ArbEPI.py`'s `derated_sys()` comment cites
   pre-ABCD-protocol PNS sweep numbers (125.9% -> 124.6% -> 84.3%) as if
   descriptive of the current build, with no staleness disclaimer.**
   [measured 2026-09-23 against `100056a`; grepped repo-wide for "125.9"/
@@ -3921,7 +3886,8 @@ consolidation). No items needed closing this pass.
   comment has no such disclaimer and presents the old numbers as current
   fact. Fix: either drop the specific numbers (matching item 204's
   resolution) or date/qualify them as historical.
-- [ ] **239. CLAUDE.md's "PNS finding history" section still quotes
+  Resolved 2026-09-28: the comment now says those numbers come from the earlier 240x240x45 GE_UHP protocol.
+- [x] **239. CLAUDE.md's "PNS finding history" section still quotes
   pre-ABCD-protocol numbers (79.8% peak PNS at min TE 34.86 ms) as
   current, a staleness items 169's and 204's own closure notes already
   flagged as needing a fix but that was never carried out across at least
@@ -3943,6 +3909,7 @@ consolidation). No items needed closing this pass.
   section's specific numbers to the current baseline, or qualify them
   explicitly as historical the way several *other* paragraphs in the same
   CLAUDE.md section already do for their own superseded numbers.
+  Resolved 2026-09-28: CLAUDE.md's "PNS finding history" and "Investigated and closed" paragraphs now say their numbers come from the 240x240x45, R=9, TE 34.9 ms protocol, note that the current protocol kept the slews without a re-sweep, and point at the "Current baseline" table for today's numbers.
 - [ ] **240. `recon/run_recon.py`'s `_nominal_te_s` docstring says its
   duplicate lives on an "unmerged worktree branch," but that duplicate has
   been committed to this tree since commit `8e4e11c`.** [measured
@@ -3974,7 +3941,7 @@ consolidation). No items needed closing this pass.
   current fact. Fix: update to `R = 6` (or drop the specific number and
   just say "at the shipped default params").
   Resolved 2026-09-28: README's Demo section and its `docs/demo/` images were removed, replaced by `demo.ipynb`, which plots the current defaults.
-- [ ] **242. Extends item 160: two more test-file comments claim
+- [x] **242. Extends item 160: two more test-file comments claim
   "(Ny, Nz, R) = (240, 45, 9)" is "the repo's own shipped default,"
   uncited by item 160's own file list.** [measured 2026-09-23 against
   `100056a`] Item 160 currently cites only `sampling/caipi_sample.py:36-37`
@@ -3990,6 +3957,7 @@ consolidation). No items needed closing this pass.
   regardless of future default changes. Fix: fold into whichever pass
   fixes item 160 -- the fix should touch these two additional locations
   too, not just the two currently named there.
+  Resolved 2026-09-28: both regression tests are renamed `..._at_former_default_dims` and say (240, 45, 9) was the default at the time. New `test_caipi_sample_at_current_default_dims` and `test_ticaipi_sample_does_not_raise_at_current_default_dims` read the dims from `load_params()`, so they follow the shipped default.
 - [ ] **243. `preprocessing/preprocess.py`'s comment justifying
   `ksp_gre_uncompressed`'s explicit `.astype(np.complex64)` cast
   misattributes the reason -- `apply_whitening` never actually promotes

@@ -389,9 +389,10 @@ guess. This gate-design decision is permanent regardless of any one
 sequence's number (see `ge/check.py`'s `PNS_NORMAL_MODE_THRESHOLD`
 comment for the same reasoning applied to PNS's 80/100% split). The
 acoustics number that motivated it is now stale, though, since `GRE.seq`
-became the dual-echo `deGRE.seq`: today's `deGRE.seq` measures acoustics
-0.2456 -- *under* the 0.3 threshold, so the WARN-not-FAIL distinction is
-no longer even live for this repo's current default sequences (re-check
+became the dual-echo `deGRE.seq`: today's `deGRE.seq` measures *under*
+the 0.3 threshold (see `docs/review-findings.md`'s "Current baseline"
+table), so the WARN-not-FAIL distinction is not live for this repo's
+current default sequences (re-check
 after any sequence-timing change, since acoustics is scan-parameter-
 dependent the same way PNS is).
 
@@ -410,24 +411,28 @@ still over the 80% normal-mode line. The resolution is the POPE
 asymmetric readout (see `lib/make_readout_grads.py`'s paragraph above)
 plus an empirical slew sweep (2026-08-27, ~600 rise/fall/blip candidates,
 full-dims worst-frame ArbEPI builds scored by `ge/pns.py`'s RSS-combined
-total): the tuned defaults in `params.py`
+total, on the protocol shipped at the time: 0.9 mm, 240x240x45, R=9,
+TE 34.9 ms): the tuned defaults in `params.py`
 (`slew_derate=100`, `ro_slew_rise=100`, `ro_slew_fall=120`,
 `blip_slew=105`) measure **79.8% peak on the full ArbEPI build (GE_MR750,
 seed=0) at min TE 34.86 ms**, vs 77.4% at min TE ~35.8 ms for the
 symmetric-100 design through the same code -- POPE spends ~2.4% of PNS
-margin to shorten TE by ~0.9 ms. `blip_slew=105` is a deliberate
+margin to shorten TE by ~0.9 ms. `blip_slew=105` was a deliberate
 ride-the-line choice (explicit user decision) leaving only ~0.2% margin
-to the 80% limit -- thinner than observed mask-to-mask variation, so
-re-verify after any seed/mask/`R`/`ETL`/resolution change and drop back
-to `blip_slew=100` (78.3% at min TE 35.10 ms) if a new mask pushes it
-over. Two sweep lessons worth keeping: (a) the
+to the 80% limit on that protocol (`blip_slew=100` measured 78.3% at min
+TE 35.10 ms). The 2026-09-15 switch to the current default protocol
+(2.4 mm, 90x90x60, R=6, TE 30 ms, `0b9c25f`) kept these slews without
+re-sweeping, and at it ArbEPI peaks around 70% (see
+`docs/review-findings.md`'s "Current baseline" table) -- so the ~0.2%
+margin no longer applies, and a re-sweep could trade some of the ~10
+percentage points of headroom for shorter echo spacing. Two sweep lessons worth keeping: (a) the
 per-channel PNS maxima are badly misleading here -- the y/z blips play
 centered on the kx turnaround, exactly where the readout fall ramp ends,
 so aggressive fall/blip slews RSS-combine into a 3-channel hotspot (e.g.
 rise/fall/blip 95/200/170 looks fine per-channel but totals 106%), which
 is why the tuned fall/rise ratio is far milder than the POPE paper's
-hardware-limit fall; (b) a prescribed TE of 30 ms (a considered target) is
-unreachable under 80% -- every swept config at min TE <= 35.2 ms exceeded
+hardware-limit fall; (b) on that 240x240x45 protocol, a prescribed TE of
+30 ms (a considered target) was unreachable under 80% -- every swept config at min TE <= 35.2 ms exceeded
 the line, ~33 ms costs >85%, and ~30 ms well over 100%.
 `test_arbepi_default_params_peak_pns_under_normal_mode_limit`
 (tests/test_ge_check.py) now regression-guards the <80% property on every
@@ -437,7 +442,8 @@ plotting.compare_readout_pns`) rebuilds the symmetric-vs-POPE comparison
 nominal parameters, per-variant PNS-over-one-TR figures plus a combined
 overlay (`output/compare_pope/`), and a printed table (peak PNS, echo
 spacing, realized TE). PNS remains scan-context-dependent: these numbers
-are for `PNSwt = [0.8, 1.0, 0.7]` on GE_MR750 with the seed=0 mask, and
+are for `PNSwt = [0.8, 1.0, 0.7]` on GE_MR750 with the seed=0 mask of the
+240x240x45 protocol, and
 any change to scanner, mask seed, `R`/`ETL`, or resolution needs the
 check re-run (the regression test and `main.py --ge` both do).
 
@@ -455,8 +461,8 @@ kernel weights recent slew history much more than distant history, so
 front-loading fast slew where it's furthest from the instant being
 evaluated should, naively, lower PNS at that instant. A prototype tested
 this directly against the real PNS model: took the actual full-dims
-seed=0 `ArbEPI` build at shipped params (rise=100, fall=120, blip=105,
-baseline peak PNS 78.9%, matching the 79.84% figure above), located every
+seed=0 `ArbEPI` build at the params shipped then (240x240x45, R=9;
+rise=100, fall=120, blip=105, baseline peak PNS 78.9%, matching the 79.84% figure above), located every
 one of the 1200 real rise ramps in the sampled `gx` waveform (uniformly
 496us/124 samples, confirmed by `diff(gx)/dt`), and replaced each one --
 at *fixed total duration and fixed endpoints*, so nothing downstream
@@ -537,7 +543,7 @@ no longer called them, for the same reason.
   most informative for `mask2epi_radial`, where starts scatter around the
   spoke ends rather than clustering near one corner of k-space like
   `mask2epi_laminar`'s raster order. `plotting/plot_last_run.py` drives all
-  four plotting functions against the most recent `output/` run and is
+  five plotting functions (including `plot_pns_one_tr`) against the most recent `output/` run and is
   wired into `main.py --plot`, which now runs *before* the `--ge` export
   step (both independently depend only on `scan_info.mat`/`ArbEPI.seq`, not
   on each other) so the diagnostic plots are still written even if `--ge`
@@ -551,9 +557,9 @@ no longer called them, for the same reason.
   `docs/demo/` images.
 - **Poisson-disc sampling** (`sampling/pd_sample.py`): a local
   reimplementation of `sigpy.mri.poisson`'s algorithm, not a dependency on
-  the `sigpy` package — see README's Scope section for the three
-  independent bugs found (in both `../ArbEPI/lib/pd_sample.m` and real
-  SigPy) that motivated this, and why `numba` (narrowly, for just this one
+  the `sigpy` package — see README's "Differences vs. MATLAB original"
+  section for the three independent bugs found (in both
+  `../ArbEPI/lib/pd_sample.m` and real SigPy) that motivated this, and why `numba` (narrowly, for just this one
   function) is still a dependency.
 - **`ge/coppe.py`** SSH-copies a folder of `.pge` files (e.g. `output/*.pge`)
   to the scanner, auto-allocating unused `pge2`/v7 entry numbers (0-9999)

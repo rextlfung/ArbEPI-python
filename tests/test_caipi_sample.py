@@ -32,7 +32,7 @@ def test_caipi_sample_shift_offset_permutes_rows():
 
 
 def test_balanced_factors_weights_by_fov_ratio_not_squareness():
-    # At (Ny, Nz, R) = (240, 60, 4) (this repo's default `res`), Ny/Nz = 4 --
+    # At a hypothetical (Ny, Nz, R) = (240, 60, 4), Ny/Nz = 4 --
     # among the dividing candidates (1,4)/(2,2)/(4,1), the most-square split
     # (2, 2) is far from that ratio; (4, 1) is an exact match, and matches
     # pd_sample's continuous aspect-matched ellipse in spirit (equalizing
@@ -61,9 +61,9 @@ def test_balanced_factors_raises_when_no_factor_pair_divides():
         balanced_factors([64, 64], 9)
 
 
-def test_balanced_factors_and_caipi_sample_at_shipped_default_dims():
-    # Regression test for docs/review-findings.md item 147: the repo's own
-    # shipped default (Ny, Nz, R) = (240, 45, 9) crashed both mask2epi's
+def test_balanced_factors_and_caipi_sample_at_former_default_dims():
+    # Regression test for docs/review-findings.md item 147: the repo's
+    # default at the time, (Ny, Nz, R) = (240, 45, 9), crashed both mask2epi's
     # exact-sample-count assertion and ticaipi_sample's divisibility guard
     # once balanced_factors started weighting by FOV ratio without a
     # divisibility constraint. Nshots mirrors params.py's real formula
@@ -71,3 +71,13 @@ def test_balanced_factors_and_caipi_sample_at_shipped_default_dims():
     N, R, ETL = [240, 45], 9, 60
     Nshots = math.ceil(N[0] * N[1] / R / ETL)
     assert caipi_sample(N, R).sum() == Nshots * ETL
+
+
+def test_caipi_sample_at_current_default_dims():
+    # Same exact-sample-count invariant as above, at whatever params.py ships
+    # today, so the check follows the default protocol instead of a literal.
+    from params import load_params
+
+    p = load_params()
+    N = [p.Ny, p.Nz]
+    assert caipi_sample(N, p.R).sum() == p.Nshots * p.ETL
