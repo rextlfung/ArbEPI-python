@@ -88,7 +88,7 @@ class PreprocessConfig:
     # sequence has a noise scan).
     compress: bool = True
     cc_method: str = 'gcc'  # 'gcc' (per-x, Zhang et al. 2013) or 'pca' (global)
-    cc_energy_thresh: float = 0.99  # fraction of eigenvalue energy kept
+    cc_energy_thresh: float = 0.999  # fraction of eigenvalue energy kept
     Nvcoils: int | None = None  # exact number of virtual coils; overrides the threshold
     cc_calib_size: int = 24  # GCC: central (ky, kz) block of the deGRE per x
 

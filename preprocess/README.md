@@ -176,7 +176,7 @@ whitened, uncompressed data.
   so each position's spectrum is steep even though the whole volume's is flat.
 - **PCA** (`cc_method='pca'`): one matrix for the volume (the previous behavior).
 - **How many virtual coils**: the smallest number whose kept eigenvalue energy,
-  summed over all x, reaches `cc_energy_thresh` (0.99). Summing over x weights
+  summed over all x, reaches `cc_energy_thresh` (0.999). Summing over x weights
   each position by its signal, so no object mask is needed; taking the worst
   position instead swung between 11 and 31 coils depending on how the edge was
   defined. `Nvcoils` sets the count exactly. There is no floor tied to R.
@@ -194,27 +194,30 @@ object voxel's SNR kept (matched-filter combine, R = 1), median / worst 5%:
 | 14 | 0.965 / 0.843 | 1.000 / 0.998 |
 
 The previous rule (PCA, 90% energy, at least 2R) kept 14 coils and lost ~16% SNR
-at the object's periphery; GCC at 99% keeps 10 coils and ~1.4%.
+at the object's periphery.
 
 Those numbers are at R = 1. Under acceleration the loss is larger, because fewer
-coils also means more noise amplification in the unfolding. Reconstructing
-`2_6x_2.4mm` (R = 6) with unregularized CG-SENSE (30 iterations, 20 frames,
-plain SENSE), compared with all 32 coils:
+coils also means more noise amplification in the unfolding, which is why the
+default threshold is 0.999 rather than 0.99. Reconstructing `2_6x_2.4mm` (R = 6)
+with unregularized CG-SENSE (30 iterations, 20 frames, plain SENSE), compared
+with all 32 coils:
 
-| virtual coils | mean-image difference | tSNR relative to 32 coils | CG time |
-|---|---|---|---|
-| GCC 6 | 15.1% | 0.70 | 2.7 s |
-| GCC 8 | 7.2% | 0.80 | 3.5 s |
-| GCC 10 (the 99% default) | 3.8% | 0.88 | 4.3 s |
-| GCC 12 | 1.8% | 0.94 | 5.1 s |
-| PCA 14 (previous rule) | 9.0% | 0.84 | 5.8 s |
-| 32 (`compress=False`) | — | 1 | 13.9 s |
+| `cc_energy_thresh` | virtual coils | mean-image difference | tSNR relative to 32 coils | CG time |
+|---|---|---|---|---|
+| — (`Nvcoils=6`) | GCC 6 | 15.1% | 0.70 | 2.7 s |
+| — (`Nvcoils=8`) | GCC 8 | 7.2% | 0.80 | 3.5 s |
+| 0.99 | GCC 10 | 3.8% | 0.88 | 4.3 s |
+| 0.995 | GCC 12 | 1.8% | 0.94 | 5.1 s |
+| **0.999 (default)** | **GCC 15** | **0.7%** | **0.98** | **6.2 s** |
+| previous rule | PCA 14 | 9.0% | 0.84 | 5.8 s |
+| `compress=False` | 32 | — | 1 | 13.9 s |
 
-GCC with 10 coils beats the previous 14-coil PCA on both counts at ~3× less recon
-time than 32 coils. Unregularized CG is the worst case for noise amplification
-(regularized recon should narrow the gap, not measured here). Where SNR matters
-more than recon time, raise `cc_energy_thresh` (0.995 gives ~12 coils here) or set
-`Nvcoils`; `compress=False` keeps everything.
+The default gives up under 2% of tSNR at ~2.2× less recon time than 32 coils,
+and beats the previous 14-coil PCA clearly. The same thresholds pick the same
+counts on all four `20260915ball` sequences (0.99 → 10, 0.995 → 12, 0.998 → 14,
+0.999 → 15), since they share one deGRE and coil array. Unregularized CG is the
+worst case for noise amplification. Lower `cc_energy_thresh` or set `Nvcoils` for
+faster recon; `compress=False` keeps everything.
 
 ### Maps (from the dual-echo deGRE)
 
@@ -279,7 +282,7 @@ the full default run takes 6–7 minutes (346 s alone on the machine), under 2 o
 them for Stage A and the rest for ESPIRiT, the B0 fit and writing. Rerunning from
 a kept cache with different compression settings takes about 1 minute without
 the maps (62 s for 6 virtual coils) and about 4 with ESPIRiT. The whitened
-32-coil cache is ~1.2 GB; the default output (10 virtual coils) ~0.75 GB, and
+32-coil cache is ~1.2 GB; the default output (15 virtual coils) ~1.0 GB, and
 ~1.8 GB uncompressed.
 
 ## Validation

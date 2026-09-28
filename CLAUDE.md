@@ -688,8 +688,8 @@ FOV normalized by max-min, lenient -- 6 GCC coils pass its 0.01 here); a
 noise-floor (Marchenko-Pastur) threshold keeps all 32 at deGRE SNR; the max over
 x of per-x 99% counts swung 11 -> 17 -> 27 -> 31 with the object-mask definition
 (one weak edge position needs 17). The chosen rule -- smallest Nv whose
-eigenvalue energy summed over all x reaches `cc_energy_thresh` (0.99) -- needs
-no mask and gives 10. The 2R floor was dropped (user decision; R-fold aliasing
+eigenvalue energy summed over all x reaches `cc_energy_thresh` -- needs
+no mask. The 2R floor was dropped (user decision; R-fold aliasing
 arguments are weak for incoherent sampling with regularized recon), and
 `cfg.Nvcoils` sets the count exactly. A first GCC measurement script used
 `Vh[:nv]` instead of `conj(Vh[:nv])` for data rows c^T and looked *worse* than
@@ -699,10 +699,11 @@ deGRE's kx to the EPI Nx (shared x FOV) so per-x matrices land on EPI x
 positions, and uses a central 24x24 (ky, kz) block (all of ky-kz gave the same
 numbers). Caveat, measured by reconstruction (`2_6x_2.4mm`, R = 6,
 unregularized CG-SENSE, 20 frames): the R = 1 retention metric understates the
-loss under acceleration -- GCC 10 coils gave tSNR 0.88 of the 32-coil recon
-(GCC 12: 0.94, GCC 8: 0.80, the old PCA 14: 0.84) at ~3x less recon time.
-The 99% default was kept as the user's call; `cc_energy_thresh` 0.995 gives 12
-coils here (table in `preprocess/README.md`).
+loss under acceleration -- 0.99 (10 coils) gave tSNR 0.88 of the 32-coil
+recon, 0.995 (12) 0.94, 0.999 (15) 0.98, the old PCA 14 0.84. So the default
+is 0.999 (user decision after this measurement): 15 coils, ~2.2x faster CG than
+32. The counts per threshold were identical on all four `20260915ball`
+sequences (table in `preprocess/README.md`).
 
 **Odd/even frame (review item 251).** `compute_oephase` and `epiphasecorrect`
 use the same centered-IFFT pairing along x, so `a` is estimated and applied in

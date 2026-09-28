@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--delay', type=float, default=-1.0, help='k-space center offset (samples)')
     p.add_argument('--no-compress', action='store_true', help='keep all physical coils')
     p.add_argument('--cc-method', choices=('gcc', 'pca'), default='gcc')
-    p.add_argument('--cc-energy', type=float, default=0.99,
+    p.add_argument('--cc-energy', type=float, default=0.999,
                    help='fraction of eigenvalue energy the virtual coils keep')
     p.add_argument('--nvcoils', type=int,
                    help='exact number of virtual coils (overrides --cc-energy)')
