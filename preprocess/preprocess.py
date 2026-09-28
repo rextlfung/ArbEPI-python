@@ -416,12 +416,22 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
     resuming = os.path.exists(paths.cache)
     if resuming:
         with h5py.File(paths.cache, 'r') as f:
-            if f.attrs['delay'] != seq_delay(cfg, paths.seqname):
+            # 'oephase_a' is written once calibration and every setup dataset are in
+            # place; without it the file is left over from a run that failed first.
+            initialized = 'oephase_a' in f.attrs
+            complete = bool(f.attrs.get('complete', False))
+            cached_delay = f.attrs.get('delay')
+        if not initialized:
+            print(f'Stage A: {paths.cache} is from a failed run; starting over')
+            os.remove(paths.cache)
+            resuming = False
+        else:
+            if cached_delay != seq_delay(cfg, paths.seqname):
                 warnings.warn(
-                    f"grid_epi: {paths.cache} was gridded with delay {f.attrs['delay']}, not "
+                    f'grid_epi: {paths.cache} was gridded with delay {cached_delay}, not '
                     f'{seq_delay(cfg, paths.seqname)}; reusing it anyway -- delete it to regrid'
                 )
-            if f.attrs.get('complete', False):
+            if complete:
                 print(f'Stage A: using complete cache {paths.cache}')
                 return
 
