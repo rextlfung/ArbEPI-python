@@ -20,8 +20,8 @@ Open and resolved findings from periodic repo-wide correctness/consistency/
 conciseness reviews live in [`docs/review-findings.md`](docs/review-findings.md),
 not here -- it's a worklog, consulted occasionally, not an instruction a
 session needs loaded by default. Numbering in that file is cumulative and
-never reused: a few source files (`preprocessing/grid_resize.py`,
-`tests/test_preprocessing_grid_resize.py`, `lib/make_prephasers.py`) cite
+never reused: a few source files (`preprocess/grid_resize.py`,
+`tests/test_preprocess_grid_resize.py`, `lib/make_prephasers.py`) cite
 specific item numbers in comments, and items cross-reference each other by
 number. Check it before a review pass, and add new findings there in the
 same numbered format.
@@ -106,7 +106,7 @@ conversion either way.
 
 `output/scan_info.mat` -- kxo/kxe (odd/even echo k-space trajectories for
 ghost correction), schedules/parts (the sampling schedule), and a snapshot
-of the scan scalars `preprocessing/` needs -- is written via
+of the scan scalars `preprocess/` needs -- is written via
 `hdf5storage.savemat(..., fmt='7.3')`, matching the original MATLAB code's
 `save(..., '-v7.3')`. **`scipy.io.loadmat`/`savemat` cannot read or write
 v7.3 at all** — always use `hdf5storage.loadmat` (or raw `h5py`) when
@@ -119,7 +119,7 @@ conversion above. This was a deliberate consolidation: `scan_info.mat`
 replaces three previously-separate files (`samp_locs.mat`, `params.mat`,
 `kxoe<Nx>.mat`), all written by `sequences/ArbEPI.py` at one point in the
 pipeline now that nothing needs `kxoe<Nx>.mat`'s old two-stage,
-Nx-dependent filename resolution (see `preprocessing/preprocess.py`'s
+Nx-dependent filename resolution (see `preprocess/utils.py`'s
 `load_kxoe`) or a separate `EPIcal.py`-computed copy of kxo/kxe (see
 `sequences/EPIcal.py`'s module docstring for why that copy was redundant --
 EPIcal's own kx trajectory is mathematically identical to ArbEPI's,
@@ -595,430 +595,160 @@ no longer called them, for the same reason.
   including the PNS/TE re-verification step a custom mask's different
   ky/kz step sizes can require.
 
-### `preprocessing/` -- raw scanner data -> zero-filled k-space, ported from `../epi-preprocessing`
+### `preprocess/` -- raw scanner data -> one reconstruction-ready file per sequence, ported from `../epi-preprocessing`
 
-`preprocessing/` is a from-scratch Python port of the companion MATLAB repo
-`../epi-preprocessing`: raw scanner data -> reconstructed images, the
-consumer of `scan_info.mat` this repo's sequence-generation side produces.
-It's a separate `pyproject.toml` optional-dependency group
-(`preprocessing`), deliberately kept out of the main sequence-generation
-dependency set -- see below for why it also needs its own venv.
+User-facing documentation (setup, usage, outputs, the pipeline stages and their
+measured numbers) is `preprocess/README.md`, with a worked example and the
+settings table in `preprocess/demo.ipynb`; this section keeps the design
+history behind it.
 
-**Two-stage pipeline, same structure as the MATLAB original**: Stage 1
-(`preprocess.py`, ported from `preprocess.m`, stays in `preprocessing/`)
-reads raw ScanArchives, whitens/coil-compresses/grids/phase-corrects, and
-writes a zero-filled k-space volume. Stage 2 lives in `recon/` (RSS and
-iterative SENSE with optional B0/R2* modeling and low-rank or L1-wavelet+TV
-regularization -- see the `recon/` section below). The sigpy-only drivers
-ported from `recon_frames.m` (RSS, CG-SENSE, plain L1-wavelet+TV over a shared
-`recon_frames` loop) and the low-res calibration-region reconstruction
-(`recon/lowres_calib.py`) were removed; see git history. Only Stage 1
-(`preprocess.py`, `raw_io.py`, `calibrate_delay.py`, `gre_diagnostics.py`, and the shared
-config/coil/grid/nifti helpers) stays in `preprocessing/`.
+`preprocess(cfg, seqname)` (`preprocess/preprocess.py`) turns one sequence's raw
+ScanArchives into `<outdir>/<seq>_preprocessed.h5`: zero-filled k-space, the
+fully sampled calibration region, sensitivity/B0/R2* maps, `W`/`cc_matrix` and
+provenance attrs. Stage A (whitening, odd/even phase, per-frame gridding and
+scatter on all physical coils, resumable) is cached in `<seq>_gridded.h5`;
+coil compression, the deGRE maps and Stage B (output) run from that cache.
+Restructured 2026-09-27 from a set of separate intermediate files
+(`<seq>_epi_zf.h5`, `<seq>_gre.h5`, `smaps_<seq>_sigpy.h5`, `<seq>_b0map.h5`) and
+modules (`config.py`, `raw_io.py`, `matio.py`, `nifti_io.py`,
+`gre_diagnostics.py`, `run_b0map.py`, `r2star_map.py`, `cg_sense.py`); see git
+history for those.
 
-**Raw ScanArchive reading needs GE's proprietary Orchestra SDK
-(`GERecon`), isolated to one module (`raw_io.py`).** This is not optional --
-`h5dump -H` on a real `.h5` ScanArchive shows the k-space payload is an
-opaque `H5T_STD_U8LE` byte blob with no structured type info, and even the
-MRI community's own `ge_to_ismrmrd` converter still links Orchestra's own
-Boost/HDF5 libraries to decode it, so reimplementing this independently
-isn't realistic. `GERecon` is *not* pip-installable and its compiled
-extension is *not* committed to this repo (proprietary, ~100MB, and
-ABI-locked to Python 3.10 with `numpy<2.0.0`) -- install it separately from
-GE's SDK distribution (`pip install <SDK>/GERecon`) into its own venv
-(`uv venv --python 3.10`), not the main sequence-generation environment,
-which resolves `numpy>=2.0` and would conflict. Verified working end to end
-against real project data: `GERecon.Archive(path).Metadata()` and
-`.NextFrame()` both function correctly, and `.NextFrame()`'s exhaustion
-(`RuntimeError` containing "No next frame available") is what `raw_io.
-ArchiveReader` converts to a normal `StopIteration` for Python's iterator
-protocol. Every other module in `preprocessing/` avoids importing
-`raw_io`/`GERecon` at module level (`preprocess.py` and
-`calibrate_delay.py` both import it lazily, inside the one function that
-needs it) specifically so the rest of the package -- and its tests --
-stay importable without the SDK installed.
+**Raw ScanArchive reading needs GE's proprietary Orchestra SDK (`GERecon`).**
+`h5dump -H` on a real ScanArchive shows the k-space payload is an opaque
+`H5T_STD_U8LE` byte blob, and even `ge_to_ismrmrd` links Orchestra's own
+libraries to decode it, so reimplementing it isn't realistic. `GERecon` is not
+pip-installable, not committed (proprietary, ~100MB), and ABI-locked to Python
+3.10 / `numpy<2.0.0`, hence the separate `.venv-preprocessing`. It is imported
+only inside `utils.ArchiveReader.__init__`, so the rest of `preprocess/`, its
+tests and `recon/` (which imports `preprocess.utils` from `.venv-recon`) work
+without it. `Archive.NextFrame()`'s exhaustion (`RuntimeError` containing "No
+next frame available") becomes `StopIteration`. Tests replace
+`utils.read_archive`/`utils.ArchiveReader` with in-memory fakes
+(`tests/test_preprocess_pipeline.py`), which is why `preprocess.py` calls them
+through the `utils` module rather than importing the names.
 
-**BART and hmriutils/MIRT are dropped entirely, replaced by plain numpy +
-sigpy** (explicit user decision, not a fallback forced by unavailability --
-BART itself is installed and working locally). Noise whitening and PCA
-coil compression (`coils.py`) are a few lines of numpy (Cholesky
-decorrelation, eigendecomposition) with no need for BART's `whiten`/`cc`/
-`ccapply` at all. ESPIRiT sensitivity maps (`smaps.py`) use
-`sigpy.mri.app.EspiritCalib` in place of `bart ecalib` (sigpy only supports
-outputting one map set, unlike BART, which simplifies `process_smaps`'s
-port slightly -- no `emaps(...,end)`-style selection among several map sets
-is needed). The 1D NUFFT ramp-sample regridding (`epi_gridding.py`, ported
-from hmriutils' `rampsampepi2cart.m`/`rampsamp2cart.m`/`reconecho.m`) uses
-`sigpy.nufft_adjoint` with the same gradient-magnitude density
-compensation (`dcf = |diff(kx)| / max(...)`) in place of MIRT's `Gmri`. The
-combined L1-wavelet+TV regularized reconstruction (replacing `run_bart.m`'s
-`bart pics -R W:... -R T:...`) was originally sigpy's standard
-multi-regularizer pattern: `G = Vstack([Wavelet, FiniteDifference])`,
-`proxg = prox.Stack([L1Reg(...,lamb_l1), L1Reg(...,lamb_tv)])`, solved via
-`PrimalDualHybridGradient`. Since the 2026-09-25 recon restructure it is the
-same `G = [W; D]` structure in torch (`recon/regularizers.py`'s `WaveletTV`),
-solved with `recon/solvers.py`'s `pdhg` (mirtorch's `FBPD`, Condat-Vu primal-dual; `recon/sense.py --reg wavelet-tv`).
-**Accepted, disclosed tradeoff**: none of this claims numerical parity with
-BART/MIRT (unlike `ge/`'s float-ULP-level MATLAB validation) --
-verification here is algorithm-invariant instead (round-trip/convergence
-tests against synthetic data with known ground truth), the same philosophy
-this repo already uses for sequence generation where no MATLAB comparison
-is available (see Commands section above).
+**BART and hmriutils/MIRT are dropped, replaced by plain numpy + sigpy**
+(explicit user decision, not forced by unavailability): whitening and
+compression are a few lines of numpy, ESPIRiT is `sigpy.mri.app.EspiritCalib`,
+and the ramp-sample regridding (`epi_gridding.py`, from hmriutils'
+`rampsampepi2cart.m`/`reconecho.m`) uses `sigpy.nufft_adjoint` with the same
+`|diff(kx)|` density compensation. No numerical parity with BART/MIRT is
+claimed; verification is algorithm-invariant (synthetic round trips, known
+ground truth), the same philosophy as the sequence side. The gridding's absolute
+scale was fixed on 2026-09-21 (an extra 1/sqrt(nx): sigpy's adjoint already
+carries 1/sqrt(nx), reconecho.m divides by nx), because recon's noise-calibrated
+low-rank weights need it; files written before that are off by ~sqrt(nx) (the
+`20260915ball` `2_6x_2.4mm_epi_zf.h5` on disk is one).
 
-**Validated end to end against real acquired data**: `preprocess.py` ->
-the RSS driver (since removed from `recon/sigpy_recon.py`; see git history) was
-run on a real acquisition (`wb_2.4mm`, GE_UHP hardware) and
-compared against a real MATLAB/BART reference reconstruction
-(`wb_2.4mm_recon_rss.mat`) -- 0.19% relative L2 error, Pearson r = 0.999997
-(after fitting a single overall scale factor, since RSS's own coil
-normalization differs by convention), with metadata (`Nvcoils`, `Nframes`,
-matrix size, TR) matching exactly. This confirms the whole Stage 1 pipeline
-(whitening, coil compression, EPI gridding, odd/even phase correction,
-k-space scatter) end to end, not just its individual building blocks in
-isolation. Every building block was also independently verified before
-that: `raw_io.py` against real `ScanArchive` files (`Archive`/`NextFrame`
-reading real cal/EPI data), `epi_gridding.py`/`oephase.py`/`cg_sense.py`/
-the L1-wavelet+TV solver via synthetic round-trip/convergence tests, and the
-trickiest piece of
-`preprocess.py` -- the MATLAB column-major
-`permute`/`reshape` chain that scatters gridded k-space into the correct
-`(ky, kz)` zero-filled-volume slot -- has a dedicated location-encoding
-test (`scatter_frame` in `test_preprocessing_preprocess.py`: each
-(shot, echo) is given a unique decodable value, and the test asserts it
-lands at exactly the schedule's location, catching any flatten-order
-mismatch a shape-only check would miss). Every MATLAB `permute`/`reshape`
-in this port is translated mechanically (`permute(A,[p...])` ->
-`A.transpose(p_0based...)`, `reshape(A,dims)` -> `A.reshape(dims,
-order='F')`, since MATLAB `reshape` is always column-major over the whole
-array, exactly numpy's `order='F'`) -- not re-derived by hand, to avoid
-introducing exactly this class of bug.
+**Validated end to end against real data, twice.** (1) Before the restructure,
+preprocess -> RSS on `wb_2.4mm` (GE_UHP) matched a MATLAB/BART reference
+(`wb_2.4mm_recon_rss.mat`) to 0.19% relative L2 (r = 0.999997, after one global
+scale), with `Nvcoils`/`Nframes`/matrix size/TR matching. (2) After it, on
+`20260915ball/2_6x_2.4mm`: configured with the previous choices (global PCA, 14
+virtual coils, `a` from whitened + compressed cal data), the new pipeline
+matched frames computed by the previous `preprocessing/` code from the raw
+archives to 1.1e-7 (float32), with identical `noise_var`, `omegas` and
+`echo_times`; the new default `a` changed the k-space by 6.8e-4; the new B0 map
+correlated 0.9994 with the previous one and the smaps support agreed (Dice
+0.991). The scatter step has a location-encoding test (each (shot, echo)
+carries a decodable value), as does `unflatten_gre_echoes` (each (echo, iY, iZ)
+of the deGRE's echo-fastest, then iY, then iZ order, with the iZ=0
+receive-gain block dropped). Every MATLAB `permute`/`reshape` is translated
+mechanically (`permute(A,[p...])` -> `A.transpose(p_0based...)`,
+`reshape(A,dims)` -> `A.reshape(dims, order='F')`), never re-derived.
 
-**Per-acquisition scan parameters travel as a `.mat` snapshot, not a copied
-script.** MATLAB's `preprocess.m` gets `Nx`/`Ny`/`ETL`/`fov`/etc. by
-`run()`-ing a per-acquisition `params.m` into its workspace, injecting
-variables -- no Python equivalent of that pattern exists, and copying the
-whole `params.py` module was considered and rejected (it would require
-`pypulseq`/`scanners.py` in the GERecon-constrained preprocessing venv just
-to read a handful of scalars, and ties a long-term data record to source
-code that can change shape over time). Instead, `sequences/ArbEPI.py`
-exports exactly the scalars `preprocess.py` needs into `scan_info.mat`
-(`hdf5storage.savemat(fmt='7.3')`, alongside the kxo/kxe/schedules arrays it
-also writes there -- see the ".mat file format" section above);
-`preprocessing/config.py`'s `load_seq_params` reads it back with `h5py`
-(see below for why not `hdf5storage`). No new dependency needed on either
-side: `hdf5storage` is already a main-repo dependency (writer), plain
-`h5py` is already in the `preprocessing` extras (reader).
+**Why compression runs after the cache, and whitening is not optional.**
+Gridding, the odd/even correction (one phase per echo and x, identical across
+coils) and the scatter are linear and coil-independent, so any coil-mixing
+matrix commutes with them -- including GCC's per-x matrices, because the
+sampling mask depends only on (ky, kz) (`test_gcc_kspace_compression_matches_
+compressed_maps_forward_model`). What does not commute is estimating from coil
+data: `getoephase` is a power-weighted, nonlinear coil average, PCA/GCC and the
+coil count depend on the basis, and ESPIRiT is at best unitary-equivariant.
+Those always use whitened, uncompressed data. The user originally asked for
+whitening to be optional too; it is mandatory whenever a noise scan exists
+(user-approved), because it is lossless (`W` stored) and every consumer assumes
+it: `noise_var` ~ 1, recon's lambdas, PCA/GCC SNR-optimality, ESPIRiT (Kellman &
+McVeigh, MRM 2005), and SENSE without a noise covariance. Measured on
+`20260915ball`, the coil basis used for the odd/even estimate (raw, whitened,
+whitened+compressed) moved `a` by <= the half-split noise of the estimate
+(e.g. `2_6x`: da0 3e-4 rad vs noise 3e-4; da1 2e-3 vs 9e-3 rad/FOV); the
+32-channel noise was already nearly white (mean |corr| 0.006).
 
-**`preprocessing/matio.py` -- read hdf5storage `.mat` files with `h5py`,
-correctly.** `hdf5storage` stores arrays *axis-reversed* on disk (MATLAB's
-column-major convention); `h5py` reads the raw on-disk layout with no
-correction. Verified empirically against a real `scan_info.mat`:
-`hdf5storage.loadmat`'s `schedules` is `(30, 20, 60, 3)` (matching this
-repo's documented `Nframes x Nshots x ETL x 3` layout), while a bare
-`h5py.File(...)['schedules'][()]` comes back `(3, 60, 20, 30)` -- exactly
-the reverse, and exactly `raw.transpose()` recovers the correct array
-(shape *and* values, checked element-by-element against
-`hdf5storage.loadmat`'s output). `matio.read_mat_array`/`read_mat` apply
-this transpose unconditionally; for vectors/scalars it's a no-op on the
-values (only a singleton axis moves), so there's no need to special-case
-shape. Use these for every hdf5storage-written `.mat` this pipeline reads
-(`scan_info.mat`) -- never `scipy.io` (can't read v7.3 at all, see above),
-never a bare `h5py` read without the transpose.
+**Coil compression: GCC, and how many virtual coils.** The previous rule
+(global PCA, 90% energy, floor 2R) kept 14 of 32 coils on `2_6x_2.4mm` and,
+measured per object voxel at R = 1, kept 0.965 of the SNR at the median but
+0.843 at the 5th percentile. The whole-volume coil spectrum is flat (90% energy
+needs 14, 99% needs 26), but only a few coils see any one readout position, so
+GCC (Zhang et al., MRM 2013) keeps 0.986 at the 5th percentile with 10 coils.
+Things learned choosing the rule, all measured: the paper gives no R-based rule
+("thresholding the singular values" or nRMSE; its nRMSE is SSOS over the whole
+FOV normalized by max-min, lenient -- 6 GCC coils pass its 0.01 here); a
+noise-floor (Marchenko-Pastur) threshold keeps all 32 at deGRE SNR; the max over
+x of per-x 99% counts swung 11 -> 17 -> 27 -> 31 with the object-mask definition
+(one weak edge position needs 17). The chosen rule -- smallest Nv whose
+eigenvalue energy summed over all x reaches `cc_energy_thresh` -- needs
+no mask. The 2R floor was dropped (user decision; R-fold aliasing
+arguments are weak for incoherent sampling with regularized recon), and
+`cfg.Nvcoils` sets the count exactly. A first GCC measurement script used
+`Vh[:nv]` instead of `conj(Vh[:nv])` for data rows c^T and looked *worse* than
+PCA; `coils.gcc_compression` reuses `pca_compression`'s eigenvector convention
+(u^H of sum c c^H) to avoid that. `coils.gcc_calibration` crops/pads the
+deGRE's kx to the EPI Nx (shared x FOV) so per-x matrices land on EPI x
+positions, and uses a central 24x24 (ky, kz) block (all of ky-kz gave the same
+numbers). Caveat, measured by reconstruction (`2_6x_2.4mm`, R = 6,
+unregularized CG-SENSE, 20 frames): the R = 1 retention metric understates the
+loss under acceleration -- 0.99 (10 coils) gave tSNR 0.88 of the 32-coil
+recon, 0.995 (12) 0.94, 0.999 (15) 0.98, the old PCA 14 0.84. So the default
+is 0.999 (user decision after this measurement): 15 coils, ~2.2x faster CG than
+32. The counts per threshold were identical on all four `20260915ball`
+sequences (table in `preprocess/README.md`).
 
-**Everything `preprocess.py` and the `recon/` drivers write for their own
-internal use -- not for a human to open in a viewer -- stays `.h5`, not
-`.mat`.** These are plain numpy-order `h5py` writes with no MATLAB
-consumer (the zero-filled k-space output, the per-sequence GRE/smaps
-caches) -- the opposite on-disk axis convention from the hdf5storage-written
-files this pipeline *reads*. A `.mat` extension here would silently invite
-reading it with `hdf5storage.loadmat`, which would return every multi-axis
-array transposed; the `.h5` extension is a deliberate, visible signal that
-these files follow this port's own convention, not MATLAB's. One related,
-fixed inconsistency in the original: `recon_frames.m` looks for a *shared*
-`<datdir>/recon/gre.mat`, but `preprocess.m` actually saves its
-whitened+compressed `ksp_gre` to `<datdir>/scanarchives/gre.mat` -- those
-paths don't match in the MATLAB original, and since the whitening matrix
-comes from a per-sequence noise scan, a single shared cache is a latent
-correctness bug (whichever sequence's `preprocess.m` ran last silently
-wins for every other sequence's fallback smaps estimation). This port uses
-one consistent per-sequence path, `<datdir>/recon/<seqname>_gre.h5`, on
-both the writer (`preprocess.py`) and reader (the removed `recon_frames`) side.
+**Odd/even frame (review item 251).** `compute_oephase` and `epiphasecorrect`
+use the same centered-IFFT pairing along x, so `a` is estimated and applied in
+one pixel frame; the old inline copy in `calibrate_delay.py` used MATLAB's
+fftshift/ifftshift spelling, one pixel off for odd Nx (a0 biased by a1/Nx;
+every dataset so far has even Nx). Note `rampsamp2cart` itself keeps MATLAB's
+fftshift-both-sides forward FFT, so for odd Nx "the frame" is defined by the
+estimate/apply pair agreeing, not by absolute position.
 
-**The final reconstructed-image files are the one exception: `.nii.gz` +
-JSON sidecar, not `.h5`.** `preprocessing/nifti_io.py`'s `save_recon_nifti`
-is the shared writer the `recon/` drivers all call in place of their old direct `h5py.File(...)` writes. This is a
-deliberate format split by *consumer*, not a blanket format change: the
-intermediate files above (`ksp_epi_zf`, smaps, GRE cache) still feed the
-downstream Julia advanced-recon pipeline and stay plain HDF5 (already
-generic and directly readable via `HDF5.jl`, no format change needed
-there), while the final magnitude images are for a human to look at, and
-this repo's own `.h5` files have no viewer as good as ITK-SNAP/FSLeyes/3D
-Slicer/etc., all of which expect NIfTI (or DICOM) rather than a bare
-HDF5 array. NIfTI has no native complex dtype, so `save_recon_nifti` saves
-magnitude only (`np.abs`) -- the former RSS/CG-SENSE outputs were
-already real-valued in practice, so this loses nothing currently produced, but note it if a future recon driver
-needs the complex-valued image itself; that consumer should keep reading
-`recon_frames`' return value directly; rather than round-tripping it
-through NIfTI. NIfTI also has no free-form attribute dict (unlike h5py's
-`.attrs`), so per-recon parameters that used to live as `.h5` attrs
-(`seqname`, `num_iter`, `lamb_l1`/`lamb_tv`, `runtime_s`, the `seq_params`
-fields) are written to a `<fn_base>.json` sidecar instead -- the common
-BIDS-style image+sidecar convention, not a repo-specific format. The
-NIfTI affine is a plain diagonal voxel-size matrix derived from
-`seq_params.fov`/the image shape; no patient-orientation information
-exists anywhere in this pipeline (unlike a scanner-produced DICOM/NIfTI),
-so voxel spacing is correct but radiological left/right or
-anterior/posterior orientation is not guaranteed.
+**Per-acquisition scan parameters travel in `scan_info.mat`**, not a copied
+script (MATLAB `run()`s a per-acquisition `params.m`; copying `params.py` would
+drag pypulseq into the GERecon venv and tie a data record to changing code).
+`utils.load_seq_params` reads it with h5py; `utils.read_mat_array` applies the
+full transpose hdf5storage's axis reversal needs (verified: raw h5py gives
+`(3, 60, 20, 30)` for `schedules`, `hdf5storage.loadmat` `(30, 20, 60, 3)`).
+Snapshots from before the dual-echo deGRE lack `n_echoes_degre`/`TE_degre`
+(defaults 1/None), since they are durable, non-regeneratable records. Files this
+pipeline writes for machine use are plain numpy-order `.h5` (the `.h5`
+extension signals they are *not* hdf5storage `.mat`); human-facing maps are
+`.nii.gz` + JSON sidecar (magnitude only; diagonal affine, no orientation).
 
-**`preprocessing/` now knows about deGRE's dual-echo acquisition, and hands
-both echoes off to an external B0-mapping consumer.** `sequences/deGRE.py`
-writes two full excitation/readout passes per phase encode (`TE_degre`, a
-2-element array -- see `params.py`, echo innermost, then `iY`, then `iZ`,
-including the `iZ=0` receive-gain-calibration pass -- see that module's
-"Each (iY, iZ) phase-encode location is excited once per echo" docstring
-note). `sequences/ArbEPI.py` now exports `n_echoes_degre = len(params.
-TE_degre)` and `TE_degre` itself in its scan-scalar snapshot (now part of
-`scan_info.mat`, formerly its own `params.mat` -- see the ".mat file
-format" section above) (`preprocessing/config.py`'s
-`SeqParams.n_echoes_degre`/`TE_degre`, read by `load_seq_params`; both
-default -- `1` and `None` respectively -- when missing, since a snapshot
-written before this change is a durable, non-regeneratable per-acquisition
-data record, not something to raise `KeyError` on).
+**B0 field map via MRIFieldmaps.jl** (Lin & Fessler, IEEE TCI 2020), not
+ported: `preprocess/julia/` is a pinned Julia project run as a subprocess by
+`b0map.py` (temp h5 in, temp h5 out; first-time setup `julia
+--project=preprocess/julia -e 'import Pkg; Pkg.instantiate()'`). Choices, all
+from measured problems (see the script's header): `precon=:diag`, not the
+default `:ichol` -- with `:ichol` the preconditioner is built from the same
+roughness operator as the gradient, so `l2b` had no effect over [-6, 28] and
+the map was speckled; `:diag` made it ~4x smoother and cut B0-correction speckle
+in reconstructions ~3x (+61.1 -> +19.5 excess roughness), and `l2b`/`niter` were
+dropped from the CLI. The fit mask (magnitude > 0.1 x peak, AND ESPIRiT
+eigenvalue > crop) is mandatory: an exactly-zero voxel gives 0/0 in the coil
+combine and NaN everywhere. `finit` is ROMEO-unwrapped (Dymerska et al., MRM
+2021): NCG only finds the local optimum near its start (207 Hz RMSE from a
+wrapped start vs < 60 Hz on a +-450 Hz synthetic field); the unwrapped array is
+the phase-contrast combine's echo 2, `y2 conj(y1)/sos` -- its echo 1 is
+identically real, which a first attempt unwrapped with no effect. HDF5.jl reverses
+axes relative to h5py, so `b0map.jl` permutes on read and write. The julia tests
+skip without `julia` on PATH.
 
-`preprocessing/preprocess.py`'s `unflatten_gre_echoes()` (STEP 2)
-unflattens the raw archive against `n_echoes_degre`, returning
-`[Nx_degre, Ny_degre, Nz_degre, n_echoes, Ncoils]` -- every echo, not just
-one. Whitening and coil-compression-matrix estimation still use only
-`PreprocessingConfig.gre_echo_idx` (default `0` = the shorter TE1, for
-higher SNR -- either echo works for sensitivity maps, per `deGRE.py`'s
-docstring) so `Nvcoils` selection and `smaps.py`'s `estimate_smaps`/
-`process_smaps` behave exactly as before the dual-echo upgrade (the coil
-subspace is echo-independent, so a compression matrix fit on one echo is
-correctly applied to both); `apply_whitening`/`apply_coil_compression`
-operate per-sample along the coil axis regardless of the extra echo axis,
-so this doesn't change the selected echo's values at all. Verified with a
-location-encoding test in the same style as `scatter_frame`'s
-(`test_unflatten_gre_echoes_places_data_at_correct_indices` in
-`tests/test_preprocessing_preprocess.py`): every acquisition is given a
-value encoding its own `(echo, iY, iZ)`, and the test confirms every
-echo's unflattened volume holds exactly the right value at each
-`(iY, iZ)` and that the `iZ=0` calibration block is dropped entirely --
-not just a shape-only check.
-
-**The `<seqname>_gre.h5` cache is the handoff point to B0 field map
-estimation -- deliberately not GE-specific.** Alongside the existing
-`ksp_gre` dataset (the selected echo, whitened + coil-compressed,
-unchanged key so the (since removed) `recon_frames` cache reader needed no changes), STEP
-2 now also writes `ksp_gre_echoes` (`[Nx_degre, Ny_degre, Nz_degre,
-n_echoes, Nvcoils]`, both echoes, whitened + coil-compressed) and a
-`TE_degre` attr (seconds) whenever `seq_params.TE_degre` is available.
-Both are plain numpy-order HDF5 (see the `.h5`-vs-`.mat` convention note
-above) -- a consumer needs only `h5py`/`HDF5.jl`, never GERecon or the raw
-ScanArchive.
-
-**STEP 2 also writes `ksp_gre_uncompressed` and `cc_matrix`** --
-`ksp_gre_uncompressed` (`[Nx_degre, Ny_degre, Nz_degre, Ncoils]`, the same
-`cfg.gre_echo_idx` echo as `ksp_gre`, whitened but captured *before* PCA
-coil compression -- `Ncoils` is the real physical receive-coil count,
-e.g. 32, not `Nvcoils`) and `cc_matrix` (`[Nvcoils, Ncoils]`, the exact
-PCA compression matrix STEP 2 applies to `ksp_gre_all`/`ksp_gre`) are the
-two inputs `smaps.py`'s `load_smaps` needs to calibrate ESPIRiT **once**,
-on the full-coil data, and derive the Nvcoils-compressed set by linear
-projection rather than a second, independent calibration on separately-
-compressed k-space (see below). A `<seqname>_gre.h5` written before these
-fields existed has no way to backfill them (the raw ScanArchive isn't
-available to `load_smaps`, only the raw-archive-reading `preprocess()`
-itself, which needs GERecon) -- `load_smaps` falls back to the original
-independent-calibration design for the compressed set alone, rather than
-raising, see below.
-
-**`smaps.py`'s `load_smaps` now returns a fifth value,
-`smaps_degre_uncompressed`** -- ESPIRiT sensitivity maps at the deGRE
-grid/FOV, for a true per-physical-coil (e.g. 32-channel) profile rather
-than a PCA-compressed subspace. Both it and the existing Nvcoils-
-compressed `smaps`/`smaps_degre` now come from **one** ESPIRiT
-calibration on `ksp_gre_uncompressed`: the compressed set is a linear
-projection of that single calibration through `cc_matrix`
-(`preprocessing/coils.py`'s `apply_coil_compression`), not a second
-calibration on `ksp_gre`. This is mathematically exact under the ideal
-SENSE signal model, not an approximation of convenience: for a fixed
-object rho(r), `img_c(r) = s_c(r) * rho(r)` for every physical coil `c`,
-and coil compression is a linear combination of channels applied
-identically at every k-space sample (`y'_v = sum_c M[v,c] y_c`), so
-`img'_v(r) = sum_c M[v,c] img_c(r) = [sum_c M[v,c] s_c(r)] * rho(r)` --
-the virtual-coil sensitivity is that same linear combination of the true
-per-coil sensitivities. A side effect: the projected compressed maps
-automatically inherit `process_smaps`' exact-zero-background invariant
-(any linear combination of an all-zero coil vector is still zero), and
-both coil counts share one `emap`/`emap_degre` (no separate
-`emap_uncompressed`) since they're the same calibration. Cached alongside
-the existing Nvcoils set as `smaps_raw_uncompressed`/
-`smaps_degre_uncompressed` in `smaps_<seqname>_sigpy.h5`, under its own
-`Ncoils` attr (independent of `Nvcoils`: a coil-compression-setting
-change moves `Nvcoils` without touching `Ncoils`, and vice versa for a
-different physical coil array or a re-run archive -- either mismatch
-invalidates the whole cache, since both coil counts derive from the same
-calibration and can't be partially reused). `smaps_degre_uncompressed` is
-`None` only when `<seqname>_gre.h5` predates `cc_matrix`/
-`ksp_gre_uncompressed` -- the only field in `load_smaps`' return tuple
-that can come back `None`; both of its current callers
-(`run_b0map.py`, and the removed `recon_frames`) already discard this return value, so
-nothing downstream consumes it yet -- it exists for a future full-coil-
-domain consumer. `preprocessing/preprocess.py`'s own inline STEP 3 (used
-only for the NIfTI/console-output side effect during `preprocess()`
-itself) still computes only the Nvcoils-compressed set directly, via the
-original independent-calibration design on `ksp_gre`. `ksp_gre` itself is
-still written by every `preprocess()` run (unchanged) purely as the
-fallback input for a `<seqname>_gre.h5` written by an *older*
-`preprocess()` that predates `cc_matrix`/`ksp_gre_uncompressed` -- for a
-freshly-written cache (which always has `cc_matrix`), `load_smaps` never
-reads it, so it's dead weight there, kept anyway since it's small and
-this is the one place a plain compressed single-echo k-space snapshot
-lives. `smaps_degre`/`emap_degre`/`smaps_degre_uncompressed` all continue
-to be computed lazily by `load_smaps` the first time something needs
-them.
-
-**B0 field map estimation is implemented, via
-[MRIFieldmaps.jl](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl)
-(Lin & Fessler, "Efficient Regularized Field Map Estimation in 3D MRI",
-IEEE TCI 2020) -- not ported to Python, since no such port exists and
-MRIFieldmaps.jl's regularized NCG solver is the actual state of the art
-here, not boilerplate worth reimplementing.** `preprocessing/julia/` is a
-small, self-contained Julia project (`Project.toml` + a pinned
-`Manifest.toml`, both committed) holding one script, `b0map.jl`, invoked
-as a subprocess by `preprocessing/run_b0map.py` (`julia
---project=preprocessing/julia preprocessing/julia/b0map.jl <gre_h5>
-<output_h5> [smaps_h5] [eig_mask_threshold] [mask_threshold] [precon]`) --
-not embedded via PythonCall/juliacall,
-since there is no other Julia dependency anywhere in this pipeline to
-justify that weight, and a subprocess boundary mirrors how `raw_io.py`
-already isolates GE's proprietary GERecon SDK to one module rather than
-embedding it more deeply. First-time setup needs `julia
---project=preprocessing/julia -e 'import Pkg; Pkg.instantiate()'` (network
-required once, to populate the local package depot); after that, no
-network access is needed to run it.
-
-`b0map.jl` reads `ksp_gre_echoes`/`TE_degre` back from the cache, IFFTs
-each echo/coil to image space with the same centered-FFT convention as
-`preprocessing/gre_diagnostics.py`'s `_ift3` (`fftshift(ifft(fftshift(.)))` per axis), and calls
-`MRIFieldmaps.b0map(finit, images, echotime; smap, mask, precon)`.
-`precon=:diag` (not `b0map`'s own default, `:ichol`) -- see the dedicated
-paragraph below for why. `smap`, when `preprocessing/smaps.py`'s
-`load_smaps` has a deGRE-grid sensitivity-map cache available (see that
-module's docstring: it now resizes the same `cal_size`-cropped ESPIRiT
-calibration onto *this* deGRE grid, not just the EPI grid), replaces
-MRIFieldmaps' own phase-contrast coil-combine fallback with a true
-matched-filter combine -- `run_b0map.py` computes/loads this best-effort
-(falls back to no `smap` if unavailable, e.g. no `ksp_gre` in the GRE
-cache, rather than failing field-map estimation over an optional input).
-An explicit magnitude-threshold `mask` (default `0.1` x peak first-echo
-magnitude, matching `MRIFieldmaps.b0init`'s own default), ANDed with an
-ESPIRiT-eigenvalue-based mask when `smap` is available, is *not* optional
-here despite `b0map`'s own `mask` keyword defaulting to "every voxel": its
-no-`smap` coil-combine path divides by each voxel's coil sum-of-squares,
-and a synthetic all-zero-background test volume confirmed this produces a
-background 0/0 = NaN that poisons Julia's `maximum()` and returns an
-all-NaN field map end to end (real scanner data has thermal noise
-everywhere so an exactly-zero voxel won't occur, but masking out
-background is standard practice for this package regardless, so the mask
-stays mandatory here rather than becoming a latent footgun).
-
-**`precon=:diag`, not MRIFieldmaps' own default `:ichol` -- the actual fix
-for a real, measured reconstruction artifact.** A B0-corrected
-reconstruction (see `recon/`'s "B0 off-resonance correction" subsection)
-kept showing salt-and-pepper speckle after landing on `L=32`; the field
-map itself turned out to be the cause, and specifically its optimizer, not
-its regularization weight. `l2b` (`b0map`'s log2 roughness-regularization
-weight) was swept across `[-6, 28]` -- a 16384x-to-270-million-x range in
-the actual `beta = 2^l2b` -- and had essentially no effect on the fitted
-field map's smoothness (`mean|Laplacian|` roughness flat at ~8.2-8.4
-throughout, confirmed both under-converged and via a full 2000-iteration
-NCG run at `l2b=4`, which was still measurably reducing cost yet converged
-to the same roughness as `l2b=-6`). Traced to `:ichol`'s preconditioner
-(`H = spdiagm(hcurv) + CC`) being built from the *same* `CC = beta * C'C`
-operator that appears in the gradient (`grad = hderiv + CC*w`) -- as
-`beta` grows, both numerator and denominator become `CC`-dominated and the
-preconditioned NCG step collapses toward `-w`, independent of `beta`.
-Switching to `precon=:diag` (`Hdiag = hcurv + diag(CC)`, no such
-numerator/denominator cancellation since only the diagonal of `CC` enters
-the preconditioner) fixed it directly: field-map roughness dropped ~4x
-under `:diag` vs `:ichol` at identical `l2b`/`niter`, and re-reconstructing
-with the `:diag` field map confirmed the fix at the image level too --
-B0-correction-induced excess image roughness (over an uncorrected
-baseline) dropped from +61.1 (`:ichol`) to +19.5 (`:diag`). This isn't
-data-specific: MRIFieldmaps.jl's own
-[`02-b0map.jl` example](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl/blob/main/docs/lit/examples/02-b0map.jl)
-independently notes "the diagonal preconditioner seems to be as effective
-as the incomplete Cholesky preconditioner" in this Julia port (unlike the
-original MATLAB implementation, where `ichol` is the expected/reliable
-win) -- though that comparison is about final-RMSE-vs-wall-time on its own
-canonical test case, not `l2b` sensitivity specifically, so it corroborates
-the outcome without independently confirming the mechanism above (traced
-directly in this pipeline's own code instead). With `precon=:diag` fixing
-the actual problem, `l2b`/`niter` were *removed* from `b0map.jl`'s exposed
-CLI arguments (they'd been added specifically to chase this bug) and
-MRIFieldmaps' own call is no longer passed them at all -- both silently
-revert to library defaults (`-6.0`/`30`), which is all that's needed once
-the preconditioner is right.
-
-**`finit` is built via [ROMEO.jl](https://github.com/korbinian90/ROMEO.jl)
-(Dymerska et al., "Phase unwrapping with a rapid opensource minimum
-spanning tree algorithm (ROMEO)", MRM 2021) rather than left to `b0map`'s
-own default (a plain, possibly-aliased two-point phase difference).**
-`b0map`'s NCG solve has a data-fit term that is itself periodic (see the
-cost function referenced below), so it doesn't strictly need unwrapped
-phase to converge -- but that periodicity only guarantees a *locally*
-consistent optimum, not that NCG finds its way to the globally correct 2π
-branch starting from a badly-aliased `finit`. This was measured, not
-theoretical: `b0map.jl`'s own dedicated test
-(`test_run_b0map_unwraps_a_field_map_beyond_the_naive_unambiguous_range`
-in `tests/test_preprocessing_run_b0map.py`) uses a synthetic field map
-exceeding the naive `finit`'s +-1/(2 dTE) unambiguous range (dTE = 2 ms =>
-+-250 Hz); `b0map` fed the ROMEO-unwrapped `finit` recovers the true field
-to well under 60 Hz RMSE, fed the plain wrapped `finit` it converges to a
-local minimum that reproduces the aliasing instead of correcting it
-(~207 Hz RMSE, confirmed in scratch testing during development).
-
-Which array actually needs unwrapping is *not* obvious, and got it wrong
-on the first attempt: `MRIFieldmaps.coil_combine`'s phase-contrast formula
-(`zdata_e = sum_c conj(y_{c,1}/sos) * y_{c,e}`) makes the *reference*
-echo's own combined phase (`zdata[...,1]`) identically zero by
-construction for every voxel (`conj(y_{c,1}) * y_{c,1} / sos` sums to a
-real positive number) -- confirmed empirically when a first attempt at
-spatially unwrapping `zdata[...,1]` changed exactly zero voxels on data
-that plainly needed it. The physically meaningful signal is
-`zdata[...,2]`, which for this two-echo case reduces to exactly `y2 *
-conj(y1) / sos` -- the same wrapped phase *difference* `MRIFieldmaps.
-b0init` itself computes (`angle.(y2 .* conj(y1))`). So `b0map.jl`'s
-`romeo_finit` unwraps that one 3D volume via `ROMEO.unwrap`, weighted by
-its own magnitude (a coherence-like quantity in `[0, 1]` from the
-phase-contrast combine -- naturally lower wherever the two echoes
-disagree, i.e. exactly where `unwrap` should trust the local phase less,
-not the raw image amplitude), then divides by `2π * dTE` to get Hz. Only
-the first two echoes are used, matching `b0init`'s own restriction to
-two-point phase difference in the non-water-fat case -- consistent with
-this pipeline only ever acquiring a two-echo deGRE.
-
-**Axis order, both directions, verified empirically rather than assumed:**
-HDF5.jl reads/writes arrays reversed relative to h5py/numpy, the mirror
-image of the `hdf5storage`-vs-`h5py` gotcha `preprocessing/matio.py`
-documents for the opposite (MATLAB-writer) direction. Confirmed against a
-real Python-written `(Nx, Ny, Nz, n_echoes, Ncoils)` dataset: Julia's
-`read` returns it as `(Ncoils, n_echoes, Nz, Ny, Nx)`, and
-`permutedims(raw, reverse(1:ndims(raw)))` recovers the correct array
-(`b0map.jl`'s `read_numpy_array`). The same reversal is applied on
-*write* (`write_numpy_array`), so `<seqname>_b0map.h5`'s
-`b0map_hz`/`finit_hz`/`mask` datasets land on disk already in numpy axis
-order and need no correction
-read back from Python -- confirmed both ways with a synthetic dual-echo
-GRE volume carrying a known spatial field-map ramp (`tests/
-test_preprocessing_run_b0map.py`): shape matches exactly, and the
-recovered field map correlates > 0.98 with the injected ground truth.
-That test (and the whole `preprocessing/julia/` path) is skipped
-whenever no `julia` executable is on `PATH` -- the same tolerance this
-repo already extends to MATLAB-based comparisons (no MATLAB install was
-available during this port either, see the Commands section) and to
-`raw_io.py`'s GERecon dependency.
+**R2* is a placeholder with the current deGRE** (`r2star.py`): its echo spacing
+is set for B0 (2.24 ms vs T2* ~47 ms on `2_6x_2.4mm`; echo ratio 0.953), so the
+fit is noise-dominated. The user considered it "basically a no-op"; strictly two
+points determine a monoexponential, the problem is dTE << T2*. The fit already
+spans all echoes; the missing piece is a multi-echo GRE (`docs/TODO.md`).
 
 ### `recon/` -- image reconstruction (RSS, iterative SENSE with B0/R2* and low-rank / wavelet-TV priors), on `mirtorch`
 
@@ -1056,12 +786,12 @@ the way `../mslr-recon` does -- unit-variance k-space noise and a unit-norm
 operator:
 - **k-space noise**: `preprocess()` pushes the noise-scan readouts through
   the same whitening -> coil compression -> regridding -> odd/even phase
-  correction as the EPI data (`measure_noise_var`) and records the result as
-  the `noise_var` attr of `<seqname>_epi_zf.h5`; `run_sense` divides the
+  correction as the EPI data (`grid_noise`) and records the result as
+  the `noise_var` attr of `<seqname>_preprocessed.h5`; `run_sense` divides the
   k-space by `sqrt(noise_var)`. Whitening targets 1 -- measured 0.93
   (`2_6x_2.4mm`) and 1.05 (`1_1x_5.4mm`) on `20260915ball` -- so this is
-  normally a few-percent correction. Files written before this lack the attr
-  and are used as is; `preprocess.record_noise_var(cfg, paths)` backfills it.
+  normally a few-percent correction. Files without the attr (no noise scan)
+  are used as is.
   Estimating the noise from the acquired k-space itself doesn't work on these
   high-SNR datasets: the outer (ky, kz) shell and even the x-background of
   hybrid (x, ky, kz) space (where kx is fully sampled, so there's no aliasing)
@@ -1079,9 +809,9 @@ operator:
 It started as a Python/PyTorch port of the companion Julia repo `../mslr-recon`
 (multi-scale locally-low-rank fMRI reconstruction, Ong & Lustig 2016),
 built on [mirtorch](https://github.com/guanhuaw/MIRTorch) in place of
-MIRT.jl + LinearMapsAA, and consumes this repo's own `preprocessing/` output
-directly (`<seqname>_epi_zf.h5`'s `ksp_epi_zf` + `smaps_<seqname>_sigpy.h5`'s
-`smaps`).
+MIRT.jl + LinearMapsAA, and consumes this repo's own `preprocess/` output
+directly (`<seqname>_preprocessed.h5`'s `ksp_epi_zf`, `smaps`, `b0map_hz`,
+`r2star`).
 
 **All of `recon/` runs in `.venv-recon`** (the `recon` optional-dependency
 group: torch, mirtorch, h5py, nibabel, PyWavelets, scipy, matplotlib,
@@ -1222,15 +952,14 @@ convergence-plot reporting) -- both are QA/visualization, not required for
 a working reconstruction path. `recon/utils.py`'s `save_result` writes
 `ReconResult` to disk (`.h5` full-precision complex + solver trace,
 `.nii.gz`+`.json` magnitude image + metadata, reusing
-`preprocessing/nifti_io.py`'s `save_recon_nifti`) -- `recon/sense.py`'s
+`preprocess/utils.py`'s `save_recon_nifti`) -- `recon/sense.py`'s
 CLI is its production consumer.
 
 ### B0 off-resonance correction
 
 Two-stage B0 correction on top of the plain `SENSE` encoding
-operator, consuming `preprocessing/run_b0map.py`'s field map
-(`<seqname>_b0map.h5`) and `preprocessing/preprocess.py`'s per-sample
-`echo_times`:
+operator, consuming the field map `b0map_hz` and per-sample `echo_times`
+in `<seqname>_preprocessed.h5` (`preprocess/b0map.py`, `preprocess/preprocess.py`):
 
 - **Static single-segment correction (formerly `demodulate_smaps`, removed in the
   2026-09-25 restructure; see git history)** -- static, single-
@@ -1271,12 +1000,12 @@ alone -- valid as long as R2*'s own decay-time product stays much smaller
 than Δf's bandwidth-time product, checked and printed at construction
 time) so one L-segment machinery corrects magnitude decay alongside
 phase. `build_sense_b0` is the phase-only operator; an all-zero R2* map reproduces it. R2* itself comes from
-`preprocessing/r2star_map.py`'s two-point log-ratio estimate on the same
-dual-echo deGRE data already used for Δf(r); `recon/sense.py --R2star`
-wires it end to end (estimates R2*, reads the nominal-TE reference time
-from `scan_info.mat`, and saves under a separate `sense_<reg>_b0r2star/`
-output directory so an `--R2star` run never collides with a plain
-B0-only run).
+`preprocess/r2star.py`'s log-linear fit over the same dual-echo deGRE
+data used for Δf(r) (a placeholder -- see the `preprocess/` section);
+`recon/sense.py --R2star` reads it and the nominal-TE reference time
+(`r2star`, attr `t_ref_s`) from `<seqname>_preprocessed.h5`, and saves
+under a separate `sense_<reg>_b0r2star/` output directory so an
+`--R2star` run never collides with a plain B0-only run.
 
 **Sign convention diverges deliberately from the (unmerged, exploratory)
 `worktree-lowres-calib-recon` branch's `recon/lowres_calib_recon_b0complex.py` (its path on that branch)
@@ -1395,10 +1124,11 @@ to the uncorrected operator's.
 landing on `L=32`, the B0-corrected reconstruction still showed a
 persistent salt-and-pepper speckle texture, distinguishable from this
 phantom's *real* air-bubble signal voids (confirmed by
-`preprocessing/gre_diagnostics.py`, which reconstructs the dual-echo deGRE
-images to NIfTI/PNG for direct visual comparison against the field map --
+the deGRE QA figures, now `preprocess/utils.py`'s
+`plot_gre_b0_diagnostics`, which show the dual-echo deGRE images next to
+the field map --
 the raw GRE images themselves are clean). Diagnosing this led to
-`preprocessing/julia/b0map.jl`'s `precon` fix below -- see that module's
+`preprocess/julia/b0map.jl`'s `precon` fix below -- see that module's
 docstring for the full mechanism (`:ichol`'s preconditioner shares the
 same `CC` operator as the `l2b` regularization term, which numerically
 cancels `l2b`'s effect on the NCG descent direction once `CC` dominates;
@@ -1414,17 +1144,16 @@ still differ from the uncorrected baseline by a similar relative L2
 amount, ~13-16%, since correcting real geometric distortion is supposed to
 change the image).
 
-**Sensitivity-map rewiring (`preprocessing/smaps.py`'s `load_smaps`)**: a
-real methodological improvement made available at the same time, but *not*
-the fix for the above -- see `preprocessing/`'s section below for the
-detail. Measured to make no difference to field-map roughness on this
+**Sensitivity maps as b0map.jl's coil combine** (instead of MRIFieldmaps'
+phase-contrast fallback): a real methodological improvement made available
+at the same time, but *not* the fix for the above. Measured to make no difference to field-map roughness on this
 phantom (whole-mask and by radial zone, including the low-SNR object
 center this change specifically targets) once `precon=:diag` is already in
 place, so it's infrastructure for future/noisier datasets, not something
 this dataset's own results depend on.
 
 **`grid_resize.py`'s `grid_mode=True` alignment fix (see
-`preprocessing/`'s section below) is directly load-bearing here.**
+`preprocess/`'s section below) is directly load-bearing here.**
 `SENSE_B0.c_phasors` (and the removed static-stage phasor) are both
 per-voxel functions of `b0map_hz`, which reaches the encoding operator
 already resized onto the EPI grid by that same code path -- a

@@ -248,7 +248,7 @@ def build_sense_b0_r2star(
     nbins: int = 128,
 ) -> BlockDiagonal:
     """build_sense_b0 plus R2* decay (see SENSE_B0_R2star). r2star_map:
-    (Nx,Ny,Nz) in 1/s. t_ref_s: nominal-TE echo time (utils.nominal_te_s)."""
+    (Nx,Ny,Nz) in 1/s. t_ref_s: nominal-TE echo time (the preprocessed file's t_ref_s attr)."""
     b_by_echo, _c, tl, _t, pos_per_frame = _segment_fit(
         omega, b0map_hz, echo_times_yz, L, nbins, t_ref_s=t_ref_s,
     )

@@ -12,8 +12,8 @@ decides the solver (recon/solvers.py):
     .venv-recon/bin/python -m recon.sense <datdir> <seqname> --reg lowrank \\
         --patch 6 6 6 --stride 3 3 3 [--B0 [--R2star]] [--frames 0,1,2] [--niter 200]
 
-Reads <datdir>/recon/{<seqname>_epi_zf.h5, smaps_<seqname>_sigpy.h5,
-<seqname>_b0map.h5} and writes <datdir>/recon/sense_<reg>[_b0|_b0r2star]/
+Reads <datdir>/recon/<seqname>_preprocessed.h5 (preprocess/'s output: k-space,
+sensitivity, B0 and R2* maps) and writes <datdir>/recon/sense_<reg>[_b0|_b0r2star]/
 <seqname>_recon.{h5,nii.gz,json}.
 """
 
@@ -91,7 +91,7 @@ def run_sense(
 ) -> ReconResult:
     """Reconstruct the frames of fn_ksp with regularizer `reg`.
 
-    fn_b0map: a preprocessing/run_b0map.py output; when given, A models B0
+    fn_b0map: a preprocess/run_b0map.py output; when given, A models B0
     phase accrual (SENSE_B0), using fn_ksp's per-sample 'echo_times'. With
     r2star_map (1/s, EPI grid) as well, A also models R2* decay relative to
     t_ref_s, the nominal-TE echo time (SENSE_B0_R2star).
@@ -175,6 +175,12 @@ def run_sense(
     ksp = load_and_gather_ksp(fn_ksp, A, device, frames=frames)  # (K,Nc,Nt)
     with h5py.File(fn_ksp, "r") as f:
         noise_var = f.attrs.get("noise_var")
+        whitened = f.attrs.get("whitened", True)
+    if not whitened:
+        print(
+            "  WARNING: this k-space was not noise-whitened (no noise scan); the lowrank "
+            "lambda weights assume white unit-variance noise"
+        )
     if noise_var is None:
         print(
             "  no 'noise_var' recorded in the k-space file; assuming whitened unit-variance noise"
@@ -378,48 +384,38 @@ def main(
     B0: bool = False,
     fn_b0map: str | None = None,
     R2star: bool = False,
-    zero_pad_z: bool = False,
     **kwargs,
 ) -> str:
-    """Reconstruct <datdir>/recon/<seqname>_* and save the result. kwargs go
-    to run_sense. For reg='lowrank', a GPU out-of-memory error falls back from
-    POGM to FPGM to PGM (less solver state each time). Returns the output
-    path without extension."""
-    from preprocessing.config import load_config, load_seq_params, set_seq_paths
-    from preprocessing.r2star_map import estimate_r2star_map_epi_grid
-    from recon.utils import nominal_te_s
-
+    """Reconstruct <datdir>/recon/<seqname>_preprocessed.h5 and save the
+    result. kwargs go to run_sense. For reg='lowrank', a GPU out-of-memory
+    error falls back from POGM to FPGM to PGM (less solver state each time).
+    Returns the output path without extension."""
     recon_dir = os.path.join(datdir, "recon")
-    fn_ksp = os.path.join(recon_dir, f"{seqname}_epi_zf.h5")
-    fn_smaps = os.path.join(recon_dir, f"smaps_{seqname}_sigpy.h5")
+    fn_pre = os.path.join(recon_dir, f"{seqname}_preprocessed.h5")
     B0 = B0 or fn_b0map is not None
     if R2star and not B0:
         raise ValueError("R2star correction requires B0 correction")
     if B0 and fn_b0map is None:
-        fn_b0map = os.path.join(recon_dir, f"{seqname}_b0map.h5")
+        fn_b0map = fn_pre
     device = resolve_device(kwargs.get("device"))
 
-    paths = set_seq_paths(load_config(datdir=datdir, seqnames=[seqname]), seqname)
-    sp = load_seq_params(paths)
-    if R2star:
-        t_ref_s = nominal_te_s(paths.scan_info, sp.ETL)
-        with h5py.File(fn_ksp, "r") as f:
-            grid = f["ksp_epi_zf"].shape[:3]
-        print(
-            f"Estimating R2* map from dual-echo deGRE data (TE_nominal={t_ref_s * 1000:.3f} ms)..."
-        )
-        r2 = estimate_r2star_map_epi_grid(
-            datdir, seqname, sp.fov_degre, sp.fov, grid, zero_pad_z=zero_pad_z
-        )
-        kwargs.update(r2star_map=torch.from_numpy(r2).to(device), t_ref_s=t_ref_s)
+    with h5py.File(fn_pre, "r") as f:
+        fov = tuple(f.attrs["fov"])
+        if R2star:
+            if "r2star" not in f:
+                raise ValueError(f"{fn_pre} has no R2* map (was estimate_r2star=False?)")
+            t_ref_s = float(f.attrs["t_ref_s"])
+            r2 = f["r2star"][()]
+            print(f"R2* map from preprocessing (TE_nominal={t_ref_s * 1000:.3f} ms)")
+            kwargs.update(r2star_map=torch.from_numpy(r2).to(device), t_ref_s=t_ref_s)
 
     moms = ["pogm", "fpgm", "pgm"]
     moms = moms[moms.index(kwargs.pop("mom", "pogm")) :] if reg == "lowrank" else [None]
     for mom in moms:
         try:
             result = run_sense(
-                fn_ksp=fn_ksp,
-                fn_smaps=fn_smaps,
+                fn_ksp=fn_pre,
+                fn_smaps=fn_pre,
                 reg=reg,
                 fn_b0map=fn_b0map,
                 **({"mom": mom} if mom else {}),
@@ -443,7 +439,7 @@ def main(
     save_result(
         fn_out,
         result,
-        fov=sp.fov,
+        fov=fov,
         seqname=seqname,
         reg=reg,
         b0_corrected=B0,
@@ -489,16 +485,12 @@ def _cli() -> None:
     p.add_argument("datdir")
     p.add_argument("seqname")
     p.add_argument("--reg", choices=REGULARIZERS, required=True)
-    p.add_argument("--B0", action="store_true", help="model B0 phase accrual (<seqname>_b0map.h5)")
+    p.add_argument("--B0", action="store_true", help="model B0 phase accrual (b0map_hz)")
     p.add_argument(
-        "--b0map", default=None, help="B0 map .h5 to use instead of the default (implies --B0)"
+        "--b0map", default=None,
+        help=".h5 with a 'b0map_hz' to use instead of the preprocessed one (implies --B0)",
     )
     p.add_argument("--R2star", action="store_true", help="also model R2* decay (needs --B0)")
-    p.add_argument(
-        "--zero-pad-z",
-        action="store_true",
-        help="(--R2star) zero-pad the R2* map where the EPI z-FOV exceeds deGRE's",
-    )
     p.add_argument("--L", type=int, default=32, dest="L_b0", help="B0 time segments")
     p.add_argument("--nbins", type=int, default=128, dest="nbins_b0", help="B0 histogram bins")
     p.add_argument(
@@ -546,7 +538,7 @@ def _cli() -> None:
         frames=_parse_frames(a.frames) if a.frames else None,
     )
     if a.reg == "lowrank":
-        with h5py.File(os.path.join(a.datdir, "recon", f"{a.seqname}_epi_zf.h5"), "r") as f:
+        with h5py.File(os.path.join(a.datdir, "recon", f"{a.seqname}_preprocessed.h5"), "r") as f:
             shape = f["ksp_epi_zf"].shape[:3]
         patches, strides = (
             (a.patch, a.stride) if a.patch else ([["6", "6", "6"]], [["3", "3", "3"]])
@@ -568,7 +560,6 @@ def _cli() -> None:
         B0=a.B0,
         fn_b0map=a.b0map,
         R2star=a.R2star,
-        zero_pad_z=a.zero_pad_z,
         **kwargs,
     )
 

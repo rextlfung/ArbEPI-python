@@ -1,6 +1,6 @@
 # recon/ — image reconstruction
 
-Turns the zero-filled k-space written by `preprocessing/` into images. There
+Turns the zero-filled k-space written by `preprocess/` into images. There
 are two kinds of reconstruction:
 
 - **RSS** (`rss.py`): zero-filled inverse FFT per coil, then root-sum-of-squares
@@ -42,21 +42,26 @@ uv pip install --python .venv-recon/bin/python -e ".[recon,test]"
 ```
 
 Run everything from the repository root (`recon/` imports helpers from
-`preprocessing/`). Install the torch build matching your CUDA version first if
+`preprocess/`). Install the torch build matching your CUDA version first if
 the default wheel doesn't fit your GPU. Everything also runs on CPU, just much more slowly; the
 device defaults to `cuda` when a GPU is available and `cpu` otherwise
 (`--device` overrides it).
 
 ## Inputs
 
-All read from `<datdir>/recon/`, as written by `preprocessing/`:
+One file, `<datdir>/recon/<seq>_preprocessed.h5`, as written by `preprocess/`:
 
-| File | Contents | Needed for |
+| Dataset / attr | Contents | Needed for |
 |---|---|---|
-| `<seq>_epi_zf.h5` | `ksp_epi_zf` (Nx, Ny, Nz, Ncoils, Nframes), zero where not sampled; `omegas` (Ny, Nz, Nframes) sampling mask; `echo_times` (Ny, Nz, Nframes) in seconds; attr `noise_var` | everything |
-| `smaps_<seq>_sigpy.h5` | `smaps` (Nx, Ny, Nz, Ncoils), ESPIRiT sensitivity maps | SENSE |
-| `<seq>_b0map.h5` | `b0map_hz` (Nx, Ny, Nz), B0 field map in Hz on the EPI grid | `--B0` |
-| `<seq>_gre.h5` + `<datdir>/seqs/<seq>/scan_info.mat` | dual-echo deGRE data (for the R2* map) and the nominal TE | `--R2star` |
+| `ksp_epi_zf` | (Nx, Ny, Nz, Ncoils, Nframes) zero-filled k-space (whitened, and coil-compressed unless preprocessed with `compress=False`) | everything |
+| `omegas`, `echo_times` | (Ny, Nz, Nframes) sampling mask, and each sample's time since excitation (s) | everything |
+| attrs `noise_var`, `whitened` | thermal-noise variance of `ksp_epi_zf`; whether a noise scan whitened it | scaling |
+| `smaps` | (Nx, Ny, Nz, Ncoils) ESPIRiT sensitivity maps, in the same coil space as `ksp_epi_zf` | SENSE |
+| `b0map_hz` | (Nx, Ny, Nz) B0 field map in Hz on the EPI grid | `--B0` |
+| `r2star`, attr `t_ref_s` | (Nx, Ny, Nz) R2* map in 1/s, and the nominal-TE reference time | `--R2star` |
+
+It also holds `ksp_calib` (the fully sampled central calibration region), the
+whitening/compression matrices and deGRE-grid QA volumes; see preprocess/demo.ipynb.
 
 ## Quick start
 
@@ -144,8 +149,10 @@ interpolation weights. The weights come from mirtorch's `mri_exp_approx`.
 **`SENSE_B0_R2star`** — also models magnitude decay. The field becomes complex,
 $\psi(r) = i 2\pi \Delta f(r) - R_2^*(r)$, and each segment's phasor is
 $e^{\psi(r)(t_l - t_{\text{ref}})}$. $t_{\text{ref}}$ is the nominal TE, so the
-reconstruction target is "the image at TE". The R2* map is estimated from the
-dual-echo deGRE data (`preprocessing/r2star_map.py`). The physics lives in
+reconstruction target is "the image at TE". The R2* map is fit by preprocessing
+(`preprocess/r2star.py`) on the dual-echo deGRE, whose two closely spaced echoes
+make it a placeholder: a trustworthy map needs a true multi-echo GRE (see that
+module's docstring). The physics lives in
 `SENSE_B0_R2star.segment_phasors`, which is computed once and shared by every
 frame (a separate copy per frame doesn't fit in GPU memory).
 
@@ -193,12 +200,11 @@ forward model, a **unit-norm operator**. `run_sense` arranges both:
 1. **k-space noise.** `preprocess()` measures the thermal-noise variance of the
    final k-space by pushing the noise-scan readouts through the same whitening,
    coil compression and regridding as the EPI data, and records it as the
-   `noise_var` attribute of `<seq>_epi_zf.h5`. `run_sense` divides the k-space
+   `noise_var` attribute of `<seq>_preprocessed.h5`. `run_sense` divides the k-space
    by $\sqrt{\texttt{noise\_var}}$. Whitening already targets 1, so this is
    normally a few-percent correction (0.93–1.14 on the `20260915ball` and
-   `20260918ball` datasets). Files written before the attribute existed are
-   used as they are (a message says so);
-   `preprocessing.preprocess.record_noise_var(cfg, paths)` adds it.
+   `20260918ball` datasets). Files without the attribute (no noise scan) are
+   used as they are (a message says so).
    The noise level can't be estimated from the acquired k-space itself on
    these high-SNR datasets: every candidate region is dominated by signal
    leakage, not noise.

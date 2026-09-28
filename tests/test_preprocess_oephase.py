@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from preprocessing.oephase import epiphasecorrect, getoephase, smooth_custom
+from preprocess.oephase import epiphasecorrect, getoephase, smooth_custom
 
 
 def test_smooth_custom_matches_reference_edge_truncated_average():

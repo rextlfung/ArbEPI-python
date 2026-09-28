@@ -219,29 +219,22 @@ ge/                      Pure-Python GE .pge toolchain (Pulseq -> GE), wired int
   validate_against_matlab.py   Field-by-field / byte-for-byte comparison vs. MATLAB output
   coppe.py                     Copy .pge files to the scanner over SSH, auto-allocating entry numbers
                                 (port of ../toppe/+toppe/+utils/coppe.m; UM lab-internal use)
-preprocessing/                Raw-data -> reconstructed-image pipeline, ported from ../epi-preprocessing
-  config.py                    Session/per-sequence config (replaces config.m/set_seq_paths.m)
-  raw_io.py                     ScanArchive reading via GE's Orchestra SDK (GERecon, external, not committed)
-  coils.py                      Noise whitening + PCA coil compression (plain numpy, replaces BART)
-  epi_gridding.py               1D NUFFT ramp-sample regridding (sigpy, replaces MIRT/hmriutils)
-  oephase.py                    Odd/even EPI ghost-correction estimation + application
-  smaps.py                      ESPIRiT sensitivity maps (sigpy, replaces BART) + mask/crop/resize/normalize;
-                                 load_smaps caches both the EPI-grid and deGRE-grid resize (the latter for
-                                 run_b0map.py's smap/eig-mask inputs to b0map.jl -- see CLAUDE.md)
-  cg_sense.py                   CG-SENSE solver
-  matio.py                      Shared hdf5storage-compatible .mat reader (h5py-based)
-  nifti_io.py                   Writes final recon images as NIfTI + JSON sidecar (for ITK-SNAP/FSLeyes/etc.)
-  preprocess.py                 Stage 1 driver: raw data -> zero-filled k-space volume
-  run_preprocessing.py          Batch entry point for Stage 1 (Stage 2 lives in recon/)
-  calibrate_delay.py            Automated k-space center delay tuning
-  run_b0map.py                  Batch driver for B0 field map estimation (subprocess -> julia/b0map.jl)
-  gre_diagnostics.py            One-off: dual-echo deGRE images -> NIfTI/PNG, for visual QC against
-                                 the estimated field map
-  julia/                        Self-contained Julia project (Project.toml + Manifest.toml, pinned):
-                                 b0map.jl estimates a B0 field map from the deGRE dual-echo cache via
-                                 MRIFieldmaps.jl (precon=:diag, not its own :ichol default -- see
-                                 CLAUDE.md's preprocessing/ section for why), with its initial guess
-                                 unwrapped via ROMEO.jl
+preprocess/                Raw ScanArchives -> one reconstruction-ready file per sequence
+                              (.venv-preprocessing), ported from ../epi-preprocessing -- see preprocess/README.md
+  preprocess.py                 PreprocessConfig + preprocess(): gridding (cached), coil compression,
+                                 maps, output <seq>_preprocessed.h5
+  batch_preprocess.py           Command line: several sequences in one go
+  coils.py                      Noise whitening; GCC / PCA coil compression
+  epi_gridding.py               1D NUFFT ramp-sample regridding (sigpy)
+  oephase.py                    Odd/even (Nyquist ghost) phase estimation + correction
+  smaps.py                      ESPIRiT sensitivity maps (sigpy) + resize/mask/smooth/normalize
+  b0map.py                      B0 field map via julia/b0map.jl (MRIFieldmaps.jl + ROMEO.jl)
+  r2star.py                     R2* fit over the deGRE echoes (a placeholder with the dual-echo deGRE)
+  grid_resize.py                deGRE grid -> EPI grid
+  calibrate_delay.py            Readout k-space center offset sweep
+  utils.py                      ScanArchive (GERecon), scan_info.mat and NIfTI I/O; QA figures
+  julia/                        Self-contained Julia project (Project.toml + Manifest.toml, pinned)
+  demo.ipynb                    Every step on one real dataset, and the settings table
 recon/                        Image reconstruction (.venv-recon), on PyTorch/mirtorch -- see recon/README.md:
                               min_x 0.5||Ax - y||^2 + g(x)
   operators.py               Encoding operators A: SENSE, SENSE_B0 (B0 phase accrual, time-segmented,
@@ -259,18 +252,18 @@ docs/demo/                   Static images embedded in this README's Demo sectio
 
 Index convention: internal computation is 0-based throughout (mask2epi's `schedule`, sampling masks, etc.). `output/scan_info.mat` is written with `schedules`' (ky, kz) channels converted to 1-based (matching what MATLAB-side reconstruction code expects) — `parts` is already a 1-based shot label with 0 = unsampled, so it needs no conversion.
 
-`output/scan_info.mat` (kxo/kxe, schedules/parts, and a snapshot of the scan scalars `preprocessing/` needs — consolidating what used to be three separate files, `samp_locs.mat`/`params.mat`/`kxoe<Nx>.mat`) is written via `hdf5storage` in MATLAB v7.3 format (HDF5-based), matching the original MATLAB code's `save(..., '-v7.3')`. `scipy.io.savemat`/`loadmat` cannot write or read v7.3 at all — use `hdf5storage.loadmat` (or `h5py` directly) to read these files from Python, not `scipy.io.loadmat`.
+`output/scan_info.mat` (kxo/kxe, schedules/parts, and a snapshot of the scan scalars `preprocess/` needs — consolidating what used to be three separate files, `samp_locs.mat`/`params.mat`/`kxoe<Nx>.mat`) is written via `hdf5storage` in MATLAB v7.3 format (HDF5-based), matching the original MATLAB code's `save(..., '-v7.3')`. `scipy.io.savemat`/`loadmat` cannot write or read v7.3 at all — use `hdf5storage.loadmat` (or `h5py` directly) to read these files from Python, not `scipy.io.loadmat`.
 
 See [../ArbEPI/README.md](../ArbEPI/README.md) for background on the sampling methods and `mask2epi_laminar`'s original (MATLAB) partitioning design — see [Algorithms](#algorithms-libmask2epipy) above for the ordering optimization and `mask2epi_radial`, both this port's own addition with no MATLAB counterpart.
 
-`preprocessing/` is a separate `pyproject.toml` optional-dependency group (`pip install -e ".[preprocessing]"`) with its own venv requirement (Python 3.10, since GE's Orchestra SDK is ABI-locked to it) — see `CLAUDE.md`'s `preprocessing/` section for the full detail: why BART/hmriutils/MIRT were dropped in favor of sigpy + plain numpy, why raw ScanArchive reading still needs GE's proprietary (non-pip, not committed) SDK, and what has/hasn't been validated against real data. The SDK itself is distributed as a GitHub release, accessible by request: [GEHC-External/MR-Orchestra-SDK-Python](https://github.com/GEHC-External/MR-Orchestra-SDK-Python/releases).
+`preprocess/` is a separate `pyproject.toml` optional-dependency group (`preprocessing`) with its own venv (Python 3.10, since GE's Orchestra SDK is ABI-locked to it) -- see [preprocess/README.md](preprocess/README.md) for setup, usage, outputs and design. The SDK itself is distributed as a GitHub release, accessible by request: [GEHC-External/MR-Orchestra-SDK-Python](https://github.com/GEHC-External/MR-Orchestra-SDK-Python/releases).
 
 ## References
 
 Source repositories this port is derived from or ports code from:
 
 - [rextlfung/ArbEPI](https://github.com/rextlfung/ArbEPI) — the MATLAB/Pulseq original this repo ports.
-- [rextlfung/epi-preprocessing](https://github.com/rextlfung/epi-preprocessing) — the MATLAB original `preprocessing/` ports.
+- [rextlfung/epi-preprocessing](https://github.com/rextlfung/epi-preprocessing) — the MATLAB original `preprocess/` ports.
 - [HarmonizedMRI/PulCeq](https://github.com/HarmonizedMRI/PulCeq) — `ge/` ports `seq2ceq.m`/`writeceq.m`/`pge2.pns.m`/`check_grad_acoustics.m` from here.
 - [HarmonizedMRI/B0shimming](https://github.com/HarmonizedMRI/B0shimming) — `sequences/deGRE.py` is adapted from this repo's `writeB0.m`.
 
@@ -280,18 +273,18 @@ Libraries this repo depends on:
 - [SigPy](https://github.com/mikgroup/sigpy) — ESPIRiT sensitivity maps, NUFFT gridding, L1-wavelet/TV regularized reconstruction (BSD); `sampling/pd_sample.py` is also an independent reimplementation of `sigpy.mri.poisson`'s Poisson-disc algorithm (see that module's docstring for the bugs found in both it and the MATLAB original that motivated the reimplementation).
 - [Numba](https://numba.pydata.org/) — JIT compilation for `pd_sample.py`'s point-placement core.
 - [BART](https://mrirecon.github.io/bart/) — considered for coil compression/whitening/parallel imaging and explicitly dropped in favor of plain numpy + SigPy (see `CLAUDE.md`); noted here since several docstrings describe what this repo does *instead* of calling it.
-- [MRIFieldmaps.jl](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl) — B0 field map estimation (MIT), invoked as a subprocess from `preprocessing/run_b0map.py` via the self-contained Julia project in `preprocessing/julia/`; requires a separate `julia` install (see `CLAUDE.md`'s `preprocessing/` section), not otherwise part of this repo's Python dependency set.
-- [ROMEO.jl](https://github.com/korbinian90/ROMEO.jl) — phase unwrapping (MIT), used by `preprocessing/julia/b0map.jl` to build the field map solve's initial guess; same Julia project as MRIFieldmaps.jl above.
+- [MRIFieldmaps.jl](https://github.com/MagneticResonanceImaging/MRIFieldmaps.jl) — B0 field map estimation (MIT), invoked as a subprocess from `preprocess/b0map.py` via the self-contained Julia project in `preprocess/julia/`; requires a separate `julia` install (see `preprocess/README.md`), not otherwise part of this repo's Python dependency set.
+- [ROMEO.jl](https://github.com/korbinian90/ROMEO.jl) — phase unwrapping (MIT), used by `preprocess/julia/b0map.jl` to build the field map solve's initial guess; same Julia project as MRIFieldmaps.jl above.
 
 Proprietary, not distributed with this repo:
 
-- [GE Orchestra SDK / GERecon](https://github.com/GEHC-External/MR-Orchestra-SDK-Python) — required to read raw GE ScanArchive files in `preprocessing/raw_io.py`; installed separately by the user under GE's own license terms, not covered by this repo's license.
+- [GE Orchestra SDK / GERecon](https://github.com/GEHC-External/MR-Orchestra-SDK-Python) — required to read raw GE ScanArchive files in `preprocess/utils.py`; installed separately by the user under GE's own license terms, not covered by this repo's license.
 
 Algorithms and standards:
 
 - ESPIRiT: Uecker M, Lai P, Murphy MJ, et al. "ESPIRiT — an eigenvalue approach to autocalibrating parallel MRI: where SENSE meets GRAPPA." *Magn Reson Med.* 2014;71(3):990-1001.
 - Shinnar-Le Roux (SLR) pulse design: Pauly J, Le Roux P, Nishimura D, Macovski A. "Parameter relations for the Shinnar-Le Roux selective excitation pulse design algorithm." *IEEE Trans Med Imaging.* 1991;10(1):53-65. (Referenced in `lib/make_fatsat_rf.py` — the MATLAB original's `toppe.utils.rf.makeslr` implements this; this port uses pypulseq's `make_gauss_pulse` instead, see that module's docstring.)
 - Golden-angle ordering: Winkelmann S, Schaeffter T, Koehler T, Eggers H, Doessel O. "An optimal radial profile order based on the Golden Ratio for time-resolved MRI." *IEEE Trans Med Imaging.* 2007;26(1):68-76. ([open-access copy](https://pmc.ncbi.nlm.nih.gov/articles/PMC9189059/); applied in `lib/mask2epi.py`'s `_golden_angle_shot_order`, see that function's docstring.)
-- Regularized B0 field map estimation: Lin CY, Fessler JA. "Efficient Regularized Field Map Estimation in 3D MRI." *IEEE Trans Comput Imaging.* 2020;7:60-73. (Implemented by MRIFieldmaps.jl, invoked from `preprocessing/julia/b0map.jl`.)
-- Phase unwrapping: Dymerska B, Eckstein K, Bachrata B, Siow B, Trattnig S, Shmueli K, Robinson SD. "Phase unwrapping with a rapid opensource minimum spanning tree algorithm (ROMEO)." *Magn Reson Med.* 2021;85(4):2294-2308. (Implemented by ROMEO.jl, used in `b0map.jl` to build the field map solve's initial guess -- see `CLAUDE.md`'s `preprocessing/` section for why the naive two-point guess isn't safe to use directly.)
+- Regularized B0 field map estimation: Lin CY, Fessler JA. "Efficient Regularized Field Map Estimation in 3D MRI." *IEEE Trans Comput Imaging.* 2020;7:60-73. (Implemented by MRIFieldmaps.jl, invoked from `preprocess/julia/b0map.jl`.)
+- Phase unwrapping: Dymerska B, Eckstein K, Bachrata B, Siow B, Trattnig S, Shmueli K, Robinson SD. "Phase unwrapping with a rapid opensource minimum spanning tree algorithm (ROMEO)." *Magn Reson Med.* 2021;85(4):2294-2308. (Implemented by ROMEO.jl, used in `b0map.jl` to build the field map solve's initial guess -- see the script's header for why the naive two-point guess isn't safe to use directly.)
 - Peripheral nerve stimulation: IEC 60601-2-33:2022, the PNS prediction model `ge/pns.py` implements (ported from PulCeq's `pge2.pns.m`).

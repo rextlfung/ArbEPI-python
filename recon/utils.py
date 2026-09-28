@@ -1,7 +1,7 @@
 """Everything in recon/ that isn't an operator, regularizer, solver or driver.
 
-    I/O              read_frames_cropped, load_*, load_and_gather_ksp, nominal_te_s,
-                     read_julia_mat, save_result
+    I/O              read_frames_cropped, load_*, load_and_gather_ksp, read_julia_mat,
+                     save_result
     operator norms   poweriter, estimate_spectral_norm, check_operator_unitary
     tSNR             object_mask, temporal_stability, tsnr_report
     analysis         sweep, benchmark, validate (one-off studies, not the production path)
@@ -23,8 +23,7 @@ import torch
 from mirtorch.linear import BlockDiagonal
 from mirtorch.linear.mri import mri_exp_approx
 
-from preprocessing.matio import read_mat
-from preprocessing.nifti_io import save_recon_nifti
+from preprocess.utils import save_recon_nifti
 from recon.operators import SENSE, SENSE_B0, build_sense, build_sense_b0
 
 if TYPE_CHECKING:
@@ -140,13 +139,6 @@ def load_and_gather_ksp(
             flat = frame.reshape(-1, Nc)  # spatial C-order flatten, matches SENSE
             out[:, :, it] = flat[A.A[it].idx, :]
     return out
-
-
-def nominal_te_s(scan_info_path: str, etl: int) -> float:
-    """Acquisition time (s since excitation) of the nominal-TE echo, the
-    center echo of the train, from scan_info.mat's schedules."""
-    schedules = read_mat(scan_info_path, ["schedules"])["schedules"]  # (Nframes,Nshots,ETL,3)
-    return float(schedules[0, 0, (etl - 1) // 2, 2])
 
 
 def read_julia_mat(path: str) -> dict:
@@ -675,10 +667,10 @@ def _cli_validate() -> None:
     parser.add_argument("--smaps", default=None)
     args = parser.parse_args()
 
-    # <recon_dir>/mslr/<subdir>/<name>.mat -> <recon_dir>/ArbEPI_epi_zf.h5
+    # <recon_dir>/mslr/<subdir>/<name>.mat -> <recon_dir>/ArbEPI_preprocessed.h5
     recon_dir = os.path.dirname(os.path.dirname(os.path.dirname(args.fn_julia_mat)))
-    fn_ksp = args.ksp or os.path.join(recon_dir, "ArbEPI_epi_zf.h5")
-    fn_smaps = args.smaps or os.path.join(recon_dir, "smaps_ArbEPI_sigpy.h5")
+    fn_ksp = args.ksp or os.path.join(recon_dir, "ArbEPI_preprocessed.h5")
+    fn_smaps = args.smaps or fn_ksp
 
     ok = validate(fn_ksp, fn_smaps, args.fn_julia_mat)
     sys.exit(0 if ok else 1)

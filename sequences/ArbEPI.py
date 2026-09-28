@@ -4,7 +4,7 @@ Outputs: <output_dir>/ArbEPI.seq (Pulseq format) and <output_dir>/scan_info.mat
 -- kxo/kxe (odd/even echo k-space trajectories for ghost correction, shared
 with EPIcal.py, see this module's kxoe comment below), schedules ((ky, kz,
 echo time) per acquisition) and parts (the partition map), and a snapshot of
-scan scalars preprocessing/ needs -- everything preprocessing/ reads for
+scan scalars preprocess/ needs -- everything preprocess/ reads for
 this acquisition, in one file.
 
 GE `.pge` export (write_to_ge.m) and the trailing MATLAB plotting figures
@@ -359,16 +359,16 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # array holds [iy (1-based), iz (1-based), echo time (s)] per
     # acquisition -- float64 throughout (iy/iz stay exactly representable),
     # since MATLAB has no separate-dtype-per-column array type anyway.
-    # preprocessing/preprocess.py's load_schedules() splits the 3rd channel
+    # preprocess/preprocess.py's load_schedules() splits the 3rd channel
     # back out for consumers that still want a plain (ky, kz) index array.
     schedules_te = np.broadcast_to(echo_times, (params.Nframes, params.Nshots, params.ETL))
     schedules_out = np.concatenate(
         [(schedules + 1).astype(np.float64), schedules_te[..., None]], axis=-1,
     )
 
-    # Save everything preprocessing/ needs for this acquisition in one file,
+    # Save everything preprocess/ needs for this acquisition in one file,
     # scan_info.mat: the kxo/kxe trajectories and schedules/parts above, plus
-    # a snapshot of the scan scalars preprocessing/config.py's
+    # a snapshot of the scan scalars preprocess/config.py's
     # load_seq_params reads (MATLAB's preprocess.m gets these by run()-ing a
     # per-acquisition params.m into its workspace, which has no Python
     # equivalent -- copying the whole params.py module would drag

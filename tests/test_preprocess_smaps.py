@@ -4,8 +4,8 @@ from scipy import ndimage
 
 pytest.importorskip("sigpy")
 
-from preprocessing.grid_resize import resize_to_epi_grid  # noqa: E402
-from preprocessing.smaps import estimate_smaps, process_smaps  # noqa: E402
+from preprocess.grid_resize import resize_to_epi_grid  # noqa: E402
+from preprocess.smaps import estimate_smaps, process_smaps  # noqa: E402
 
 
 def _gaussian_coil_sens(nx, ny, center, sigma):
