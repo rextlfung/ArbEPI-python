@@ -1,0 +1,241 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1600" width="1100" height="1600" role="img" aria-label="ArbEPI workflow: scan configuration, sampling masks and echo-train partitioning produce four Pulseq sequences (deGRE, noise, EPIcal, ArbEPI); these are exported to GE .pge files and run on the scanner; each sequence&#x27;s raw ScanArchive feeds its own preprocessing step (whitening, odd/even calibration, gridding, coil maps and B0); the preprocessed file feeds RSS or iterative SENSE reconstruction. scan_info.mat bypasses the scanner and carries the sampling schedule to preprocessing.">
+<title>ArbEPI pipeline</title>
+<style>svg { --bg: #f5f6f8; --fg: #19212c; --muted: #586273; --line: #3d4757; --box: #ffffff; --chip: #e6eaf0; --seq-band: #e7edf7; --seq: #2f5d9e; --scan-band: #f2ece2; --scan: #8d5f22; --pre-band: #e4f1ea; --pre: #2a7250; --rec-band: #eee8f6; --rec: #664a9c; --hand: #bb4a24; --hand-bg: #fbe9e1; }
+.bg { fill: var(--bg); }
+.band { stroke: none; }
+.band.seq { fill: var(--seq-band); } .band.scan { fill: var(--scan-band); }
+.band.pre { fill: var(--pre-band); } .band.rec { fill: var(--rec-band); }
+.rail { font: 600 11px "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, "Liberation Sans", sans-serif; letter-spacing: .12em; }
+.rail.seq { fill: var(--seq); } .rail.scan { fill: var(--scan); }
+.rail.pre { fill: var(--pre); } .rail.rec { fill: var(--rec); }
+.box { fill: var(--box); stroke-width: 1.5; }
+.box.seq { stroke: var(--seq); } .box.scan { stroke: var(--scan); }
+.box.pre { stroke: var(--pre); } .box.rec { stroke: var(--rec); }
+.box.plain { stroke: var(--line); }
+.box.key { stroke-width: 2.5; }
+.box.dashed { stroke-dasharray: 5 4; }
+.group { fill: none; stroke: var(--pre); stroke-width: 1; stroke-dasharray: 3 3; }
+.chip { fill: var(--chip); stroke: none; }
+.chip.hand { fill: var(--hand-bg); stroke: var(--hand); stroke-width: 1.5; }
+.flow { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.flow.dashed { stroke-dasharray: 5 4; }
+.hand { fill: none; stroke: var(--hand); stroke-width: 2; stroke-dasharray: 7 5; }
+.ah { fill: var(--line); }
+.ah-hand { fill: var(--hand); }
+.t-title { font: 600 14px "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, "Liberation Sans", sans-serif; fill: var(--fg); }
+.t-mono { font: 400 12px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; fill: var(--muted); }
+.t-mono-s { font: 400 11px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; fill: var(--muted); }
+.t-mono-b { font: 600 12.5px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; fill: var(--fg); }
+.t-text { font: 400 12.5px "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, "Liberation Sans", sans-serif; fill: var(--fg); }
+.t-chip { font: 500 12px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; fill: var(--fg); }
+.t-edge { font: 600 11.5px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; fill: var(--fg); }
+.t-section { font: 600 12.5px "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, "Liberation Sans", sans-serif; fill: var(--muted); letter-spacing: .02em; }
+.t-legend { font: 400 12.5px "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, "Liberation Sans", sans-serif; fill: var(--muted); }
+.t-note { font: 400 11.5px "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, "Liberation Sans", sans-serif; fill: var(--hand); }
+.t-note-b { font: 600 11.5px "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, "Liberation Sans", sans-serif; fill: var(--hand); }
+.t-note-mono { font: 400 11px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; fill: var(--hand); }
+</style>
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+<marker id="ah-hand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-hand"/></marker>
+</defs>
+<rect width="1100" height="1600" rx="12" class="bg"/>
+<rect x="20" y="11" width="26" height="16" rx="4" class="box plain"/>
+<text x="54" y="24" text-anchor="start" class="t-legend">processing step</text>
+<rect x="170" y="11" width="26" height="16" rx="8" class="chip"/>
+<text x="204" y="24" text-anchor="start" class="t-legend">file or array passed on</text>
+<rect x="368" y="11" width="26" height="16" rx="4" class="box plain dashed"/>
+<text x="402" y="24" text-anchor="start" class="t-legend">optional input</text>
+<path d="M512 19 H546" class="hand"/>
+<text x="554" y="24" text-anchor="start" class="t-legend">scan_info.mat, which goes around the scanner</text>
+<g transform="translate(0 40)">
+<rect x="0" y="0" width="1100" height="778" rx="10" class="band seq"/>
+<text x="30" y="389.0" transform="rotate(-90 30 389.0)" text-anchor="middle" class="rail seq">SEQUENCE DESIGN · main.py</text>
+<rect x="0" y="822" width="1100" height="102" rx="10" class="band scan"/>
+<text x="30" y="873.0" transform="rotate(-90 30 873.0)" text-anchor="middle" class="rail scan">SCANNER</text>
+<rect x="0" y="974" width="1100" height="366" rx="10" class="band pre"/>
+<text x="30" y="1157.0" transform="rotate(-90 30 1157.0)" text-anchor="middle" class="rail pre">PREPROCESS · .venv-preprocessing</text>
+<rect x="0" y="1390" width="1100" height="158" rx="10" class="band rec"/>
+<text x="30" y="1469.0" transform="rotate(-90 30 1469.0)" text-anchor="middle" class="rail rec">RECON · .venv-recon</text>
+<rect x="60" y="28" width="270" height="92" rx="6" class="box seq"/>
+<text x="76" y="50" class="t-mono-b">scanners.py</text>
+<text x="76" y="66" class="t-text">ScannerSpec: GE_MR750 | GE_UHP</text>
+<text x="76" y="82" class="t-text">max gradient, slew, B1, PNS;</text>
+<text x="76" y="98" class="t-text">ge/ checks read the same spec</text>
+<path d="M330 74 H378" class="flow" marker-end="url(#ah)"/>
+<rect x="380" y="28" width="440" height="92" rx="6" class="box seq"/>
+<text x="396" y="50" class="t-title">Scan configuration</text>
+<text x="396" y="68" class="t-mono">params.py · load_params() → Params</text>
+<text x="396" y="86" class="t-text">resolution, matrix, R, ETL, TE, volume TR, readout slews</text>
+<text x="396" y="102" class="t-text">derives Nshots, then TR and flip angle</text>
+<rect x="860" y="28" width="225" height="92" rx="6" class="box seq dashed"/>
+<text x="876" y="50" class="t-title">Custom mask (optional)</text>
+<text x="876" y="68" class="t-mono-s">sampling/external_mask.py</text>
+<text x="876" y="84" class="t-text">(ky, kz) or (ky, kz, t) .mat</text>
+<text x="876" y="100" class="t-text">sets Nshots and effective R</text>
+<path d="M860 74 H822" class="flow dashed" marker-end="url(#ah)"/>
+<path d="M600 120 V174" class="flow" marker-end="url(#ah)"/>
+<rect x="517.0" y="137" width="166" height="22" rx="11" class="chip "/>
+<text x="600" y="152" text-anchor="middle" class="t-chip">Params (+ sys, spec)</text>
+<rect x="380" y="176" width="440" height="92" rx="6" class="box seq"/>
+<text x="396" y="198" class="t-title">Sampling masks</text>
+<text x="396" y="216" class="t-mono">sampling/ · resolve_omegas()</text>
+<text x="396" y="234" class="t-text">one (ky, kz) mask per frame: pd · caipi · ticaipi · rand</text>
+<text x="396" y="250" class="t-text">or the custom mask, passed through from Params</text>
+<path d="M600 268 V322" class="flow" marker-end="url(#ah)"/>
+<rect x="474.0" y="285" width="252" height="22" rx="11" class="chip "/>
+<text x="600" y="300" text-anchor="middle" class="t-chip">omegas · Ny × Nz × Nframes, bool</text>
+<rect x="380" y="324" width="440" height="92" rx="6" class="box seq"/>
+<text x="396" y="346" class="t-title">Echo-train partitioning</text>
+<text x="396" y="364" class="t-mono">lib/mask2epi.py · radial | laminar</text>
+<text x="396" y="382" class="t-text">split each frame&#x27;s samples into Nshots trains of ETL echoes</text>
+<text x="396" y="398" class="t-text">order: min-sum TSP → bottleneck 2-opt → uncross (radial)</text>
+<path d="M600 416 V480 H780 V504" class="flow" marker-end="url(#ah)"/>
+<rect x="416.0" y="435" width="368" height="22" rx="11" class="chip "/>
+<text x="600" y="450" text-anchor="middle" class="t-chip">schedules · Nframes × Nshots × ETL × (ky, kz, t)</text>
+<text x="55" y="492" text-anchor="start" class="t-section">Sequence generation · sequences/ (pypulseq)</text>
+<rect x="55" y="506" width="190" height="108" rx="6" class="box seq"/>
+<text x="71" y="528" class="t-title">deGRE</text>
+<text x="71" y="546" class="t-mono">deGRE.py</text>
+<text x="71" y="564" class="t-text">dual-echo 3D GRE</text>
+<text x="71" y="580" class="t-text">patches TE_degre in</text>
+<text x="71" y="596" class="t-text">scan_info.mat</text>
+<rect x="265" y="506" width="190" height="108" rx="6" class="box seq"/>
+<text x="281" y="528" class="t-title">noise</text>
+<text x="281" y="546" class="t-mono">noise.py</text>
+<text x="281" y="564" class="t-text">ADC only: no RF or</text>
+<text x="281" y="580" class="t-text">gradients, same readout</text>
+<text x="281" y="596" class="t-text">geometry as ArbEPI</text>
+<rect x="475" y="506" width="190" height="108" rx="6" class="box seq"/>
+<text x="491" y="528" class="t-title">EPIcal</text>
+<text x="491" y="546" class="t-mono">EPIcal.py</text>
+<text x="491" y="564" class="t-text">ArbEPI readout with</text>
+<text x="491" y="580" class="t-text">every blip at 0</text>
+<text x="491" y="596" class="t-text">(ghost calibration)</text>
+<rect x="685" y="506" width="190" height="108" rx="6" class="box seq key"/>
+<text x="701" y="528" class="t-title">ArbEPI</text>
+<text x="701" y="546" class="t-mono">ArbEPI.py</text>
+<text x="701" y="564" class="t-text">POPE readout, blips</text>
+<text x="701" y="580" class="t-text">from schedules,</text>
+<text x="701" y="596" class="t-text">TE/TR delays, trap4ge</text>
+<rect x="905" y="518" width="180" height="84" rx="12" class="chip hand"/>
+<text x="919" y="540" class="t-mono-b">scan_info.mat</text>
+<text x="919" y="556" class="t-text">schedules, kxo/kxe,</text>
+<text x="919" y="572" class="t-text">echo times, TE_degre,</text>
+<text x="919" y="588" class="t-text">scan scalars (v7.3)</text>
+<path d="M875 560 H903" class="flow" marker-end="url(#ah)"/>
+<path d="M150 614 V668" class="flow" marker-end="url(#ah)"/>
+<rect x="106.5" y="631" width="87" height="22" rx="11" class="chip "/>
+<text x="150" y="646" text-anchor="middle" class="t-chip">deGRE.seq</text>
+<path d="M360 614 V668" class="flow" marker-end="url(#ah)"/>
+<rect x="316.5" y="631" width="87" height="22" rx="11" class="chip "/>
+<text x="360" y="646" text-anchor="middle" class="t-chip">noise.seq</text>
+<path d="M570 614 V668" class="flow" marker-end="url(#ah)"/>
+<rect x="523.0" y="631" width="94" height="22" rx="11" class="chip "/>
+<text x="570" y="646" text-anchor="middle" class="t-chip">EPIcal.seq</text>
+<path d="M780 614 V668" class="flow" marker-end="url(#ah)"/>
+<rect x="733.0" y="631" width="94" height="22" rx="11" class="chip "/>
+<text x="780" y="646" text-anchor="middle" class="t-chip">ArbEPI.seq</text>
+<rect x="55" y="670" width="820" height="88" rx="6" class="box seq"/>
+<text x="71" y="692" class="t-title">GE export</text>
+<text x="71" y="710" class="t-mono">ge/ · main.py --ge</text>
+<text x="71" y="728" class="t-text">checks all four first: gradient, slew, B1 limits · PNS (fails above 100%, warns above 80%) · acoustics (warns)</text>
+<text x="71" y="744" class="t-text">then seq2ceq → writeceq writes one .pge per sequence (pure Python port of PulCeq)</text>
+<path d="M150 758 V842" class="flow" marker-end="url(#ah)"/>
+<rect x="106.5" y="789" width="87" height="22" rx="11" class="chip "/>
+<text x="150" y="804" text-anchor="middle" class="t-chip">deGRE.pge</text>
+<path d="M360 758 V842" class="flow" marker-end="url(#ah)"/>
+<rect x="316.5" y="789" width="87" height="22" rx="11" class="chip "/>
+<text x="360" y="804" text-anchor="middle" class="t-chip">noise.pge</text>
+<path d="M570 758 V842" class="flow" marker-end="url(#ah)"/>
+<rect x="523.0" y="789" width="94" height="22" rx="11" class="chip "/>
+<text x="570" y="804" text-anchor="middle" class="t-chip">EPIcal.pge</text>
+<path d="M780 758 V842" class="flow" marker-end="url(#ah)"/>
+<rect x="733.0" y="789" width="94" height="22" rx="11" class="chip "/>
+<text x="780" y="804" text-anchor="middle" class="t-chip">ArbEPI.pge</text>
+<text x="905" y="794" text-anchor="start" class="t-note">copy to the scanner:</text>
+<text x="905" y="810" text-anchor="start" class="t-note-mono">ge/coppe.py (optional)</text>
+<rect x="55" y="844" width="820" height="60" rx="6" class="box scan"/>
+<text x="71" y="866" class="t-title">GE scanner · pge2/tv7 interpreter</text>
+<text x="71" y="884" class="t-text">runs each .pge as a pge2 entry; raw data saved as GE ScanArchives (HDF5, read only by the Orchestra SDK)</text>
+<path d="M360 904 V1026" class="flow" marker-end="url(#ah)"/>
+<path d="M570 904 V1026" class="flow" marker-end="url(#ah)"/>
+<path d="M780 904 V1026" class="flow" marker-end="url(#ah)"/>
+<path d="M150 904 V1208" class="flow" marker-end="url(#ah)"/>
+<rect x="85.0" y="938" width="130" height="22" rx="11" class="chip "/>
+<text x="150" y="953" text-anchor="middle" class="t-chip">gre.h5 · shared</text>
+<rect x="273.5" y="938" width="173" height="22" rx="11" class="chip "/>
+<text x="360" y="953" text-anchor="middle" class="t-chip">&lt;seq&gt;_noise.h5 (opt.)</text>
+<rect x="516.0" y="938" width="108" height="22" rx="11" class="chip "/>
+<text x="570" y="953" text-anchor="middle" class="t-chip">&lt;seq&gt;_cal.h5</text>
+<rect x="726.0" y="938" width="108" height="22" rx="11" class="chip "/>
+<text x="780" y="953" text-anchor="middle" class="t-chip">&lt;seq&gt;_epi.h5</text>
+<rect x="255" y="992" width="620" height="158" rx="8" class="group pre"/>
+<text x="262" y="1172" text-anchor="start" class="t-section">Stage A (dotted) · all coils, cached, resumable</text>
+<rect x="275" y="1028" width="170" height="104" rx="6" class="box pre"/>
+<text x="291" y="1050" class="t-title">Whitening</text>
+<text x="291" y="1068" class="t-mono">coils.py</text>
+<text x="291" y="1086" class="t-text">noise covariance → W</text>
+<text x="291" y="1102" class="t-text">noise_var measured</text>
+<text x="291" y="1118" class="t-text">after gridding</text>
+<rect x="485" y="1028" width="170" height="104" rx="6" class="box pre"/>
+<text x="501" y="1050" class="t-title">Odd/even phase</text>
+<text x="501" y="1068" class="t-mono">oephase.py</text>
+<text x="501" y="1086" class="t-text">readout-delay sweep,</text>
+<text x="501" y="1102" class="t-text">then ghost phase a</text>
+<text x="501" y="1118" class="t-text">on whitened cal data</text>
+<rect x="695" y="1028" width="170" height="104" rx="6" class="box pre"/>
+<text x="711" y="1050" class="t-title">Grid + scatter</text>
+<text x="711" y="1068" class="t-mono">epi_gridding.py</text>
+<text x="711" y="1086" class="t-text">ramp-sample regrid,</text>
+<text x="711" y="1102" class="t-text">odd/even correction,</text>
+<text x="711" y="1118" class="t-text">scatter by schedules</text>
+<path d="M445 1072 H483" class="flow" marker-end="url(#ah)"/>
+<text x="465.0" y="1066" text-anchor="middle" class="t-edge">W</text>
+<path d="M655 1072 H693" class="flow" marker-end="url(#ah)"/>
+<text x="675.0" y="1066" text-anchor="middle" class="t-edge">W, a</text>
+<path d="M275 1072 H153" class="flow" marker-end="url(#ah)"/>
+<text x="220.5" y="1066" text-anchor="middle" class="t-edge">W</text>
+<path d="M780 1132 V1208" class="flow" marker-end="url(#ah)"/>
+<rect x="711.5" y="1169" width="137" height="22" rx="11" class="chip "/>
+<text x="780" y="1184" text-anchor="middle" class="t-chip">&lt;seq&gt;_gridded.h5</text>
+<rect x="55" y="1210" width="820" height="108" rx="6" class="box pre"/>
+<text x="71" y="1232" class="t-title">Coil compression, deGRE maps, Stage B output</text>
+<text x="71" y="1250" class="t-mono">coils.py · smaps.py · b0map.py + julia/b0map.jl · r2star.py</text>
+<text x="71" y="1268" class="t-text">GCC fit on the whitened deGRE: per-x matrices keeping 99.9% of the eigenvalue energy</text>
+<text x="71" y="1284" class="t-text">deGRE → ESPIRiT sensitivity maps · B0 field map (MRIFieldmaps.jl, ROMEO start) · R2*</text>
+<text x="71" y="1300" class="t-text">Stage B: compress the cached k-space; write it with the calibration region, maps and noise_var</text>
+<path d="M1070 602 V1094 H867" class="hand" marker-end="url(#ah-hand)"/>
+<text x="905" y="634" text-anchor="start" class="t-note-b">read by preprocess from</text>
+<text x="905" y="650" text-anchor="start" class="t-note-mono">&lt;datdir&gt;/seqs/&lt;seq&gt;/</text>
+<text x="905" y="672" text-anchor="start" class="t-note">schedules → (ky, kz)</text>
+<text x="905" y="688" text-anchor="start" class="t-note">kxo/kxe → gridding</text>
+<text x="905" y="704" text-anchor="start" class="t-note">echo times → B0 model</text>
+<path d="M470 1318 V1402" class="flow"/>
+<path d="M180 1402 H600" class="flow"/>
+<path d="M180 1402 V1416" class="flow" marker-end="url(#ah)"/>
+<path d="M600 1402 V1416" class="flow" marker-end="url(#ah)"/>
+<rect x="203.5" y="1354" width="533" height="22" rx="11" class="chip "/>
+<text x="470" y="1369" text-anchor="middle" class="t-chip">&lt;seq&gt;_preprocessed.h5 · ksp_epi_zf, smaps, b0map_hz, r2star, echo_times</text>
+<rect x="55" y="1418" width="250" height="108" rx="6" class="box rec"/>
+<text x="71" y="1440" class="t-title">RSS</text>
+<text x="71" y="1458" class="t-mono">rss.py</text>
+<text x="71" y="1476" class="t-text">zero-filled IFFT per coil,</text>
+<text x="71" y="1492" class="t-text">root-sum-of-squares</text>
+<text x="71" y="1508" class="t-text">first look, aliasing kept</text>
+<rect x="325" y="1418" width="550" height="108" rx="6" class="box rec"/>
+<text x="341" y="1440" class="t-title">Iterative SENSE</text>
+<text x="341" y="1458" class="t-mono">sense.py · operators.py · regularizers.py · solvers.py</text>
+<text x="341" y="1476" class="t-text">min over x of ½‖Ax − y‖² + g(x)</text>
+<text x="341" y="1492" class="t-text">A: SENSE · + B0 (time-segmented, L = 32) · + B0 + R2*</text>
+<text x="341" y="1508" class="t-text">g → solver: none → CG · lowrank → POGM · wavelet-tv → PDHG</text>
+<path d="M875 1472 H903" class="flow" marker-end="url(#ah)"/>
+<rect x="905" y="1416" width="180" height="116" rx="12" class="chip "/>
+<text x="919" y="1438" class="t-mono-b">&lt;datdir&gt;/recon/</text>
+<text x="919" y="1454" class="t-mono-s">sense_&lt;reg&gt;/</text>
+<text x="919" y="1470" class="t-mono-s">sense_&lt;reg&gt;_b0/</text>
+<text x="919" y="1486" class="t-mono-s">sense_&lt;reg&gt;_b0r2star/</text>
+<text x="919" y="1502" class="t-mono-s">rss/</text>
+<text x="919" y="1518" class="t-text">.h5 + .nii.gz + .json</text>
+</g>
+</svg>
