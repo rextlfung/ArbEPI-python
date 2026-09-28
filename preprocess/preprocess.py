@@ -4,7 +4,8 @@ preprocess(cfg, seqname) runs, for one sequence:
 
 Stage A -- mandatory, cached in <outdir>/<seq>_gridded.h5 (grid_epi)
     noise scan -> whitening matrix W (identity if there is no noise scan)
-    cal scan   -> odd/even (Nyquist ghost) phase model `a`, estimated on the
+    cal scan   -> readout delay (k-space center offset), calibrated by a sweep,
+                  then the odd/even (Nyquist ghost) phase model `a`; both on the
                   whitened, uncompressed calibration echo trains
     EPI        -> per frame: whiten, regrid the ramp-sampled readouts onto
                   Cartesian kx, odd/even phase correction, scatter into the
@@ -64,7 +65,7 @@ from preprocess.epi_gridding import rampsampepi2cart
 from preprocess.grid_resize import resize_to_epi_grid
 from preprocess.oephase import epiphasecorrect, getoephase
 from preprocess.r2star import R2STAR_METHOD, fit_r2star
-from preprocess.utils import load_kxoe, load_schedules, load_seq_params
+from preprocess.utils import load_kxoe, load_schedules, load_seq_params, matlab_round
 
 # ---------------------------------------------------------------------------
 # Configuration and paths
@@ -79,10 +80,6 @@ class PreprocessConfig:
     seqnames: list[str] = field(default_factory=list)
     fn_gre: str | None = None  # deGRE ScanArchive; default <datdir>/scanarchives/gre.h5
     outdir: str | None = None  # default <datdir>/recon
-
-    # k-space center offset of the readout (samples): a scalar, or a dict keyed
-    # by sequence name. Scanner/dwell-time dependent; tune with calibrate_delay.
-    delay: float | dict[str, float] = -1.0
 
     # Coil compression of the output (whitening is always applied when the
     # sequence has a noise scan).
@@ -118,11 +115,6 @@ class PreprocessConfig:
             self.outdir = os.path.join(self.datdir, 'recon')
         if self.cc_method not in ('gcc', 'pca'):
             raise ValueError(f"cc_method must be 'gcc' or 'pca', got {self.cc_method!r}")
-
-
-def seq_delay(cfg: PreprocessConfig, seqname: str) -> float:
-    """cfg.delay for one sequence (scalar, or looked up by name)."""
-    return cfg.delay[seqname] if isinstance(cfg.delay, dict) else cfg.delay
 
 
 @dataclass
@@ -206,26 +198,93 @@ def prepare_cal_data(
     return ksp_cal[:, :ETL - (ETL % 2)]
 
 
+DELAY_SWEEP = np.round(np.arange(-6, 6 + 0.025, 0.05), 2)  # candidate delays (samples)
+
+
+def sweep_delay(
+    ksp_cal: np.ndarray,
+    kxo0: np.ndarray,
+    kxe0: np.ndarray,
+    Nx: int,
+    fov_x_cm: float,
+    delays: np.ndarray = DELAY_SWEEP,
+    wrap_thresh: float = np.pi,
+) -> dict[str, np.ndarray]:
+    """The odd/even phase model at each candidate readout delay. Ports
+    calibrate_delay.m.
+
+    A wrong delay (k-space center offset) puts a linear phase ramp between odd
+    and even echoes; once the ramp passes +-pi inside the object, getoephase's
+    no-wrap linear fit breaks. For each delay this counts adjacent-pixel jumps
+    > wrap_thresh in the odd/even phase over the central half of x (later echo
+    pairs). ksp_cal: [Nfid, ETL_even, N_cal_shots, Nc] from prepare_cal_data().
+    Returns {'delay', 'a1', 'a2', 'wrap_count'}, one entry per delay.
+    """
+    Nfid = ksp_cal.shape[0]
+    rows = slice(matlab_round(Nx / 4), matlab_round(3 * Nx / 4))
+    a_all, wraps = [], []
+    for d in delays:
+        a, th = compute_oephase(ksp_cal, *apply_delay(kxo0, kxe0, Nfid, d), Nx, fov_x_cm)
+        d_th = np.diff(th[rows, th.shape[1] // 2:], axis=0)
+        a_all.append(a)
+        wraps.append(int(np.sum(np.abs(d_th) > wrap_thresh)))
+    a_all = np.array(a_all)
+    return {'delay': np.asarray(delays, dtype=float), 'a1': a_all[:, 0], 'a2': a_all[:, 1],
+            'wrap_count': np.array(wraps)}
+
+
+def select_best_delay(report: dict) -> float:
+    """Among delays with zero detected phase wraps, pick the one whose fitted
+    linear term a2 is closest to zero (a correctly aligned readout leaves only
+    a constant odd/even offset); if every candidate wrapped, fall back to the
+    delay with the fewest wraps. Ports the selection at the end of
+    calibrate_delay.m."""
+    wrap_count = np.asarray(report['wrap_count'])
+    a2 = np.asarray(report['a2'])
+    delay = np.asarray(report['delay'])
+    safe = np.flatnonzero(wrap_count == 0)
+    if len(safe) == 0:
+        idx = int(np.argmin(wrap_count))
+    else:
+        idx = safe[np.argmin(np.abs(a2[safe]))]
+    return float(delay[idx])
+
+
 def calibrate_odd_even(
     ksp_cal_raw: np.ndarray,
     W: np.ndarray,
     cc_matrix: np.ndarray | None,
-    cfg: PreprocessConfig,
-    paths: SeqPaths,
+    scan_info: str,
     Nx: int,
     ETL: int,
     fov_x_cm: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Calibration scan -> (kxo, kxe, a): the delay-corrected odd/even readout
-    trajectories and the odd/even phase model."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+    """Calibration scan -> (kxo, kxe, a, sweep): the readout delay, calibrated
+    by sweep_delay/select_best_delay and applied to the odd/even readout
+    trajectories; the odd/even phase model at that delay; and the sweep, with
+    the chosen delay under 'best'."""
     Nfid = ksp_cal_raw.shape[0]
     ksp_cal = prepare_cal_data(ksp_cal_raw, W, cc_matrix, ETL)
-    delay = seq_delay(cfg, paths.seqname)
-    print(f'  k-space center offset: {delay:.2f} samples')
-    kxo, kxe = apply_delay(*load_kxoe(paths.scan_info), Nfid, delay)
+    kxo0, kxe0 = load_kxoe(scan_info)
+    sweep = sweep_delay(ksp_cal, kxo0, kxe0, Nx, fov_x_cm)
+    delay = select_best_delay(sweep)
+    sweep['best'] = delay
+    wraps = int(sweep['wrap_count'][np.argmin(np.abs(sweep['delay'] - delay))])
+    print(f'  readout delay (k-space center offset): {delay:+.2f} samples, calibrated')
+    if wraps:
+        warnings.warn(
+            f'calibrate_odd_even: every candidate delay leaves odd/even phase wraps (fewest: '
+            f'{wraps}, at {delay:+.2f}); the ghost correction may be poor', stacklevel=2
+        )
+    elif delay in (sweep['delay'][0], sweep['delay'][-1]):
+        warnings.warn(
+            f'calibrate_odd_even: the calibrated delay {delay:+.2f} is at the edge of the '
+            f'sweep ({sweep["delay"][0]:+.2f} to {sweep["delay"][-1]:+.2f})', stacklevel=2
+        )
+    kxo, kxe = apply_delay(kxo0, kxe0, Nfid, delay)
     a, _ = compute_oephase(ksp_cal, kxo, kxe, Nx, fov_x_cm)
     print(f'  odd/even phase: constant {a[0]:.4f} rad, linear {a[1]:.4f} rad/FOV')
-    return kxo, kxe, a
+    return kxo, kxe, a, sweep
 
 
 def unflatten_gre_echoes(
@@ -420,20 +479,13 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
             # place; without it the file is left over from a run that failed first.
             initialized = 'oephase_a' in f.attrs
             complete = bool(f.attrs.get('complete', False))
-            cached_delay = f.attrs.get('delay')
         if not initialized:
             print(f'Stage A: {paths.cache} is from a failed run; starting over')
             os.remove(paths.cache)
             resuming = False
-        else:
-            if cached_delay != seq_delay(cfg, paths.seqname):
-                warnings.warn(
-                    f'grid_epi: {paths.cache} was gridded with delay {cached_delay}, not '
-                    f'{seq_delay(cfg, paths.seqname)}; reusing it anyway -- delete it to regrid'
-                )
-            if complete:
-                print(f'Stage A: using complete cache {paths.cache}')
-                return
+        elif complete:
+            print(f'Stage A: using complete cache {paths.cache}')
+            return
 
     schedules, echo_times = load_schedules(paths.scan_info)
     Nframes, Nshots, ETL_sched, _ = schedules.shape
@@ -465,8 +517,8 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
                 warnings.warn(f'grid_epi: no noise scan at {paths.noise}; data are NOT whitened')
                 ksp_noise, W, whitened = None, np.eye(Ncoils, dtype=np.complex128), False
 
-            kxo, kxe, a_est = calibrate_odd_even(
-                ksp_cal_raw, W, None, cfg, paths, Nx, ETL, fov_x_cm
+            kxo, kxe, a_est, sweep = calibrate_odd_even(
+                ksp_cal_raw, W, None, paths.scan_info, Nx, ETL, fov_x_cm
             )
             if a is None:
                 a = a_est
@@ -486,11 +538,14 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
             if ksp_noise is not None:
                 noise_gridded = grid_noise(ksp_noise, W, None, kxo, kxe, a, Nx, ETL, fov_x_cm)
                 f.create_dataset('noise_gridded', data=noise_gridded.astype(np.complex64))
-            f.attrs['oephase_a'] = a
-            f.attrs['delay'] = seq_delay(cfg, paths.seqname)
+            g = f.create_group('delay_sweep')
+            for k in ('delay', 'a1', 'a2', 'wrap_count'):
+                g.create_dataset(k, data=sweep[k])
+            f.attrs['delay'] = sweep['best']
             f.attrs['whitened'] = whitened
             f.attrs['n_frames_discard'] = round(sp.discard_duration / sp.volume_tr)
             f.attrs['complete'] = False
+            f.attrs['oephase_a'] = a  # last: marks the cache as initialized (see above)
 
         epi_reader = utils.ArchiveReader(paths.epi)
         shots_per_frame = ETL * Nshots
@@ -707,6 +762,8 @@ def write_output(
         with h5py.File(paths.cache, 'r') as c:
             for k in ('omegas', 'echo_times', 'W'):
                 f.create_dataset(k, data=c[k][()])
+            if 'delay_sweep' in c:  # absent in caches from before delay calibration
+                c.copy('delay_sweep', f)
         f.create_dataset(
             'ksp_epi_zf', shape=(Nx, Ny, Nz, Nc_out, Nframes), dtype=np.complex64,
             chunks=(Nx, Ny, Nz, Nc_out, 1), compression='gzip', compression_opts=4,

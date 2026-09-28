@@ -38,7 +38,6 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('seqnames', nargs='+')
     p.add_argument('--outdir', help='default: <datdir>/recon')
     p.add_argument('--fn-gre', help='deGRE archive; default <datdir>/scanarchives/gre.h5')
-    p.add_argument('--delay', type=float, default=-1.0, help='k-space center offset (samples)')
     p.add_argument('--no-compress', action='store_true', help='keep all physical coils')
     p.add_argument('--cc-method', choices=('gcc', 'pca'), default='gcc')
     p.add_argument('--cc-energy', type=float, default=0.999,
@@ -54,7 +53,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--keep-cache', action='store_true', help='keep <seqname>_gridded.h5')
     a = p.parse_args(argv)
     cfg = PreprocessConfig(
-        datdir=a.datdir, seqnames=a.seqnames, outdir=a.outdir, fn_gre=a.fn_gre, delay=a.delay,
+        datdir=a.datdir, seqnames=a.seqnames, outdir=a.outdir, fn_gre=a.fn_gre,
         compress=not a.no_compress, cc_method=a.cc_method, cc_energy_thresh=a.cc_energy,
         Nvcoils=a.nvcoils, estimate_smaps=not a.no_smaps, estimate_b0=not a.no_b0,
         estimate_r2star=not a.no_r2star, extract_calib=not a.no_calib,

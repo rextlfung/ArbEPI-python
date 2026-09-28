@@ -705,6 +705,17 @@ is 0.999 (user decision after this measurement): 15 coils, ~2.2x faster CG than
 32. The counts per threshold were identical on all four `20260915ball`
 sequences (table in `preprocess/README.md`).
 
+**The readout delay is calibrated in Stage A, not configured (review item
+254).** `PreprocessConfig` has no `delay`: `calibrate_odd_even` sweeps it
+(`sweep_delay`, −6..+6 samples by 0.05, then `select_best_delay`: zero
+odd/even phase wraps, smallest linear term) on every sequence's own whitened,
+uncompressed calibration scan, and stores the sweep as `delay_sweep/`. The old
+fixed default −1.0 was 0.75–2 samples off on every session checked
+(20260912–20260924) and wrapped the odd/even phase on 20260920ball and
+20260924ball. The
+standalone `calibrate_delay.py` was folded into `preprocess.py` (it imported
+from it, so the reverse import would be circular).
+
 **Odd/even frame (review item 251).** `compute_oephase` and `epiphasecorrect`
 use the same centered-IFFT pairing along x, so `a` is estimated and applied in
 one pixel frame; the old inline copy in `calibrate_delay.py` used MATLAB's

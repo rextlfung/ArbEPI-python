@@ -28,6 +28,7 @@ NXD, NYD, NZD = 16, 16, 12  # deGRE grid
 FOV, FOV_DEGRE = (0.12, 0.12, 0.06), (0.12, 0.12, 0.08)
 TE_DEGRE = (0.003, 0.0052)
 A_FIXED = np.array([0.2, 1.5])
+D_TRUE = 0.35  # readout delay (samples) built into the synthetic calibration scan
 
 
 def _crandn(rng, *shape):
@@ -37,6 +38,25 @@ def _crandn(rng, *shape):
 def _fft3c(x):
     axes = (0, 1, 2)
     return np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(x, axes=axes), axes=axes), axes=axes)
+
+
+def _cal_scan(rng, kxo):
+    """Blip-free calibration echo trains [NFID, NC, ETL * 5] of a smooth 1D
+    object, read out at the kx positions of a D_TRUE readout delay, with a
+    constant (delay-free) odd/even phase on the even echoes."""
+    import sigpy
+
+    kxo_t, kxe_t = apply_delay(kxo / 100, kxo[::-1] / 100, NFID, D_TRUE)
+    xp = np.arange(NX) - NX / 2
+    img = np.exp(-((xp / (NX / 3)) ** 2))[:, None] * _crandn(rng, NC)[None, :]  # [NX, NC]
+
+    def readout(kx, phase):  # -> [NFID, NC]
+        return sigpy.nufft(img.T * phase, (kx * FOV[0] * 100)[:, None]).T
+
+    trains = [readout(kxo_t, 1) if e % 2 == 0 else readout(kxe_t, np.exp(0.3j))
+              for _ in range(5) for e in range(ETL)]
+    cal = np.stack(trains, axis=-1)
+    return cal + 1e-3 * _crandn(rng, *cal.shape)
 
 
 def _schedules(rng):
@@ -75,7 +95,7 @@ def dataset(tmp_path, monkeypatch):
 
     mix = _crandn(rng, NC, NC) * 0.3 + np.eye(NC)  # correlated, unequal coil noise
     noise = (_crandn(rng, NFID, 200, NC) @ mix.T).transpose(0, 2, 1)
-    cal = _crandn(rng, NFID, NC, ETL * 5)
+    cal = _cal_scan(rng, kxo)
     epi_shots = [_crandn(rng, NFID, NC) for _ in range(NFRAMES * NSHOTS * ETL)]
 
     # deGRE: a sphere seen by smooth coils, with a small field map.
@@ -128,9 +148,13 @@ def _cfg(ds, **kw):
     return PreprocessConfig(**{**base, **kw})
 
 
-def _reference(ds, W, cc):
+def _trajectories(ds, delay):
+    return apply_delay(ds['kxo'] / 100, ds['kxo'][::-1] / 100, NFID, delay)
+
+
+def _reference(ds, W, cc, delay):
     """Old pipeline order: whiten + (single-matrix) compress before gridding."""
-    kxo, kxe = apply_delay(ds['kxo'] / 100, ds['kxo'][::-1] / 100, NFID, -1.0)
+    kxo, kxe = _trajectories(ds, delay)
     sched = ds['schedules'][..., :2].astype(int) - 1
     spf = NSHOTS * ETL
     frames = [
@@ -152,11 +176,11 @@ def test_pca_output_equals_compressing_before_gridding(dataset):
     out = preprocess(_cfg(dataset, cc_method='pca', estimate_smaps=False), SEQ, a=A_FIXED)
     with h5py.File(out, 'r') as f:
         ksp, cc, W = f['ksp_epi_zf'][()], f['cc_matrix'][()], f['W'][()]
-        noise_var = f.attrs['noise_var']
+        noise_var, delay = f.attrs['noise_var'], f.attrs['delay']
         assert f.attrs['whitened'] and f.attrs['coil_compressed']
         assert f.attrs['cc_method'] == 'pca' and f.attrs['Nvcoils_source'] == 'energy'
         np.testing.assert_allclose(f.attrs['oephase_a'], A_FIXED)
-    ref_ksp, ref_noise_var = _reference(dataset, W, cc)
+    ref_ksp, ref_noise_var = _reference(dataset, W, cc, delay)
     assert _rel(ksp, ref_ksp) < 1e-5
     assert noise_var == pytest.approx(ref_noise_var, rel=1e-5)
 
@@ -167,12 +191,12 @@ def test_gcc_output_is_gcc_applied_to_the_whitened_gridded_data(dataset):
         ksp, A, W = f['ksp_epi_zf'][()], f['cc_matrix'][()], f['W'][()]
         nv = f.attrs['Nvcoils']
         assert f.attrs['cc_method'] == 'gcc' and f.attrs['cc_energy_kept'] >= 0.99
-        noise_var = f.attrs['noise_var']
+        noise_var, delay = f.attrs['noise_var'], f.attrs['delay']
     assert A.shape == (NX, nv, NC) and ksp.shape == (NX, NY, NZ, nv, NFRAMES)
-    ref_white, _ = _reference(dataset, W, None)
+    ref_white, _ = _reference(dataset, W, None, delay)
     ref = np.stack([apply_gcc_kspace(ref_white[..., t], A) for t in range(NFRAMES)], axis=-1)
     assert _rel(ksp, ref) < 1e-5
-    kxo, kxe = apply_delay(dataset['kxo'] / 100, dataset['kxo'][::-1] / 100, NFID, -1.0)
+    kxo, kxe = _trajectories(dataset, delay)
     noise = grid_noise(dataset['noise'], W, None, kxo, kxe, A_FIXED, NX, ETL, FOV[0] * 100)
     assert noise_var == pytest.approx(np.mean(np.abs(apply_gcc_kspace(noise, A)) ** 2), rel=1e-5)
 
@@ -203,11 +227,11 @@ def test_no_compression_promotes_the_cache_and_keeps_all_coils(dataset):
     paths = set_seq_paths(cfg, SEQ)
     assert not os.path.exists(paths.cache)
     with h5py.File(out, 'r') as f:
-        W = f['W'][()]
+        W, delay = f['W'][()], f.attrs['delay']
         ksp = f['ksp_epi_zf'][()]
         assert not f.attrs['coil_compressed'] and 'cc_matrix' not in f
         assert 'complete' not in f.attrs and 'noise_gridded' not in f
-    ref, _ = _reference(dataset, W, None)
+    ref, _ = _reference(dataset, W, None, delay)
     assert ksp.shape[3] == NC and _rel(ksp, ref) < 1e-5
 
 
@@ -240,8 +264,6 @@ def test_rerun_with_a_kept_cache_skips_stage_a(dataset):
     with h5py.File(out, 'r') as f:
         assert f['ksp_epi_zf'].shape[3] == 2
         np.testing.assert_allclose(f.attrs['oephase_a'], A_FIXED)  # the cache's a
-    with pytest.warns(UserWarning, match='gridded with delay'):
-        preprocess(_cfg(dataset, keep_cache=True, delay=0.5, estimate_smaps=False), SEQ)
 
 
 def test_resume_after_a_crash_matches_an_uninterrupted_run(dataset):
@@ -256,8 +278,24 @@ def test_resume_after_a_crash_matches_an_uninterrupted_run(dataset):
     out = preprocess(cfg, SEQ, a=A_FIXED)
     with h5py.File(out, 'r') as f:
         ksp, cc, W = f['ksp_epi_zf'][()], f['cc_matrix'][()], f['W'][()]
-    ref, _ = _reference(dataset, W, cc)
+        delay = f.attrs['delay']
+    ref, _ = _reference(dataset, W, cc, delay)
     assert _rel(ksp, ref) < 1e-5
+
+
+def test_readout_delay_is_calibrated_from_the_cal_scan(dataset):
+    """No delay is configured: Stage A sweeps it on the calibration scan, finds
+    the one the synthetic readouts were made with, and records the sweep."""
+    out = preprocess(_cfg(dataset, estimate_smaps=False), SEQ)
+    with h5py.File(out, 'r') as f:
+        assert f.attrs['delay'] == pytest.approx(D_TRUE, abs=0.051)
+        sweep = {k: f['delay_sweep'][k][()] for k in ('delay', 'a1', 'a2', 'wrap_count')}
+        a = f.attrs['oephase_a']
+    assert len({len(v) for v in sweep.values()}) == 1
+    best = np.argmin(np.abs(sweep['delay'] - D_TRUE))
+    assert sweep['wrap_count'][best] == 0 and sweep['wrap_count'].max() > 0
+    # at the calibrated delay only the constant odd/even phase is left
+    assert a[0] == pytest.approx(0.3, abs=0.05) and abs(a[1]) < 0.3
 
 
 def test_cache_left_by_a_failed_start_is_replaced(dataset):
@@ -271,7 +309,8 @@ def test_cache_left_by_a_failed_start_is_replaced(dataset):
     out = preprocess(cfg, SEQ, a=A_FIXED)
     with h5py.File(out, 'r') as f:
         ksp, cc, W = f['ksp_epi_zf'][()], f['cc_matrix'][()], f['W'][()]
-    ref, _ = _reference(dataset, W, cc)
+        delay = f.attrs['delay']
+    ref, _ = _reference(dataset, W, cc, delay)
     assert _rel(ksp, ref) < 1e-5
 
 

@@ -12,7 +12,6 @@ from preprocess.preprocess import (  # noqa: E402
     apply_delay,
     resume_start_frame,
     scatter_frame,
-    seq_delay,
     set_seq_paths,
     unflatten_gre_echoes,
 )
@@ -261,12 +260,6 @@ def test_config_defaults_and_paths():
     assert paths.output == '/data/recon/caipi_preprocessed.h5'
     with pytest.raises(ValueError):
         PreprocessConfig(datdir='/data/', cc_method='svd')
-
-
-def test_seq_delay_scalar_and_per_sequence():
-    assert seq_delay(PreprocessConfig(datdir='/d', delay=-1.5), 'a') == -1.5
-    cfg = PreprocessConfig(datdir='/d', delay={'a': -1.0, 'b': 2.0})
-    assert seq_delay(cfg, 'a') == -1.0 and seq_delay(cfg, 'b') == 2.0
 
 
 def test_grid_noise_variance_is_one_for_whitened_noise_and_tracks_scale():
