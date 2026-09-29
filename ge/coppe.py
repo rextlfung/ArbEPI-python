@@ -115,30 +115,40 @@ done
 # per-run directory, and moves just the .entry files into the shared
 # pulseq/v7/ namespace (the .pge files stay where they land).
 #
-# This scp's auth is documented (README's "hop 2") as key-only and must
-# never need a human at the keyboard -- this leg runs unattended, several
-# hops deep inside a remote script with no tty anywhere in the chain. Without
-# BatchMode=yes, a pubkey failure here (wrong/missing key offered, stale
-# authorized_keys entry, etc.) doesn't fail cleanly: the scanner's ssh falls
-# through to password auth, which -- on a host where DISPLAY is set but the
-# configured SSH_ASKPASS helper is missing/broken -- fails 3x (matching
-# ssh's default NumberOfPasswordPrompts) with a useless
-# "ksshaskpass: No such file or directory" instead of the real
-# "Permission denied (publickey)". BatchMode=yes disables every interactive
-# fallback outright, so a broken key surfaces as an immediate, diagnosable
-# error instead of this silent askpass noise. No -q, deliberately: verified
-# empirically (2026-09) that scp/ssh's -q suppresses the actual auth-failure
-# text too (e.g. "Host key verification failed."), not just the progress
-# meter -- with -q, a failure here surfaces as a bare, undiagnosable exit 1
-# with no message at all, which is what made this bug hard to root-cause in
-# the first place.
+# Since 2026-09-25 phobos (the default relay, where the tarball is staged)
+# requires `AuthenticationMethods publickey,keyboard-interactive`: the key,
+# then an Okta push with number matching. This leg runs several hops deep
+# inside a remote script with no tty anywhere in the chain, and the
+# scanner's configured SSH_ASKPASS helper is broken (it shells out to a
+# missing `ksshaskpass`), so the Okta prompt -- including "The correct
+# answer is NN", the number the user must tap -- has nowhere to go. A
+# throwaway askpass in run_dir (the scanner's /tmp may be noexec) echoes
+# every prompt to stderr, which run_remote streams live (see
+# transfer_and_install), and answers each with an empty line: an empty
+# passcode starts a push, and an empty line acknowledges "Press enter to
+# continue". SSH_ASKPASS_REQUIRE=force needs OpenSSH >= 8.4; DISPLAY is
+# kept non-empty for older clients, which only use SSH_ASKPASS when it is
+# set. Only publickey and keyboard-interactive are allowed, so a bad key
+# still fails with "Permission denied" rather than falling through to
+# password prompts. No -q, deliberately: verified empirically (2026-09)
+# that scp/ssh's -q suppresses the actual auth-failure text too (e.g. "Host
+# key verification failed."), not just the progress meter.
 _TRANSFER_SCRIPT = r"""
 set -eu
 basedir="$1"; run_dir="$2"; user="$3"; host_ip="$4"; tar_abspath="$5"; shift 5
 mkdir -p "$run_dir"
 cd "$run_dir"
 tar_name="${tar_abspath##*/}"
-scp -o BatchMode=yes -o PreferredAuthentications=publickey \
+ap=$(mktemp "$run_dir/.okta_askpass.XXXXXX")
+trap 'rm -f "$ap"' EXIT
+cat > "$ap" <<'ASKPASS'
+#!/bin/sh
+echo "OKTA PROMPT: $*" >&2
+echo
+ASKPASS
+chmod 700 "$ap"
+SSH_ASKPASS="$ap" SSH_ASKPASS_REQUIRE=force DISPLAY="${DISPLAY:-:0}" \
+    scp -o PreferredAuthentications=publickey,keyboard-interactive \
     "${user}@${host_ip}:${tar_abspath}" ./
 tar -xzf "$tar_name"
 rm -f "$tar_name"
@@ -331,6 +341,7 @@ def build_ssh_prefix(user: str, target: str, relay: str | None = None) -> list[s
 
 def run_remote(
     ssh_prefix: list[str], script: str, args: list[str] = (), verbose: bool = False,
+    stream_stderr: bool = False,
 ) -> str:
     """Runs `script` (plain bash, piped via stdin) on the far end of the
     double-SSH hop in `ssh_prefix`, with `args` as its positional
@@ -343,7 +354,9 @@ def run_remote(
     normally reads the actual secret from /dev/tty directly regardless of
     whether stdout/stderr are captured, so this mainly matters for
     *watching* prompts/progress (e.g. a Duo push), not for the prompt
-    itself to function.
+    itself to function. stream_stderr streams just stderr, for output the
+    user must see while the command is still running (the Okta number
+    echoed by _TRANSFER_SCRIPT's askpass).
 
     Uses `_ssh_env()` (DISPLAY stripped) defensively for *this* (the
     local -> jump-host) connection, since OpenSSH's read_passphrase()
@@ -355,21 +368,20 @@ def run_remote(
     failure mode traced the actual observed askpass breakage to a
     different connection entirely -- the scanner-initiated scp inside
     `_TRANSFER_SCRIPT` (hop 2, scanner -> this host, docs above) pulling
-    the tarball back -- fixed there via `BatchMode=yes` instead (see that
-    script's own comment), since that connection is documented as
-    key-only and should never fall through to an interactive prompt at
-    all, let alone one this many hops deep with no tty to answer it."""
+    the tarball back -- which supplies its own askpass on the scanner (see
+    that script's own comment)."""
     argv = [*ssh_prefix, 'bash', '-s', '--', *args]
     result = subprocess.run(
-        argv, input=script.encode(), capture_output=not verbose, env=_ssh_env(),
+        argv, input=script.encode(),
+        stdout=None if verbose else subprocess.PIPE,
+        stderr=None if verbose or stream_stderr else subprocess.PIPE,
+        env=_ssh_env(),
     )
     if result.returncode != 0:
-        detail = '' if verbose else (
-            (result.stdout or b'').decode(errors='replace')
-            + (result.stderr or b'').decode(errors='replace')
+        raise RuntimeError(
+            f'remote command failed (exit {result.returncode})\n{_decode_output(result)}'
         )
-        raise RuntimeError(f'remote command failed (exit {result.returncode})\n{detail}')
-    return (result.stdout or b'').decode() if not verbose else ''
+    return (result.stdout or b'').decode()
 
 
 def query_existing_entries(ssh_prefix: list[str]) -> dict[int, float]:
@@ -517,7 +529,7 @@ def transfer_and_install(
     remote_run_dir: str, claimed: list[int], verbose: bool,
 ) -> None:
     args = [_BASEDIR, remote_run_dir, user, host_ip, tar_abspath, *map(str, claimed)]
-    run_remote(ssh_prefix, _TRANSFER_SCRIPT, args, verbose=verbose)
+    run_remote(ssh_prefix, _TRANSFER_SCRIPT, args, verbose=verbose, stream_stderr=True)
 
 
 def print_report(assignment: dict[Path, int], remote_run_dir: str) -> None:
@@ -540,10 +552,10 @@ def main(args: argparse.Namespace) -> None:
 
     # Printed before the first SSH call into ssh_prefix (query_run_entries,
     # right below) rather than right before transfer_and_install -- every
-    # call through ssh_prefix can trigger its own Duo push, not just the
+    # call through ssh_prefix can trigger its own 2FA push, not just the
     # final transfer, so the warning needs to be visible before any of them
     # fire, not just the last one.
-    print('Contacting the scanner (keep an eye out for a Duo push)...')
+    print('Contacting the scanner (keep an eye out for Duo/Okta pushes)...', flush=True)
 
     # A rerun to the same --run-id can reuse entries a previous run already
     # claimed instead of allocating fresh ones -- but only after confirming
@@ -589,7 +601,8 @@ def main(args: argparse.Namespace) -> None:
                     tar_abspath = str(tar_path.resolve())
                     host_ip = discover_host_ip(args.host_ip)
 
-                print(f'Copying {len(pge_files)} sequence(s) to the scanner...')
+                print(f'Copying {len(pge_files)} sequence(s) to the scanner '
+                      '(any Okta number to tap is printed below)...', flush=True)
                 transfer_and_install(
                     ssh_prefix, tar_abspath, args.user, host_ip, remote_run_dir, claimed,
                     args.verbose,
@@ -635,8 +648,8 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '-v', '--verbose', action='store_true',
-        help='stream the final transfer step live instead of capturing it, '
-             'for interactive password/Duo prompts',
+        help='stream all of the final transfer step\'s output live, not just its stderr '
+             '(where the Okta prompts are printed either way)',
     )
     parser.add_argument(
         '-h', '--help', action='help', default=argparse.SUPPRESS,

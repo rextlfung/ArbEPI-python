@@ -65,6 +65,22 @@ once (see [Usage](#usage) below); the specific failure to watch for is the
 transfer step's `scp` erroring with `Permission denied
 (publickey)`, which means this hop isn't set up for your account/host yet.
 
+**Okta on phobos.** Since 2026-09-25 phobos (the default relay, where the
+tarball is staged) requires the key *and* an Okta push
+(`AuthenticationMethods publickey,keyboard-interactive`), with number
+matching. The scanner has no way to show you that prompt itself, so
+`coppe.py` gives the scanner-side `scp` a small askpass script that prints
+each prompt and answers it with a blank line (a blank passcode starts a
+push). Watch the terminal during the transfer step for
+
+```
+OKTA PROMPT: The correct answer is 46
+```
+
+and tap that number in Okta Verify. It appears with or without `-v`. If you
+tap the wrong number, ssh retries with a new push and a new number, up to 3
+times.
+
 **If you do end up setting this up yourself**, a few things that aren't
 obvious the first time through:
 
@@ -176,7 +192,8 @@ uv run python ge/coppe.py --target outside
 # Transfer .pge files from a different folder
 uv run python ge/coppe.py --pge-dir /path/to/some/other/folder
 
-# Show live output during the transfer (e.g. to watch for a Duo push)
+# Stream all of the transfer step's output live (its stderr, including
+# the Okta number, is always streamed)
 uv run python ge/coppe.py -v
 
 # Skip the automatic public-IP lookup (see Troubleshooting)
@@ -262,6 +279,11 @@ scanner"):
 - **A Duo push doesn't seem to be arriving**: pass `-v`/`--verbose` to
   stream the transfer step's output live instead of capturing it, so you
   can see what's actually happening rather than a silent wait.
+- **The transfer fails with `Permission denied (keyboard-interactive)`**:
+  the Okta push for phobos (see [Hop 2](#hop-2-scanner--this-host-the-pull-leg))
+  was denied, timed out, or got the wrong number three times. Rerun with
+  the same `--run-id` and tap the number printed on the
+  `OKTA PROMPT: The correct answer is NN` line.
 - **You're asked to 2FA multiple times per run**: `coppe.py` makes up to 4
   separate SSH connections per invocation (entry-number lookup, claiming,
   and the transfer itself), each authenticated independently. Enable SSH
