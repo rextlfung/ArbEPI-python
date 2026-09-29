@@ -57,8 +57,8 @@ One file, `<datdir>/recon/<seq>_preprocessed.h5`, as written by `preprocess/`:
 | `omegas`, `echo_times` | (Ny, Nz, Nframes) sampling mask, and each sample's time since excitation (s) | everything |
 | attrs `noise_var`, `whitened` | thermal-noise variance of `ksp_epi_zf`; whether a noise scan whitened it | scaling |
 | `smaps` | (Nx, Ny, Nz, Ncoils) ESPIRiT sensitivity maps, in the same coil space as `ksp_epi_zf` | SENSE |
-| `b0map_hz` | (Nx, Ny, Nz) B0 field map in Hz on the EPI grid | `--B0` |
-| `r2star`, attr `t_ref_s` | (Nx, Ny, Nz) R2* map in 1/s, and the nominal-TE reference time | `--R2star` |
+| `b0_map` | (Nx, Ny, Nz) B0 field map in Hz on the EPI grid | `--B0` |
+| `r2star_map`, attr `t_ref_s` | (Nx, Ny, Nz) R2* map in 1/s, and the nominal-TE reference time | `--R2star` |
 
 It also holds `ksp_calib` (the fully sampled central calibration region), the
 whitening/compression matrices and deGRE-grid QA volumes; see preprocess/demo.ipynb.
@@ -77,10 +77,10 @@ $PY -m recon.rss $DAT $SEQ
 $PY -m recon.sense $DAT $SEQ --reg none --B0
 
 # Locally low rank (6x6x6 patches, stride 3), B0 + R2* corrected
-$PY -m recon.sense $DAT $SEQ --reg lowrank --B0 --R2star --patch 6 6 6 --stride 3 3 3
+$PY -m recon.sense $DAT $SEQ --reg mslr --B0 --R2star --patch 6 6 6 --stride 3 3 3
 
 # Global + local low rank (two scales)
-$PY -m recon.sense $DAT $SEQ --reg lowrank --B0 \
+$PY -m recon.sense $DAT $SEQ --reg mslr --B0 \
     --patch full --stride full --patch 15 15 15 --stride 5 5 5
 
 # L1-wavelet + TV on the first 10 frames
@@ -161,7 +161,7 @@ frame (a separate copy per frame doesn't fit in GPU memory).
 | `--reg` | $g(x)$ | Solver |
 |---|---|---|
 | `none` | 0 | `cg`: conjugate gradient on $A^H A x = A^H y$ |
-| `lowrank` | multi-scale low rank | `pogm_restart` (default POGM; `--mom fpgm` or `pgm` also available) |
+| `mslr` | multi-scale low rank | `pogm_restart` (default POGM; `--mom fpgm` or `pgm` also available) |
 | `wavelet-tv` | $\lambda_{\ell_1}\|Wx\|_1 + \lambda_{TV}\|Dx\|_1$, per frame | `pdhg` (primal-dual) |
 
 POGM needs a closed-form proximal operator for $g$; the low-rank regularizer
@@ -208,7 +208,7 @@ forward model, a **unit-norm operator**. `run_sense` arranges both:
    The noise level can't be estimated from the acquired k-space itself on
    these high-SNR datasets: every candidate region is dominated by signal
    leakage, not noise.
-2. **Operator.** For `lowrank`, $A$ is divided by its spectral norm
+2. **Operator.** For `mslr`, $A$ is divided by its spectral norm
    $\sigma_1(A)$, estimated by power iteration. Plain SENSE already has
    $\sigma_1 \approx 1$; the B0 operators measure about 1.2–1.9.
 3. **`--lambda-global` defaults to R**, the acceleration factor. The paper's

@@ -14,9 +14,9 @@ Stage A -- mandatory, cached in <outdir>/<seq>_gridded.h5 (grid_epi)
                   so noise_var can be measured in the output coil space.
 
 Coil compression -- optional (coil_compression)
-    GCC (per-x matrices along the fully sampled readout) or global PCA, fit on
-    the whitened deGRE; the number of virtual coils from an energy threshold
-    or set explicitly (cfg.Nvcoils).
+    GCC: geometric-decomposition coil compression, per-x matrices along the
+    fully sampled readout, fit on the whitened deGRE; the number of virtual
+    coils from an energy threshold or set explicitly (cfg.Nvcoils).
 
 Maps from the dual-echo deGRE (estimate_maps)
     ESPIRiT sensitivity maps, B0 field map (MRIFieldmaps.jl), R2* map.
@@ -50,15 +50,12 @@ from preprocess import utils
 from preprocess.b0map import estimate_b0map, fit_mask, resize_to_epi
 from preprocess.coils import (
     align_gcc,
-    apply_coil_compression,
     apply_gcc_image,
     apply_gcc_kspace,
     apply_whitening,
-    compute_coil_covariance,
     compute_whitening_matrix,
     gcc_calibration,
     gcc_compression,
-    pca_compression,
     select_nvcoils,
 )
 from preprocess.epi_gridding import rampsampepi2cart
@@ -84,7 +81,6 @@ class PreprocessConfig:
     # Coil compression of the output (whitening is always applied when the
     # sequence has a noise scan).
     compress: bool = True
-    cc_method: str = 'gcc'  # 'gcc' (per-x, Zhang et al. 2013) or 'pca' (global)
     cc_energy_thresh: float = 0.999  # fraction of eigenvalue energy kept
     Nvcoils: int | None = None  # exact number of virtual coils; overrides the threshold
     cc_calib_size: int = 24  # GCC: central (ky, kz) block of the deGRE per x
@@ -113,8 +109,6 @@ class PreprocessConfig:
             self.fn_gre = os.path.join(self.datdir, 'scanarchives', 'gre.h5')
         if self.outdir is None:
             self.outdir = os.path.join(self.datdir, 'recon')
-        if self.cc_method not in ('gcc', 'pca'):
-            raise ValueError(f"cc_method must be 'gcc' or 'pca', got {self.cc_method!r}")
 
 
 @dataclass
@@ -184,16 +178,12 @@ def compute_oephase(
     return getoephase(np.mean(oephase_data, axis=2))  # average over cal shots
 
 
-def prepare_cal_data(
-    ksp_cal_raw: np.ndarray, W: np.ndarray, cc_matrix: np.ndarray | None, ETL: int
-) -> np.ndarray:
+def prepare_cal_data(ksp_cal_raw: np.ndarray, W: np.ndarray, ETL: int) -> np.ndarray:
     """Calibration readouts [Nfid, Ncoils, N_cal] -> [Nfid, ETL_even, N_cal_shots, Nc]:
-    whitened, optionally compressed with a single [Nv, Nc] matrix, grouped into
-    echo trains, truncated to an even ETL (getoephase pairs odd/even echoes)."""
+    whitened, grouped into echo trains, truncated to an even ETL (getoephase
+    pairs odd/even echoes)."""
     Nfid = ksp_cal_raw.shape[0]
     ksp_cal = apply_whitening(ksp_cal_raw.transpose(0, 2, 1), W)  # [Nfid, N_cal, Ncoils]
-    if cc_matrix is not None:
-        ksp_cal = apply_coil_compression(ksp_cal, cc_matrix)
     ksp_cal = ksp_cal.reshape(Nfid, ETL, -1, ksp_cal.shape[-1], order='F')
     return ksp_cal[:, :ETL - (ETL % 2)]
 
@@ -253,7 +243,6 @@ def select_best_delay(report: dict) -> float:
 def calibrate_odd_even(
     ksp_cal_raw: np.ndarray,
     W: np.ndarray,
-    cc_matrix: np.ndarray | None,
     scan_info: str,
     Nx: int,
     ETL: int,
@@ -264,7 +253,7 @@ def calibrate_odd_even(
     trajectories; the odd/even phase model at that delay; and the sweep, with
     the chosen delay under 'best'."""
     Nfid = ksp_cal_raw.shape[0]
-    ksp_cal = prepare_cal_data(ksp_cal_raw, W, cc_matrix, ETL)
+    ksp_cal = prepare_cal_data(ksp_cal_raw, W, ETL)
     kxo0, kxe0 = load_kxoe(scan_info)
     sweep = sweep_delay(ksp_cal, kxo0, kxe0, Nx, fov_x_cm)
     delay = select_best_delay(sweep)
@@ -324,7 +313,6 @@ def scatter_frame(
 def process_epi_frame(
     ksp_frame_raw: np.ndarray,
     W: np.ndarray,
-    cc_matrix: np.ndarray | None,
     kxo: np.ndarray,
     kxe: np.ndarray,
     a: np.ndarray,
@@ -338,12 +326,9 @@ def process_epi_frame(
 ) -> np.ndarray:
     """One EPI frame of raw shots [Nfid, Ncoils, ETL*Nshots] (acquisition
     order, one shot's echoes contiguous) -> zero-filled [Nx, Ny, Nz, Nc]:
-    whiten, (optionally compress with a single matrix), regrid, odd/even
-    correct, scatter. Stage A passes cc_matrix=None."""
+    whiten, regrid, odd/even correct, scatter."""
     Nfid = ksp_frame_raw.shape[0]
     ksp = apply_whitening(ksp_frame_raw.transpose(0, 2, 1), W)  # [Nfid, shots, Ncoils]
-    if cc_matrix is not None:
-        ksp = apply_coil_compression(ksp, cc_matrix)
     Nc = ksp.shape[-1]
     # MATLAB: reshape(ksp, Nfid, Nc, ETL, Nshots) then permute([1 3 4 2]).
     ksp = ksp.transpose(0, 2, 1).reshape(Nfid, Nc, ETL, Nshots, order='F').transpose(0, 2, 3, 1)
@@ -354,7 +339,6 @@ def process_epi_frame(
 def grid_noise(
     ksp_noise: np.ndarray,
     W: np.ndarray,
-    cc_matrix: np.ndarray | None,
     kxo: np.ndarray,
     kxe: np.ndarray,
     a: np.ndarray,
@@ -363,7 +347,7 @@ def grid_noise(
     fov_x_cm: float,
 ) -> np.ndarray:
     """Noise-scan readouts [Nfid, Ncoils, Nacq] through the same whitening,
-    (optional compression,) regridding and odd/even correction as the EPI data,
+    regridding and odd/even correction as the EPI data,
     grouped ETL at a time as if they were echo trains -> [Nx, ETL, n_trains, Nc]
     Cartesian k-space. Its mean |.|^2 is the thermal-noise variance of the
     final k-space; the noise scan has no signal, so this can't be biased by
@@ -373,8 +357,6 @@ def grid_noise(
     if n_trains == 0:
         raise ValueError(f'grid_noise: noise scan has {Nacq} readouts, fewer than ETL={ETL}')
     x = apply_whitening(ksp_noise[:, :, : n_trains * ETL].transpose(0, 2, 1), W)
-    if cc_matrix is not None:
-        x = apply_coil_compression(x, cc_matrix)
     Nc = x.shape[-1]
     x = x.transpose(0, 2, 1).reshape(Nfid, Nc, ETL, n_trains, order='F').transpose(0, 2, 3, 1)
     return epiphasecorrect(rampsampepi2cart(x, kxo, kxe, Nx, fov_x_cm), a)
@@ -518,7 +500,7 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
                 ksp_noise, W, whitened = None, np.eye(Ncoils, dtype=np.complex128), False
 
             kxo, kxe, a_est, sweep = calibrate_odd_even(
-                ksp_cal_raw, W, None, paths.scan_info, Nx, ETL, fov_x_cm
+                ksp_cal_raw, W, paths.scan_info, Nx, ETL, fov_x_cm
             )
             if a is None:
                 a = a_est
@@ -536,7 +518,7 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
             f.create_dataset('kxo', data=kxo)
             f.create_dataset('kxe', data=kxe)
             if ksp_noise is not None:
-                noise_gridded = grid_noise(ksp_noise, W, None, kxo, kxe, a, Nx, ETL, fov_x_cm)
+                noise_gridded = grid_noise(ksp_noise, W, kxo, kxe, a, Nx, ETL, fov_x_cm)
                 f.create_dataset('noise_gridded', data=noise_gridded.astype(np.complex64))
             g = f.create_group('delay_sweep')
             for k in ('delay', 'a1', 'a2', 'wrap_count'):
@@ -559,7 +541,7 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
                         f'grid_epi: EPI readout length ({shots[0].shape[0]}) != Nfid ({Nfid})'
                     )
                 ksp_frame_zf = process_epi_frame(
-                    np.stack(shots, axis=-1), W, None, kxo, kxe, a, schedules[frame],
+                    np.stack(shots, axis=-1), W, kxo, kxe, a, schedules[frame],
                     Nx, Ny, Nz, ETL, Nshots, fov_x_cm,
                 )
                 f['ksp_epi_zf'][..., frame] = ksp_frame_zf.astype(np.complex64)
@@ -589,20 +571,17 @@ def load_gre(cfg: PreprocessConfig, sp: utils.SeqParams, W: np.ndarray) -> np.nd
 def coil_compression(
     cfg: PreprocessConfig, ksp_gre: np.ndarray, Nx: int
 ) -> tuple[np.ndarray | None, dict]:
-    """(T, info) from one whitened deGRE echo [Nx_degre, Ny, Nz, Ncoils].
+    """(GCC, info) from one whitened deGRE echo [Nx_degre, Ny, Nz, Ncoils].
 
-    T is None (no compression), a [Nv, Nc] PCA matrix, or [Nx, Nv, Nc] GCC
-    matrices on the EPI readout grid. Nv is cfg.Nvcoils if set, else the
-    smallest count keeping cfg.cc_energy_thresh of the eigenvalue energy
-    (summed over x for GCC)."""
+    GCC is None (no compression) or the [Nx, Nv, Nc] geometric-decomposition
+    coil compression matrices on the EPI readout grid. Nv is cfg.Nvcoils if
+    set, else the smallest count keeping cfg.cc_energy_thresh of the
+    eigenvalue energy summed over x."""
     Ncoils = ksp_gre.shape[-1]
     if not cfg.compress:
         return None, {'coil_compressed': False, 'Nvcoils': Ncoils}
 
-    if cfg.cc_method == 'pca':
-        V, evals = pca_compression(compute_coil_covariance(ksp_gre))
-    else:
-        A0, evals = gcc_compression(gcc_calibration(ksp_gre, Nx, cfg.cc_calib_size))
+    A0, evals = gcc_compression(gcc_calibration(ksp_gre, Nx, cfg.cc_calib_size))
 
     if cfg.Nvcoils is not None:
         if not 1 <= cfg.Nvcoils <= Ncoils:
@@ -611,44 +590,37 @@ def coil_compression(
     else:
         nv, source = select_nvcoils(evals, cfg.cc_energy_thresh), 'energy'
 
-    e = np.clip(np.atleast_2d(evals), 0, None)
+    e = np.clip(evals, 0, None)
     kept = e[:, :nv].sum() / e.sum()
-    if cfg.cc_method == 'pca':
-        T = V[:nv]
-    else:
-        T = align_gcc(A0[:, :nv], energy=e.sum(axis=1))
-        kept_x = e[:, :nv].sum(axis=1) / np.maximum(e.sum(axis=1), 1e-30)
-        worst = np.argsort(kept_x)[:3]
-        print(f'  GCC: lowest per-x energy kept {kept_x[worst].round(4)} at x = {worst}')
-    print(f'Coil compression ({cfg.cc_method}): {Ncoils} -> {nv} virtual coils '
+    GCC = align_gcc(A0[:, :nv], energy=e.sum(axis=1))
+    kept_x = e[:, :nv].sum(axis=1) / np.maximum(e.sum(axis=1), 1e-30)
+    worst = np.argsort(kept_x)[:3]
+    print(f'  GCC: lowest per-x energy kept {kept_x[worst].round(4)} at x = {worst}')
+    print(f'Coil compression (GCC): {Ncoils} -> {nv} virtual coils '
           f'({source}; {100 * kept:.2f}% of energy kept)')
     info = {
-        'coil_compressed': True, 'cc_method': cfg.cc_method, 'Nvcoils': nv,
+        'coil_compressed': True, 'Nvcoils': nv,
         'Nvcoils_source': source, 'cc_energy_kept': kept, 'cc_evals': e,
     }
-    return T, info
+    return GCC, info
 
 
-def compress_kspace(ksp: np.ndarray, T: np.ndarray | None) -> np.ndarray:
-    """Apply coil_compression's T to k-space [Nx(kx), ..., Nc] (coils last)."""
-    if T is None:
-        return ksp
-    return apply_coil_compression(ksp, T) if T.ndim == 2 else apply_gcc_kspace(ksp, T)
+def compress_kspace(ksp: np.ndarray, GCC: np.ndarray | None) -> np.ndarray:
+    """Apply coil_compression's GCC to k-space [Nx(kx), ..., Nc] (coils last)."""
+    return ksp if GCC is None else apply_gcc_kspace(ksp, GCC)
 
 
-def compress_image(img: np.ndarray, T: np.ndarray | None) -> np.ndarray:
-    """Apply coil_compression's T to image-domain data [Nx, ..., Nc] (e.g. maps)."""
-    if T is None:
-        return img
-    return apply_coil_compression(img, T) if T.ndim == 2 else apply_gcc_image(img, T)
+def compress_image(img: np.ndarray, GCC: np.ndarray | None) -> np.ndarray:
+    """Apply coil_compression's GCC to image-domain data [Nx, ..., Nc] (e.g. maps)."""
+    return img if GCC is None else apply_gcc_image(img, GCC)
 
 
 def estimate_maps(
-    cfg: PreprocessConfig, sp: utils.SeqParams, ksp_gre: np.ndarray, T: np.ndarray | None
+    cfg: PreprocessConfig, sp: utils.SeqParams, ksp_gre: np.ndarray, GCC: np.ndarray | None
 ) -> dict[str, np.ndarray]:
     """Sensitivity, B0 and R2* maps from the whitened deGRE [..., n_echoes, Nc].
     Keys are output-file dataset paths: EPI-grid maps at the top level, deGRE-
-    grid QA volumes under 'degre/'. smaps are in the output coil space (T)."""
+    grid QA volumes under 'degre/'. smaps are in the output coil space (GCC)."""
     from preprocess.smaps import estimate_smaps, process_smaps
 
     fov, fov_degre = tuple(sp.fov), tuple(sp.fov_degre)
@@ -673,7 +645,7 @@ def estimate_maps(
         emap_degre = resize_to_epi_grid(emap, fov_degre, fov_degre, n_degre, order=3)
         # Same linear combination as the k-space, so maps and data share a coil
         # space (exact under the SENSE model); then unit RSS per voxel again.
-        smaps = compress_image(smaps_epi, T)
+        smaps = compress_image(smaps_epi, GCC)
         rss = np.sqrt(np.sum(np.abs(smaps) ** 2, axis=-1, keepdims=True))
         smaps = smaps / np.where(rss > np.finfo(np.float32).eps, rss, 1)
         maps['smaps'] = smaps.astype(np.complex64)
@@ -690,11 +662,11 @@ def estimate_maps(
             mask_thresh=cfg.b0map_mask_thresh, precon=cfg.b0map_precon,
         )
         mask_degre = r['mask']
-        b0, b0_mask = resize_to_epi(r['b0map_hz'], mask_degre, fov_degre, fov, n_epi,
+        b0, b0_mask = resize_to_epi(r['b0_map'], mask_degre, fov_degre, fov, n_epi,
                                     zero_pad_z=cfg.zero_pad_z)
         maps.update({
-            'b0map_hz': b0, 'b0_mask': b0_mask,
-            'degre/b0map_hz': r['b0map_hz'].astype(np.float32),
+            'b0_map': b0, 'b0_mask': b0_mask,
+            'degre/b0_map': r['b0_map'].astype(np.float32),
             'degre/finit_hz': r['finit_hz'].astype(np.float32),
             'degre/mask': mask_degre,
         })
@@ -708,8 +680,8 @@ def estimate_maps(
         r2 = resize_to_epi_grid(
             r2_degre * mask_degre, fov_degre, fov, n_epi, order=3, zero_pad_z=cfg.zero_pad_z
         )
-        maps['r2star'] = np.clip(r2, 0, None).astype(np.float32)  # spline overshoot
-        maps['degre/r2star'] = r2_degre
+        maps['r2star_map'] = np.clip(r2, 0, None).astype(np.float32)  # spline overshoot
+        maps['degre/r2star_map'] = r2_degre
     return maps
 
 
@@ -722,15 +694,15 @@ def write_output(
     cfg: PreprocessConfig,
     paths: SeqPaths,
     sp: utils.SeqParams,
-    T: np.ndarray | None,
+    GCC: np.ndarray | None,
     cc_info: dict,
     maps: dict[str, np.ndarray],
 ) -> None:
     """Stage B: <outdir>/<seq>_preprocessed.h5 from the Stage A cache.
 
-    Datasets: 'ksp_epi_zf' [Nx, Ny, Nz, Nc_out, Nframes] (compressed with T),
+    Datasets: 'ksp_epi_zf' [Nx, Ny, Nz, Nc_out, Nframes] (compressed with GCC),
     'omegas', 'echo_times', 'ksp_calib' (if a calibration region exists),
-    the maps, 'W', 'cc_matrix'. Attrs include 'noise_var' (thermal-noise
+    the maps, 'W', 'GCC'. Attrs include 'noise_var' (thermal-noise
     variance per complex sample, ~1 after whitening; recon divides by its
     square root), 'whitened', 'coil_compressed' and 't_ref_s'."""
     with h5py.File(paths.cache, 'r') as c:
@@ -742,7 +714,7 @@ def write_output(
     if cfg.extract_calib and region is None:
         warnings.warn('write_output: no fully sampled calibration region found; no ksp_calib')
 
-    if T is None:
+    if GCC is None:
         # Nothing to compress: the cache already is the output k-space.
         if cfg.keep_cache:
             shutil.copyfile(paths.cache, paths.output)
@@ -758,7 +730,7 @@ def write_output(
         Nc_out = Ncoils
     else:
         f = h5py.File(paths.output, 'w')
-        Nc_out = T.shape[-2]
+        Nc_out = GCC.shape[-2]
         with h5py.File(paths.cache, 'r') as c:
             for k in ('omegas', 'echo_times', 'W'):
                 f.create_dataset(k, data=c[k][()])
@@ -779,14 +751,14 @@ def write_output(
             f['ksp_calib'].attrs['calib_z_range'] = (zs.start, zs.stop)
             print(f'Calibration region: ky {ys.start}:{ys.stop}, kz {zs.start}:{zs.stop}')
         print(f'Stage B: writing {paths.output}')
-        if T is not None or region is not None:
-            src = h5py.File(paths.cache, 'r') if T is not None else None
+        if GCC is not None or region is not None:
+            src = h5py.File(paths.cache, 'r') if GCC is not None else None
             try:
                 d = src['ksp_epi_zf'] if src is not None else f['ksp_epi_zf']
                 for frame in range(Nframes):
                     ksp = d[..., frame]
-                    if T is not None:
-                        ksp = compress_kspace(ksp, T).astype(np.complex64)
+                    if GCC is not None:
+                        ksp = compress_kspace(ksp, GCC).astype(np.complex64)
                         f['ksp_epi_zf'][..., frame] = ksp
                     if region is not None:
                         f['ksp_calib'][..., frame] = ksp[:, region[0], region[1], :]
@@ -795,7 +767,7 @@ def write_output(
                     src.close()
 
         if noise_gridded is not None:
-            f.attrs['noise_var'] = float(np.mean(np.abs(compress_kspace(noise_gridded, T)) ** 2))
+            f.attrs['noise_var'] = float(np.mean(np.abs(compress_kspace(noise_gridded, GCC)) ** 2))
             print(f'  thermal-noise variance of the output k-space: {f.attrs["noise_var"]:.4f}')
         f.attrs['whitened'] = bool(cache_attrs['whitened'])
         f.attrs['oephase_a'] = cache_attrs['oephase_a']
@@ -804,11 +776,11 @@ def write_output(
         f.attrs['Ncoils'] = Ncoils
         f.attrs['Nc_out'] = Nc_out
         f.attrs['coil_compressed'] = cc_info['coil_compressed']
-        for k in ('cc_method', 'Nvcoils', 'Nvcoils_source', 'cc_energy_kept'):
+        for k in ('Nvcoils', 'Nvcoils_source', 'cc_energy_kept'):
             if k in cc_info:
                 f.attrs[k] = cc_info[k]
-        if T is not None:
-            f.create_dataset('cc_matrix', data=T.astype(np.complex64))
+        if GCC is not None:
+            f.create_dataset('GCC', data=GCC.astype(np.complex64))
             f.create_dataset('cc_evals', data=cc_info['cc_evals'].astype(np.float32))
         f.attrs['seqname'] = paths.seqname
         f.attrs['fov'] = np.asarray(sp.fov)
@@ -816,7 +788,7 @@ def write_output(
         f.attrs['t_ref_s'] = utils.nominal_te_s(paths.scan_info, sp.ETL)
         if sp.TE_degre is not None:
             f.attrs['TE_degre'] = np.asarray(sp.TE_degre)
-        if 'r2star' in maps:
+        if 'r2star_map' in maps:
             f.attrs['r2star_method'] = R2STAR_METHOD
             f.attrs['r2star_n_echoes'] = len(sp.TE_degre)
         for key, val in maps.items():
@@ -825,10 +797,10 @@ def write_output(
         f.close()
 
     base = os.path.join(cfg.outdir, paths.seqname)
-    for key, suffix in (('smaps', 'smaps'), ('b0map_hz', 'b0map'), ('r2star', 'r2star')):
+    for key in ('smaps', 'b0_map', 'r2star_map'):
         if key in maps:
-            utils.save_recon_nifti(f'{base}_{suffix}', maps[key], fov=sp.fov, seqname=paths.seqname)
-    if T is not None and not cfg.keep_cache:
+            utils.save_recon_nifti(f'{base}_{key}', maps[key], fov=sp.fov, seqname=paths.seqname)
+    if GCC is not None and not cfg.keep_cache:
         os.remove(paths.cache)
 
 
@@ -848,9 +820,9 @@ def preprocess(cfg: PreprocessConfig, seqname: str, a: np.ndarray | None = None)
     with h5py.File(paths.cache, 'r') as f:
         W = f['W'][()]
     ksp_gre = load_gre(cfg, sp, W)
-    T, cc_info = coil_compression(cfg, ksp_gre[..., cfg.gre_echo_idx, :], sp.Nx)
-    maps = estimate_maps(cfg, sp, ksp_gre, T)
+    GCC, cc_info = coil_compression(cfg, ksp_gre[..., cfg.gre_echo_idx, :], sp.Nx)
+    maps = estimate_maps(cfg, sp, ksp_gre, GCC)
     del ksp_gre
-    write_output(cfg, paths, sp, T, cc_info, maps)
+    write_output(cfg, paths, sp, GCC, cc_info, maps)
     print(f'Done: {paths.output}')
     return paths.output

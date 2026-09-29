@@ -10,7 +10,7 @@ with `ksp_gre_echoes` [Nx, Ny, Nz, n_echoes, Ncoils] (whitened k-space), a
     julia --project=preprocess/julia preprocess/julia/b0map.jl \
         <gre_h5> <output_h5> [smaps_h5] [eig_mask_threshold] [mask_threshold] [precon]
 
-Writes `b0map_hz`, `finit_hz` and `mask` on the deGRE grid.
+Writes `b0_map`, `finit_hz` and `mask` on the deGRE grid.
 
 Choices:
 - precon = :diag, not MRIFieldmaps' default :ichol. With :ichol the
@@ -143,7 +143,7 @@ function main(
 
     mkpath(dirname(output_h5_path))
     h5open(output_h5_path, "w") do f
-        write_numpy_array(f, "b0map_hz", Float32.(fhat))
+        write_numpy_array(f, "b0_map", Float32.(fhat))
         write_numpy_array(f, "finit_hz", Float32.(finit))
         write_numpy_array(f, "mask", Array{Bool}(mask))
         f["TE_degre"] = collect(echotime)

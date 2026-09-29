@@ -57,7 +57,7 @@ def _setup(seed_offset=0, b0_max_hz=40.0, dt_echo=5e-5):
     # A smooth, non-trivial field map (a ramp along y plus a bit of curvature).
     yy = torch.linspace(-1, 1, Ny, device=DEVICE).reshape(1, Ny, 1)
     zz = torch.linspace(-1, 1, Nz, device=DEVICE).reshape(1, 1, Nz)
-    b0map_hz = (b0_max_hz * yy + 0.4 * b0_max_hz * zz**2).expand(Nx, Ny, Nz).contiguous()
+    b0_map = (b0_max_hz * yy + 0.4 * b0_max_hz * zz**2).expand(Nx, Ny, Nz).contiguous()
 
     # Per-echo (per-ky) acquisition time: uniform spacing, matching
     # sequences/ArbEPI.py's echo_times model (one gro-duration step per
@@ -65,10 +65,10 @@ def _setup(seed_offset=0, b0_max_hz=40.0, dt_echo=5e-5):
     te = 0.030  # s
     t_per_ky = te + (torch.arange(Ny, device=DEVICE, dtype=torch.float32) - (Ny - 1) / 2) * dt_echo
 
-    y_true = _brute_force_time_varying_ksp(img, smaps, b0map_hz, t_per_ky)
+    y_true = _brute_force_time_varying_ksp(img, smaps, b0_map, t_per_ky)
     y_true_flat = y_true.reshape(Nc, -1).T  # (K,Nc), C-order -- matches SENSE's own flatten
 
-    return img, smaps, b0map_hz, te, y_true_flat
+    return img, smaps, b0_map, te, y_true_flat
 
 
 def test_adjoint_is_self_consistent_on_odd_spatial_dims():
@@ -115,13 +115,13 @@ def test_spectral_norm_is_near_unity_for_normalized_smaps_full_sampling():
     assert abs(sigma1 - 1.0) < 1e-3
 
 
-def _build_b0_operator(smaps, samp, b0map_hz, t_frame_s, L, nbins=20, fit_t_ms=None):
+def _build_b0_operator(smaps, samp, b0_map, t_frame_s, L, nbins=20, fit_t_ms=None):
     """One frame's SENSE_B0, built by hand. The segmentation is fit on
     fit_t_ms if given (e.g. a set of distinct echo times, as build_sense_b0
     does), else on every sampled location's own time."""
     idx = torch.nonzero(samp.reshape(-1), as_tuple=False).squeeze(-1)
     t_ms = (t_frame_s.reshape(-1)[idx] * 1000).to(torch.float32)
-    b0_neg = (-b0map_hz).to(torch.float32)
+    b0_neg = (-b0_map).to(torch.float32)
     b, c, _tl = mri_exp_approx(b0_neg, nbins, L, t_ms if fit_t_ms is None else fit_t_ms)
     N = tuple(smaps.shape[1:])
     c = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)
@@ -142,16 +142,16 @@ def test_l1_matches_static_correction():
     -- both are, in the end, one global per-voxel phase term applied before
     the FFT; this is the connective-tissue check between the two stages."""
 
-    img, smaps, b0map_hz, te, y_true_flat = _setup(seed_offset=30)
+    img, smaps, b0_map, te, y_true_flat = _setup(seed_offset=30)
     Nx, Ny, Nz = smaps.shape[1:]
     full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
     t_frame = torch.full((Nx, Ny, Nz), te, device=DEVICE)  # only the mean/te matters at L=1
 
-    static_phasor = torch.exp(1j * (2 * math.pi * te) * b0map_hz.to(torch.float32)).to(smaps.dtype)
+    static_phasor = torch.exp(1j * (2 * math.pi * te) * b0_map.to(torch.float32)).to(smaps.dtype)
     A_static = SENSE(smaps * static_phasor.unsqueeze(0), full_mask)
     y_static = A_static.apply(img)
 
-    A_l1 = _build_b0_operator(smaps, full_mask, b0map_hz, t_frame, L=1)
+    A_l1 = _build_b0_operator(smaps, full_mask, b0_map, t_frame, L=1)
     y_l1 = A_l1.apply(img)
 
     rel_diff = (y_l1 - y_static).norm().item() / y_static.norm().item()
@@ -169,7 +169,7 @@ def test_more_segments_reduces_error_in_a_toy_grid():
     realistic-regime check, which reuses that script's real-scale ground
     truth directly. Kept as a cheap, fast sanity check that more segments
     monotonically help at all -- not a stand-in for the real-scale test."""
-    img, smaps, b0map_hz, te, y_true_flat = _setup(seed_offset=31, b0_max_hz=350.0, dt_echo=0.0012)
+    img, smaps, b0_map, te, y_true_flat = _setup(seed_offset=31, b0_max_hz=350.0, dt_echo=0.0012)
     Nx, Ny, Nz = smaps.shape[1:]
     full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
 
@@ -182,7 +182,7 @@ def test_more_segments_reduces_error_in_a_toy_grid():
     t_frame = t_per_ky.reshape(1, Nyv, 1).expand(Nx, Nyv, Nz).contiguous()
 
     def err(L):
-        A = _build_b0_operator(smaps, full_mask, b0map_hz, t_frame, L=L)
+        A = _build_b0_operator(smaps, full_mask, b0_map, t_frame, L=L)
         y_hat = A.apply(img)
         return (y_hat - y_true_flat).norm().item() / y_true_flat.norm().item()
 
@@ -219,12 +219,12 @@ def test_more_segments_reduces_error_at_real_scale():
     truth/operator-construction helpers directly, rather than a third copy
     of them."""
 
-    img, smaps, b0map_hz, t_per_ky, y_true_flat = _setup_real_scale(seed=200)
+    img, smaps, b0_map, t_per_ky, y_true_flat = _setup_real_scale(seed=200)
     Nx, Ny, Nz = smaps.shape[1:]
     t_frame = t_per_ky.reshape(1, Ny, 1).expand(Nx, Ny, Nz).contiguous()
 
     def err(L, nbins=128):
-        A = _build_operator(smaps, b0map_hz, t_frame, L=L, nbins=nbins)
+        A = _build_operator(smaps, b0_map, t_frame, L=L, nbins=nbins)
         y_hat = A.apply(img)
         return (y_hat - y_true_flat).norm().item() / y_true_flat.norm().item()
 
@@ -247,13 +247,13 @@ def test_production_nbins_avoids_row_sum_warning(recwarn):
     confirm the production default (nbins=128) doesn't trip
     _check_b_weight_row_sums' ill-conditioning warning, at real scale."""
 
-    _img, smaps, b0map_hz, t_per_ky, _y_true_flat = _setup_real_scale(seed=201)
+    _img, smaps, b0_map, t_per_ky, _y_true_flat = _setup_real_scale(seed=201)
     Nx, Ny, Nz = smaps.shape[1:]
     Nt = 1
     omega = torch.ones(Nx, Ny, Nz, Nt, dtype=torch.bool, device=smaps.device)
     echo_times_yz = t_per_ky.reshape(Ny, 1, 1).expand(Ny, Nz, Nt).contiguous()
 
-    build_sense_b0(smaps, omega, b0map_hz, echo_times_yz, L=32, nbins=128)
+    build_sense_b0(smaps, omega, b0_map, echo_times_yz, L=32, nbins=128)
 
     row_sum_warnings = [w for w in recwarn.list if "b_weights row sums" in str(w.message)]
     assert not row_sum_warnings, (
@@ -268,10 +268,10 @@ def test_adjoint_is_self_consistent():
     Nx, Ny, Nz, Nc, L = 6, 7, 5, 3, 4
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=40)
     samp = torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.5
-    b0map_hz = _complex_randn(Nx, Ny, Nz, seed=41).real * 150
+    b0_map = _complex_randn(Nx, Ny, Nz, seed=41).real * 150
     t_frame = _complex_randn(Nx, Ny, Nz, seed=42).real.abs() * 0.05 + 0.01
 
-    A = _build_b0_operator(smaps, samp, b0map_hz, t_frame, L=L)
+    A = _build_b0_operator(smaps, samp, b0_map, t_frame, L=L)
     K = A.idx.numel()
 
     x = _complex_randn(Nx, Ny, Nz, seed=43)
@@ -292,7 +292,7 @@ def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
     passed to build_sense_b0 itself (see its docstring)."""
     Nx, Ny, Nz, Nc, Nt, L = 5, 6, 4, 2, 3, 3
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=50)
-    b0map_hz = _complex_randn(Nx, Ny, Nz, seed=51).real * 100
+    b0_map = _complex_randn(Nx, Ny, Nz, seed=51).real * 100
 
     g = torch.Generator(device=DEVICE).manual_seed(52)
     omega = torch.stack(
@@ -319,7 +319,7 @@ def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
     echo_times_2d = echo_times_yz.unsqueeze(-1).expand(Ny, Nz, Nt).contiguous()  # (Ny,Nz,Nt)
     echo_times_s = echo_times_2d.unsqueeze(0).expand(Nx, -1, -1, -1).contiguous()
 
-    A = build_sense_b0(smaps, omega, b0map_hz, echo_times_2d, L=L, nbins=10)
+    A = build_sense_b0(smaps, omega, b0_map, echo_times_2d, L=L, nbins=10)
 
     x = _complex_randn(Nx, Ny, Nz, Nt, seed=53)
     y_batched = A.apply(x)
@@ -333,7 +333,7 @@ def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
     fit_t_ms = torch.unique((echo_times_s[..., 0].reshape(-1)[idx0] * 1000).to(torch.float32))
     for it in range(Nt):
         A_manual = _build_b0_operator(
-            smaps, omega[..., it], b0map_hz, echo_times_s[..., it], L=L, nbins=10,
+            smaps, omega[..., it], b0_map, echo_times_s[..., it], L=L, nbins=10,
             fit_t_ms=fit_t_ms,
         )
         y_manual = A_manual.apply(x[..., it])
@@ -352,7 +352,7 @@ def test_r2star_zero_map_matches_phase_only_operator():
     r2star_map=0."""
     Nx, Ny, Nz, Nc, Nt, L = 5, 6, 4, 2, 3, 3
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=70)
-    b0map_hz = _complex_randn(Nx, Ny, Nz, seed=71).real * 100
+    b0_map = _complex_randn(Nx, Ny, Nz, seed=71).real * 100
 
     g = torch.Generator(device=DEVICE).manual_seed(52)
     omega = torch.stack(
@@ -371,10 +371,10 @@ def test_r2star_zero_map_matches_phase_only_operator():
     echo_times_yz = distinct_times[yz_idx]  # (Ny,Nz)
     echo_times_2d = echo_times_yz.unsqueeze(-1).expand(Ny, Nz, Nt).contiguous()
 
-    A_none = build_sense_b0(smaps, omega, b0map_hz, echo_times_2d, L=L, nbins=10)
+    A_none = build_sense_b0(smaps, omega, b0_map, echo_times_2d, L=L, nbins=10)
     r2star_zero = torch.zeros(Nx, Ny, Nz, device=DEVICE)
     A_zero = build_sense_b0_r2star(
-        smaps, omega, b0map_hz, echo_times_2d, r2star_zero, 0.0, L=L, nbins=10,
+        smaps, omega, b0_map, echo_times_2d, r2star_zero, 0.0, L=L, nbins=10,
     )
     assert isinstance(A_zero.A[0], SENSE_B0_R2star)
 
@@ -399,17 +399,17 @@ def test_r2star_generalization_adjoint_is_self_consistent():
     Nx, Ny, Nz, Nc, L = 6, 7, 5, 3, 4
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=80)
     samp = torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.5
-    b0map_hz = _complex_randn(Nx, Ny, Nz, seed=81).real * 150
+    b0_map = _complex_randn(Nx, Ny, Nz, seed=81).real * 150
     r2star_hz = _complex_randn(Nx, Ny, Nz, seed=82).real.abs() * 40  # 1/s, physically plausible
     t_frame = _complex_randn(Nx, Ny, Nz, seed=83).real.abs() * 0.05 + 0.01
 
     idx = torch.nonzero(samp.reshape(-1), as_tuple=False).squeeze(-1)
     t_ms = (t_frame.reshape(-1)[idx] * 1000).to(torch.float32)
-    b0_neg = (-b0map_hz).to(torch.float32)
+    b0_neg = (-b0_map).to(torch.float32)
     b_by_echo, _c_phase_only, tl = mri_exp_approx(b0_neg, 20, L, t_ms)
 
     N = (Nx, Ny, Nz)
-    psi = 1j * 2 * math.pi * b0map_hz.to(torch.complex64) - r2star_hz.to(torch.complex64)
+    psi = 1j * 2 * math.pi * b0_map.to(torch.complex64) - r2star_hz.to(torch.complex64)
     tl_c = tl.to(torch.complex64)
     c_phasors = torch.exp(tl_c.reshape((L,) + (1,) * len(N)) * psi[None, ...]).to(smaps.dtype)
     pos = torch.arange(b_by_echo.shape[0], device=DEVICE)
@@ -452,7 +452,7 @@ def test_r2star_forward_model_decays_away_from_reference_time():
     |c_phasors| directly sidesteps that confound entirely."""
     Nx, Ny, Nz, Nc, L = 6, 7, 5, 3, 8
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=90)
-    b0map_hz = _complex_randn(Nx, Ny, Nz, seed=92).real * 150  # realistic-scale Δf, Hz
+    b0_map = _complex_randn(Nx, Ny, Nz, seed=92).real * 150  # realistic-scale Δf, Hz
     r2_uniform = 50.0  # 1/s
     r2star_hz = torch.full((Nx, Ny, Nz), r2_uniform, device=DEVICE)
 
@@ -469,7 +469,7 @@ def test_r2star_forward_model_decays_away_from_reference_time():
     echo_times_yz = distinct_times[yz_idx].unsqueeze(-1)  # (Ny,Nz,Nt)
 
     A = build_sense_b0_r2star(
-        smaps, omega, b0map_hz, echo_times_yz, r2star_hz, t_ref_s, L=L, nbins=20,
+        smaps, omega, b0_map, echo_times_yz, r2star_hz, t_ref_s, L=L, nbins=20,
     )
     c_phasors = A.A[0].c_phasors  # (L,Nx,Ny,Nz)
 
@@ -552,10 +552,10 @@ def test_check_operator_unitary_warns_for_real_b0_correction():
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=70)
     smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-8)
     full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
-    b0map_hz = _complex_randn(Nx, Ny, Nz, seed=71).real * 200  # real-scale-ish field map, Hz
+    b0_map = _complex_randn(Nx, Ny, Nz, seed=71).real * 200  # real-scale-ish field map, Hz
     t_frame = _complex_randn(Nx, Ny, Nz, seed=72).real.abs() * 0.05 + 0.01  # seconds
 
-    A = _build_b0_operator(smaps, full_mask, b0map_hz, t_frame, L=L, nbins=40)
+    A = _build_b0_operator(smaps, full_mask, b0_map, t_frame, L=L, nbins=40)
     x0 = _complex_randn(Nx, Ny, Nz, seed=73)
 
     with pytest.warns(UserWarning, match="not unitary"):

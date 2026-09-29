@@ -395,7 +395,7 @@ def _complex_randn(*shape, seed):
 
 
 def _brute_force_time_varying_ksp(
-    img: torch.Tensor, smaps: torch.Tensor, b0map_hz: torch.Tensor, t_per_ky: torch.Tensor
+    img: torch.Tensor, smaps: torch.Tensor, b0_map: torch.Tensor, t_per_ky: torch.Tensor
 ) -> torch.Tensor:
     """Exact time-varying B0 forward model (no segmentation): one full FFT per
     ky row with that row's phase, keeping only that row. (Nc,Nx,Ny,Nz)."""
@@ -403,7 +403,7 @@ def _brute_force_time_varying_ksp(
     dims = (1, 2, 3)
     y_true = torch.zeros(Nc, Nx, Ny, Nz, dtype=torch.complex64, device=DEVICE)
     for iy in range(Ny):
-        angle = (2 * math.pi * t_per_ky[iy].item()) * b0map_hz
+        angle = (2 * math.pi * t_per_ky[iy].item()) * b0_map
         phasor = torch.exp(1j * angle).to(torch.complex64)
         demod = img * smaps * phasor
         k_full = torch.fft.fftshift(
@@ -415,7 +415,7 @@ def _brute_force_time_varying_ksp(
 
 def _setup_real_scale(seed: int = 100):
     """Small synthetic problem at the real echo-train length and field-map range,
-    with its exact k-space. Returns (img, smaps, b0map_hz, t_per_ky, y_true_flat)."""
+    with its exact k-space. Returns (img, smaps, b0_map, t_per_ky, y_true_flat)."""
     Nx, Ny, Nz, Nc = 16, ETL, 8, 4  # Ny=ETL matches the real echo train exactly
     img = _complex_randn(Nx, Ny, Nz, seed=seed)
     smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=seed + 1)
@@ -424,19 +424,19 @@ def _setup_real_scale(seed: int = 100):
     # Smooth field map over the real range, with a little curvature.
     yy = torch.linspace(0, 1, Ny, device=DEVICE).reshape(1, Ny, 1)
     zz = torch.linspace(-1, 1, Nz, device=DEVICE).reshape(1, 1, Nz)
-    b0map_hz = (B0_MIN_HZ + (B0_MAX_HZ - B0_MIN_HZ) * yy + 15.0 * zz**2).expand(Nx, Ny, Nz)
-    b0map_hz = b0map_hz.contiguous().clamp(B0_MIN_HZ, B0_MAX_HZ + 15.0)
+    b0_map = (B0_MIN_HZ + (B0_MAX_HZ - B0_MIN_HZ) * yy + 15.0 * zz**2).expand(Nx, Ny, Nz)
+    b0_map = b0_map.contiguous().clamp(B0_MIN_HZ, B0_MAX_HZ + 15.0)
 
     echo_idx = torch.arange(Ny, device=DEVICE, dtype=torch.float32)
     t_per_ky = TE_S + (echo_idx - (Ny - 1) / 2) * DT_ECHO_S
 
-    y_true = _brute_force_time_varying_ksp(img, smaps, b0map_hz, t_per_ky)
+    y_true = _brute_force_time_varying_ksp(img, smaps, b0_map, t_per_ky)
     y_true_flat = y_true.reshape(Nc, -1).T  # (K,Nc), same flatten as SENSE
-    return img, smaps, b0map_hz, t_per_ky, y_true_flat
+    return img, smaps, b0_map, t_per_ky, y_true_flat
 
 
 def _build_operator(
-    smaps: torch.Tensor, b0map_hz: torch.Tensor, t_frame_s: torch.Tensor, L: int, nbins: int
+    smaps: torch.Tensor, b0_map: torch.Tensor, t_frame_s: torch.Tensor, L: int, nbins: int
 ):
     """Fully sampled single-frame SENSE_B0 with the segmentation fit on every
     sample's time."""
@@ -444,7 +444,7 @@ def _build_operator(
     full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
     idx = torch.nonzero(full_mask.reshape(-1), as_tuple=False).squeeze(-1)
     t_ms = (t_frame_s.reshape(-1)[idx] * 1000).to(torch.float32)
-    b0_neg = (-b0map_hz).to(torch.float32)  # sign convention: see operators.py
+    b0_neg = (-b0_map).to(torch.float32)  # sign convention: see operators.py
     b, c, _tl = mri_exp_approx(b0_neg, nbins, L, t_ms)
     N = (Nx, Ny, Nz)
     c = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)
@@ -455,7 +455,7 @@ def _build_operator(
 def sweep(L_values: list[int], nbins: int = NBINS):
     """Forward-model error of SENSE_B0 vs the exact time-varying model, per L.
     Returns (error without B0 correction, [(L, error), ...])."""
-    img, smaps, b0map_hz, t_per_ky, y_true_flat = _setup_real_scale()
+    img, smaps, b0_map, t_per_ky, y_true_flat = _setup_real_scale()
     Nx, Ny, Nz = smaps.shape[1:]
     t_frame = t_per_ky.reshape(1, Ny, 1).expand(Nx, Ny, Nz).contiguous()
     full_mask = torch.ones(Nx, Ny, Nz, dtype=torch.bool, device=DEVICE)
@@ -467,7 +467,7 @@ def sweep(L_values: list[int], nbins: int = NBINS):
 
     results = []
     for L in L_values:
-        A = _build_operator(smaps, b0map_hz, t_frame, L, nbins)
+        A = _build_operator(smaps, b0_map, t_frame, L, nbins)
         y_hat = A.apply(img)
         err = (y_hat - y_true_flat).norm().item() / y_true_flat.norm().item()
         results.append((L, err))
@@ -519,7 +519,7 @@ def _build_inputs():
         flat[perm] = True
         omega[..., it] = flat.reshape(Nx, Ny, Nz)
 
-    b0map_hz = (
+    b0_map = (
         -300.0 + 370.0 * torch.linspace(0, 1, Ny, device=DEVICE).reshape(1, Ny, 1)
     ).expand(Nx, Ny, Nz).contiguous()
 
@@ -532,7 +532,7 @@ def _build_inputs():
     t_yz_s = (distinct_t_ms[yz_idx] / 1000.0)  # (Ny,Nz)
     echo_times_s = t_yz_s.reshape(1, Ny, Nz, 1).expand(Nx, Ny, Nz, Nt).contiguous()
 
-    return smaps, omega, b0map_hz, echo_times_s, K
+    return smaps, omega, b0_map, echo_times_s, K
 
 
 def _time_forward_adjoint(A, x0, y0):
@@ -553,7 +553,7 @@ def benchmark(L_values: list[int]):
     """Time and GPU memory of one forward + adjoint of SENSE and of SENSE_B0 per L."""
     assert DEVICE == "cuda", "this benchmark is only meaningful on GPU"
     Nx, Ny, Nz, Nc, Nt = _BENCH_SHAPE
-    smaps, omega, b0map_hz, echo_times_s, K = _build_inputs()
+    smaps, omega, b0_map, echo_times_s, K = _build_inputs()
     x0 = _complex_randn(Nx, Ny, Nz, Nt, seed=1)
     y0 = _complex_randn(K, Nc, Nt, seed=2)
 
@@ -578,7 +578,7 @@ def benchmark(L_values: list[int]):
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.empty_cache()
         mem_before = torch.cuda.memory_allocated() / 1e9
-        A = build_sense_b0(smaps, omega, b0map_hz, echo_times_s, L=L, nbins=NBINS)
+        A = build_sense_b0(smaps, omega, b0_map, echo_times_s, L=L, nbins=NBINS)
         torch.cuda.synchronize()
         mem_after_build = torch.cuda.memory_allocated() / 1e9
         build_mem = mem_after_build - mem_before
@@ -609,7 +609,7 @@ def validate(fn_ksp: str, fn_smaps: str, fn_julia_mat: str) -> bool:
     ref = read_julia_mat(fn_julia_mat)
 
     result = run_sense(
-        reg="lowrank",
+        reg="mslr",
         normalize_operator=False,  # Julia uses A as is
         fn_ksp=fn_ksp,
         fn_smaps=fn_smaps,

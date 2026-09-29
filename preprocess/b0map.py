@@ -60,7 +60,7 @@ def estimate_b0map(
         b0map.jl combines coils with the maps (matched filter) and tightens the
         fit mask with emap > crop; without, it falls back to a phase-contrast
         combine and a magnitude-only mask.
-    Returns deGRE-grid 'b0map_hz', 'finit_hz' (the ROMEO-unwrapped start) and
+    Returns deGRE-grid 'b0_map', 'finit_hz' (the ROMEO-unwrapped start) and
     'mask' (bool).
     """
     if not julia_available():
@@ -87,25 +87,25 @@ def estimate_b0map(
         )
         with h5py.File(fn_out, 'r') as f:
             return {
-                'b0map_hz': f['b0map_hz'][()],
+                'b0_map': f['b0_map'][()],
                 'finit_hz': f['finit_hz'][()],
                 'mask': f['mask'][()].astype(bool),
             }
 
 
 def resize_to_epi(
-    b0map_hz: np.ndarray,
+    b0_map: np.ndarray,
     mask: np.ndarray,
     fov_degre: tuple[float, float, float],
     fov: tuple[float, float, float],
     n_target: tuple[int, int, int],
     zero_pad_z: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """(b0map_hz, mask) on the EPI grid. The field map is zeroed outside the fit
+    """(b0_map, mask) on the EPI grid. The field map is zeroed outside the fit
     mask before the cubic-spline resize, and the mask is resized with nearest
     neighbor so it stays binary."""
     b0 = resize_to_epi_grid(
-        b0map_hz * mask, fov_degre, fov, n_target, order=3, zero_pad_z=zero_pad_z
+        b0_map * mask, fov_degre, fov, n_target, order=3, zero_pad_z=zero_pad_z
     ).astype(np.float32)
     m = resize_to_epi_grid(mask, fov_degre, fov, n_target, order=0, zero_pad_z=zero_pad_z) > 0.5
     return b0, m

@@ -250,7 +250,7 @@ def test_config_defaults_and_paths():
     cfg = PreprocessConfig(datdir='/data/', seqnames=['a'])
     assert cfg.fn_gre == '/data/scanarchives/gre.h5'
     assert cfg.outdir == '/data/recon'
-    assert cfg.compress and cfg.cc_method == 'gcc' and cfg.Nvcoils is None
+    assert cfg.compress and cfg.Nvcoils is None
     paths = set_seq_paths(cfg, 'caipi')
     assert paths.scan_info == '/data/seqs/caipi/scan_info.mat'
     assert paths.cal == '/data/scanarchives/caipi_cal.h5'
@@ -258,20 +258,13 @@ def test_config_defaults_and_paths():
     assert paths.epi == '/data/scanarchives/caipi_epi.h5'
     assert paths.cache == '/data/recon/caipi_gridded.h5'
     assert paths.output == '/data/recon/caipi_preprocessed.h5'
-    with pytest.raises(ValueError):
-        PreprocessConfig(datdir='/data/', cc_method='svd')
 
 
 def test_grid_noise_variance_is_one_for_whitened_noise_and_tracks_scale():
-    """Noise-scan readouts pushed through whitening, coil compression and
-    regridding (uniform kx, so density compensation is ~1) come out with unit
-    variance per complex sample, and scale with the input noise level."""
-    from preprocess.coils import (
-        apply_whitening,
-        coil_compression_matrix,
-        compute_coil_covariance,
-        compute_whitening_matrix,
-    )
+    """Noise-scan readouts pushed through whitening and regridding (uniform
+    kx, so density compensation is ~1) come out with unit variance per complex
+    sample, and scale with the input noise level."""
+    from preprocess.coils import compute_whitening_matrix
     from preprocess.preprocess import grid_noise
 
     def measure_noise_var(*args):
@@ -284,13 +277,11 @@ def test_grid_noise_variance_is_one_for_whitened_noise_and_tracks_scale():
     mix = rng.standard_normal((ncoils, ncoils)) + 1j * rng.standard_normal((ncoils, ncoils))
     noise = (white @ mix.T).transpose(0, 2, 1)  # [Nfid, Ncoils, Nacq], correlated coils
     W = compute_whitening_matrix(noise.transpose(0, 2, 1))
-    cov = compute_coil_covariance(apply_whitening(noise.transpose(0, 2, 1), W))
-    cc = coil_compression_matrix(cov, 4)
     kmax = nx / (2 * fov_cm)
     kx = np.linspace(-kmax, kmax, nx, endpoint=False)
     a = np.zeros(2)
 
-    v = measure_noise_var(noise, W, cc, kx, kx, a, nx, etl, fov_cm)
+    v = measure_noise_var(noise, W, kx, kx, a, nx, etl, fov_cm)
     assert abs(v - 1) < 0.1, v
-    v_half = measure_noise_var(noise, W / 2, cc, kx, kx, a, nx, etl, fov_cm)
+    v_half = measure_noise_var(noise, W / 2, kx, kx, a, nx, etl, fov_cm)
     assert abs(v_half / v - 0.25) < 1e-6

@@ -15,10 +15,9 @@ Each of the four sequences keeps its own lane from generation through the scanne
 |---|---|---|---|
 | Sequences | main (`uv sync`) | `uv run python main.py --plot` | `output/*.seq`, `output/scan_info.mat`, diagnostic plots |
 | GE export | main | `uv run python main.py --ge` | `output/*.pge` |
-| Copy to scanner (optional) | main | `uv run python ge/coppe.py` | pge2 entries on the scanner |
 | Preprocess | `.venv-preprocessing` | `.venv-preprocessing/bin/python -m preprocess.batch_preprocess <datdir> <seq> ...` | `<datdir>/recon/<seq>_preprocessed.h5` |
 | RSS | `.venv-recon` | `.venv-recon/bin/python -m recon.rss <datdir> <seq>` | `<datdir>/recon/rss/` |
-| Iterative SENSE | `.venv-recon` | `.venv-recon/bin/python -m recon.sense <datdir> <seq> --reg lowrank --B0` | `<datdir>/recon/sense_lowrank_b0/` |
+| Iterative SENSE | `.venv-recon` | `.venv-recon/bin/python -m recon.sense <datdir> <seq> --reg mslr --B0` | `<datdir>/recon/sense_mslr_b0/` |
 
 Before preprocessing, put the raw ScanArchives in `<datdir>/scanarchives/` and copy that session's `scan_info.mat` to `<datdir>/seqs/<seq>/` (see [preprocess/README.md](preprocess/README.md)).
 
@@ -211,7 +210,7 @@ preprocess/                Raw ScanArchives -> one reconstruction-ready file per
   preprocess.py                 PreprocessConfig + preprocess(): gridding (cached), coil compression,
                                  maps, output <seq>_preprocessed.h5
   batch_preprocess.py           Command line: several sequences in one go
-  coils.py                      Noise whitening; GCC / PCA coil compression
+  coils.py                      Noise whitening; GCC coil compression
   epi_gridding.py               1D NUFFT ramp-sample regridding (sigpy)
   oephase.py                    Odd/even (Nyquist ghost) phase estimation + correction
   smaps.py                      ESPIRiT sensitivity maps (sigpy) + resize/mask/smooth/normalize
@@ -227,7 +226,7 @@ recon/                        Image reconstruction (.venv-recon), on PyTorch/mir
                                  L=32 in production -- swept, see CLAUDE.md), SENSE_B0_R2star (+ R2* decay)
   regularizers.py               g(x): MultiScaleLowRank (multi-scale low-rank, patch SVST), WaveletTV (3D wavelet + TV)
   solvers.py                    pogm_restart (PGM/FPGM/POGM), pdhg (Condat-Vu, via mirtorch), cg
-  sense.py                      Iterative SENSE driver: --reg {none,lowrank,wavelet-tv}, --B0, --R2star
+  sense.py                      Iterative SENSE driver: --reg {none,mslr,wavelet-tv}, --B0, --R2star
   rss.py                        Root-sum-of-squares, GPU-batched over frames
   utils.py                      I/O, operator norms, tSNR report, one-off L sweep/benchmark and
                                  validation vs. ../mslr-recon (python -m recon.utils ...)

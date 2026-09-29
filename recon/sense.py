@@ -6,10 +6,10 @@ operators in recon/operators.py (SENSE, or SENSE_B0 / SENSE_B0_R2star with
 decides the solver (recon/solvers.py):
 
     --reg none        g = 0                        -> conjugate gradient
-    --reg lowrank     multi-scale low-rank         -> POGM (or FPGM / PGM)
+    --reg mslr     multi-scale low-rank         -> POGM (or FPGM / PGM)
     --reg wavelet-tv  L1-wavelet + TV, per frame   -> PDHG (primal-dual)
 
-    .venv-recon/bin/python -m recon.sense <datdir> <seqname> --reg lowrank \\
+    .venv-recon/bin/python -m recon.sense <datdir> <seqname> --reg mslr \\
         --patch 6 6 6 --stride 3 3 3 [--B0 [--R2star]] [--frames 0,1,2] [--niter 200]
 
 Reads <datdir>/recon/<seqname>_preprocessed.h5 (preprocess/'s output: k-space,
@@ -40,12 +40,12 @@ from recon.utils import (
     save_result,
 )
 
-REGULARIZERS = ("none", "lowrank", "wavelet-tv")
+REGULARIZERS = ("none", "mslr", "wavelet-tv")
 
 
 @dataclass
 class ReconResult:
-    X: torch.Tensor  # (Nx,Ny,Nz,Nt,Nscales); Nscales=1 unless reg='lowrank'
+    X: torch.Tensor  # (Nx,Ny,Nz,Nt,Nscales); Nscales=1 unless reg='mslr'
     X_recon: torch.Tensor  # (Nx,Ny,Nz,Nt)
     omega: torch.Tensor  # (Nx,Ny,Nz,Nt) bool
     dc_costs: list[float]  # per iteration; CG: relative residual norms
@@ -54,7 +54,7 @@ class ReconResult:
     rel_changes: list[float]
     R: float
     sigma1A: float
-    L: float  # Lipschitz constant used for the step size (lowrank only, else nan)
+    L: float  # Lipschitz constant used for the step size (mslr only, else nan)
     lambdas: list[float]
     runtime_s: float
     meta: dict = field(default_factory=dict)
@@ -64,7 +64,7 @@ def run_sense(
     *,
     fn_ksp: str,
     fn_smaps: str,
-    reg: str = "lowrank",
+    reg: str = "mslr",
     frames: list[int] | None = None,
     device: torch.device | str | None = None,
     fn_b0map: str | None = None,
@@ -74,7 +74,7 @@ def run_sense(
     nbins_b0: int = 128,
     niters: int = 200,
     sigma1A: float | None = None,
-    # lowrank
+    # mslr
     patch_sizes: list[tuple[int, int, int]] | None = None,
     strides: list[tuple[int, int, int]] | None = None,
     lambda_global: float | None = None,
@@ -103,10 +103,10 @@ def run_sense(
     - the k-space is divided by sqrt(noise_var), the post-preprocessing
       thermal-noise variance preprocess() records in fn_ksp; ~1 when
       whitening works, and skipped for files written before it was recorded.
-    - lowrank: A is divided by sigma1A (normalize_operator), so A is
+    - mslr: A is divided by sigma1A (normalize_operator), so A is
       unit-norm like the unitary operator the lambda formula assumes.
 
-    lambda_global (lowrank): scales the Ong & Lustig weights, which are
+    lambda_global (mslr): scales the Ong & Lustig weights, which are
     calibrated for unit-variance noise; None (default) means the acceleration
     factor R, since incoherent aliasing needs stronger regularization than
     noise alone.
@@ -141,13 +141,15 @@ def run_sense(
         A = build_sense(smaps_chw, omega)
     else:
         print(f"  Loading B0 field map from {fn_b0map} (L={L_b0}, nbins={nbins_b0})...")
-        b0map_hz = torch.from_numpy(load_array(fn_b0map, "b0map_hz").astype(np.float32)).to(device)
-        assert tuple(b0map_hz.shape) == (Nx, Ny, Nz), (
-            f"b0map_hz shape {tuple(b0map_hz.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz})"
+        with h5py.File(fn_b0map, "r") as f:  # files from before 2026-09-28 say b0map_hz
+            b0_key = "b0_map" if "b0_map" in f else "b0map_hz"
+        b0_map = torch.from_numpy(load_array(fn_b0map, b0_key).astype(np.float32)).to(device)
+        assert tuple(b0_map.shape) == (Nx, Ny, Nz), (
+            f"b0_map shape {tuple(b0_map.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz})"
         )
         echo_times_yz = load_echo_times(fn_ksp, device)[..., frames]
         if r2star_map is None:
-            A = build_sense_b0(smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0)
+            A = build_sense_b0(smaps_chw, omega, b0_map, echo_times_yz, L=L_b0, nbins=nbins_b0)
         else:
             print(f"  R2* correction enabled (t_ref_s={t_ref_s * 1000:.3f} ms)...")
             assert tuple(r2star_map.shape) == (Nx, Ny, Nz), (
@@ -156,7 +158,7 @@ def run_sense(
             A = build_sense_b0_r2star(
                 smaps_chw,
                 omega,
-                b0map_hz,
+                b0_map,
                 echo_times_yz,
                 r2star_map,
                 t_ref_s,
@@ -178,7 +180,7 @@ def run_sense(
         whitened = f.attrs.get("whitened", True)
     if not whitened:
         print(
-            "  WARNING: this k-space was not noise-whitened (no noise scan); the lowrank "
+            "  WARNING: this k-space was not noise-whitened (no noise scan); the mslr "
             "lambda weights assume white unit-variance noise"
         )
     if noise_var is None:
@@ -205,7 +207,7 @@ def run_sense(
         )
     if lambda_global is None:
         lambda_global = float(R)
-    return _solve_lowrank(
+    return _solve_mslr(
         A,
         ksp,
         (Nx, Ny, Nz, Nt),
@@ -245,7 +247,7 @@ def _solve_cg(A, ksp, shape, niters, tol, common) -> ReconResult:
     )
 
 
-def _solve_lowrank(
+def _solve_mslr(
     A,
     ksp,
     shape,
@@ -387,7 +389,7 @@ def main(
     **kwargs,
 ) -> str:
     """Reconstruct <datdir>/recon/<seqname>_preprocessed.h5 and save the
-    result. kwargs go to run_sense. For reg='lowrank', a GPU out-of-memory
+    result. kwargs go to run_sense. For reg='mslr', a GPU out-of-memory
     error falls back from POGM to FPGM to PGM (less solver state each time).
     Returns the output path without extension."""
     recon_dir = os.path.join(datdir, "recon")
@@ -402,15 +404,16 @@ def main(
     with h5py.File(fn_pre, "r") as f:
         fov = tuple(f.attrs["fov"])
         if R2star:
-            if "r2star" not in f:
+            r2_key = "r2star_map" if "r2star_map" in f else "r2star"  # older files: r2star
+            if r2_key not in f:
                 raise ValueError(f"{fn_pre} has no R2* map (was estimate_r2star=False?)")
             t_ref_s = float(f.attrs["t_ref_s"])
-            r2 = f["r2star"][()]
+            r2 = f[r2_key][()]
             print(f"R2* map from preprocessing (TE_nominal={t_ref_s * 1000:.3f} ms)")
             kwargs.update(r2star_map=torch.from_numpy(r2).to(device), t_ref_s=t_ref_s)
 
     moms = ["pogm", "fpgm", "pgm"]
-    moms = moms[moms.index(kwargs.pop("mom", "pogm")) :] if reg == "lowrank" else [None]
+    moms = moms[moms.index(kwargs.pop("mom", "pogm")) :] if reg == "mslr" else [None]
     for mom in moms:
         try:
             result = run_sense(
@@ -485,10 +488,10 @@ def _cli() -> None:
     p.add_argument("datdir")
     p.add_argument("seqname")
     p.add_argument("--reg", choices=REGULARIZERS, required=True)
-    p.add_argument("--B0", action="store_true", help="model B0 phase accrual (b0map_hz)")
+    p.add_argument("--B0", action="store_true", help="model B0 phase accrual (b0_map)")
     p.add_argument(
         "--b0map", default=None,
-        help=".h5 with a 'b0map_hz' to use instead of the preprocessed one (implies --B0)",
+        help=".h5 with a 'b0_map' to use instead of the preprocessed one (implies --B0)",
     )
     p.add_argument("--R2star", action="store_true", help="also model R2* decay (needs --B0)")
     p.add_argument("--L", type=int, default=32, dest="L_b0", help="B0 time segments")
@@ -497,11 +500,11 @@ def _cli() -> None:
         "--niter",
         type=int,
         default=None,
-        help="iterations (default: none 150, lowrank 200, wavelet-tv 100)",
+        help="iterations (default: none 150, mslr 200, wavelet-tv 100)",
     )
     p.add_argument("--frames", default=None, help="frame indices, e.g. 0,1,2 or 0-9 (default: all)")
     p.add_argument("--device", default=None, help="default: cuda if available, else cpu")
-    lr = p.add_argument_group("lowrank")
+    lr = p.add_argument_group("mslr")
     lr.add_argument(
         "--patch",
         nargs="+",
@@ -534,10 +537,10 @@ def _cli() -> None:
         device=a.device,
         L_b0=a.L_b0,
         nbins_b0=a.nbins_b0,
-        niters=a.niter or {"none": 150, "lowrank": 200, "wavelet-tv": 100}[a.reg],
+        niters=a.niter or {"none": 150, "mslr": 200, "wavelet-tv": 100}[a.reg],
         frames=_parse_frames(a.frames) if a.frames else None,
     )
-    if a.reg == "lowrank":
+    if a.reg == "mslr":
         with h5py.File(os.path.join(a.datdir, "recon", f"{a.seqname}_preprocessed.h5"), "r") as f:
             shape = f["ksp_epi_zf"].shape[:3]
         patches, strides = (

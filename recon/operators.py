@@ -9,7 +9,7 @@ into a BlockDiagonal mapping (Nx,Ny,Nz,Nt) -> (K,Nc,Nt). Outputs hold only the
 K sampled k-space locations, not a zero-filled grid. See recon/README.md.
 
 Sign convention: the forward model multiplies the image by exp(+i 2 pi df(r) t).
-mri_exp_approx fits exp(-i 2 pi b t), so it is passed -b0map_hz.
+mri_exp_approx fits exp(-i 2 pi b t), so it is passed -b0_map.
 """
 
 import math
@@ -132,23 +132,23 @@ class SENSE_B0_R2star(SENSE_B0):
 
     @staticmethod
     def segment_phasors(
-        b0map_hz: torch.Tensor, r2star_map: torch.Tensor, tl: torch.Tensor, dtype: torch.dtype,
+        b0_map: torch.Tensor, r2star_map: torch.Tensor, tl: torch.Tensor, dtype: torch.dtype,
     ) -> torch.Tensor:
-        """(L,*N) phasors exp(psi(r) * tl[l]), psi = i*2*pi*b0map_hz - r2star_map.
+        """(L,*N) phasors exp(psi(r) * tl[l]), psi = i*2*pi*b0_map - r2star_map.
 
-        b0map_hz (Hz), r2star_map (1/s): (*N,) on the EPI grid. tl: (L,) segment
+        b0_map (Hz), r2star_map (1/s): (*N,) on the EPI grid. tl: (L,) segment
         times in seconds relative to t_ref, from mri_exp_approx."""
-        N = tuple(b0map_hz.shape)
+        N = tuple(b0_map.shape)
         assert tuple(r2star_map.shape) == N, f"r2star_map shape {tuple(r2star_map.shape)} != {N}"
         r2_hz = r2star_map.to(torch.float32)
         # The segmentation is fit on df alone; that's valid while R2*'s decay-time
         # product stays much smaller than df's bandwidth-time product.
         t_span_s = float((tl.max() - tl.min()).item())
-        bt_df = float(b0map_hz.max() - b0map_hz.min()) * t_span_s
+        bt_df = float(b0_map.max() - b0_map.min()) * t_span_s
         bt_r2 = float(r2_hz.max()) * t_span_s
         print(f"  SENSE_B0_R2star: R2* decay-time product = {bt_r2:.4f} vs "
               f"B0 bandwidth-time product = {bt_df:.2f} (should be much smaller)")
-        psi = 1j * 2 * math.pi * b0map_hz.to(torch.complex64) - r2_hz.to(torch.complex64)
+        psi = 1j * 2 * math.pi * b0_map.to(torch.complex64) - r2_hz.to(torch.complex64)
         tl_c = tl.to(torch.complex64).reshape((-1,) + (1,) * len(N))
         return torch.exp(tl_c * psi[None, ...]).to(dtype)
 
@@ -163,7 +163,7 @@ def _check_b_weight_row_sums(b: torch.Tensor, frame_idx: int | str, tol: float =
         warnings.warn(
             f"build_sense_b0: frame {frame_idx}'s b_weights row sums "
             f"range [{lo:.4f}, {hi:.4f}] (want close to 1.0) -- the segmentation fit "
-            f"looks ill-conditioned (nbins too coarse for b0map_hz's dynamic range is "
+            f"looks ill-conditioned (nbins too coarse for b0_map's dynamic range is "
             f"the known cause; see recon/README.md). Reconstructing with "
             f"this operator is likely to show signal loss and/or incoherent noise.",
             stacklevel=2,
@@ -172,7 +172,7 @@ def _check_b_weight_row_sums(b: torch.Tensor, frame_idx: int | str, tol: float =
 
 def _segment_fit(
     omega: torch.Tensor,
-    b0map_hz: torch.Tensor,
+    b0_map: torch.Tensor,
     echo_times_yz: torch.Tensor,
     L: int,
     nbins: int,
@@ -186,7 +186,7 @@ def _segment_fit(
     n_yz = Ny * Nz
     echo_times_flat = echo_times_yz.reshape(n_yz, Nt)  # echo time doesn't depend on kx
     fit_times_flat = echo_times_flat if t_ref_s == 0.0 else echo_times_flat - t_ref_s
-    b0_neg = (-b0map_hz).to(torch.float32)  # sign convention: see module docstring
+    b0_neg = (-b0_map).to(torch.float32)  # sign convention: see module docstring
 
     samp0 = omega[..., 0]
     idx0 = torch.nonzero(samp0.reshape(-1), as_tuple=False).squeeze(-1)
@@ -213,21 +213,21 @@ def _segment_fit(
 def build_sense_b0(
     smaps: torch.Tensor,
     omega: torch.Tensor,
-    b0map_hz: torch.Tensor,
+    b0_map: torch.Tensor,
     echo_times_yz: torch.Tensor,
     L: int = 32,
     nbins: int = 128,
 ) -> BlockDiagonal:
     """Like build_sense, with B0 phase accrual (see SENSE_B0).
 
-    b0map_hz: (Nx,Ny,Nz) field map in Hz on the EPI grid. echo_times_yz:
+    b0_map: (Nx,Ny,Nz) field map in Hz on the EPI grid. echo_times_yz:
     (Ny,Nz,Nt) seconds since excitation of each sampled (ky,kz). L: number of
     time segments (32 keeps forward-model error under 1% at ETL=60). nbins:
     histogram bins for the fit (the mirtorch default of 20 is ill-conditioned on
     real field maps). The spectral norm is not 1; estimate it before solving.
     """
     N = tuple(smaps.shape[1:])
-    b_by_echo, c, _tl, _t, pos_per_frame = _segment_fit(omega, b0map_hz, echo_times_yz, L, nbins)
+    b_by_echo, c, _tl, _t, pos_per_frame = _segment_fit(omega, b0_map, echo_times_yz, L, nbins)
     b_by_echo = b_by_echo.to(smaps.dtype)
     c_phasors = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)
     frames = [
@@ -240,7 +240,7 @@ def build_sense_b0(
 def build_sense_b0_r2star(
     smaps: torch.Tensor,
     omega: torch.Tensor,
-    b0map_hz: torch.Tensor,
+    b0_map: torch.Tensor,
     echo_times_yz: torch.Tensor,
     r2star_map: torch.Tensor,
     t_ref_s: float,
@@ -250,10 +250,10 @@ def build_sense_b0_r2star(
     """build_sense_b0 plus R2* decay (see SENSE_B0_R2star). r2star_map:
     (Nx,Ny,Nz) in 1/s. t_ref_s: nominal-TE echo time (the preprocessed file's t_ref_s attr)."""
     b_by_echo, _c, tl, _t, pos_per_frame = _segment_fit(
-        omega, b0map_hz, echo_times_yz, L, nbins, t_ref_s=t_ref_s,
+        omega, b0_map, echo_times_yz, L, nbins, t_ref_s=t_ref_s,
     )
     b_by_echo = b_by_echo.to(smaps.dtype)
-    c_phasors = SENSE_B0_R2star.segment_phasors(b0map_hz, r2star_map, tl, smaps.dtype)
+    c_phasors = SENSE_B0_R2star.segment_phasors(b0_map, r2star_map, tl, smaps.dtype)
     frames = [
         SENSE_B0_R2star(smaps, omega[..., it], pos, b_by_echo, c_phasors)
         for it, pos in enumerate(pos_per_frame)

@@ -626,7 +626,7 @@ history behind it.
 
 `preprocess(cfg, seqname)` (`preprocess/preprocess.py`) turns one sequence's raw
 ScanArchives into `<outdir>/<seq>_preprocessed.h5`: zero-filled k-space, the
-fully sampled calibration region, sensitivity/B0/R2* maps, `W`/`cc_matrix` and
+fully sampled calibration region, sensitivity/B0/R2* maps, `W`/`GCC` and
 provenance attrs. Stage A (whitening, odd/even phase, per-frame gridding and
 scatter on all physical coils, resumable) is cached in `<seq>_gridded.h5`;
 coil compression, the deGRE maps and Stage B (output) run from that cache.
@@ -715,8 +715,12 @@ no mask. The 2R floor was dropped (user decision; R-fold aliasing
 arguments are weak for incoherent sampling with regularized recon), and
 `cfg.Nvcoils` sets the count exactly. A first GCC measurement script used
 `Vh[:nv]` instead of `conj(Vh[:nv])` for data rows c^T and looked *worse* than
-PCA; `coils.gcc_compression` reuses `pca_compression`'s eigenvector convention
-(u^H of sum c c^H) to avoid that. `coils.gcc_calibration` crops/pads the
+PCA; `coils.gcc_compression` uses the u^H-of-sum-c-c^H eigenvector convention
+(BART's `cc -A -M`) to avoid that. The global-PCA option (`cc_method='pca'`)
+was removed on 2026-09-28 (user decision), and the compression matrices are
+named `GCC` everywhere: the variable, and the output file's dataset (formerly
+`T` in the code and `cc_matrix` on disk; files written before then still have
+`cc_matrix`, which nothing in this repo reads). `coils.gcc_calibration` crops/pads the
 deGRE's kx to the EPI Nx (shared x FOV) so per-x matrices land on EPI x
 positions, and uses a central 24x24 (ky, kz) block (all of ky-kz gave the same
 numbers). Caveat, measured by reconstruction (`2_6x_2.4mm`, R = 6,
@@ -798,13 +802,14 @@ of older modules; see git history for those):
 | `operators.py` | the encoding operator A: `SENSE` (smaps -> FFT -> sample), `SENSE_B0` (time-segmented B0 phase accrual), `SENSE_B0_R2star` (phase accrual + R2* magnitude decay), and builders `build_sense`/`build_sense_b0`/`build_sense_b0_r2star` returning a per-frame `BlockDiagonal` |
 | `regularizers.py` | g(x): `MultiScaleLowRank` (multi-scale low-rank prox/cost, patch SVST, `SumScales`), `WaveletTV` (`Wavelet3D` + periodic finite differences, `SectionL1` prox) |
 | `solvers.py` | `pogm_restart` (PGM/FPGM/POGM with gradient restart + `conv_tol`), `pdhg` (Condat-Vu primal-dual via mirtorch's `FBPD`, for regularizers without a closed-form prox), `cg` |
-| `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,lowrank,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, ...). `none` -> CG, `lowrank` -> POGM, `wavelet-tv` -> PDHG (TV has no closed-form prox). `--device` defaults to cuda if available, else cpu (everything also runs on CPU, slowly) |
+| `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,mslr,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, ...). `none` -> CG, `mslr` -> POGM, `wavelet-tv` -> PDHG (TV has no closed-form prox). `--device` defaults to cuda if available, else cpu (everything also runs on CPU, slowly) |
 | `rss.py` | root-sum-of-squares, GPU-batched over frames |
 | `utils.py` | I/O (`read_frames_cropped`, `load_*`, `load_and_gather_ksp`, `save_result`, ...), operator norms (`estimate_spectral_norm`, `check_operator_unitary`, `estimate_operator_noise_factor`), `tsnr_report`, and the one-off `sweep`/`benchmark`/`validate` analyses (`python -m recon.utils {tsnr,sweep,benchmark,validate}`) |
 | `demo.ipynb` | runs every recon type on `20260915ball/2_6x_2.4mm` |
 
 Outputs land in `<datdir>/recon/sense_<reg>[_b0|_b0r2star]/` and
-`<datdir>/recon/rss/` (older runs used `mslr_b0/`, `mslr_local*/`, `cs_b0*/`,
+`<datdir>/recon/rss/` (older runs used `sense_lowrank*/` -- `--reg mslr` was
+`--reg lowrank` until 2026-09-28 -- `mslr_b0/`, `mslr_local*/`, `cs_b0*/`,
 `cgsense*/`, `basic/`). `wavelet-tv` moved from sigpy's PDHG to mirtorch's
 FBPD (`solvers.pdhg`), so its results are not identical to older `cs_b0*` runs.
 
@@ -829,7 +834,7 @@ operator:
   high-SNR datasets: the outer (ky, kz) shell and even the x-background of
   hybrid (x, ky, kz) space (where kx is fully sampled, so there's no aliasing)
   read E|n|^2 ~ 500-10000, dominated by signal leakage, not noise.
-- **operator**: `lowrank` divides A by `sigma1A` (`normalize_operator`,
+- **operator**: `mslr` divides A by `sigma1A` (`normalize_operator`,
   default on). `SENSE` with RSS-normalized smaps already has sigma1 ~ 1; the
   B0 operators measure ~1.2-1.9.
 - Neither scaling is undone on the output (not quantitative imaging). The
@@ -843,8 +848,8 @@ It started as a Python/PyTorch port of the companion Julia repo `../mslr-recon`
 (multi-scale locally-low-rank fMRI reconstruction, Ong & Lustig 2016),
 built on [mirtorch](https://github.com/guanhuaw/MIRTorch) in place of
 MIRT.jl + LinearMapsAA, and consumes this repo's own `preprocess/` output
-directly (`<seqname>_preprocessed.h5`'s `ksp_epi_zf`, `smaps`, `b0map_hz`,
-`r2star`).
+directly (`<seqname>_preprocessed.h5`'s `ksp_epi_zf`, `smaps`, `b0_map`,
+`r2star_map`).
 
 **All of `recon/` runs in `.venv-recon`** (the `recon` optional-dependency
 group: torch, mirtorch, h5py, nibabel, PyWavelets, scipy, matplotlib,
@@ -991,7 +996,7 @@ CLI is its production consumer.
 ### B0 off-resonance correction
 
 Two-stage B0 correction on top of the plain `SENSE` encoding
-operator, consuming the field map `b0map_hz` and per-sample `echo_times`
+operator, consuming the field map `b0_map` and per-sample `echo_times`
 in `<seqname>_preprocessed.h5` (`preprocess/b0map.py`, `preprocess/preprocess.py`):
 
 - **Static single-segment correction (formerly `demodulate_smaps`, removed in the
@@ -1012,7 +1017,7 @@ in `<seqname>_preprocessed.h5` (`preprocess/b0map.py`, `preprocess/preprocess.py
   time-segmented stage, via `mirtorch.linear.mri.mri_exp_approx` (the same
   min-max frequency-segmentation fit `mirtorch`'s own NUFFT-based
   `Gmri`/`GmriGram` use). `build_sense_b0(smaps, omega,
-  b0map_hz, echo_times_yz, L, nbins)` solves the segmentation fit once
+  b0_map, echo_times_yz, L, nbins)` solves the segmentation fit once
   against this pipeline's real per-frame-invariant ETL distinct echo
   times (not once per frame -- an earlier version did, which also OOM'd a
   real reconstruction by storing an independent per-frame copy of the
@@ -1036,7 +1041,7 @@ phase. `build_sense_b0` is the phase-only operator; an all-zero R2* map reproduc
 `preprocess/r2star.py`'s log-linear fit over the same dual-echo deGRE
 data used for Δf(r) (a placeholder -- see the `preprocess/` section);
 `recon/sense.py --R2star` reads it and the nominal-TE reference time
-(`r2star`, attr `t_ref_s`) from `<seqname>_preprocessed.h5`, and saves
+(`r2star_map`, attr `t_ref_s`) from `<seqname>_preprocessed.h5`, and saves
 under a separate `sense_<reg>_b0r2star/` output directory so an
 `--R2star` run never collides with a plain B0-only run.
 
@@ -1080,14 +1085,14 @@ Both stages share one convention, derived from Sutton, Noll, Fessler
 ("Fast, iterative image reconstruction for MRI in the presence of field
 inhomogeneities," IEEE TMI 2003) and cross-checked against
 `mirtorch.linear.mri.Gmri`'s own demo notebook, not just re-derived: the
-forward operator needs `exp(+i 2*pi*b0map_hz(r)*t)` multiplied into the
+forward operator needs `exp(+i 2*pi*b0_map(r)*t)` multiplied into the
 image before the spatial-encoding FFT -- see `recon/operators.py`'s
 module docstring for the full sign derivation. `mri_exp_approx(b0, bins,
 lseg, t)` (read directly from mirtorch 0.3.1's own source, the pinned
 dependency) expects `b0` in **Hz** and `t` in **milliseconds** (it divides
 by 1000 internally, twice), and returns `tl` already in **seconds** -- so
 `operators.py` passing `echo_times_s * 1000` against an unscaled-Hz
-field map is correct, not a units bug, and `-b0map_hz` (not `+`) is what
+field map is correct, not a units bug, and `-b0_map` (not `+`) is what
 composes correctly with `mri_exp_approx`'s own internal sign to reproduce
 the physically-correct convention above (matching `Gmri`'s own
 `zmap=-b0` call, which exists for the same reason).
@@ -1115,7 +1120,7 @@ against, and a real signal-loss-plus-incoherent-noise bug in its own
 right, independent of `L`.** `mri_exp_approx` builds its fit from an
 *equal-width*, plain voxel-count histogram (mirtorch 0.3.1's
 `_uniform_histogram` -- no magnitude weighting, unlike MIRT's original,
-whose weight-vector argument mirtorch's port dropped) of `b0map_hz`'s
+whose weight-vector argument mirtorch's port dropped) of `b0_map`'s
 *entire* range, background included and unmasked. At this pipeline's real
 scale (~half the volume near-zero background, in-object range wide and
 asymmetric -- roughly -300 to +70 Hz, not symmetric around 0), mirtorch's
@@ -1144,7 +1149,7 @@ reconstruction using this repo's own measured non-encoding overhead
 sweet spot, not a compromise between two competing costs.
 
 **Real reconstruction run**: the (since removed) `recon/run_recon.py mslr-ref` (`--L 32`; today
-`recon/sense.py --reg lowrank --B0 --patch full --patch ...`) reproduced
+`recon/sense.py --reg mslr --B0 --patch full --patch ...`) reproduced
 the existing G+L (multi-scale) config already validated against
 `../mslr-recon` for the uncorrected case, saving to
 `<datdir>/recon/mslr_b0/G+L_L<L>/<name>_recon.*` (one directory per `L`,
@@ -1188,7 +1193,7 @@ this dataset's own results depend on.
 **`grid_resize.py`'s `grid_mode=True` alignment fix (see
 `preprocess/`'s section below) is directly load-bearing here.**
 `SENSE_B0.c_phasors` (and the removed static-stage phasor) are both
-per-voxel functions of `b0map_hz`, which reaches the encoding operator
+per-voxel functions of `b0_map`, which reaches the encoding operator
 already resized onto the EPI grid by that same code path -- a
 pixel-center-vs-edge alignment error there would silently mis-register
 the field map against `smaps`/the image grid the operator actually
