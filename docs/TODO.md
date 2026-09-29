@@ -36,6 +36,19 @@
      check it on something with fat (an oil phantom, or in vivo with fat-sat
      on/off) before relying on the default for human work, and retune
      `FatsatParams.tbw`/`dur` with `flip_profile` if needed.
+     A water-excitation arm (`params.excitation = 'water'`, binomial 1-3-3-1,
+     no fat-sat pulse *or crusher*) changes the spoiling too, not just the
+     excitation: with fat-sat, coherence passes two random spoiler lobes
+     between excitations (the post-readout spoiler and the next shot's
+     crusher, ~6–8 cycles/voxel together, as in `20260924ball`'s arm C); in
+     water mode only the post-readout one (3–4). That is the narrow-range
+     regime this investigation flagged, so compare it against arm C only with
+     that in mind, or set `spoil_cycles_min/max` to 6–8 in water mode to match
+     the old per-TR range. On the 5.4 mm protocol its per-shot min TR is
+     51.02 ms at 3–4 cycles/voxel and 51.72 ms at 3–8, so it fits the 1.05 s
+     volume TR. The fat caveat applies here too: check fat suppression on
+     something with fat, and its water off-resonance cost (0.64x the flip at
+     −150 Hz) in vivo.
   3. Look into the ~1.4° per-shot phase jitter that makes up most of the 0.58%
      left with fat-sat off: frequency drift or receiver phase, or correct it
      per shot from the data. Then check the result against the ~3% BOLD target.
