@@ -15,7 +15,6 @@ Each of the four sequences keeps its own lane from generation through the scanne
 |---|---|---|---|
 | Sequences | main (`uv sync`) | `uv run python main.py --plot` | `output/*.seq`, `output/scan_info.mat`, diagnostic plots |
 | GE export | main | `uv run python main.py --ge` | `output/*.pge` |
-| Copy to scanner (optional) | main | `uv run python ge/coppe.py` | pge2 entries on the scanner |
 | Preprocess | `.venv-preprocessing` | `.venv-preprocessing/bin/python -m preprocess.batch_preprocess <datdir> <seq> ...` | `<datdir>/recon/<seq>_preprocessed.h5` |
 | RSS | `.venv-recon` | `.venv-recon/bin/python -m recon.rss <datdir> <seq>` | `<datdir>/recon/rss/` |
 | Iterative SENSE | `.venv-recon` | `.venv-recon/bin/python -m recon.sense <datdir> <seq> --reg mslr --B0` | `<datdir>/recon/sense_mslr_b0/` |

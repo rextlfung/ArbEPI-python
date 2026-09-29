@@ -441,8 +441,6 @@ def draw(d):
     for key, name, _, _ in seqs:
         d.arrow(f'M{LANE[key]} {ge_y + ge_h} V{sc_y - 2}')
         d.chip(LANE[key], pge_y, f'{name}.pge')
-    d.label(905, pge_y - 6, 'copy to the scanner:', 'start', 't-note')
-    d.label(905, pge_y + 10, 'ge/coppe.py (optional)', 'start', 't-note-mono')
     sc_h = d.box(55, sc_y, 820, None, 'scan', [
         ('title', 'GE scanner · pge2 interpreter'),
         ('para', 'runs each .pge as a pge2 entry; raw data saved as GE ScanArchives '

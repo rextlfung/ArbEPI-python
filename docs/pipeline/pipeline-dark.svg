@@ -149,8 +149,6 @@
 <path d="M360 790 V874" class="flow" marker-end="url(#ah)"/>
 <path d="M570 790 V874" class="flow" marker-end="url(#ah)"/>
 <path d="M780 790 V874" class="flow" marker-end="url(#ah)"/>
-<text x="905" y="826" text-anchor="start" class="t-note">copy to the scanner:</text>
-<text x="905" y="842" text-anchor="start" class="t-note-mono">ge/coppe.py (optional)</text>
 <rect x="55" y="876" width="820" height="54" rx="6" class="box scan"/>
 <text x="71" y="898" class="t-title">GE scanner · pge2 interpreter</text>
 <text x="71" y="916" class="t-text">runs each .pge as a pge2 entry; raw data saved as GE ScanArchives (HDF5, read only by the Orchestra SDK)</text>
