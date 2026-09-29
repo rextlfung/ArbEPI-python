@@ -19,7 +19,7 @@ are documented and set. Start there. Ported from the MATLAB
 |---|---|
 | `preprocess.py` | `PreprocessConfig`, `preprocess()` and its stages (gridding, compression, maps, output) |
 | `batch_preprocess.py` | `batch_preprocess()` and the `python -m preprocess.batch_preprocess` command line |
-| `coils.py` | Noise whitening; coil compression (GCC and PCA) and the virtual-coil count rule |
+| `coils.py` | Noise whitening; GCC coil compression and the virtual-coil count rule |
 | `epi_gridding.py` | Ramp-sampled readouts → Cartesian kx (1D NUFFT) |
 | `oephase.py` | Odd/even (Nyquist ghost) phase estimation and correction |
 | `smaps.py` | ESPIRiT sensitivity maps and their resize/mask/smooth/normalize |
@@ -112,12 +112,12 @@ looks), plain numpy-order HDF5:
 | `b0map_hz`, `b0_mask` | (Nx, Ny, Nz) | B0 field map (Hz) and the voxels it was fit on |
 | `r2star` | (Nx, Ny, Nz) | R2* (1/s) |
 | `W` | (Ncoils, Ncoils) | whitening matrix |
-| `cc_matrix`, `cc_evals` | (Nx, Nv, Ncoils), (Nx, Ncoils) | GCC matrices and per-x eigenvalues (PCA: (Nv, Ncoils), (Ncoils,)) |
+| `GCC`, `cc_evals` | (Nx, Nv, Ncoils), (Nx, Ncoils) | GCC matrices and per-x eigenvalues |
 | `degre/` | deGRE grid | QA volumes: `img_echoes`, `b0map_hz`, `finit_hz`, `mask`, `smaps`, `emap`, `r2star` |
 | `delay_sweep/` | (241,) each | readout-delay calibration: `delay`, `a1`, `a2` (odd/even constant and linear term), `wrap_count` |
 
 Attributes: `noise_var` (thermal-noise variance of `ksp_epi_zf` per complex
-sample), `whitened`, `coil_compressed`, `cc_method`, `Ncoils`, `Nc_out`,
+sample), `whitened`, `coil_compressed`, `Ncoils`, `Nc_out`,
 `Nvcoils`, `Nvcoils_source` (`energy` or `user`), `cc_energy_kept`, `oephase_a`,
 `delay` (calibrated readout delay, samples), `t_ref_s` (nominal TE), `TE_degre`, `fov`, `fov_degre`,
 `n_frames_discard`, `r2star_method`.
@@ -134,7 +134,7 @@ kept too.
 1. **Whitening.** `W` from the noise scan decorrelates the channels and gives each
    unit noise variance (Cholesky of the noise covariance). It is lossless (`W` is
    full rank and stored), and everything downstream assumes it: `noise_var` ≈ 1,
-   recon's low-rank λ weights, PCA/GCC, ESPIRiT and SENSE (which has no noise
+   recon's low-rank λ weights, GCC, ESPIRiT and SENSE (which has no noise
    covariance term). Without a noise scan, `W = I` and `whitened = False` (recon
    warns).
 2. **Readout delay.** The k-space center offset of the ramp-sampled readout
@@ -179,7 +179,7 @@ whitened, uncompressed data.
 
 ### Coil compression
 
-- **GCC** (`cc_method='gcc'`, default; Zhang, Pauly, Vasanawala & Lustig, MRM
+- **GCC** (geometric-decomposition coil compression; Zhang, Pauly, Vasanawala & Lustig, MRM
   2013): the k-space is inverse-FFT'd along the fully sampled kx, and each x
   position gets its own [Nv, Ncoils] matrix from the top eigenvectors of that
   position's coil covariance (from the whitened deGRE, kx cropped/padded to the
@@ -187,7 +187,8 @@ whitened, uncompressed data.
   ACS region). The matrices are then rotated within their subspaces to vary
   smoothly along x (the paper's alignment step). Only a few coils see any one x,
   so each position's spectrum is steep even though the whole volume's is flat.
-- **PCA** (`cc_method='pca'`): one matrix for the volume (the previous behavior).
+- One global PCA matrix for the whole volume (the previous behavior) was an option
+  until 2026-09-28 and was removed: GCC keeps more SNR with fewer coils (below).
 - **How many virtual coils**: the smallest number whose kept eigenvalue energy,
   summed over all x, reaches `cc_energy_thresh` (0.999). Summing over x weights
   each position by its signal, so no object mask is needed; taking the worst
@@ -323,8 +324,7 @@ the maps (62 s for 6 virtual coils) and about 4 with ESPIRiT. The whitened
   scatter placement, the deGRE unflattening, the calibration region against the pd
   rectangle, the R2* fit, the B0 fit on synthetic fields (including unwrapping
   beyond the naive ±1/(2ΔTE) range), and `preprocess()` end to end on fake
-  archives (PCA output equals compressing before gridding; GCC output equals GCC
-  of the uncompressed output; `Nvcoils`; no noise scan; cache reuse; resume after
+  archives (GCC output equals GCC of the uncompressed output; `Nvcoils`; no noise scan; cache reuse; resume after
   a crash).
 
 Run them with the preprocessing extras installed, or they are skipped:

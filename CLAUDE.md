@@ -626,7 +626,7 @@ history behind it.
 
 `preprocess(cfg, seqname)` (`preprocess/preprocess.py`) turns one sequence's raw
 ScanArchives into `<outdir>/<seq>_preprocessed.h5`: zero-filled k-space, the
-fully sampled calibration region, sensitivity/B0/R2* maps, `W`/`cc_matrix` and
+fully sampled calibration region, sensitivity/B0/R2* maps, `W`/`GCC` and
 provenance attrs. Stage A (whitening, odd/even phase, per-frame gridding and
 scatter on all physical coils, resumable) is cached in `<seq>_gridded.h5`;
 coil compression, the deGRE maps and Stage B (output) run from that cache.
@@ -715,8 +715,12 @@ no mask. The 2R floor was dropped (user decision; R-fold aliasing
 arguments are weak for incoherent sampling with regularized recon), and
 `cfg.Nvcoils` sets the count exactly. A first GCC measurement script used
 `Vh[:nv]` instead of `conj(Vh[:nv])` for data rows c^T and looked *worse* than
-PCA; `coils.gcc_compression` reuses `pca_compression`'s eigenvector convention
-(u^H of sum c c^H) to avoid that. `coils.gcc_calibration` crops/pads the
+PCA; `coils.gcc_compression` uses the u^H-of-sum-c-c^H eigenvector convention
+(BART's `cc -A -M`) to avoid that. The global-PCA option (`cc_method='pca'`)
+was removed on 2026-09-28 (user decision), and the compression matrices are
+named `GCC` everywhere: the variable, and the output file's dataset (formerly
+`T` in the code and `cc_matrix` on disk; files written before then still have
+`cc_matrix`, which nothing in this repo reads). `coils.gcc_calibration` crops/pads the
 deGRE's kx to the EPI Nx (shared x FOV) so per-x matrices land on EPI x
 positions, and uses a central 24x24 (ky, kz) block (all of ky-kz gave the same
 numbers). Caveat, measured by reconstruction (`2_6x_2.4mm`, R = 6,

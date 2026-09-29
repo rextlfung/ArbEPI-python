@@ -3,16 +3,12 @@ import pytest
 
 from preprocess.coils import (
     align_gcc,
-    apply_coil_compression,
     apply_gcc_image,
     apply_gcc_kspace,
     apply_whitening,
-    coil_compression_matrix,
-    compute_coil_covariance,
     compute_whitening_matrix,
     gcc_calibration,
     gcc_compression,
-    pca_compression,
     select_nvcoils,
 )
 
@@ -57,13 +53,12 @@ def test_coil_compression_preserves_dominant_signal_energy():
     latent = _crandn(rng, n_samples, n_true)
     data = latent @ S.T + 1e-3 * _crandn(rng, n_samples, ncoils)
 
-    cov = compute_coil_covariance(data)
-    _, evals = pca_compression(cov)
+    # one x position: GCC reduces to a single compression matrix
+    A0, evals = gcc_compression(data[None])
     nvcoils = select_nvcoils(evals, energy_thresh=0.99)
     assert nvcoils == n_true
 
-    V = coil_compression_matrix(cov, nvcoils)
-    compressed = apply_coil_compression(data, V)
+    compressed = data @ A0[0, :nvcoils].T
     assert compressed.shape == (n_samples, nvcoils)
     assert np.sum(np.abs(compressed) ** 2) == pytest.approx(np.sum(np.abs(data) ** 2), rel=0.05)
 
@@ -95,8 +90,10 @@ def test_gcc_keeps_what_global_pca_loses_when_sensitivities_vary_along_x():
     nv = select_nvcoils(evals, 0.99)
     assert nv == 2
     kept_gcc = np.sum(np.abs(np.einsum('xvc,xmc->xmv', A0[:, :nv], hyb)) ** 2)
-    V = coil_compression_matrix(compute_coil_covariance(hyb), nv)
-    kept_pca = np.sum(np.abs(apply_coil_compression(hyb, V)) ** 2)
+    # one global (PCA) matrix for all x: top eigenvectors of sum c c^H
+    flat = hyb.reshape(-1, hyb.shape[-1])
+    evecs = np.linalg.eigh(flat.T @ flat.conj())[1][:, ::-1]
+    kept_pca = np.sum(np.abs(flat @ evecs[:, :nv].conj()) ** 2)
     total = np.sum(np.abs(hyb) ** 2)
     assert kept_gcc / total > 0.999
     assert kept_pca / total < 0.5

@@ -152,19 +152,23 @@ def _trajectories(ds, delay):
     return apply_delay(ds['kxo'] / 100, ds['kxo'][::-1] / 100, NFID, delay)
 
 
-def _reference(ds, W, cc, delay):
-    """Old pipeline order: whiten + (single-matrix) compress before gridding."""
+def _reference(ds, W, GCC, delay):
+    """Each frame whitened, gridded and scattered on its own, then compressed
+    with GCC (if given): (k-space, noise variance)."""
     kxo, kxe = _trajectories(ds, delay)
     sched = ds['schedules'][..., :2].astype(int) - 1
     spf = NSHOTS * ETL
     frames = [
         process_epi_frame(
-            np.stack(ds['epi_shots'][t * spf:(t + 1) * spf], axis=-1), W, cc, kxo, kxe, A_FIXED,
+            np.stack(ds['epi_shots'][t * spf:(t + 1) * spf], axis=-1), W, kxo, kxe, A_FIXED,
             sched[t], NX, NY, NZ, ETL, NSHOTS, FOV[0] * 100,
         )
         for t in range(NFRAMES)
     ]
-    noise = grid_noise(ds['noise'], W, cc, kxo, kxe, A_FIXED, NX, ETL, FOV[0] * 100)
+    noise = grid_noise(ds['noise'], W, kxo, kxe, A_FIXED, NX, ETL, FOV[0] * 100)
+    if GCC is not None:
+        frames = [apply_gcc_kspace(k, GCC) for k in frames]
+        noise = apply_gcc_kspace(noise, GCC)
     return np.stack(frames, axis=-1), float(np.mean(np.abs(noise) ** 2))
 
 
@@ -172,33 +176,19 @@ def _rel(a, b):
     return np.linalg.norm(a - b) / np.linalg.norm(b)
 
 
-def test_pca_output_equals_compressing_before_gridding(dataset):
-    out = preprocess(_cfg(dataset, cc_method='pca', estimate_smaps=False), SEQ, a=A_FIXED)
-    with h5py.File(out, 'r') as f:
-        ksp, cc, W = f['ksp_epi_zf'][()], f['cc_matrix'][()], f['W'][()]
-        noise_var, delay = f.attrs['noise_var'], f.attrs['delay']
-        assert f.attrs['whitened'] and f.attrs['coil_compressed']
-        assert f.attrs['cc_method'] == 'pca' and f.attrs['Nvcoils_source'] == 'energy'
-        np.testing.assert_allclose(f.attrs['oephase_a'], A_FIXED)
-    ref_ksp, ref_noise_var = _reference(dataset, W, cc, delay)
-    assert _rel(ksp, ref_ksp) < 1e-5
-    assert noise_var == pytest.approx(ref_noise_var, rel=1e-5)
-
-
 def test_gcc_output_is_gcc_applied_to_the_whitened_gridded_data(dataset):
     out = preprocess(_cfg(dataset, estimate_smaps=False), SEQ, a=A_FIXED)
     with h5py.File(out, 'r') as f:
-        ksp, A, W = f['ksp_epi_zf'][()], f['cc_matrix'][()], f['W'][()]
+        ksp, GCC, W = f['ksp_epi_zf'][()], f['GCC'][()], f['W'][()]
         nv = f.attrs['Nvcoils']
-        assert f.attrs['cc_method'] == 'gcc' and f.attrs['cc_energy_kept'] >= 0.99
+        assert f.attrs['whitened'] and f.attrs['coil_compressed']
+        assert f.attrs['Nvcoils_source'] == 'energy' and f.attrs['cc_energy_kept'] >= 0.99
+        np.testing.assert_allclose(f.attrs['oephase_a'], A_FIXED)
         noise_var, delay = f.attrs['noise_var'], f.attrs['delay']
-    assert A.shape == (NX, nv, NC) and ksp.shape == (NX, NY, NZ, nv, NFRAMES)
-    ref_white, _ = _reference(dataset, W, None, delay)
-    ref = np.stack([apply_gcc_kspace(ref_white[..., t], A) for t in range(NFRAMES)], axis=-1)
-    assert _rel(ksp, ref) < 1e-5
-    kxo, kxe = _trajectories(dataset, delay)
-    noise = grid_noise(dataset['noise'], W, None, kxo, kxe, A_FIXED, NX, ETL, FOV[0] * 100)
-    assert noise_var == pytest.approx(np.mean(np.abs(apply_gcc_kspace(noise, A)) ** 2), rel=1e-5)
+    assert GCC.shape == (NX, nv, NC) and ksp.shape == (NX, NY, NZ, nv, NFRAMES)
+    ref_ksp, ref_noise_var = _reference(dataset, W, GCC, delay)
+    assert _rel(ksp, ref_ksp) < 1e-5
+    assert noise_var == pytest.approx(ref_noise_var, rel=1e-5)
 
 
 def test_nvcoils_sets_the_exact_virtual_coil_count(dataset):
@@ -206,7 +196,7 @@ def test_nvcoils_sets_the_exact_virtual_coil_count(dataset):
     with h5py.File(out, 'r') as f:
         assert f['ksp_epi_zf'].shape[3] == 3
         assert f['smaps'].shape == (NX, NY, NZ, 3)
-        assert f['cc_matrix'].shape == (NX, 3, NC)
+        assert f['GCC'].shape == (NX, 3, NC)
         assert f.attrs['Nvcoils'] == 3 and f.attrs['Nvcoils_source'] == 'user'
         # compressed maps are unit-RSS inside their support
         rss = np.sqrt(np.sum(np.abs(f['smaps'][()]) ** 2, axis=-1))
@@ -229,7 +219,7 @@ def test_no_compression_promotes_the_cache_and_keeps_all_coils(dataset):
     with h5py.File(out, 'r') as f:
         W, delay = f['W'][()], f.attrs['delay']
         ksp = f['ksp_epi_zf'][()]
-        assert not f.attrs['coil_compressed'] and 'cc_matrix' not in f
+        assert not f.attrs['coil_compressed'] and 'GCC' not in f
         assert 'complete' not in f.attrs and 'noise_gridded' not in f
     ref, _ = _reference(dataset, W, None, delay)
     assert ksp.shape[3] == NC and _rel(ksp, ref) < 1e-5
@@ -256,7 +246,7 @@ def test_calibration_region_is_extracted(dataset):
 
 
 def test_rerun_with_a_kept_cache_skips_stage_a(dataset):
-    cfg = _cfg(dataset, keep_cache=True, cc_method='pca', estimate_smaps=False)
+    cfg = _cfg(dataset, keep_cache=True, estimate_smaps=False)
     preprocess(cfg, SEQ, a=A_FIXED)
     reads = dataset['state']['epi_reads']
     out = preprocess(_cfg(dataset, keep_cache=True, Nvcoils=2, estimate_smaps=False), SEQ)
@@ -267,7 +257,7 @@ def test_rerun_with_a_kept_cache_skips_stage_a(dataset):
 
 
 def test_resume_after_a_crash_matches_an_uninterrupted_run(dataset):
-    cfg = _cfg(dataset, cc_method='pca', estimate_smaps=False)
+    cfg = _cfg(dataset, estimate_smaps=False)
     state = dataset['state']
     state['fail_after'] = NSHOTS * ETL + 3  # dies partway through frame 2
     with pytest.raises(RuntimeError, match='simulated crash'):
@@ -277,9 +267,9 @@ def test_resume_after_a_crash_matches_an_uninterrupted_run(dataset):
     state['fail_after'] = None
     out = preprocess(cfg, SEQ, a=A_FIXED)
     with h5py.File(out, 'r') as f:
-        ksp, cc, W = f['ksp_epi_zf'][()], f['cc_matrix'][()], f['W'][()]
+        ksp, GCC, W = f['ksp_epi_zf'][()], f['GCC'][()], f['W'][()]
         delay = f.attrs['delay']
-    ref, _ = _reference(dataset, W, cc, delay)
+    ref, _ = _reference(dataset, W, GCC, delay)
     assert _rel(ksp, ref) < 1e-5
 
 
@@ -301,16 +291,16 @@ def test_readout_delay_is_calibrated_from_the_cal_scan(dataset):
 def test_cache_left_by_a_failed_start_is_replaced(dataset):
     """A run that fails during calibration leaves a cache file with no
     attributes; the next run must start over instead of failing on it."""
-    cfg = _cfg(dataset, cc_method='pca', estimate_smaps=False)
+    cfg = _cfg(dataset, estimate_smaps=False)
     cache = set_seq_paths(cfg, SEQ).cache
     os.makedirs(os.path.dirname(cache), exist_ok=True)
     with h5py.File(cache, 'w'):
         pass
     out = preprocess(cfg, SEQ, a=A_FIXED)
     with h5py.File(out, 'r') as f:
-        ksp, cc, W = f['ksp_epi_zf'][()], f['cc_matrix'][()], f['W'][()]
+        ksp, GCC, W = f['ksp_epi_zf'][()], f['GCC'][()], f['W'][()]
         delay = f.attrs['delay']
-    ref, _ = _reference(dataset, W, cc, delay)
+    ref, _ = _reference(dataset, W, GCC, delay)
     assert _rel(ksp, ref) < 1e-5
 
 

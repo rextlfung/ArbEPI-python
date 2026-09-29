@@ -211,7 +211,7 @@ preprocess/                Raw ScanArchives -> one reconstruction-ready file per
   preprocess.py                 PreprocessConfig + preprocess(): gridding (cached), coil compression,
                                  maps, output <seq>_preprocessed.h5
   batch_preprocess.py           Command line: several sequences in one go
-  coils.py                      Noise whitening; GCC / PCA coil compression
+  coils.py                      Noise whitening; GCC coil compression
   epi_gridding.py               1D NUFFT ramp-sample regridding (sigpy)
   oephase.py                    Odd/even (Nyquist ghost) phase estimation + correction
   smaps.py                      ESPIRiT sensitivity maps (sigpy) + resize/mask/smooth/normalize

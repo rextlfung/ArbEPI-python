@@ -3,21 +3,17 @@
 Whitening (compute_whitening_matrix/apply_whitening) decorrelates the receive
 channels and scales each to unit noise variance, using a noise-only scan.
 
-Coil compression, two methods:
-- 'pca': one [Nv, Nc] matrix for the whole volume, from the top eigenvectors
-  of the coil covariance (Huang et al., MRI 2008).
-- 'gcc': geometric-decomposition coil compression (Zhang, Pauly, Vasanawala,
-  Lustig, MRM 2013). The readout (kx) is fully sampled, so the data can be
-  inverse-Fourier-transformed along kx into hybrid (x, ky, kz) space and
-  compressed with a different [Nv, Nc] matrix at each x. Only a few coils see
-  any one x position, so far fewer virtual coils keep the same signal. The
-  per-x matrices are then rotated to vary smoothly along x (the paper's
-  alignment step), which keeps virtual-coil images and k-space kernels
-  sensible without changing the per-x subspaces.
+Coil compression is GCC, geometric-decomposition coil compression (Zhang,
+Pauly, Vasanawala, Lustig, MRM 2013). The readout (kx) is fully sampled, so the
+data can be inverse-Fourier-transformed along kx into hybrid (x, ky, kz) space
+and compressed with a different [Nv, Nc] matrix at each x. Only a few coils see
+any one x position, so far fewer virtual coils keep the same signal than with
+one global (PCA) matrix. The per-x matrices are then rotated to vary smoothly
+along x (the paper's alignment step), which keeps virtual-coil images and
+k-space kernels sensible without changing the per-x subspaces.
 
 The number of virtual coils comes from select_nvcoils: the smallest Nv whose
-kept eigenvalue energy, summed over all x for GCC, reaches a fraction of the
-total.
+kept eigenvalue energy, summed over all x, reaches a fraction of the total.
 
 Every function takes the coil axis last unless stated otherwise.
 """
@@ -49,43 +45,14 @@ def apply_whitening(data: np.ndarray, W: np.ndarray, coil_axis: int = -1) -> np.
     return np.moveaxis(whitened, -1, coil_axis)
 
 
-def compute_coil_covariance(data: np.ndarray, coil_axis: int = -1) -> np.ndarray:
-    """[Ncoils, Ncoils] Hermitian sample covariance sum(c c^H)/N, pooled over
-    every other axis."""
-    x = np.moveaxis(data, coil_axis, 0).reshape(data.shape[coil_axis], -1)  # [Ncoils, Nsamples]
-    return (x @ x.conj().T) / x.shape[1]
-
-
 def select_nvcoils(evals: np.ndarray, energy_thresh: float) -> int:
     """Smallest Nv whose top-Nv eigenvalues hold at least `energy_thresh` of the
-    total energy. evals: [Nc] (PCA) or [Nx, Nc] (GCC, one row per x), each row
-    sorted in descending order. For GCC the energy is summed over x, so x
-    positions with little signal count for little -- no object mask needed."""
+    total energy. evals: [Nx, Nc] (one row per x) or [Nc], each row sorted in
+    descending order. The energy is summed over x, so x positions with little
+    signal count for little -- no object mask needed."""
     evals = np.clip(np.atleast_2d(evals), 0, None)
     kept = np.cumsum(evals.sum(axis=0))
     return int(np.searchsorted(kept / kept[-1], energy_thresh - 1e-12) + 1)
-
-
-def pca_compression(cov: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """(V, evals): V [Nc, Nc] with rows the conjugated eigenvectors of `cov` in
-    descending eigenvalue order, so V[:Nv] is the [Nv, Nc] compression matrix
-    (BART's `cc -p Nv -A -M`)."""
-    evals, evecs = np.linalg.eigh(cov)  # ascending
-    return evecs[:, ::-1].conj().T, evals[::-1]
-
-
-def coil_compression_matrix(cov: np.ndarray, nvcoils: int) -> np.ndarray:
-    """[Nvcoils, Ncoils] PCA compression matrix: the top-`nvcoils` eigenvectors
-    of `cov`."""
-    return pca_compression(cov)[0][:nvcoils]
-
-
-def apply_coil_compression(data: np.ndarray, V: np.ndarray, coil_axis: int = -1) -> np.ndarray:
-    """Apply a single [Nvcoils, Ncoils] compression matrix along `coil_axis`
-    (BART's `ccapply`)."""
-    data = np.moveaxis(data, coil_axis, -1)
-    compressed = data @ V.T
-    return np.moveaxis(compressed, -1, coil_axis)
 
 
 def _center_crop_pad(a: np.ndarray, n: int, axis: int = 0) -> np.ndarray:
@@ -131,9 +98,10 @@ def gcc_calibration(ksp: np.ndarray, nx: int, calib_size: int = 24) -> np.ndarra
 def gcc_compression(calib: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """(A0, evals) from gcc_calibration's [Nx, M, Nc] data.
 
-    A0: [Nx, Nc, Nc]; A0[x, :Nv] is x's [Nv, Nc] compression matrix (the top
-        eigenvectors of that x's coil covariance, same convention as
-        pca_compression). Not yet aligned across x -- see align_gcc.
+    A0: [Nx, Nc, Nc]; A0[x, :Nv] is x's [Nv, Nc] compression matrix: rows are
+        the conjugated top eigenvectors (u^H) of that x's coil covariance
+        sum(c c^H), so a coil vector c compresses to A0[x, :Nv] @ c (BART's
+        `cc -A -M` convention). Not yet aligned across x -- see align_gcc.
     evals: [Nx, Nc] eigenvalues, descending, for select_nvcoils.
     """
     # Coil covariance per x: sum over samples of c c^H.
