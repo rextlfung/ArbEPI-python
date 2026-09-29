@@ -2704,6 +2704,39 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   re-estimating via the single-calibration projection path -- a second
   ESPIRiT run, and a different `smaps` than the one STEP 3 had just
   exported to NIfTI. Fixed: STEP 3 calls `load_smaps`.
+- [ ] **255. The fat-sat pulse from `lib/make_fatsat_rf.py` substantially
+  excites water, and that is the main source of the temporal fluctuation
+  in static scans.** [measured 2026-09-28, `20260924ball`, against
+  `3f3277e`] The pypulseq Gaussian (90°, 4 ms, TBW 3, at −447 Hz) stands in
+  for the MATLAB original's min-phase SLR pulse (see the module docstring).
+  A Bloch simulation of the exact pulse `make_fatsat_rf` returns tips
+  water by **26° on resonance** (larger than the 17° excitation at
+  TR 58 ms), 42° at −100 Hz, 60° at −200 Hz and 77° at −300 Hz. It plays
+  every shot with a constant phase, and its crusher shares that shot's
+  random spoiler draw. Measured on the fully sampled, static 5.4 mm ball
+  protocol: turning the pulse off (RF replaced by an equal-length delay,
+  `FatsatParams.enabled=False`; everything else identical) raised mean
+  signal 1.56× (C/A ratio 1.32 above +30 Hz, 1.46–1.60 near 0 Hz, 1.97
+  below −60 Hz) and cut the median voxel CV from 3.20% to 0.58% (tSNR 31
+  → 177, RSS on one common mask). In k-space, the stimulated-echo ghosts
+  predicted from the per-shot spoiler draws explain 34% of A's
+  frame-to-frame residual (3.6% null), and the same fit explains nothing
+  with fat-sat off (2.3% vs 3.0% null), even though nearly every shot
+  still has a pathway landing inside the readout window. So the coherence
+  that refocuses is created by this pulse. Widening the random spoiler
+  range to 3–8 cycles/voxel stops it refocusing inside the readout
+  (51/1080 shots have an in-window pathway, vs 1045/1080 at 3–4) but only
+  reaches 1.83% CV. What remains is mostly a per-shot signal level that
+  changes each frame (0.70% std, twice A's and the no-fat-sat run's),
+  still fat-sat-dependent. The same pathway correlation, with a null
+  shuffled control, was also found in `20260918ball/1_1x_5.4mm` (44%) and
+  `20260912xiaokai/01_fullsamp` (42%). Full numbers and scripts:
+  `/StorageRAID/rexfung/20260924ball/analysis/README.md`. Fix: a spectral
+  profile that leaves water alone. Candidates are a longer pulse, an SLR
+  design (port or precompute the MATLAB original's `makeslr` waveform), a
+  frequency offset or flip chosen against the measured profile, or
+  water-selective excitation instead. Re-run the Bloch check above and
+  repeat the A/C comparison. Next steps are tracked in `docs/TODO.md`.
 
 ## Consistency & documentation
 
@@ -4726,6 +4759,19 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   through `load_smaps()` itself, to lock in commit `5ba6fc5`'s fix and
   catch a future regression of the `run_b0map()` silent-fallback bug item
   205 originally found.
+- [ ] **256. `recon/utils.py`'s `tsnr_report` builds a separate object mask
+  for each input, so its numbers aren't comparable across runs.**
+  [measured 2026-09-28, `20260924ball`, against `3f3277e`] Each file gets
+  `object_mask(img, thresh_frac)`, which thresholds at a fraction of *that
+  file's* own maximum. The three RSS runs of one static phantom got masks
+  of 5603, 4725 and 13100 voxels. The no-fat-sat run's larger mask came
+  from its higher signal (item 255), not a bigger object. The reported
+  median tSNRs (37, 56, 172) were therefore taken over different voxel
+  sets. On one common mask the three runs read 31, 55 and 177, and in
+  general the median over a mask that changes size is biased toward
+  whatever voxels it gains or loses. Fix: build one mask for all inputs
+  in `tsnr_report` (e.g. the intersection of each file's own mask, or an
+  optional caller-supplied mask), and print its size once.
 
 ## Conciseness & performance
 
