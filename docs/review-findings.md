@@ -4506,28 +4506,16 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   is now fixed, so this no longer needs a "modulo" carve-out) for a couple
   of `ETL` parities, and (b) a
   `make_spoilers.py`-level duration/area unit test per item 142.
-- [ ] **173. `ge/coppe.py`'s hop-2 SSH-failure fix (commit `3de4d58` --
-  the `BatchMode`/`PreferredAuthentications`/`-q` change in
-  `_TRANSFER_SCRIPT`, and the new `_ssh_env()` helper) has zero test
-  coverage, matching the "no regression test for a just-fixed bug" pattern
-  items 129/134/135/161 already flag elsewhere in this repo.** [measured]
-  `grep -rn "coppe" tests/` finds only `tests/test_coppe_assign.py`, whose
-  own docstring explicitly disclaims the remote-facing functions ("thin
-  wrappers around subprocess calls to a real scanner and aren't exercised
-  here") and whose imports (`assign_entry_numbers, find_pge_files,
-  split_reused_files, stage_entry_files`) never touch `_ssh_env`,
-  `_TRANSFER_SCRIPT`, `run_remote`, or any ssh/scp-invoking function.
-  Unlike the genuinely network-dependent functions that file's docstring
-  excuses, both new pieces here are trivially unit-testable with zero
-  network/SSH dependency: `_ssh_env()` is a pure function (assert it
-  strips exactly `{DISPLAY, SSH_ASKPASS, SSH_ASKPASS_REQUIRE}` from a
-  supplied env dict and leaves everything else untouched), and
-  `_TRANSFER_SCRIPT` is a plain module-level string (assert it contains
-  `BatchMode=yes` and `PreferredAuthentications=publickey` and that its
-  `scp` invocation no longer carries a bare `-q`). Given item 171 above,
-  such a test would also directly regression-guard against silently
-  reintroducing `-q` on the hop-2 leg, or against a future edit forgetting
-  to route a new subprocess call through `_ssh_env()`.
+- [x] **173.** Resolved by `150ff82` and the follow-up that closed this item:
+  `tests/test_coppe_transfer.py` runs the real `_TRANSFER_SCRIPT` under bash
+  against a fake `scp` (checking the prompts reach stderr, the entry files
+  install, and the askpass is removed on success and on failure), and
+  unit-tests `_ssh_env()`. `BatchMode=yes`/`PreferredAuthentications=publickey`
+  is gone from the hop-2 `scp`: since 2026-09-25 phobos requires publickey +
+  Okta keyboard-interactive, so the scp now answers Okta through a
+  throwaway askpass that prints each prompt, including the number to tap.
+  The test also guards against `BatchMode=yes` coming back. Item 171 (`-q`
+  on the other hops) is separate and still open.
 - [ ] **174. `preprocessing/preprocess.py`'s STEP 3 smaps branch --
   including the new `smooth_sigma_mm` threading added by `0e4e86e` -- has
   no dedicated test.** [measured, low severity; citation updated

@@ -3,7 +3,8 @@ first on PATH that plays phobos's Okta keyboard-interactive exchange
 through the script's askpass (the way ssh would) instead of connecting
 anywhere. Checks that the Okta prompts, including the number to tap,
 reach stderr, and that the throwaway askpass is removed whether or not the
-copy succeeds."""
+copy succeeds. Also checks _ssh_env, the local-side environment every
+ssh/scp call uses."""
 
 import os
 import stat
@@ -11,7 +12,7 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from ge.coppe import _TRANSFER_SCRIPT
+from ge.coppe import _TRANSFER_SCRIPT, _ssh_env
 
 _FAKE_SCP = r"""#!/bin/bash
 set -eu
@@ -90,3 +91,14 @@ def test_transfer_removes_askpass_when_scp_fails(tmp_path):
     askpass = Path((log / 'askpass_path').read_text().strip())
     assert not askpass.exists()
     assert not (basedir / 'pulseq' / 'v7' / 'pge7.entry').exists()
+
+
+def test_ssh_env_strips_only_askpass_variables(monkeypatch):
+    for key, value in {'DISPLAY': ':0', 'SSH_ASKPASS': '/usr/lib/ssh/ssh-askpass',
+                       'SSH_ASKPASS_REQUIRE': 'prefer', 'COPPE_TEST_KEEP': 'yes'}.items():
+        monkeypatch.setenv(key, value)
+    env = _ssh_env()
+    assert not {'DISPLAY', 'SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE'} & set(env)
+    assert env['COPPE_TEST_KEEP'] == 'yes'
+    assert env == {k: v for k, v in os.environ.items()
+                   if k not in ('DISPLAY', 'SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE')}
