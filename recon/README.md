@@ -32,18 +32,24 @@ Tests mirror this: `tests/test_recon_<module>.py`.
 
 ## Setup
 
-Everything in `recon/` runs in its own venv, `.venv-recon` (torch is a large,
-GPU-specific install that has no reason to share a venv with the
-GERecon-locked preprocessing environment):
+Everything in `recon/` runs in its own venv, `.venv-recon`, installed from the
+same `uv.lock` as the main environment:
 
 ```bash
-uv venv .venv-recon
-uv pip install --python .venv-recon/bin/python -e ".[recon,test]"
+UV_PROJECT_ENVIRONMENT=.venv-recon uv sync --extra recon --extra test
 ```
 
+It is kept separate from `.venv` because `uv sync` is exact: it removes any
+package the requested extras don't list, so the `uv sync --extra test` used
+for sequence work would uninstall torch from a shared environment. For the
+same reason, anything installed into `.venv-recon` by hand (`uv pip install`)
+is removed by the next sync. torch comes from the lockfile's PyPI wheel; if
+that build doesn't fit your GPU, pin a different one in `pyproject.toml`
+(a `[[tool.uv.index]]` for the PyTorch CUDA index plus a `[tool.uv.sources]`
+entry for `torch`) and re-lock, rather than installing it by hand.
+
 Run everything from the repository root (`recon/` imports helpers from
-`preprocess/`). Install the torch build matching your CUDA version first if
-the default wheel doesn't fit your GPU. Everything also runs on CPU, just much more slowly; the
+`preprocess/`). Everything also runs on CPU, just much more slowly; the
 device defaults to `cuda` when a GPU is available and `cpu` otherwise
 (`--device` overrides it).
 
