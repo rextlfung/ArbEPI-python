@@ -21,8 +21,7 @@ import numpy as np
 import pypulseq as pp
 
 from lib.calc_te_tr_delays import calc_te_tr_delays
-from lib.make_excitation_pulse import make_excitation_pulse
-from lib.make_fatsat_rf import make_fatsat_rf
+from lib.make_excitation_pulse import make_excitation_from_params
 from lib.make_prephasers import make_prephasers
 from lib.make_spoilers import make_spoilers
 from lib.mask2epi import max_blip_steps
@@ -43,11 +42,9 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
     # this must use hdf5storage too.
     schedules = hdf5storage.loadmat(os.path.join(params.output_dir, 'scan_info.mat'))['schedules']
 
-    # Excitation pulse (identical to ArbEPI)
-    rf, gz_ss, gz_ssr = make_excitation_pulse(params.fa, params.rf_dur, params.rf_tb, params.fov, sys, params.crt)
-
-    # Fat-sat pulse (identical to ArbEPI)
-    rfsat = make_fatsat_rf(params.fatsat, sys, params.fat_offres_freq)
+    # Excitation and fat-sat pulse (identical to ArbEPI; rfsat None for water
+    # excitation)
+    rf, gz_ss, gz_ssr, rfsat = make_excitation_from_params(params, sys)
 
     # Readout gradients — sized to match ArbEPI so calibration trajectory applies
     max_ky_step, max_kz_step = max_blip_steps(schedules)
@@ -105,16 +102,18 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
         y_scale = cy / params.spoil_cycles_max
         z_scale = cz / params.spoil_cycles_max
 
-        # Fat-sat
-        seq.add_block(
-            rfsat if params.fatsat.enabled else pp.make_delay(pp.calc_duration(rfsat)),
-            pp.make_label('TRID', 'SET', TRID),
-        )
-        seq.add_block(
-            pp.scale_grad(gx_spoil, x_scale),
-            pp.scale_grad(gy_spoil, y_scale),
-            pp.scale_grad(gz_spoil, z_scale),
-        )
+        # Fat-sat (carries the TRID label), unless water excitation
+        trid = pp.make_label('TRID', 'SET', TRID)
+        if rfsat is not None:
+            seq.add_block(
+                rfsat if params.fatsat.enabled else pp.make_delay(pp.calc_duration(rfsat)),
+                trid,
+            )
+            seq.add_block(
+                pp.scale_grad(gx_spoil, x_scale),
+                pp.scale_grad(gy_spoil, y_scale),
+                pp.scale_grad(gz_spoil, z_scale),
+            )
 
         # RF spoiling (quadratic phase cycling)
         rf_phase = (0.5 * params.rf_phase_0 * rf_count**2) % 360.0
@@ -123,7 +122,10 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
         rf_count += 1
 
         # Slab-selective excitation + slice-select rephaser
-        seq.add_block(rf, gz_ss)
+        if rfsat is None:
+            seq.add_block(rf, gz_ss, trid)
+        else:
+            seq.add_block(rf, gz_ss)
         seq.add_block(gz_ssr)
 
         # TE padding delay

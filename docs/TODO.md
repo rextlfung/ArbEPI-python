@@ -36,6 +36,13 @@
      check it on something with fat (an oil phantom, or in vivo with fat-sat
      on/off) before relying on the default for human work, and retune
      `FatsatParams.tbw`/`dur` with `flip_profile` if needed.
+     Add a water-excitation arm (`params.excitation = 'water'`, binomial
+     1-3-3-1, no fat-sat pulse or crusher): it tips no fat-sat water at all, so
+     it tests the same hypothesis from the other side. On the 5.4 mm protocol
+     its per-shot min TR is 51.02 ms (51.72 ms with the 3–8 spoiler), so it fits
+     the 1.05 s volume TR either way. The same fat caveat applies: check fat
+     suppression on something with fat, and its water off-resonance cost
+     (0.64x the flip at −150 Hz) in vivo.
   3. Look into the ~1.4° per-shot phase jitter that makes up most of the 0.58%
      left with fat-sat off: frequency drift or receiver phase, or correct it
      per shot from the data. Then check the result against the ~3% BOLD target.

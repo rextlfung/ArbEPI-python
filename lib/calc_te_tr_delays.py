@@ -14,7 +14,7 @@ import pypulseq as pp
 
 def calc_te_tr_delays(
     rf: SimpleNamespace,
-    rfsat: SimpleNamespace,
+    rfsat: SimpleNamespace | None,
     gz_ss: SimpleNamespace,
     gz_ssr: SimpleNamespace,
     gx_pre: SimpleNamespace,
@@ -56,9 +56,13 @@ def calc_te_tr_delays(
         )
         te_delay = 0.0
 
+    # rfsat None (params.excitation == 'water'): no fat-sat block and no
+    # crusher after it.
+    fatsat_blocks = 0.0 if rfsat is None else (
+        pp.calc_duration(rfsat) + max(pp.calc_duration(gx_spoil), pp.calc_duration(gz_spoil))
+    )
     min_tr = (
-        pp.calc_duration(rfsat)
-        + max(pp.calc_duration(gx_spoil), pp.calc_duration(gz_spoil))
+        fatsat_blocks
         + max(pp.calc_duration(rf), pp.calc_duration(gz_ss))
         + pp.calc_duration(gz_ssr)
         + te_delay

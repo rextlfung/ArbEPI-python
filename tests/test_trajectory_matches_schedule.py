@@ -22,11 +22,15 @@ from sequences.EPIcal import generate_epical
 from sequences.noise import generate_noise
 
 
-def _small_params(tmp_path):
+EXCITATIONS = pytest.mark.parametrize('excitation', ['fatsat', 'water'])
+
+
+def _small_params(tmp_path, excitation='fatsat'):
     p = load_params()
     # Ny*Nz/R = 16*12/8 = 24 = Nshots*ETL
     return replace(
         p,
+        excitation=excitation,
         Ny=16,
         Nz=12,
         ETL=8,
@@ -38,8 +42,9 @@ def _small_params(tmp_path):
     )
 
 
-def test_arbepi_trajectory_matches_schedule(tmp_path):
-    p = _small_params(tmp_path)
+@EXCITATIONS
+def test_arbepi_trajectory_matches_schedule(tmp_path, excitation):
+    p = _small_params(tmp_path, excitation)
     omegas = resolve_omegas(p)
     schedules, _ = _compute_schedules(
         omegas, p.ETL, p.Nshots, p.epi_trajectory, deltak=(1 / p.fov[1], 1 / p.fov[2]),
@@ -66,7 +71,8 @@ def test_arbepi_trajectory_matches_schedule(tmp_path):
             assert iz_measured == schedules[0, s, e, 1], f'shot={s} echo={e} kz mismatch'
 
 
-def test_arbepi_schedule_echo_times(tmp_path):
+@EXCITATIONS
+def test_arbepi_schedule_echo_times(tmp_path, excitation):
     """scan_info.mat's 'schedules' carries a 3rd channel, echo time (s
     since RF excitation) per acquisition, alongside (ky, kz) -- see
     sequences/ArbEPI.py's echo_times computation and
@@ -74,7 +80,7 @@ def test_arbepi_schedule_echo_times(tmp_path):
     out for (ky, kz)-only consumers."""
     import hdf5storage
 
-    p = _small_params(tmp_path)
+    p = _small_params(tmp_path, excitation)
     omegas = resolve_omegas(p)
     generate_arbepi(omegas, p, seqname='xcheck')
 
@@ -101,7 +107,8 @@ def test_arbepi_schedule_echo_times(tmp_path):
     assert mid == pytest.approx(p.TE, abs=1e-4)
 
 
-def test_arbepi_kxoe_matches_epical(tmp_path):
+@EXCITATIONS
+def test_arbepi_kxoe_matches_epical(tmp_path, excitation):
     """kxo/kxe are now written into scan_info.mat by generate_arbepi()
     (sequences/ArbEPI.py) instead of a separate kxoe<Nx>.mat written by
     generate_epical() (sequences/EPIcal.py) -- confirm the rationale for
@@ -111,7 +118,7 @@ def test_arbepi_kxoe_matches_epical(tmp_path):
     and checking it matches what ArbEPI wrote."""
     import hdf5storage
 
-    p = _small_params(tmp_path)
+    p = _small_params(tmp_path, excitation)
     omegas = resolve_omegas(p)
     generate_arbepi(omegas, p, seqname='xcheck')
     epical_seq = generate_epical(p, seqname='xcheck_cal')
@@ -285,7 +292,8 @@ def test_arbepi_kx_oversamples_when_nyquist_rate_exceeds_max_grad(tmp_path):
     )
 
 
-def test_arbepi_schedule_echo_times_match_measured_kx_zero_crossings(tmp_path):
+@EXCITATIONS
+def test_arbepi_schedule_echo_times_match_measured_kx_zero_crossings(tmp_path, excitation):
     """Ground-truth check of schedules[..., 2] (per-echo acquisition time,
     used by a future B0-correction consumer): the saved echo times must
     match the kx(t) = 0 crossing times measured from the assembled
@@ -294,7 +302,7 @@ def test_arbepi_schedule_echo_times_match_measured_kx_zero_crossings(tmp_path):
     in-block crossing time (~0.5-0.6 ms at default params)."""
     import hdf5storage
 
-    p = _small_params(tmp_path)
+    p = _small_params(tmp_path, excitation)
     omegas = resolve_omegas(p)
     seq = generate_arbepi(omegas, p, seqname='xcheck')
 
@@ -348,9 +356,10 @@ def test_readout_ramps_are_asymmetric():
     assert rg.gro1.shape_dur == pytest.approx(rg.blip_duration / 2)
 
 
-def test_epical_trajectory_is_centered(tmp_path):
+@EXCITATIONS
+def test_epical_trajectory_is_centered(tmp_path, excitation):
     """EPIcal zeroes all ky/kz encoding — every echo should read back k~0."""
-    p = _small_params(tmp_path)
+    p = _small_params(tmp_path, excitation)
     omegas = resolve_omegas(p)
     generate_arbepi(omegas, p, seqname='xcheck')  # writes scan_info.mat that EPIcal loads
 

@@ -540,6 +540,28 @@ no longer called them, for the same reason.
   fluctuation in static scans (`docs/review-findings.md` item 255). Check
   any parameter change with `lib/make_fatsat_rf.py`'s `flip_profile` (a
   Bloch simulation); `tests/test_make_fatsat_rf.py` guards the default.
+- **Water excitation** (`params.excitation = 'water'`; default stays
+  `'fatsat'`): `lib/make_water_excitation.py`, a slab-selective binomial
+  1-3-3-1 train (Hanning sinc subpulses, TBW 8, spaced half a fat period,
+  1.12 ms at 3 T) replacing both the fat-sat block and its crusher in
+  ArbEPI/EPIcal, via `lib/make_excitation_pulse.py`'s
+  `make_excitation_from_params`. Design choices, all Bloch-simulated over
+  slab position x frequency (`lib/bloch.py`, validated on the sinc
+  excitation): **monopolar** lobes with triangular rewinders, not bipolar --
+  bipolar lobes alternate the fat chemical-shift displacement between
+  subpulses, leaving ~4° of fat (~24% of the water flip) in a band at each
+  slab edge, independent of subpulse TBW; each rewinder is centered between
+  subpulse centers so the gradient moment from `rf.center` (the train's
+  weighted center, which anchors TE and the saved echo times) to the
+  rephaser's end is zero, which pypulseq's `calculate_kspace` needs; one RF
+  event for the whole train, so GE's RF dead time/ringdown are paid once;
+  Hanning apodization (unapodized TBW 8 overshoots the slab profile 16%).
+  Cost: water off resonance gets cos³(π f τ) of the flip (0.64 at −150 Hz).
+  Saves 7.3 ms of per-shot min TR on the default protocol, adds 1.1 ms to
+  min TE. `scan_info.mat` records the mode as `water_excitation` (0/1).
+  `tests/test_make_water_excitation.py` guards the profile;
+  `tests/test_trajectory_matches_schedule.py` runs its sequence checks in
+  both modes.
 - **Plotting** (`plotting/plotting.py`): static, non-interactive matplotlib
   equivalents of the sampling-mask/trajectory/PSF plots. The interactive
   scroll/slider mask viewer from the MATLAB repo is not ported — no

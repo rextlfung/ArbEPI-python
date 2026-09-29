@@ -35,6 +35,15 @@ class FatsatParams:
 
 
 @dataclass
+class WaterExcParams:
+    """Slab-selective binomial water excitation (lib/make_water_excitation.py),
+    used when Params.excitation == 'water'."""
+    binomial: tuple = (1, 3, 3, 1)  # subpulse flip weights
+    tbw: float = 8  # time-bandwidth product of each sinc subpulse
+    apodization: float = 0.5  # Hanning window on each subpulse (0 = plain sinc)
+
+
+@dataclass
 class Params:
     # =====================================================================
     # Fields set directly from load_params()'s USER CONFIGURATION section
@@ -153,6 +162,13 @@ class Params:
     fat_offres_freq: float  # Hz
     fatsat: FatsatParams
 
+    # Fat suppression strategy for ArbEPI/EPIcal: 'fatsat' (fat-sat pulse +
+    # crusher, then the slab-selective sinc excitation) or 'water' (binomial
+    # water excitation, `water_exc`, with no fat-sat pulse or crusher;
+    # `fatsat` is then unused, including its `enabled` flag).
+    excitation: str
+    water_exc: WaterExcParams
+
     # deGRE (dual-echo GRE) parameters
     fov_degre: np.ndarray
     Nx_degre: int
@@ -264,6 +280,14 @@ def load_params(output_dir: str = 'output') -> Params:
     # gives better image quality -- see lib/mask2epi.py's module docstring
     # for the tradeoffs.
     epi_trajectory = 'radial'
+
+    # Fat suppression: 'fatsat' (spectrally selective fat-sat pulse + crusher
+    # before the slab-selective sinc excitation, every shot) or 'water'
+    # (slab-selective binomial 1-3-3-1 water excitation, no fat-sat or crusher:
+    # 7.3 ms shorter per-shot min TR and 1.1 ms longer min TE on the default
+    # protocol, but water off resonance gets less flip -- see
+    # lib/make_water_excitation.py and `water_exc` below).
+    excitation = 'fatsat'
 
     # Number of receive coil channels (used for the noise prescan).
     Ncoils = 32
@@ -380,6 +404,14 @@ def load_params(output_dir: str = 'output') -> Params:
     # before changing these. The old pypulseq Gaussian (90 deg, TBW 3, 4 ms)
     # tipped on-resonance water 26 deg: docs/review-findings.md item 255.
     fatsat = FatsatParams(flip=90, tbw=2, dur=6e-3, ftype='min')
+    # Used when excitation == 'water'. Bloch-simulated at the default protocol
+    # (18.2 deg, 129.6 mm slab; lib/bloch.py): fat <= 0.8 deg anywhere in the
+    # slab within +-100 Hz of the fat peak; water 0.89x the flip at +-80 Hz,
+    # 0.64x at -150 Hz; slab FWHM 129.1 mm, <= 0.5% profile overshoot (Hanning;
+    # 16% unapodized at TBW 8). tests/test_make_water_excitation.py guards it.
+    water_exc = WaterExcParams(binomial=(1, 3, 3, 1), tbw=8, apodization=0.5)
+    if excitation not in ('fatsat', 'water'):
+        raise ValueError(f"excitation must be 'fatsat' or 'water', got {excitation!r}")
 
     # deGRE (dual-echo GRE) parameters
     res_degre = np.array([2, 2, 2]) * 1e-3
@@ -478,6 +510,8 @@ def load_params(output_dir: str = 'output') -> Params:
         fat_chem_shift=fat_chem_shift,
         fat_offres_freq=fat_offres_freq,
         fatsat=fatsat,
+        excitation=excitation,
+        water_exc=water_exc,
         fov_degre=fov_degre,
         Nx_degre=Nx_degre,
         Ny_degre=Ny_degre,

@@ -2,11 +2,33 @@
 
 import math
 from types import SimpleNamespace
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 import pypulseq as pp
 
+from lib.make_fatsat_rf import make_fatsat_rf
+from lib.make_water_excitation import make_water_excitation
 from lib.trap4ge import trap4ge
+
+
+def make_excitation_from_params(
+    params, sys: pp.Opts
+) -> Tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace, Optional[SimpleNamespace]]:
+    """Excitation for ArbEPI/EPIcal per `params.excitation`: (rf, gz_ss, gz_ssr,
+    rfsat). 'fatsat': the slab-selective sinc plus the fat-sat pulse. 'water':
+    binomial water excitation (lib/make_water_excitation.py) and rfsat None --
+    callers then drop the fat-sat block and its crusher."""
+    if params.excitation == 'water':
+        we = params.water_exc
+        rf, gz_ss, gz_ssr = make_water_excitation(
+            params.fa, we.tbw, params.fov, sys, params.crt, params.fat_offres_freq,
+            binomial=we.binomial, apodization=we.apodization,
+        )
+        return rf, gz_ss, gz_ssr, None
+    rf, gz_ss, gz_ssr = make_excitation_pulse(
+        params.fa, params.rf_dur, params.rf_tb, params.fov, sys, params.crt
+    )
+    return rf, gz_ss, gz_ssr, make_fatsat_rf(params.fatsat, sys, params.fat_offres_freq)
 
 
 def make_excitation_pulse(

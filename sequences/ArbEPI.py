@@ -23,8 +23,7 @@ import pypulseq as pp
 from tqdm import tqdm
 
 from lib.calc_te_tr_delays import calc_te_tr_delays
-from lib.make_excitation_pulse import make_excitation_pulse
-from lib.make_fatsat_rf import make_fatsat_rf
+from lib.make_excitation_pulse import make_excitation_from_params
 from lib.make_prephasers import make_prephasers
 from lib.make_spoilers import make_spoilers
 from lib.mask2epi import mask2epi_laminar, mask2epi_radial, max_blip_steps
@@ -116,11 +115,9 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # normal-mode limit). See CLAUDE.md's PNS section.
     sys = derated_sys(params)
 
-    # Excitation pulse
-    rf, gz_ss, gz_ssr = make_excitation_pulse(params.fa, params.rf_dur, params.rf_tb, params.fov, sys, params.crt)
-
-    # Fat-sat pulse
-    rfsat = make_fatsat_rf(params.fatsat, sys, params.fat_offres_freq)
+    # Excitation, and the fat-sat pulse (None for water excitation, see
+    # params.excitation)
+    rf, gz_ss, gz_ssr, rfsat = make_excitation_from_params(params, sys)
 
     # Generate EPI sampling schedule from mask
     schedules, parts = _compute_schedules(
@@ -225,16 +222,19 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             y_scale = cy / params.spoil_cycles_max
             z_scale = cz / params.spoil_cycles_max
 
-            # Fat-sat (label first block in each unique section with TRID for GE)
-            seq.add_block(
-                rfsat if params.fatsat.enabled else pp.make_delay(pp.calc_duration(rfsat)),
-                pp.make_label('TRID', 'SET', 1),
-            )
-            seq.add_block(
-                pp.scale_grad(gx_spoil, x_scale),
-                pp.scale_grad(gy_spoil, y_scale),
-                pp.scale_grad(gz_spoil, z_scale),
-            )
+            # The first block of each unique section carries the GE TRID label:
+            # the fat-sat block, or the excitation when there is no fat-sat.
+            trid = pp.make_label('TRID', 'SET', 1)
+            if rfsat is not None:
+                seq.add_block(
+                    rfsat if params.fatsat.enabled else pp.make_delay(pp.calc_duration(rfsat)),
+                    trid,
+                )
+                seq.add_block(
+                    pp.scale_grad(gx_spoil, x_scale),
+                    pp.scale_grad(gy_spoil, y_scale),
+                    pp.scale_grad(gz_spoil, z_scale),
+                )
 
             # RF spoiling (quadratic phase cycling)
             rf_phase = (0.5 * params.rf_phase_0 * rf_count**2) % 360.0
@@ -243,7 +243,10 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             rf_count += 1
 
             # Slab-selective excitation + slice-select rephaser
-            seq.add_block(rf, gz_ss)
+            if rfsat is None:
+                seq.add_block(rf, gz_ss, trid)
+            else:
+                seq.add_block(rf, gz_ss)
             seq.add_block(gz_ssr)
 
             # TE padding delay
@@ -403,6 +406,8 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             # ΔTE for external phase-difference B0 mapping from preprocess.py's
             # ksp_gre_echoes cache -- see that module's STEP 2.
             'TE_degre': params.TE_degre,
+            # 1 = binomial water excitation, 0 = fat-sat + sinc (params.excitation)
+            'water_excitation': int(params.excitation == 'water'),
         },
         fmt='7.3',
     )
