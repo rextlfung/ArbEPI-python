@@ -6,7 +6,7 @@
     tSNR             object_mask, temporal_stability, tsnr_report
     analysis         sweep, benchmark, validate (one-off studies, not the production path)
 
-    .venv-recon/bin/python -m recon.utils {tsnr,sweep,benchmark,validate} ...
+    UV_PROJECT_ENVIRONMENT=.venv-recon uv run --extra recon python -m recon.utils {tsnr,sweep,benchmark,validate} ...
 """
 
 import argparse

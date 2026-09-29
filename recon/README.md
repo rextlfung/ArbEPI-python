@@ -72,7 +72,8 @@ whitening/compression matrices and deGRE-grid QA volumes; see preprocess/demo.ip
 ## Quick start
 
 ```bash
-PY=.venv-recon/bin/python
+export UV_PROJECT_ENVIRONMENT=.venv-recon
+PY="uv run --extra recon python"
 DAT=/StorageRAID/rexfung/20260915ball
 SEQ=2_6x_2.4mm
 

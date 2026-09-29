@@ -680,7 +680,7 @@ def draw(d):
                  '· .h5: complex image and per-iteration solver traces'),
     ])
     rec_y1 = out_y + out_h + 20
-    d.band(rec_y0, rec_y1, 'rec', 'RECON · .venv-recon')
+    d.band(rec_y0, rec_y1, 'rec', 'RECON · uv (.venv-recon)')
     return rec_y1 + 12
 
 

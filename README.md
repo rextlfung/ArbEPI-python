@@ -16,8 +16,8 @@ Each of the four sequences keeps its own lane from generation through the scanne
 | Sequences | main (`uv sync`) | `uv run python main.py --plot` | `output/*.seq`, `output/scan_info.mat`, diagnostic plots |
 | GE export | main | `uv run python main.py --ge` | `output/*.pge` |
 | Preprocess | `.venv-preprocessing` | `.venv-preprocessing/bin/python -m preprocess.batch_preprocess <datdir> <seq> ...` | `<datdir>/recon/<seq>_preprocessed.h5` |
-| RSS | `.venv-recon` | `.venv-recon/bin/python -m recon.rss <datdir> <seq>` | `<datdir>/recon/rss/` |
-| Iterative SENSE | `.venv-recon` | `.venv-recon/bin/python -m recon.sense <datdir> <seq> --reg mslr --B0` | `<datdir>/recon/sense_mslr_b0/` |
+| RSS | `.venv-recon` (`uv sync`, see [recon/README.md](recon/README.md#setup)) | `UV_PROJECT_ENVIRONMENT=.venv-recon uv run --extra recon python -m recon.rss <datdir> <seq>` | `<datdir>/recon/rss/` |
+| Iterative SENSE | `.venv-recon` | `UV_PROJECT_ENVIRONMENT=.venv-recon uv run --extra recon python -m recon.sense <datdir> <seq> --reg mslr --B0` | `<datdir>/recon/sense_mslr_b0/` |
 
 Before preprocessing, put the raw ScanArchives in `<datdir>/scanarchives/` and copy that session's `scan_info.mat` to `<datdir>/seqs/<seq>/` (see [preprocess/README.md](preprocess/README.md)).
 
@@ -220,7 +220,7 @@ preprocess/                Raw ScanArchives -> one reconstruction-ready file per
   utils.py                      ScanArchive (GERecon), scan_info.mat and NIfTI I/O; QA figures
   julia/                        Self-contained Julia project (Project.toml + Manifest.toml, pinned)
   demo.ipynb                    Every step on one real dataset, and the settings table
-recon/                        Image reconstruction (.venv-recon), on PyTorch/mirtorch -- see recon/README.md:
+recon/                        Image reconstruction (.venv-recon, uv sync), on PyTorch/mirtorch -- see recon/README.md:
                               min_x 0.5||Ax - y||^2 + g(x)
   operators.py               Encoding operators A: SENSE, SENSE_B0 (B0 phase accrual, time-segmented,
                                  L=32 in production -- swept, see CLAUDE.md), SENSE_B0_R2star (+ R2* decay)
