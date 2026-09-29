@@ -4774,7 +4774,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   through `load_smaps()` itself, to lock in commit `5ba6fc5`'s fix and
   catch a future regression of the `run_b0map()` silent-fallback bug item
   205 originally found.
-- [ ] **256. `recon/utils.py`'s `tsnr_report` builds a separate object mask
+- [x] **256. `recon/utils.py`'s `tsnr_report` builds a separate object mask
   for each input, so its numbers aren't comparable across runs.**
   [measured 2026-09-28, `20260924ball`, against `3f3277e`] Each file gets
   `object_mask(img, thresh_frac)`, which thresholds at a fraction of *that
@@ -4786,7 +4786,12 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   general the median over a mask that changes size is biased toward
   whatever voxels it gains or loses. Fix: build one mask for all inputs
   in `tsnr_report` (e.g. the intersection of each file's own mask, or an
-  optional caller-supplied mask), and print its size once.
+  optional caller-supplied mask), and print its size once. **Fixed
+  2026-09-29:** `tsnr_report` takes an optional `mask`, else uses the
+  intersection of every input's own `object_mask` (how the
+  20260924ball analysis built its common mask, at 0.1 of max rather than
+  the default 0.2), prints its size once, and raises on inputs
+  of different grids; `test_tsnr_report_uses_one_mask_for_all_inputs`.
 
 ## Conciseness & performance
 
