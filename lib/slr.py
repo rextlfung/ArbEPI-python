@@ -5,18 +5,56 @@ Pauly J, Le Roux P, Nishimura D, Macovski A. "Parameter relations for the
 Shinnar-Le Roux selective excitation pulse design algorithm." IEEE Trans Med
 Imaging. 1991;10(1):53-65.
 
-Ported from SigPy's `sigpy.mri.rf.slr` (BSD-3-Clause, Copyright (c) 2016,
-Frank Ong), itself a port of Pauly's MATLAB `rf_tools` that
-`toppe.utils.rf.makeslr` (the MATLAB original's fat-sat design, see
-`lib/make_fatsat_rf.py`) calls. Vendored rather than depending on sigpy for the
-same reason `sampling/pd_sample.py` is: the sequence side only needs ~100
-lines of it, and sigpy pulls in its own FFT wrappers that silently cast real
-input to complex64 (this port stays in float64/complex128 throughout).
+Ported from SigPy's `sigpy.mri.rf.slr` (license below), itself a port of
+Pauly's MATLAB `rf_tools`, which `toppe.utils.rf.makeslr` (the MATLAB
+original's fat-sat design, see `lib/make_fatsat_rf.py`) calls. Vendored rather
+than depending on sigpy, as `sampling/pd_sample.py` is: the sequence side needs
+~100 lines of it, and sigpy's FFT wrappers silently cast real input to
+complex64 (this port stays in float64/complex128).
 
 Only what `dzrf(n, tb, 'ex', ftype, d1, d2)` needs is here: `ftype` 'min'
 (minimum phase, via a factored Parks-McClellan filter) or 'ls' (linear phase,
-least squares), then the inverse SLR transform. Validated against sigpy 0.1.27's
-`dzrf` and MATLAB's `makeslr` (see tests/test_slr.py).
+least squares), then the inverse SLR transform.
+
+Validation (2026-09-29): against sigpy 0.1.27's `dzrf` at n = 200, relative
+L2 difference ~1e-5 for 'min' (sigpy's complex64 casts) and ~2e-7 for 'ls'
+(`tests/test_make_fatsat_rf.py::test_dzrf_ex_matches_sigpy`). Against MATLAB
+`makeslr(90, 1e5, 3, 4, ..., 'type', 'ex', 'ftype', 'min')` from `../toppe`
+(a one-off comparison, not a test): Bloch flip profiles agree to ~0.1 deg
+from +150 to -550 Hz; waveforms differ by 3.9% (relative L2, best alignment),
+from MATLAB's `resample` anti-aliasing filter vs. this repo's interpolation.
+
+SigPy license:
+
+    Copyright (c) 2016, Frank Ong.
+    Copyright (c) 2016, The Regents of the University of California.
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are met:
+
+    1. Redistributions of source code must retain the above copyright notice,
+       this list of conditions and the following disclaimer.
+
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+
+    3. Neither the name of the copyright holder nor the names of its
+       contributors may be used to endorse or promote products derived from
+       this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+    ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+    SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+    INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+    ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+    POSSIBILITY OF SUCH DAMAGE.
 """
 
 import numpy as np

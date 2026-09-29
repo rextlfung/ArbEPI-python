@@ -45,7 +45,13 @@ def make_fatsat_rf(fatsat: FatsatParams, sys: pp.Opts, fat_offres_freq: float) -
     design = dzrf_ex(_N_DESIGN, fatsat.tbw, fatsat.ftype)
     n = round(fatsat.dur / sys.rf_raster_time)
     # Each design sample is one hard pulse of dur/_N_DESIGN; interpolate between
-    # their centers onto the raster's sample centers.
+    # their centers onto the raster's sample centers. A min-phase design's first
+    # and last samples are isolated spikes (0.61/0.81 of peak at TBW 2, vs ~0.1
+    # next to them): the end taps of the equiripple (remez) filter it factors,
+    # an impulse whose area is part of the design -- smoothing it out raises the
+    # water stop band from 1.1 to 2.0 deg. makeslr's `resample` spreads it
+    # instead; the pulse still opens with a step (-0.32 of peak in the MATLAB
+    # original's), which the RF amplifier plays as is.
     t_design = (np.arange(_N_DESIGN) + 0.5) / _N_DESIGN
     t_raster = (np.arange(n) + 0.5) / n
     signal = np.interp(t_raster, t_design, design)

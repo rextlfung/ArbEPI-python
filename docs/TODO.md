@@ -30,6 +30,12 @@
      protocol with the new 6 ms pulse: per-shot min TR is 57.48 ms at 3–4
      cycles/voxel (fits the 1.05 s volume TR's 58.33 ms), but 58.88 ms at
      3–8, so a spoiler arm needs volume TR ≥ 1.06 s for every arm.
+     The new pulse also trades fat suppression at the band edges for water
+     preservation: 60° at fat ±100 Hz vs the Gaussian's 84° (81° vs 88° at
+     ±50 Hz). The ball phantom has no fat, so this scan can't see that side;
+     check it on something with fat (an oil phantom, or in vivo with fat-sat
+     on/off) before relying on the default for human work, and retune
+     `FatsatParams.tbw`/`dur` with `flip_profile` if needed.
   3. Look into the ~1.4° per-shot phase jitter that makes up most of the 0.58%
      left with fat-sat off: frequency drift or receiver phase, or correct it
      per shot from the data. Then check the result against the ~3% BOLD target.

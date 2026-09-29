@@ -699,6 +699,12 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   All `OK`; no `calc_te_tr_delays` warning, realized TE 30.00 ms, echo
   spacing 0.696 ms. `deGRE.seq` now has the least PNS margin of the four
   (2.6 percentage points), not `ArbEPI.seq`.
+- **Changed since (2026-09-29, SLR fat-sat, item 255; one build, same
+  params):** `ArbEPI.seq`/`EPIcal.seq` max B1 0.0440 → 0.0334 G (the
+  Gaussian fat-sat was the B1 peak), peak PNS 69.9% / 66.4%, per-shot min
+  TR 60.46 → 62.46 ms (+2 ms of fat-sat; 4.20 ms of slack left at the
+  66.67 ms per-shot TR). Both still all `OK`, no `calc_te_tr_delays`
+  warning, and both `.pge` exports run clean.
 
 ## Correctness
 
