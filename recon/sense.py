@@ -9,7 +9,7 @@ decides the solver (recon/solvers.py):
     --reg mslr     multi-scale low-rank         -> POGM (or FPGM / PGM)
     --reg wavelet-tv  L1-wavelet + TV, per frame   -> PDHG (primal-dual)
 
-    .venv-recon/bin/python -m recon.sense <datdir> <seqname> --reg mslr \\
+    UV_PROJECT_ENVIRONMENT=.venv-recon uv run --extra recon python -m recon.sense <datdir> <seqname> --reg mslr \\
         --patch 6 6 6 --stride 3 3 3 [--B0 [--R2star]] [--frames 0,1,2] [--niter 200]
 
 Reads <datdir>/recon/<seqname>_preprocessed.h5 (preprocess/'s output: k-space,

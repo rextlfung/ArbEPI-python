@@ -61,7 +61,7 @@
 <rect x="0" y="1000" width="1100" height="904" rx="10" class="band pre"/>
 <text x="30" y="1452.0" transform="rotate(-90 30 1452.0)" text-anchor="middle" class="rail pre">PREPROCESS · .venv-preprocessing</text>
 <rect x="0" y="1954" width="1100" height="951" rx="10" class="band rec"/>
-<text x="30" y="2429.5" transform="rotate(-90 30 2429.5)" text-anchor="middle" class="rail rec">RECON · .venv-recon</text>
+<text x="30" y="2429.5" transform="rotate(-90 30 2429.5)" text-anchor="middle" class="rail rec">RECON · uv (.venv-recon)</text>
 <rect x="60" y="28" width="270" height="88" rx="6" class="box seq"/>
 <text x="76" y="50" class="t-title">Scanner specs</text>
 <text x="76" y="68" class="t-mono">scanners.py</text>

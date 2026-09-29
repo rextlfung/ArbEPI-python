@@ -4,7 +4,7 @@ sqrt(sum_c |x_c|^2). Non-iterative, no sensitivity maps -- a quick first look.
 Frames are batched onto the GPU (as many per batch as fit in max_batch_bytes)
 and transformed together.
 
-    .venv-recon/bin/python -m recon.rss <datdir> <seqname> [--device cpu]
+    UV_PROJECT_ENVIRONMENT=.venv-recon uv run --extra recon python -m recon.rss <datdir> <seqname> [--device cpu]
 
 Reads <datdir>/recon/<seqname>_preprocessed.h5 and writes
 <datdir>/recon/rss/<seqname>_recon.{nii.gz,json}.

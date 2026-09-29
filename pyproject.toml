@@ -41,10 +41,10 @@ preprocessing = [
 # wavelet-TV priors, started as a port of ../mslr-recon (Julia/MIRT.jl) on
 # PyTorch/mirtorch. Deliberately excluded from the core and `preprocessing`
 # dependency sets: torch is a large, often CUDA-version-specific install (see
-# recon/README.md's setup section), and has no reason to share a venv with
-# GERecon's Python-3.10/numpy<2.0-locked `preprocessing` extra -- create a
-# dedicated venv for this extra (`.venv-recon`) the same way `preprocessing`
-# gets its own `.venv-preprocessing`.
+# recon/README.md's setup section). Unlike `preprocessing`, it is installed from
+# uv.lock, into its own venv so syncing the main `.venv` without this extra
+# doesn't uninstall torch (`uv sync` is exact):
+#   UV_PROJECT_ENVIRONMENT=.venv-recon uv sync --extra recon --extra test
 recon = [
     "torch>=2.2",
     "mirtorch>=0.3.1",
@@ -54,6 +54,7 @@ recon = [
     "scipy>=1.10",  # needed by mirtorch; floor pinned here
     "matplotlib",  # recon/utils.py's tSNR report figures
     "ipykernel",  # to run recon/demo.ipynb in this venv
+    "nbclient",  # to execute notebooks from scripts (nbclient.NotebookClient)
 ]
 
 [tool.setuptools]
