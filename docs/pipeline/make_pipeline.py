@@ -618,23 +618,25 @@ def draw(d):
     head_y = obj_y + obj_h + 28
     for x, text in zip(cols, ['A · ENCODING OPERATOR', 'R · REGULARIZER  (--reg)', 'SOLVER']):
         d.label(x, head_y, text, 'start', 't-colhead')
-    operators = [  # (lines, optional?)
+    operators = [  # (lines, optional?); one definition per 'text' line
         ([('title', 'SENSE'), ('mono', 'operators.SENSE'),
-          ('math', r'A = P\,F\,S'),
-          ('para', 'S: coil sensitivity maps (smaps)'),
-          ('para', 'F: centered 3D FFT'),
-          ('para', 'P: keep only the sampled (ky, kz) points (no zero-filled grid)')], False),
+          ('math', r'A = \Omega\,F\,S'),
+          ('text', 'S: coil sensitivity maps (smaps)'),
+          ('text', 'F: centered 3D FFT'),
+          ('text', 'Ω: keep only the sampled (ky, kz)')], False),
         ([('title', '+ B0 off-resonance (--B0)'), ('mono', 'operators.SENSE_B0'),
-          ('math', r'A = \sum_{l=1}^{L} W_l\, P\,F\,S\, \Phi_l'),
+          ('math', r'A = \sum_{l=1}^{L} W_l\, \Omega\,F\,S\, \Phi_l'),
           ('math', r'\Phi_l = \mathrm{diag}(e^{\,i 2\pi \Delta f(\mathbf{r})\, t_l})'),
-          ('para', 'Φₗ: B0 phase at segment time tₗ, from b0_map (Δf)'),
-          ('para', 'Wₗ: per-sample interpolation weights across the echo train'),
-          ('para', 'L = 32 time segments')], True),
+          ('text', 'Φₗ: B0 phase at segment time tₗ'),
+          ('text', 'Δf: field map (b0_map)'),
+          ('text', 'Wₗ: per-sample segment weights'),
+          ('text', 'L: number of time segments (32)')], True),
         ([('title', '+ R2* decay (--R2star)'), ('mono', 'operators.SENSE_B0_R2star'),
           ('math', r'\Phi_l = \mathrm{diag}(e^{\,\psi(\mathbf{r})\,(t_l - \mathrm{TE})})'),
           ('math', r'\psi = i 2\pi \Delta f(\mathbf{r}) - R_2^*(\mathbf{r})'),
-          ('para', 'the same A as + B0, with R2* decay from r2star_map added to Φₗ'),
-          ('para', 'needs --B0; the image is referenced to the nominal TE')], True),
+          ('text', 'R₂*: R2* map (r2star_map)'),
+          ('text', 'TE: nominal echo time'),
+          ('text', 'A as in + B0; needs --B0')], True),
     ]
     regularizers = [  # (R, the solver it uses)
         ([('title', 'None (--reg none)'), ('math', r'R(x) = 0'),
