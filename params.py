@@ -286,7 +286,10 @@ def load_params(output_dir: str = 'output') -> Params:
     # (slab-selective binomial 1-3-3-1 water excitation, no fat-sat or crusher:
     # 7.3 ms shorter per-shot min TR and 1.1 ms longer min TE on the default
     # protocol, but water off resonance gets less flip -- see
-    # lib/make_water_excitation.py and `water_exc` below).
+    # lib/make_water_excitation.py and `water_exc` below). Dropping the crusher
+    # also halves the random spoiling between excitations (only the
+    # post-readout spoiler remains); raise spoil_cycles_min/max to 6-8 to keep
+    # fat-sat mode's per-TR spoiling range.
     excitation = 'fatsat'
 
     # Number of receive coil channels (used for the noise prescan).

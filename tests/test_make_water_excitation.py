@@ -103,8 +103,25 @@ def test_water_excitation_timing(setup):
     assert rf.freq_offset == 0
     t_c = rf.delay + pp.calc_rf_center(rf)[0] - gz.delay
     t = np.linspace(t_c, gz.tt[-1], 200001)
-    after = np.trapezoid(np.interp(t, gz.tt, gz.waveform), t)
+    g = np.interp(t, gz.tt, gz.waveform)
+    after = np.sum(0.5 * (g[1:] + g[:-1]) * np.diff(t))  # exact: piecewise linear
     assert after + gzr.area == pytest.approx(0, abs=1e-3 * abs(gzr.area))
+
+
+def test_water_excitation_te_anchor_is_physical(setup):
+    """rf.center anchors TE and the saved per-echo times (recon's B0
+    correction uses them), and the sequence tests only compare quantities
+    derived from rf.center. Check it against the physics instead: at small
+    flip, water's phase after the rephaser grows with off-resonance as
+    2 pi f (t_end - t_eff), so its slope gives the effective excitation time.
+    (At the 18 deg default the slope moves ~13 us from Bloch nonlinearity.)"""
+    p, sys_, _ = setup
+    rf, gz, gzr = make_water_excitation(2.0, 8, p.fov, sys_, p.crt, p.fat_offres_freq)
+    f = np.array([-20.0, -10.0, 0.0, 10.0, 20.0])
+    mxy, _ = simulate_excitation(rf, gz, gzr, f, [0.0])
+    slope = np.polyfit(f, np.unwrap(np.angle(mxy[0])), 1)[0] / (2 * np.pi)
+    to_end = pp.calc_duration(rf, gz) - (rf.delay + pp.calc_rf_center(rf)[0]) + pp.calc_duration(gzr)
+    assert slope == pytest.approx(to_end, abs=1e-6)
 
 
 def test_excitation_factory_modes():
