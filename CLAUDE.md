@@ -853,7 +853,7 @@ directly (`<seqname>_preprocessed.h5`'s `ksp_epi_zf`, `smaps`, `b0_map`,
 
 **All of `recon/` runs in `.venv-recon`** (the `recon` optional-dependency
 group: torch, mirtorch, h5py, nibabel, PyWavelets, scipy, matplotlib,
-ipykernel), a dedicated venv since torch has no reason to share one with
+ipykernel, nbclient), a dedicated venv since torch has no reason to share one with
 GERecon's Python-3.10/numpy<2.0-locked `preprocessing` extra. Unlike
 `.venv-preprocessing` it is built from `uv.lock` (`UV_PROJECT_ENVIRONMENT=
 .venv-recon uv sync --extra recon --extra test`, 2026-09-29). It stays out of

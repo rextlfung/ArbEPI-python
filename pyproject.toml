@@ -54,6 +54,7 @@ recon = [
     "scipy>=1.10",  # needed by mirtorch; floor pinned here
     "matplotlib",  # recon/utils.py's tSNR report figures
     "ipykernel",  # to run recon/demo.ipynb in this venv
+    "nbclient",  # to execute notebooks from scripts (nbclient.NotebookClient)
 ]
 
 [tool.setuptools]

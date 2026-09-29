@@ -49,7 +49,7 @@ that build doesn't fit your GPU, pin a different one in `pyproject.toml`
 entry for `torch`) and re-lock, rather than installing it by hand.
 
 Notebooks (`demo.ipynb`) use the plain `python3` kernel, and `ipykernel` is in
-the `recon` extra, so an editor can use `.venv-recon/bin/python` as the kernel
+the `recon` extra (as is `nbclient`, for executing notebooks from a script), so an editor can use `.venv-recon/bin/python` as the kernel
 directly. To run Jupyter itself, layer it on with `--with` rather than
 installing it into the env (the next sync would remove it):
 
