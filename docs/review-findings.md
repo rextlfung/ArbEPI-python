@@ -2704,7 +2704,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   re-estimating via the single-calibration projection path -- a second
   ESPIRiT run, and a different `smaps` than the one STEP 3 had just
   exported to NIfTI. Fixed: STEP 3 calls `load_smaps`.
-- [ ] **255. The fat-sat pulse from `lib/make_fatsat_rf.py` substantially
+- [x] **255. The fat-sat pulse from `lib/make_fatsat_rf.py` substantially
   excites water, and that is the main source of the temporal fluctuation
   in static scans.** [measured 2026-09-28, `20260924ball`, against
   `3f3277e`] The pypulseq Gaussian (90°, 4 ms, TBW 3, at −447 Hz) stands in
@@ -2737,6 +2737,21 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   frequency offset or flip chosen against the measured profile, or
   water-selective excitation instead. Re-run the Bloch check above and
   repeat the A/C comparison. Next steps are tracked in `docs/TODO.md`.
+  **Fixed in code 2026-09-29** (scan confirmation still pending, see
+  `docs/TODO.md`): `make_fatsat_rf` now plays a 90° min-phase SLR pulse
+  (`lib/slr.py`, a scipy-only port of sigpy's `dzrf` 'ex' path, matching it
+  to ~1e-5), TBW 2 over 6 ms (a 333 Hz band). Bloch-simulated: water
+  ≤ 1.6° over −150..+150 Hz and ≤ 3.8° down to −200 Hz; fat ≥ 81° within
+  ±50 Hz and ≥ 60° within ±100 Hz, no overshoot. The MATLAB original's own
+  parameters (min-phase SLR, TBW 3, 4 ms) would not have fixed this: 9° on
+  resonance, 28° at −100 Hz. The "water down to −300 Hz" above was the
+  whole field map; inside the object (ESPIRiT support), 99% of voxels are
+  within −57..+35 Hz in this phantom and −144..+79 Hz in vivo
+  (`20260922xiaokai`), which is what the stop band is sized against. The
+  +2 ms fits the per-shot TR slack of both the default protocol (6.2 ms)
+  and this session's 5.4 mm one (2.85 ms; 1.46 ms with B's 8-cycle
+  spoiler). `tests/test_make_fatsat_rf.py` locks in the profile, and checks
+  that the old Gaussian fails it (26° on resonance).
 
 ## Consistency & documentation
 

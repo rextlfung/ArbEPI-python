@@ -19,14 +19,17 @@
   itself is stable: an unencoded EPIcal time series gave 0.015° odd/even phase std.
   Details in `docs/review-findings.md` item 255 and
   `/StorageRAID/rexfung/20260924ball/analysis/README.md`. Next:
-  1. Replace the pulse with one that leaves water alone: longer, an SLR design
-     like the MATLAB original's, or water-selective excitation. Check the
-     design with a Bloch simulation of water at 0 to −300 Hz before scanning.
+  1. ~~Replace the pulse with one that leaves water alone.~~ Done 2026-09-29:
+     min-phase SLR, TBW 2, 6 ms (item 255 has the Bloch numbers). Check any
+     further change with `lib/make_fatsat_rf.py`'s `flip_profile`.
   2. Scan the new pulse against fat-sat off and the current baseline, on the
      same protocol in one session. Repeat the baseline last as a drift control;
      that repeat wasn't acquired in `20260924ball`. Also keep the 3–8
      cycles/voxel spoiler as a factor, since its remaining 1.83% was a per-shot
-     signal level, not refocused echoes.
+     signal level, not refocused echoes. Timing on `20260924ball`'s 5.4 mm
+     protocol with the new 6 ms pulse: per-shot min TR is 57.48 ms at 3–4
+     cycles/voxel (fits the 1.05 s volume TR's 58.33 ms), but 58.88 ms at
+     3–8, so a spoiler arm needs volume TR ≥ 1.06 s for every arm.
   3. Look into the ~1.4° per-shot phase jitter that makes up most of the 0.58%
      left with fat-sat off: frequency drift or receiver phase, or correct it
      per shot from the data. Then check the result against the ~3% BOLD target.

@@ -528,11 +528,18 @@ for anyone re-deriving this port's validation record against a fresh
 `../PulCeq` checkout. `write_to_ge_from_seq.m`/`ge_feasibility_check.m` (the
 former MATLAB shell-out targets) were removed earlier, once `ge/ge_export.py`
 no longer called them, for the same reason.
-- **Fat-sat RF pulse**: the MATLAB original designs this via GE's
-  `toppe.utils.rf.makeslr` (min-phase SLR), which has no Python equivalent.
-  `lib/make_fatsat_rf.py` uses pypulseq's built-in `make_gauss_pulse`
-  instead — simpler, less sharp spectral profile, no bit-exact-waveform
-  requirement.
+- **Fat-sat RF pulse**: a 90° min-phase SLR pulse, like the MATLAB
+  original's `toppe.utils.rf.makeslr`, designed by `lib/slr.py` (a
+  scipy-only port of sigpy's `dzrf` 'ex' path, vendored rather than adding
+  sigpy to the sequence side, like `sampling/pd_sample.py`). Its parameters
+  are *not* the original's: TBW 2 over 6 ms instead of TBW 3 over 4 ms, so
+  the stop band covers in-object water (−200..+150 Hz). The fat-sat plays
+  every shot, and any water it tips becomes coherence the random spoilers
+  refocus differently each frame: the port's earlier pypulseq Gaussian
+  tipped on-resonance water 26° and was the main source of temporal
+  fluctuation in static scans (`docs/review-findings.md` item 255). Check
+  any parameter change with `lib/make_fatsat_rf.py`'s `flip_profile` (a
+  Bloch simulation); `tests/test_make_fatsat_rf.py` guards the default.
 - **Plotting** (`plotting/plotting.py`): static, non-interactive matplotlib
   equivalents of the sampling-mask/trajectory/PSF plots. The interactive
   scroll/slider mask viewer from the MATLAB repo is not ported — no
