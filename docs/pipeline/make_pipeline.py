@@ -92,6 +92,9 @@ STYLE = f"""
 .t-note-b {{ font: 600 11.5px {SANS}; fill: var(--hand); }}
 .t-note-mono {{ font: 400 11px {MONO}; fill: var(--hand); }}
 .t-small {{ font: 400 11.5px {SANS}; fill: var(--muted); }}
+.t-colhead {{ font: 600 11px {SANS}; fill: var(--muted); letter-spacing: .06em; }}
+.t-math {{ fill: var(--fg); stroke: none; }}
+.rule {{ stroke: var(--line); stroke-opacity: .25; stroke-width: 1; }}
 """
 
 # Upper-bound pixel width per character for each text class, used only to
@@ -116,6 +119,7 @@ class Drawing:
     def __init__(self):
         self.back = []  # environment bands, drawn behind everything else
         self.out = []
+        self.front = []  # chips, drawn over the arrows they sit on
 
     def add(self, s):
         self.out.append(s)
@@ -141,10 +145,10 @@ class Drawing:
     def chip(self, cx, cy, text, cls=''):
         """A file or array passed between steps, centered on an arrow."""
         w = round(len(text) * 7.2 + 22)
-        self.add(f'<rect x="{cx - w / 2:.1f}" y="{cy - 11}" width="{w}" height="22" rx="11" '
-                 f'class="chip {cls}"/>')
-        self.add(f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" class="t-chip">'
-                 f'{escape(text)}</text>')
+        self.front.append(f'<rect x="{cx - w / 2:.1f}" y="{cy - 11}" width="{w}" height="22" '
+                          f'rx="11" class="chip {cls}"/>')
+        self.front.append(f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" class="t-chip">'
+                          f'{escape(text)}</text>')
         return w
 
     def tag(self, x, y, w, h, lines, cls=''):
@@ -157,6 +161,15 @@ class Drawing:
             self.add(f'<text x="{x + 14}" y="{ty}" class="t-{kind}">{escape(text)}</text>')
         if ty > y + h - 8:
             raise ValueError(f'{lines[0][1]!r}: text runs past the bottom of its tag')
+
+    def math(self, x, baseline, tex, size=15, anchor='start'):
+        """LaTeX (matplotlib mathtext, Computer Modern) drawn as SVG paths, so it
+        needs no fonts or MathJax when GitHub shows the SVG as an image. Returns
+        the rendered width in px."""
+        path, width = _math_path(tex, size)
+        x0 = x - width / 2 if anchor == 'middle' else x
+        self.add(f'<path transform="translate({x0:.1f} {baseline})" class="t-math" d="{path}"/>')
+        return width
 
     def arrow(self, d, cls='flow'):
         marker = 'ah-hand' if cls == 'hand' else 'ah'
@@ -199,6 +212,26 @@ class Drawing:
         if len(text) * CHAR_PX[kind] > avail:
             raise ValueError(f'{text!r} is likely wider than its box ({avail}px); '
                              'shorten it or widen the box')
+
+
+def _math_path(tex, size):
+    """(SVG path data with y pointing down and the baseline at 0, width) for `tex`."""
+    import matplotlib
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.path import Path
+    from matplotlib.textpath import TextPath
+
+    with matplotlib.rc_context({'mathtext.fontset': 'cm'}):
+        tp = TextPath((0, 0), f'${tex}$', size=size, prop=FontProperties(size=size))
+    cmd = {Path.MOVETO: 'M', Path.LINETO: 'L', Path.CURVE3: 'Q', Path.CURVE4: 'C'}
+    parts = []
+    for verts, code in tp.iter_segments(curves=True, simplify=False):
+        if code == Path.CLOSEPOLY:
+            parts.append('Z')
+            continue
+        pts = ' '.join(f'{vx:.2f} {-vy:.2f}' for vx, vy in verts.reshape(-1, 2))
+        parts.append(f'{cmd[code]}{pts}')
+    return ''.join(parts), tp.get_extents().x1
 
 
 # x centers of the four sequence lanes, kept from generation to preprocessing
@@ -336,7 +369,7 @@ def draw(d):
     ])
     d.band(sc_y - 22, sc_y + sc_h + 20, 'scan', 'SCANNER')
 
-    # ---- preprocess, Stage A: one step per lane, then the EPI chain down lane 4 ----
+    # ---- preprocess, raw data: one step per lane, then the EPI chain down lane 4 ----
     pre_y0 = sc_y + sc_h + 70
     sa_y0 = pre_y0 + 18
     sb_y, sbw = sa_y0 + 36, 170
@@ -344,14 +377,14 @@ def draw(d):
     sa_y1 = scat_y + 104 + 18
     for key in ('noise', 'cal', 'epi'):
         d.arrow(f'M{LANE[key]} {sc_y + sc_h} V{sb_y - 2}')
-    archives = {'gre': 'gre.h5 · shared', 'noise': '<seq>_noise.h5 (opt.)',
+    archives = {'gre': 'gre.h5', 'noise': '<seq>_noise.h5',
                 'cal': '<seq>_cal.h5', 'epi': '<seq>_epi.h5'}
     for key, text in archives.items():
         d.chip(LANE[key], sc_y + sc_h + 45, text)
 
     d.add(f'<rect x="255" y="{sa_y0}" width="644" height="{sa_y1 - sa_y0}" rx="8" '
           'class="group pre"/>')
-    d.label(262, sa_y1 + 22, 'Stage A (dotted) · all coils, cached, resumable', 'start',
+    d.label(262, sa_y1 + 22, 'Raw-data processing (dotted) · all coils, cached, resumable', 'start',
             't-section')
     ex, ew = LANE['epi'] - sbw // 2, sbw + 24  # lane-4 boxes: left edge, width (wider titles)
     d.box(LANE['noise'] - sbw // 2, sb_y, sbw, 104, 'pre', [
@@ -394,7 +427,7 @@ def draw(d):
     d.arrow(f'M1070 {info_y + 84} V{scat_y + 52} H{ex + ew + 2}', 'hand')
     d.arrow(f'M1070 {sb_y + 60} H{ex + ew + 2}', 'hand')
 
-    # ---- preprocess: deGRE maps | coil compression, R2* | k-space; then Stage B ----
+    # ---- preprocess: deGRE maps | coil compression, R2* | k-space; then the output ----
     col_l, col_m, col_r = (55, 250), (345, 240), (625, 250)  # (x, width)
     ya, rh = sa_y1 + 66, 104
     yb, yc = ya + rh + 40, ya + 2 * (rh + 40)
@@ -415,7 +448,7 @@ def draw(d):
                  'of the energy'),
     ])
     d.box(col_r[0], ya, col_r[1], rh, 'pre', [
-        ('title', 'Compress k-space'), ('mono', 'Stage B · write_output()'),
+        ('title', 'Compress k-space'), ('mono', 'preprocess.py · write_output()'),
         ('para', 'the cached k-space frame by frame with T, and the gridded noise → noise_var'),
     ])
     mid_a = ya + rh // 2
@@ -453,10 +486,14 @@ def draw(d):
     d.arrow(f'M{b0_cx} {yb + rh} V{yc - 2}', 'flow dashed')
     d.arrow(f'M{gcc_cx} {yb + rh} V{yc - 2}', 'flow dashed')
     d.arrow(f'M{r_cx} {yb + rh} V{yc - 2}')
+    d.label(r_cx + 8, yc - 14, 'ksp_calib', 'start')
+    r_x1 = col_r[0] + col_r[1]  # compressed k-space goes around the calibration box
+    d.arrow(f'M{r_x1} {mid_a} H{r_x1 + 22} V{yc + 46} H{r_x1 + 2}')
+    d.label(r_x1 + 30, mid_b + 4, 'ksp_epi_zf', 'start')
     wh = 92
     d.box(55, yc, 820, wh, 'pre', [
-        ('title', 'Stage B · write <seq>_preprocessed.h5'),
-        ('mono', 'preprocess.py · write_output()'),
+        ('title', 'Write all output to a single HDF5 file'),
+        ('mono', 'write_output() → <seq>_preprocessed.h5'),
         ('text', 'ksp_epi_zf, ksp_calib, smaps, b0map_hz, r2star, omegas, echo_times, W, '
                  'cc_matrix; attrs noise_var, t_ref_s'),
         ('text', 'the three maps also go to .nii.gz + .json for viewing'),
@@ -466,31 +503,50 @@ def draw(d):
 
     # ---- recon ----
     rec_y0 = pre_y1 + 50
-    bus_y, r_y, r_h = rec_y0 + 12, rec_y0 + 28, 152
-    rss_cx, sense_cx = 200, 620
+    bus_y, r_y, r_h = rec_y0 + 12, rec_y0 + 28, 234
+    rss_x, rss_w, sense_x, sense_w = 55, 250, 325, 550
+    rss_cx, sense_cx = rss_x + rss_w // 2, sense_x + sense_w // 2
     d.line(f'M470 {yc + wh} V{bus_y}')
     d.line(f'M{rss_cx} {bus_y} H{sense_cx}')
     d.arrow(f'M{rss_cx} {bus_y} V{r_y - 2}')
     d.arrow(f'M{sense_cx} {bus_y} V{r_y - 2}')
     d.chip(470, pre_y1 + 25,
            '<seq>_preprocessed.h5 · ksp_epi_zf, smaps, b0map_hz, r2star, echo_times')
-    d.box(55, r_y, 290, r_h, 'rec', [
+    d.box(rss_x, r_y, rss_w, 152, 'rec', [
         ('title', 'Root-sum-of-squares'), ('title', 'coil-combined IFT'),
         ('title', 'reconstruction'), ('mono', 'rss.py'),
         ('text', 'zero-filled inverse FFT per coil,'), ('text', 'then RSS over coils'),
         ('text', 'first look, aliasing kept'),
     ])
-    d.box(365, r_y, 510, r_h, 'rec', [
+
+    # Iterative SENSE: the objective, then what A and g can be
+    d.box(sense_x, r_y, sense_w, r_h, 'rec', [
         ('title', 'Iterative SENSE reconstruction'),
         ('mono', 'sense.py · operators.py · regularizers.py · solvers.py'),
-        ('text', 'min over x of ½‖Ax − y‖² + g(x), y = the sampled k-space points only'),
-        ('text', 'A: SENSE (coil maps · 3D FFT · sampling), always'),
-        ('indent', '+ B0 off-resonance, optional (--B0): time-segmented, L = 32'),
-        ('indent', '+ R2* decay, optional (--R2star, with B0): image at nominal TE'),
-        ('text', 'g → solver: none → CG · low rank → POGM · wavelet + TV → PDHG'),
-        ('text', 'k-space scaled to unit noise variance; λ defaults to R'),
     ])
-    d.arrow(f'M875 {r_y + 76} H903')
+    d.math(sense_cx, r_y + 78,
+           r'\hat{x} = \arg\min_x \ \dfrac{1}{2}\,\|Ax - y\|_2^2 + g(x)', size=18,
+           anchor='middle')
+    d.line(f'M{sense_x + 16} {r_y + 102} H{sense_x + sense_w - 16}', 'rule')
+    ax, gx = sense_x + 16, sense_x + 392  # column x: A (encoding), g (regularizer)
+    d.label(ax, r_y + 122, 'A · ENCODING OPERATOR', 'start', 't-colhead')
+    d.label(gx, r_y + 122, 'g → SOLVER  (--reg)', 'start', 't-colhead')
+    rows = [r_y + 146, r_y + 170, r_y + 194]
+    mx = ax + 112  # x where the math/description column starts
+    d.label(ax, rows[0], 'SENSE', 'start', 't-text')
+    d.label(mx, rows[0], 'coil maps → 3D FFT → samples', 'start', 't-text')
+    d.label(ax, rows[1], '+ B0  (--B0)', 'start', 't-text')
+    w = d.math(mx, rows[1], r'\exp(i 2\pi\, \Delta f(\mathbf{r})\, t)', size=15)
+    d.label(mx + w + 10, rows[1], 'time-segmented, L = 32', 'start', 't-small')
+    d.label(ax, rows[2], '+ R2*  (--R2star)', 'start', 't-text')
+    d.math(mx, rows[2], r'\exp(-R_2^*(\mathbf{r})\,(t - \mathrm{TE}))', size=15)
+    for y, (reg, solver) in zip(rows, [('none', 'CG'), ('lowrank', 'POGM'),
+                                       ('wavelet-tv', 'PDHG')]):
+        d.label(gx, y, reg, 'start', 't-chip')
+        d.label(gx + 88, y, f'→ {solver}', 'start', 't-text')
+    d.label(ax, r_y + 220, 'y: sampled k-space points only, scaled to unit noise variance · '
+            'λ = R by default', 'start', 't-small')
+    d.arrow(f'M{sense_x + sense_w} {r_y + 76} H903')
     d.tag(905, r_y + 18, 180, 116, [
         ('mono-b', '<datdir>/recon/'),
         ('mono-s', 'sense_<reg>/'),
@@ -508,8 +564,8 @@ def render(theme):
     tokens = ''.join(f'--{k}: {v}; ' for k, v in THEMES[theme].items())
     d = Drawing()
     draw_legend(d)
-    legend = d.out
-    d.out = []
+    legend = d.out + d.front
+    d.out, d.front = [], []
     h = draw(d) + LEGEND_H
     head = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {h}" width="{W}" '
@@ -522,7 +578,8 @@ def render(theme):
                     f'markerHeight="7" orient="auto-start-reverse">'
                     f'<path d="M0,0 L10,5 L0,10 z" class="{mid}"/></marker>')
     head += ['</defs>', f'<rect width="{W}" height="{h}" rx="12" class="bg"/>']
-    body = [f'<g transform="translate(0 {LEGEND_H})">', *d.back, *d.out, '</g>\n</svg>\n']
+    body = [f'<g transform="translate(0 {LEGEND_H})">', *d.back, *d.out, *d.front,
+            '</g>\n</svg>\n']
     return '\n'.join(head + legend + body)
 
 
