@@ -1986,11 +1986,15 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   applied to only 1 of 7 ssh/scp invocations in the file, leaving the
   identical silent-failure mode live on every other hop.** [measured code
   state; the underlying failure mode was previously verified live by this
-  same commit's own investigation, not independently re-triggered here]
-  The commit's own comment (`ge/coppe.py:129-134`) states, as an empirical
+  same commit's own investigation, not independently re-triggered here;
+  citation updated 2026-09-29 against `fd7b106` -- line numbers below
+  shifted ~10 lines, and hop-2's `BatchMode=yes`/`PreferredAuthentications=
+  publickey` has since been replaced by an Okta askpass (see item 173);
+  the `-q` finding itself is unchanged]
+  The commit's own comment (`ge/coppe.py:133-135`) states, as an empirical
   finding, that `-q` "suppresses the actual auth-failure text too (e.g.
   'Host key verification failed.'), not just the progress meter" -- and
-  removes `-q` from `_TRANSFER_SCRIPT`'s hop-2 `scp` (`ge/coppe.py:141-142`)
+  removes `-q` from `_TRANSFER_SCRIPT`'s hop-2 `scp` (`ge/coppe.py:151-152`)
   for exactly that reason, alongside a new `_ssh_env()` helper (stripping
   `DISPLAY`/`SSH_ASKPASS`/`SSH_ASKPASS_REQUIRE`) and `BatchMode=yes`/
   `PreferredAuthentications=publickey` to force a fast, diagnosable
@@ -1998,9 +2002,9 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   structural fix, not a fragile stderr-text-classification one (no
   output-heuristic grepping was introduced anywhere in the diff). But `-q`
   is still present, unremoved, on every other ssh/scp call in the module:
-  `ge/coppe.py:241` (`discover_relay_ip`'s `ssh -q user@relay`), `:264` and
-  `:276` (`stage_tarball_on_relay`'s `ssh -q ... mktemp -d` and `scp -q`),
-  `:293` (`cleanup_relay_staging`'s `ssh -q ... rm -rf`), and `:327-329`
+  `ge/coppe.py:251` (`discover_relay_ip`'s `ssh -q user@relay`), `:274` and
+  `:286` (`stage_tarball_on_relay`'s `ssh -q ... mktemp -d` and `scp -q`),
+  `:303` (`cleanup_relay_staging`'s `ssh -q ... rm -rf`), and `:337-339`
   (`build_ssh_prefix`, both the outer local->epyc/goliath hop and the
   nested epyc/goliath->scanner hop -- used by every `run_remote` call:
   `query_existing_entries`, `query_run_entries`, `claim_entry_numbers`,
@@ -2015,7 +2019,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   set out to fix, just on a different hop. Not a rare edge case: hop 1
   (`query_run_entries`, the very first network call `main()` makes) is on
   the critical path of every single invocation. `run_remote`'s docstring
-  (`ge/coppe.py:348-361`) discusses only the `DISPLAY`/askpass side of this
+  (`ge/coppe.py:361-372`) discusses only the `DISPLAY`/askpass side of this
   fix and doesn't mention that `-q` independently undermines the
   "surfaces as diagnosable error" property the commit message claims for
   the fix as a whole. Fix direction: drop `-q` from the same five
@@ -4506,7 +4510,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   is now fixed, so this no longer needs a "modulo" carve-out) for a couple
   of `ETL` parities, and (b) a
   `make_spoilers.py`-level duration/area unit test per item 142.
-- [x] **173.** Resolved by `150ff82` and the follow-up that closed this item:
+- [x] **173.** Resolved by `150ff82` and `fd7b106`:
   `tests/test_coppe_transfer.py` runs the real `_TRANSFER_SCRIPT` under bash
   against a fake `scp` (checking the prompts reach stderr, the entry files
   install, and the askpass is removed on success and on failure), and
