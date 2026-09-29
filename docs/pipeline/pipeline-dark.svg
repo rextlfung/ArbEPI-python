@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1600" width="1100" height="1600" role="img" aria-label="ArbEPI workflow: scan configuration, sampling masks and echo-train partitioning produce four Pulseq sequences (deGRE, noise, EPIcal, ArbEPI); these are exported to GE .pge files and run on the scanner; each sequence&#x27;s raw ScanArchive feeds its own preprocessing step (whitening, odd/even calibration, gridding, coil maps and B0); the preprocessed file feeds RSS or iterative SENSE reconstruction. scan_info.mat bypasses the scanner and carries the sampling schedule to preprocessing.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1872" width="1100" height="1872" role="img" aria-label="ArbEPI workflow: scan configuration, sampling masks and echo-train partitioning produce four Pulseq sequences (deGRE, noise, EPIcal, ArbEPI); these are exported to GE .pge files and run on the scanner; each sequence&#x27;s raw ScanArchive feeds its own preprocessing step (whitening, odd/even calibration, gridding, coil maps and B0); the preprocessed file feeds RSS or iterative SENSE reconstruction. scan_info.mat bypasses the scanner and carries the sampling schedule to preprocessing.">
 <title>ArbEPI pipeline</title>
 <style>svg { --bg: #10141a; --fg: #e3e7ed; --muted: #9ba5b3; --line: #b4bdc9; --box: #19202a; --chip: #232b37; --seq-band: #15213a; --seq: #8cb2ee; --scan-band: #282116; --scan: #d7a864; --pre-band: #13281e; --pre: #78c8a0; --rec-band: #221b33; --rec: #b7a0e8; --hand: #f0906b; --hand-bg: #3a2119; }
 .bg { fill: var(--bg); }
@@ -39,7 +39,7 @@
 <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
 <marker id="ah-hand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-hand"/></marker>
 </defs>
-<rect width="1100" height="1600" rx="12" class="bg"/>
+<rect width="1100" height="1872" rx="12" class="bg"/>
 <rect x="20" y="11" width="26" height="16" rx="4" class="box plain"/>
 <text x="54" y="24" text-anchor="start" class="t-legend">processing step</text>
 <rect x="170" y="11" width="26" height="16" rx="8" class="chip"/>
@@ -53,10 +53,10 @@
 <text x="30" y="389.0" transform="rotate(-90 30 389.0)" text-anchor="middle" class="rail seq">SEQUENCE DESIGN · main.py</text>
 <rect x="0" y="822" width="1100" height="102" rx="10" class="band scan"/>
 <text x="30" y="873.0" transform="rotate(-90 30 873.0)" text-anchor="middle" class="rail scan">SCANNER</text>
-<rect x="0" y="974" width="1100" height="366" rx="10" class="band pre"/>
-<text x="30" y="1157.0" transform="rotate(-90 30 1157.0)" text-anchor="middle" class="rail pre">PREPROCESS · .venv-preprocessing</text>
-<rect x="0" y="1390" width="1100" height="158" rx="10" class="band rec"/>
-<text x="30" y="1469.0" transform="rotate(-90 30 1469.0)" text-anchor="middle" class="rail rec">RECON · .venv-recon</text>
+<rect x="0" y="974" width="1100" height="638" rx="10" class="band pre"/>
+<text x="30" y="1293.0" transform="rotate(-90 30 1293.0)" text-anchor="middle" class="rail pre">PREPROCESS · .venv-preprocessing</text>
+<rect x="0" y="1662" width="1100" height="158" rx="10" class="band rec"/>
+<text x="30" y="1741.0" transform="rotate(-90 30 1741.0)" text-anchor="middle" class="rail rec">RECON · .venv-recon</text>
 <rect x="60" y="28" width="270" height="92" rx="6" class="box seq"/>
 <text x="76" y="50" class="t-mono-b">scanners.py</text>
 <text x="76" y="66" class="t-text">ScannerSpec: GE_MR750 | GE_UHP</text>
@@ -199,43 +199,92 @@
 <path d="M780 1132 V1208" class="flow" marker-end="url(#ah)"/>
 <rect x="711.5" y="1169" width="137" height="22" rx="11" class="chip "/>
 <text x="780" y="1184" text-anchor="middle" class="t-chip">&lt;seq&gt;_gridded.h5</text>
-<rect x="55" y="1210" width="820" height="108" rx="6" class="box pre"/>
-<text x="71" y="1232" class="t-title">Coil compression, deGRE maps, Stage B output</text>
-<text x="71" y="1250" class="t-mono">coils.py · smaps.py · b0map.py + julia/b0map.jl · r2star.py</text>
-<text x="71" y="1268" class="t-text">GCC fit on the whitened deGRE: per-x matrices keeping 99.9% of the eigenvalue energy</text>
-<text x="71" y="1284" class="t-text">deGRE → ESPIRiT sensitivity maps · B0 field map (MRIFieldmaps.jl, ROMEO start) · R2*</text>
-<text x="71" y="1300" class="t-text">Stage B: compress the cached k-space; write it with the calibration region, maps and noise_var</text>
+<path d="M150 1192 H465 V1208" class="flow" marker-end="url(#ah)"/>
+<rect x="55" y="1210" width="250" height="104" rx="6" class="box pre"/>
+<text x="71" y="1232" class="t-title">Sensitivity maps (ESPIRiT)</text>
+<text x="71" y="1250" class="t-mono">smaps.py · sigpy EspiritCalib</text>
+<text x="71" y="1268" class="t-text">one uncompressed deGRE echo;</text>
+<text x="71" y="1284" class="t-text">crop, smooth, resize to EPI;</text>
+<text x="71" y="1300" class="t-text">then compressed with T</text>
+<rect x="345" y="1210" width="240" height="104" rx="6" class="box pre"/>
+<text x="361" y="1232" class="t-title">Coil compression (GCC)</text>
+<text x="361" y="1250" class="t-mono">coils.py · gcc_compression</text>
+<text x="361" y="1268" class="t-text">geometric decomposition: one</text>
+<text x="361" y="1284" class="t-text">matrix per x on the EPI grid;</text>
+<text x="361" y="1300" class="t-text">Nv keeps 99.9% of the energy</text>
+<rect x="625" y="1210" width="250" height="104" rx="6" class="box pre"/>
+<text x="641" y="1232" class="t-title">Compress k-space</text>
+<text x="641" y="1250" class="t-mono">Stage B · write_output()</text>
+<text x="641" y="1268" class="t-text">apply T to every cached frame</text>
+<text x="641" y="1284" class="t-text">and to the gridded noise scan</text>
+<text x="641" y="1300" class="t-text">(→ noise_var)</text>
+<path d="M345 1262 H307" class="flow" marker-end="url(#ah)"/>
+<text x="325.0" y="1256" text-anchor="middle" class="t-edge">T</text>
+<path d="M585 1262 H623" class="flow" marker-end="url(#ah)"/>
+<text x="605.0" y="1256" text-anchor="middle" class="t-edge">T</text>
+<rect x="88" y="1354" width="217" height="104" rx="6" class="box pre"/>
+<text x="104" y="1376" class="t-title">B0 field map</text>
+<text x="104" y="1394" class="t-mono-s">b0map.py + julia/b0map.jl</text>
+<text x="104" y="1410" class="t-text">deGRE echoes combined with</text>
+<text x="104" y="1426" class="t-text">smaps; ROMEO.jl unwraps the</text>
+<text x="104" y="1442" class="t-text">start, MRIFieldmaps.jl fits</text>
+<rect x="345" y="1354" width="240" height="104" rx="6" class="box pre"/>
+<text x="361" y="1376" class="t-title">R2* map</text>
+<text x="361" y="1394" class="t-mono">r2star.py</text>
+<text x="361" y="1412" class="t-text">log-linear fit over the deGRE</text>
+<text x="361" y="1428" class="t-text">echoes, inside the B0 mask</text>
+<text x="361" y="1444" class="t-text">(placeholder with 2 echoes)</text>
+<rect x="625" y="1354" width="250" height="104" rx="6" class="box pre"/>
+<text x="641" y="1376" class="t-title">Calibration region</text>
+<text x="641" y="1394" class="t-mono">find_calib_region()</text>
+<text x="641" y="1412" class="t-text">(ky, kz) block sampled in every</text>
+<text x="641" y="1428" class="t-text">frame, grown from the center;</text>
+<text x="641" y="1444" class="t-text">copied out as ksp_calib</text>
+<path d="M196 1314 V1352" class="flow" marker-end="url(#ah)"/>
+<text x="204" y="1340" text-anchor="start" class="t-edge">smaps, emap</text>
+<path d="M305 1406 H343" class="flow" marker-end="url(#ah)"/>
+<text x="325.0" y="1400" text-anchor="middle" class="t-edge">mask</text>
+<path d="M750 1314 V1352" class="flow" marker-end="url(#ah)"/>
+<path d="M72 1314 V1496" class="flow" marker-end="url(#ah)"/>
+<path d="M196 1458 V1496" class="flow" marker-end="url(#ah)"/>
+<path d="M465 1458 V1496" class="flow" marker-end="url(#ah)"/>
+<path d="M750 1458 V1496" class="flow" marker-end="url(#ah)"/>
+<rect x="55" y="1498" width="820" height="92" rx="6" class="box pre"/>
+<text x="71" y="1520" class="t-title">Stage B: write &lt;seq&gt;_preprocessed.h5</text>
+<text x="71" y="1538" class="t-mono">preprocess.py · write_output()</text>
+<text x="71" y="1556" class="t-text">ksp_epi_zf, ksp_calib, smaps, b0map_hz, r2star, omegas, echo_times, W, cc_matrix; attrs noise_var, t_ref_s</text>
+<text x="71" y="1572" class="t-text">the three maps also go to .nii.gz + .json for viewing</text>
 <path d="M1070 602 V1094 H867" class="hand" marker-end="url(#ah-hand)"/>
 <text x="905" y="634" text-anchor="start" class="t-note-b">read by preprocess from</text>
 <text x="905" y="650" text-anchor="start" class="t-note-mono">&lt;datdir&gt;/seqs/&lt;seq&gt;/</text>
 <text x="905" y="672" text-anchor="start" class="t-note">schedules → (ky, kz)</text>
 <text x="905" y="688" text-anchor="start" class="t-note">kxo/kxe → gridding</text>
 <text x="905" y="704" text-anchor="start" class="t-note">echo times → B0 model</text>
-<path d="M470 1318 V1402" class="flow"/>
-<path d="M180 1402 H600" class="flow"/>
-<path d="M180 1402 V1416" class="flow" marker-end="url(#ah)"/>
-<path d="M600 1402 V1416" class="flow" marker-end="url(#ah)"/>
-<rect x="203.5" y="1354" width="533" height="22" rx="11" class="chip "/>
-<text x="470" y="1369" text-anchor="middle" class="t-chip">&lt;seq&gt;_preprocessed.h5 · ksp_epi_zf, smaps, b0map_hz, r2star, echo_times</text>
-<rect x="55" y="1418" width="250" height="108" rx="6" class="box rec"/>
-<text x="71" y="1440" class="t-title">RSS</text>
-<text x="71" y="1458" class="t-mono">rss.py</text>
-<text x="71" y="1476" class="t-text">zero-filled IFFT per coil,</text>
-<text x="71" y="1492" class="t-text">root-sum-of-squares</text>
-<text x="71" y="1508" class="t-text">first look, aliasing kept</text>
-<rect x="325" y="1418" width="550" height="108" rx="6" class="box rec"/>
-<text x="341" y="1440" class="t-title">Iterative SENSE</text>
-<text x="341" y="1458" class="t-mono">sense.py · operators.py · regularizers.py · solvers.py</text>
-<text x="341" y="1476" class="t-text">min over x of ½‖Ax − y‖² + g(x)</text>
-<text x="341" y="1492" class="t-text">A: SENSE · + B0 (time-segmented, L = 32) · + B0 + R2*</text>
-<text x="341" y="1508" class="t-text">g → solver: none → CG · lowrank → POGM · wavelet-tv → PDHG</text>
-<path d="M875 1472 H903" class="flow" marker-end="url(#ah)"/>
-<rect x="905" y="1416" width="180" height="116" rx="12" class="chip "/>
-<text x="919" y="1438" class="t-mono-b">&lt;datdir&gt;/recon/</text>
-<text x="919" y="1454" class="t-mono-s">sense_&lt;reg&gt;/</text>
-<text x="919" y="1470" class="t-mono-s">sense_&lt;reg&gt;_b0/</text>
-<text x="919" y="1486" class="t-mono-s">sense_&lt;reg&gt;_b0r2star/</text>
-<text x="919" y="1502" class="t-mono-s">rss/</text>
-<text x="919" y="1518" class="t-text">.h5 + .nii.gz + .json</text>
+<path d="M470 1590 V1674" class="flow"/>
+<path d="M180 1674 H600" class="flow"/>
+<path d="M180 1674 V1688" class="flow" marker-end="url(#ah)"/>
+<path d="M600 1674 V1688" class="flow" marker-end="url(#ah)"/>
+<rect x="203.5" y="1626" width="533" height="22" rx="11" class="chip "/>
+<text x="470" y="1641" text-anchor="middle" class="t-chip">&lt;seq&gt;_preprocessed.h5 · ksp_epi_zf, smaps, b0map_hz, r2star, echo_times</text>
+<rect x="55" y="1690" width="250" height="108" rx="6" class="box rec"/>
+<text x="71" y="1712" class="t-title">RSS</text>
+<text x="71" y="1730" class="t-mono">rss.py</text>
+<text x="71" y="1748" class="t-text">zero-filled IFFT per coil,</text>
+<text x="71" y="1764" class="t-text">root-sum-of-squares</text>
+<text x="71" y="1780" class="t-text">first look, aliasing kept</text>
+<rect x="325" y="1690" width="550" height="108" rx="6" class="box rec"/>
+<text x="341" y="1712" class="t-title">Iterative SENSE</text>
+<text x="341" y="1730" class="t-mono">sense.py · operators.py · regularizers.py · solvers.py</text>
+<text x="341" y="1748" class="t-text">min over x of ½‖Ax − y‖² + g(x)</text>
+<text x="341" y="1764" class="t-text">A: SENSE · + B0 (time-segmented, L = 32) · + B0 + R2*</text>
+<text x="341" y="1780" class="t-text">g → solver: none → CG · lowrank → POGM · wavelet-tv → PDHG</text>
+<path d="M875 1744 H903" class="flow" marker-end="url(#ah)"/>
+<rect x="905" y="1688" width="180" height="116" rx="12" class="chip "/>
+<text x="919" y="1710" class="t-mono-b">&lt;datdir&gt;/recon/</text>
+<text x="919" y="1726" class="t-mono-s">sense_&lt;reg&gt;/</text>
+<text x="919" y="1742" class="t-mono-s">sense_&lt;reg&gt;_b0/</text>
+<text x="919" y="1758" class="t-mono-s">sense_&lt;reg&gt;_b0r2star/</text>
+<text x="919" y="1774" class="t-mono-s">rss/</text>
+<text x="919" y="1790" class="t-text">.h5 + .nii.gz + .json</text>
 </g>
 </svg>

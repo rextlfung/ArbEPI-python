@@ -26,7 +26,7 @@ import os
 from html import escape
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-W, H_BODY, LEGEND_H = 1100, 1560, 40
+W, H_BODY, LEGEND_H = 1100, 1832, 40
 H = H_BODY + LEGEND_H
 
 THEMES = {
@@ -190,8 +190,8 @@ def draw(d):
     # ---- environment bands ----
     d.band(0, 778, 'seq', 'SEQUENCE DESIGN · main.py')
     d.band(822, 924, 'scan', 'SCANNER')
-    d.band(974, 1340, 'pre', 'PREPROCESS · .venv-preprocessing')
-    d.band(1390, 1548, 'rec', 'RECON · .venv-recon')
+    d.band(974, 1612, 'pre', 'PREPROCESS · .venv-preprocessing')
+    d.band(1662, 1820, 'rec', 'RECON · .venv-recon')
 
     # ---- one column: configuration -> masks -> partitioning ----
     sx, sw = 380, 440
@@ -286,15 +286,17 @@ def draw(d):
                  '(HDF5, read only by the Orchestra SDK)'),
     ])
 
-    # ---- preprocess: Stage A per lane, then compression + deGRE maps ----
+    # ---- preprocess: Stage A per lane, then deGRE maps + coil compression, then Stage B ----
     archives = {'gre': 'gre.h5 · shared', 'noise': '<seq>_noise.h5 (opt.)',
                 'cal': '<seq>_cal.h5', 'epi': '<seq>_epi.h5'}
     sa_y0, sa_y1 = 992, 1150
     sb_y, sb_h, sbw = 1028, 104, 170
-    c_y, c_h = 1210, 108
+    # three columns below Stage A: deGRE maps | GCC, R2* | k-space
+    col_l, col_m, col_r = (55, 250), (345, 240), (625, 250)  # (x, width)
+    ya, yb, yc, row_h = 1210, 1354, 1498, 104
     for key in ('noise', 'cal', 'epi'):
         d.arrow(f'M{LANE[key]} {sc_y + sc_h} V{sb_y - 2}')
-    d.arrow(f'M{LANE["gre"]} {sc_y + sc_h} V{c_y - 2}')
+    d.arrow(f'M{LANE["gre"]} {sc_y + sc_h} V{ya - 2}')
     for key, text in archives.items():
         d.chip(LANE[key], 949, text)
 
@@ -320,17 +322,81 @@ def draw(d):
     d.arrow(f'M{LANE["noise"] - sbw // 2} {my} H{LANE["gre"] + 3}')
     d.label((LANE['noise'] - sbw // 2 + LANE['gre']) / 2 + 8, my - 6, 'W')
 
-    d.arrow(f'M{LANE["epi"]} {sb_y + sb_h} V{c_y - 2}')
+    d.arrow(f'M{LANE["epi"]} {sb_y + sb_h} V{ya - 2}')
     d.chip(LANE['epi'], 1180, '<seq>_gridded.h5')
-    d.box(55, c_y, 820, c_h, 'pre', [
-        ('title', 'Coil compression, deGRE maps, Stage B output'),
-        ('mono', 'coils.py · smaps.py · b0map.py + julia/b0map.jl · r2star.py'),
-        ('text', 'GCC fit on the whitened deGRE: per-x matrices keeping 99.9% of the '
-                 'eigenvalue energy'),
-        ('text', 'deGRE → ESPIRiT sensitivity maps · B0 field map (MRIFieldmaps.jl, ROMEO start)'
-                 ' · R2*'),
-        ('text', 'Stage B: compress the cached k-space; write it with the calibration region, '
-                 'maps and noise_var'),
+
+    # the whitened deGRE feeds ESPIRiT (lane) and GCC (branch)
+    gcc_cx = col_m[0] + col_m[1] // 2
+    d.arrow(f'M{LANE["gre"]} 1192 H{gcc_cx} V{ya - 2}')
+    d.box(col_l[0], ya, col_l[1], row_h, 'pre', [
+        ('title', 'Sensitivity maps (ESPIRiT)'),
+        ('mono', 'smaps.py · sigpy EspiritCalib'),
+        ('text', 'one uncompressed deGRE echo;'),
+        ('text', 'crop, smooth, resize to EPI;'),
+        ('text', 'then compressed with T'),
+    ])
+    d.box(col_m[0], ya, col_m[1], row_h, 'pre', [
+        ('title', 'Coil compression (GCC)'),
+        ('mono', 'coils.py · gcc_compression'),
+        ('text', 'geometric decomposition: one'),
+        ('text', 'matrix per x on the EPI grid;'),
+        ('text', 'Nv keeps 99.9% of the energy'),
+    ])
+    d.box(col_r[0], ya, col_r[1], row_h, 'pre', [
+        ('title', 'Compress k-space'),
+        ('mono', 'Stage B · write_output()'),
+        ('text', 'apply T to every cached frame'),
+        ('text', 'and to the gridded noise scan'),
+        ('text', '(→ noise_var)'),
+    ])
+    mid_a = ya + row_h // 2
+    d.arrow(f'M{col_m[0]} {mid_a} H{col_l[0] + col_l[1] + 2}')
+    d.label((col_m[0] + col_l[0] + col_l[1]) / 2, mid_a - 6, 'T')
+    d.arrow(f'M{col_m[0] + col_m[1]} {mid_a} H{col_r[0] - 2}')
+    d.label((col_m[0] + col_m[1] + col_r[0]) / 2, mid_a - 6, 'T')
+
+    # B0 sits right of a lane that carries the smaps straight down to the output
+    smaps_x, b0_x = 72, 88
+    b0_w = col_l[0] + col_l[1] - b0_x
+    b0_cx = b0_x + b0_w // 2
+    d.box(b0_x, yb, b0_w, row_h, 'pre', [
+        ('title', 'B0 field map'),
+        ('mono-s', 'b0map.py + julia/b0map.jl'),
+        ('text', 'deGRE echoes combined with'),
+        ('text', 'smaps; ROMEO.jl unwraps the'),
+        ('text', 'start, MRIFieldmaps.jl fits'),
+    ])
+    d.box(col_m[0], yb, col_m[1], row_h, 'pre', [
+        ('title', 'R2* map'),
+        ('mono', 'r2star.py'),
+        ('text', 'log-linear fit over the deGRE'),
+        ('text', 'echoes, inside the B0 mask'),
+        ('text', '(placeholder with 2 echoes)'),
+    ])
+    d.box(col_r[0], yb, col_r[1], row_h, 'pre', [
+        ('title', 'Calibration region'),
+        ('mono', 'find_calib_region()'),
+        ('text', '(ky, kz) block sampled in every'),
+        ('text', 'frame, grown from the center;'),
+        ('text', 'copied out as ksp_calib'),
+    ])
+    d.arrow(f'M{b0_cx} {ya + row_h} V{yb - 2}')
+    d.label(b0_cx + 8, yb - 14, 'smaps, emap', 'start')
+    mid_b = yb + row_h // 2
+    d.arrow(f'M{col_l[0] + col_l[1]} {mid_b} H{col_m[0] - 2}')
+    d.label((col_l[0] + col_l[1] + col_m[0]) / 2, mid_b - 6, 'mask')
+    r_cx = col_r[0] + col_r[1] // 2
+    d.arrow(f'M{r_cx} {ya + row_h} V{yb - 2}')
+
+    d.arrow(f'M{smaps_x} {ya + row_h} V{yc - 2}')
+    for x in (b0_cx, gcc_cx, r_cx):
+        d.arrow(f'M{x} {yb + row_h} V{yc - 2}')
+    d.box(55, yc, 820, 92, 'pre', [
+        ('title', 'Stage B: write <seq>_preprocessed.h5'),
+        ('mono', 'preprocess.py · write_output()'),
+        ('text', 'ksp_epi_zf, ksp_calib, smaps, b0map_hz, r2star, omegas, echo_times, W, '
+                 'cc_matrix; attrs noise_var, t_ref_s'),
+        ('text', 'the three maps also go to .nii.gz + .json for viewing'),
     ])
 
     # scan_info.mat goes around the scanner, straight to preprocessing
@@ -346,12 +412,12 @@ def draw(d):
         d.label(905, 634 + i * 16 + (6 if i >= 2 else 0), text, 'start', cls)
 
     # ---- recon ----
-    r_y, r_h = 1418, 108
-    d.line(f'M470 {c_y + c_h} V1402')
-    d.line('M180 1402 H600')
-    d.arrow('M180 1402 V1416')
-    d.arrow('M600 1402 V1416')
-    d.chip(470, 1365, '<seq>_preprocessed.h5 · ksp_epi_zf, smaps, b0map_hz, r2star, echo_times')
+    r_y, r_h = 1690, 108
+    d.line(f'M470 {yc + 92} V1674')
+    d.line('M180 1674 H600')
+    d.arrow('M180 1674 V1688')
+    d.arrow('M600 1674 V1688')
+    d.chip(470, 1637, '<seq>_preprocessed.h5 · ksp_epi_zf, smaps, b0map_hz, r2star, echo_times')
     d.box(55, r_y, 250, r_h, 'rec', [
         ('title', 'RSS'),
         ('mono', 'rss.py'),
@@ -366,8 +432,8 @@ def draw(d):
         ('text', 'A: SENSE · + B0 (time-segmented, L = 32) · + B0 + R2*'),
         ('text', 'g → solver: none → CG · lowrank → POGM · wavelet-tv → PDHG'),
     ])
-    d.arrow('M875 1472 H903')
-    d.tag(905, 1416, 180, 116, [
+    d.arrow(f'M875 {r_y + 54} H903')
+    d.tag(905, r_y - 2, 180, 116, [
         ('mono-b', '<datdir>/recon/'),
         ('mono-s', 'sense_<reg>/'),
         ('mono-s', 'sense_<reg>_b0/'),
@@ -375,7 +441,6 @@ def draw(d):
         ('mono-s', 'rss/'),
         ('text', '.h5 + .nii.gz + .json'),
     ])
-
 
 def render(theme):
     tokens = ''.join(f'--{k}: {v}; ' for k, v in THEMES[theme].items())
