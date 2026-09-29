@@ -699,6 +699,12 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   All `OK`; no `calc_te_tr_delays` warning, realized TE 30.00 ms, echo
   spacing 0.696 ms. `deGRE.seq` now has the least PNS margin of the four
   (2.6 percentage points), not `ArbEPI.seq`.
+- **Changed since (2026-09-29, SLR fat-sat, item 255; one build, same
+  params):** `ArbEPI.seq`/`EPIcal.seq` max B1 0.0440 → 0.0334 G (the
+  Gaussian fat-sat was the B1 peak), peak PNS 69.9% / 66.4%, per-shot min
+  TR 60.46 → 62.46 ms (+2 ms of fat-sat; 4.20 ms of slack left at the
+  66.67 ms per-shot TR). Both still all `OK`, no `calc_te_tr_delays`
+  warning, and both `.pge` exports run clean.
 
 ## Correctness
 
@@ -2704,6 +2710,54 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   re-estimating via the single-calibration projection path -- a second
   ESPIRiT run, and a different `smaps` than the one STEP 3 had just
   exported to NIfTI. Fixed: STEP 3 calls `load_smaps`.
+- [x] **255. The fat-sat pulse from `lib/make_fatsat_rf.py` substantially
+  excites water, and that is the main source of the temporal fluctuation
+  in static scans.** [measured 2026-09-28, `20260924ball`, against
+  `3f3277e`] The pypulseq Gaussian (90°, 4 ms, TBW 3, at −447 Hz) stands in
+  for the MATLAB original's min-phase SLR pulse (see the module docstring).
+  A Bloch simulation of the exact pulse `make_fatsat_rf` returns tips
+  water by **26° on resonance** (larger than the 17° excitation at
+  TR 58 ms), 42° at −100 Hz, 60° at −200 Hz and 77° at −300 Hz. It plays
+  every shot with a constant phase, and its crusher shares that shot's
+  random spoiler draw. Measured on the fully sampled, static 5.4 mm ball
+  protocol: turning the pulse off (RF replaced by an equal-length delay,
+  `FatsatParams.enabled=False`; everything else identical) raised mean
+  signal 1.56× (C/A ratio 1.32 above +30 Hz, 1.46–1.60 near 0 Hz, 1.97
+  below −60 Hz) and cut the median voxel CV from 3.20% to 0.58% (tSNR 31
+  → 177, RSS on one common mask). In k-space, the stimulated-echo ghosts
+  predicted from the per-shot spoiler draws explain 34% of A's
+  frame-to-frame residual (3.6% null), and the same fit explains nothing
+  with fat-sat off (2.3% vs 3.0% null), even though nearly every shot
+  still has a pathway landing inside the readout window. So the coherence
+  that refocuses is created by this pulse. Widening the random spoiler
+  range to 3–8 cycles/voxel stops it refocusing inside the readout
+  (51/1080 shots have an in-window pathway, vs 1045/1080 at 3–4) but only
+  reaches 1.83% CV. What remains is mostly a per-shot signal level that
+  changes each frame (0.70% std, twice A's and the no-fat-sat run's),
+  still fat-sat-dependent. The same pathway correlation, with a null
+  shuffled control, was also found in `20260918ball/1_1x_5.4mm` (44%) and
+  `20260912xiaokai/01_fullsamp` (42%). Full numbers and scripts:
+  `/StorageRAID/rexfung/20260924ball/analysis/README.md`. Fix: a spectral
+  profile that leaves water alone. Candidates are a longer pulse, an SLR
+  design (port or precompute the MATLAB original's `makeslr` waveform), a
+  frequency offset or flip chosen against the measured profile, or
+  water-selective excitation instead. Re-run the Bloch check above and
+  repeat the A/C comparison. Next steps are tracked in `docs/TODO.md`.
+  **Fixed in code 2026-09-29** (scan confirmation still pending, see
+  `docs/TODO.md`): `make_fatsat_rf` now plays a 90° min-phase SLR pulse
+  (`lib/slr.py`, a scipy-only port of sigpy's `dzrf` 'ex' path, matching it
+  to ~1e-5), TBW 2 over 6 ms (a 333 Hz band). Bloch-simulated: water
+  ≤ 1.6° over −150..+150 Hz and ≤ 3.8° down to −200 Hz; fat ≥ 81° within
+  ±50 Hz and ≥ 60° within ±100 Hz, no overshoot. The MATLAB original's own
+  parameters (min-phase SLR, TBW 3, 4 ms) would not have fixed this: 9° on
+  resonance, 28° at −100 Hz. The "water down to −300 Hz" above was the
+  whole field map; inside the object (ESPIRiT support), 99% of voxels are
+  within −57..+35 Hz in this phantom and −144..+79 Hz in vivo
+  (`20260922xiaokai`), which is what the stop band is sized against. The
+  +2 ms fits the per-shot TR slack of both the default protocol (6.2 ms)
+  and this session's 5.4 mm one (2.85 ms; 1.46 ms with B's 8-cycle
+  spoiler). `tests/test_make_fatsat_rf.py` locks in the profile, and checks
+  that the old Gaussian fails it (26° on resonance).
 
 ## Consistency & documentation
 
@@ -4726,6 +4780,24 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   through `load_smaps()` itself, to lock in commit `5ba6fc5`'s fix and
   catch a future regression of the `run_b0map()` silent-fallback bug item
   205 originally found.
+- [x] **256. `recon/utils.py`'s `tsnr_report` builds a separate object mask
+  for each input, so its numbers aren't comparable across runs.**
+  [measured 2026-09-28, `20260924ball`, against `3f3277e`] Each file gets
+  `object_mask(img, thresh_frac)`, which thresholds at a fraction of *that
+  file's* own maximum. The three RSS runs of one static phantom got masks
+  of 5603, 4725 and 13100 voxels. The no-fat-sat run's larger mask came
+  from its higher signal (item 255), not a bigger object. The reported
+  median tSNRs (37, 56, 172) were therefore taken over different voxel
+  sets. On one common mask the three runs read 31, 55 and 177, and in
+  general the median over a mask that changes size is biased toward
+  whatever voxels it gains or loses. Fix: build one mask for all inputs
+  in `tsnr_report` (e.g. the intersection of each file's own mask, or an
+  optional caller-supplied mask), and print its size once. **Fixed
+  2026-09-29:** `tsnr_report` takes an optional `mask`, else uses the
+  intersection of every input's own `object_mask` (how the
+  20260924ball analysis built its common mask, at 0.1 of max rather than
+  the default 0.2), prints its size once, and raises on inputs
+  of different grids; `test_tsnr_report_uses_one_mask_for_all_inputs`.
 
 ## Conciseness & performance
 

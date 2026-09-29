@@ -305,7 +305,8 @@ def temporal_stability(img: np.ndarray, mask: np.ndarray, tr_s: float) -> dict:
 
 
 def tsnr_report(
-    fn_recons: list[str], tr_s: float, skip_frames: int = 0, thresh_frac: float = 0.2
+    fn_recons: list[str], tr_s: float, skip_frames: int = 0, thresh_frac: float = 0.2,
+    mask: np.ndarray | None = None,
 ) -> dict:
     """Temporal-stability report for one or more reconstructions.
 
@@ -313,19 +314,35 @@ def tsnr_report(
     rss.py/sense.py. Prints the stability numbers for each and saves one
     figure (ROI signal + linear fit, central-slice tSNR map, last-minus-first
     frame; one column per input) next to the first input. Returns
-    {label: stats}."""
+    {label: stats}.
+
+    Every input is measured over the same voxels, so their numbers compare:
+    `mask` ([Nx,Ny,Nz] bool) if given, else the intersection of each input's
+    own `object_mask`. A per-input threshold would follow each input's
+    signal level, not the object (docs/review-findings.md item 256)."""
     import nibabel as nib
     from matplotlib.figure import Figure  # not pyplot: leaves the caller's backend alone
 
+    imgs = {
+        os.path.basename(fn).removesuffix(".nii.gz"):
+            np.asarray(nib.load(fn).dataobj)[..., skip_frames:]
+        for fn in fn_recons
+    }
+    shapes = {img.shape[:3] for img in imgs.values()}
+    if len(shapes) != 1:
+        raise ValueError(f"inputs have different grids {sorted(shapes)}; can't share one mask")
+    if mask is None:
+        mask = np.logical_and.reduce([object_mask(img, thresh_frac) for img in imgs.values()])
+    elif mask.shape != next(iter(shapes)):
+        raise ValueError(f"mask shape {mask.shape} doesn't match the images' {next(iter(shapes))}")
+    print(f"object mask (shared by all inputs): {mask.sum()} voxels "
+          f"({100 * mask.sum() / mask.size:.1f}% of volume)")
+
     results = {}
-    for fn in fn_recons:
-        label = os.path.basename(fn).removesuffix(".nii.gz")
-        img = np.asarray(nib.load(fn).dataobj)[..., skip_frames:]
-        mask = object_mask(img, thresh_frac)
+    for label, img in imgs.items():
         stats = temporal_stability(img, mask, tr_s)
         results[label] = (img, mask, stats)
         print(f"\n=== {label} ===")
-        print(f"  object mask: {mask.sum()} voxels ({100 * mask.sum() / mask.size:.1f}% of volume)")
         print(f"  percent fluctuation (detrended): {stats['percent_fluctuation']:.3f}%")
         span_s = (img.shape[-1] - 1) * tr_s
         print(f"  percent drift (linear, over {span_s:.0f}s): {stats['percent_drift']:.3f}%")

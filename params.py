@@ -24,9 +24,9 @@ from scanners import SCANNERS, ScannerSpec
 @dataclass
 class FatsatParams:
     flip: float  # degrees
-    sl_thick: float  # m (dummy value; just needs to be large)
-    tbw: float  # time-bandwidth product
+    tbw: float  # time-bandwidth product (band = tbw / dur, centered on fat)
     dur: float  # s
+    ftype: str = 'min'  # SLR filter: 'min' (minimum phase) or 'ls' (linear phase), see lib/slr.py
     # False replaces the fat-sat RF pulse with an equal-duration delay in
     # ArbEPI/EPIcal, keeping its crusher and every block timing identical --
     # isolates the pulse's own contribution (e.g. as an unintended refocusing
@@ -368,7 +368,18 @@ def load_params(output_dir: str = 'output') -> Params:
 
     fat_chem_shift = 3.5 * 1e-6
     fat_offres_freq = sys.gamma * sys.B0 * fat_chem_shift
-    fatsat = FatsatParams(flip=90, sl_thick=1e5, tbw=3, dur=4e-3)
+    # Min-phase SLR, 333 Hz band (TBW 2 / 6 ms) centered on fat. Bloch-simulated
+    # (lib/make_fatsat_rf.py's flip_profile): water <= 1.6 deg over -150..+150 Hz
+    # and <= 3.8 deg down to -200 Hz; fat >= 81 deg within +-50 Hz, >= 60 deg
+    # within +-100 Hz. Sized against measured in-object B0 (99% of voxels in
+    # -144..+79 Hz in vivo, 20260922xiaokai; -57..+35 Hz in the ball phantom)
+    # and the per-shot TR budget: +2 ms over the old 4 ms pulse fits the
+    # default protocol (6.2 ms slack) and 20260924ball's 5.4 mm one (2.85 ms).
+    # A longer pulse protects water further out but narrows the fat band and
+    # costs TR -- re-check with flip_profile (and tests/test_make_fatsat_rf.py)
+    # before changing these. The old pypulseq Gaussian (90 deg, TBW 3, 4 ms)
+    # tipped on-resonance water 26 deg: docs/review-findings.md item 255.
+    fatsat = FatsatParams(flip=90, tbw=2, dur=6e-3, ftype='min')
 
     # deGRE (dual-echo GRE) parameters
     res_degre = np.array([2, 2, 2]) * 1e-3

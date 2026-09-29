@@ -17,7 +17,12 @@ pytest.importorskip("mirtorch")
 
 from recon.operators import build_sense  # noqa: E402
 from recon.rss import rss, run_rss  # noqa: E402
-from recon.utils import load_and_gather_ksp, read_frames_cropped, tsnr_report  # noqa: E402
+from recon.utils import (  # noqa: E402
+    load_and_gather_ksp,
+    object_mask,
+    read_frames_cropped,
+    tsnr_report,
+)
 
 NX, NY, NZ, NC, NT = 6, 5, 4, 3, 7
 
@@ -118,3 +123,33 @@ def test_tsnr_report_on_a_stable_phantom(tmp_path):
     stats = tsnr_report([fn], tr_s=1.0)["recon"]
     assert 50 < stats["median_voxel_tsnr"] < 200
     assert (tmp_path / "recon_tsnr.png").exists()
+
+
+def test_tsnr_report_uses_one_mask_for_all_inputs(tmp_path):
+    """Item 256: a mask thresholded at a fraction of each input's own max
+    changed size with signal level (5603/4725/13100 voxels for three runs of
+    one static phantom), so the medians weren't over the same voxels. Two
+    runs of one object, one with a hot spot that shrinks its own mask, must be
+    measured over the same voxels."""
+    nib = pytest.importorskip("nibabel")
+    rng = np.random.default_rng(0)
+    base = np.zeros((8, 8, 4, 20), dtype=np.float32)
+    base[1:7, 1:7] = 100 + rng.standard_normal((6, 6, 4, 20))
+    hot = base.copy()
+    hot[3:5, 3:5] *= 8  # its own 0.2-of-max mask now drops the 100-level voxels
+    fns = []
+    for name, img in (("a", base), ("b", hot)):
+        fns.append(str(tmp_path / f"{name}.nii.gz"))
+        nib.save(nib.Nifti1Image(img, np.eye(4)), fns[-1])
+    stats = tsnr_report(fns, tr_s=1.0)
+    n_a = np.isfinite(stats["a"]["tsnr_map"]).sum()
+    n_b = np.isfinite(stats["b"]["tsnr_map"]).sum()
+    assert n_a == n_b == object_mask(hot).sum() < object_mask(base).sum()  # the intersection
+
+    given = np.zeros((8, 8, 4), dtype=bool)
+    given[1:7, 1:7] = True
+    stats = tsnr_report(fns, tr_s=1.0, mask=given)
+    for label in ("a", "b"):
+        assert np.isfinite(stats[label]["tsnr_map"]).sum() == given.sum()
+    with pytest.raises(ValueError):
+        tsnr_report(fns, tr_s=1.0, mask=given[:, :, :2])
