@@ -30,7 +30,8 @@ are documented and set. Start there. Ported from the MATLAB
 | `demo.ipynb` | Worked example on `20260915ball/2_6x_2.4mm` |
 
 Tests: `tests/test_preprocess_<module>.py`, plus `test_preprocess_pipeline.py`
-(end to end, with fake archives) and `test_preprocess_calib.py`.
+(end to end, with fake archives), `test_preprocess_calib.py` and
+`test_preprocess_delay.py` (readout-delay calibration).
 
 ## Setup
 
@@ -120,7 +121,7 @@ Attributes: `noise_var` (thermal-noise variance of `ksp_epi_zf` per complex
 sample), `whitened`, `coil_compressed`, `Ncoils`, `Nc_out`,
 `Nvcoils`, `Nvcoils_source` (`energy` or `user`), `cc_energy_kept`, `oephase_a`,
 `delay` (calibrated readout delay, samples), `t_ref_s` (nominal TE), `TE_degre`, `fov`, `fov_degre`,
-`n_frames_discard`, `r2star_method`.
+`n_frames_discard`, `r2star_method`, `r2star_n_echoes`, `seqname`.
 
 Also written: `<seq>_smaps`, `<seq>_b0_map` and `<seq>_r2star_map` as `.nii.gz` +
 `.json` for viewing (magnitude only; voxel spacing is right but there is no patient
@@ -327,8 +328,9 @@ the maps (62 s for 6 virtual coils) and about 4 with ESPIRiT. The whitened
   archives (GCC output equals GCC of the uncompressed output; `Nvcoils`; no noise scan; cache reuse; resume after
   a crash).
 
-Run them with the preprocessing extras installed, or they are skipped:
+Run them in `.venv-preprocessing` (see [Setup](#setup)); without the preprocessing
+extras installed they are skipped:
 
 ```bash
-uv sync --extra test --extra preprocessing && uv run pytest -rs tests/test_preprocess_*.py
+.venv-preprocessing/bin/python -m pytest -rs tests/test_preprocess_*.py
 ```

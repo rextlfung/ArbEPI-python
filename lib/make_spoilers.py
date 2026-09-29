@@ -6,7 +6,7 @@ Nx/fov/deltak indirection: a gradient of area A dephases spins by A*res
 cycles across one voxel of size res, so area = n_cycles / res exactly.
 
 Callers that want shot-to-shot spoiler variation (to avoid an exact
-RF-spoiling-cycle lock -- see CLAUDE.md's RF-spoiling section) should
+RF-spoiling-cycle lock -- see params.py's Params.spoil_cycles_min comment) should
 build at the maximum cycles/voxel value they'll use and scale down per
 shot via pp.scale_grad, matching the pattern sequences/ArbEPI.py already
 uses for the mandatory ky/kz rewind.

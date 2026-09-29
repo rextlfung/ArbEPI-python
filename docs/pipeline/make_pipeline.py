@@ -457,8 +457,8 @@ def draw(d):
     ex, ew = LANE['epi'] - sbw // 2, sbw + 24  # lane-4 boxes: left edge, width
     cx0 = LANE['cal'] - sbw // 2  # lane-3 boxes: left edge
     whiten = [('title', 'Whitening'), ('mono', 'coils.py'),
-              ('para', 'Estimate noise covariance matrix W')]
-    oe_est = [('title', 'Odd/even delay estimation'), ('mono', 'oephase.py'),
+              ('para', 'whitening matrix W from the noise covariance')]
+    oe_est = [('title', 'Odd/even delay estimation'), ('mono', 'preprocess.py'),
               ('para', 'readout-delay sweep and linear phase estimation, on whitened '
                        'calibration data')]
     grid = [('title', 'Grid ramp-sampled data'), ('mono', 'epi_gridding.py'),

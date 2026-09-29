@@ -163,12 +163,12 @@
 <rect x="275" y="1054" width="170" height="138" rx="6" class="box pre"/>
 <text x="291" y="1076" class="t-title">Whitening</text>
 <text x="291" y="1094" class="t-mono">coils.py</text>
-<text x="291" y="1112" class="t-text">Estimate noise</text>
-<text x="291" y="1128" class="t-text">covariance matrix W</text>
+<text x="291" y="1112" class="t-text">whitening matrix W from</text>
+<text x="291" y="1128" class="t-text">the noise covariance</text>
 <rect x="485" y="1054" width="170" height="138" rx="6" class="box pre"/>
 <text x="501" y="1076" class="t-title">Odd/even delay</text>
 <text x="501" y="1094" class="t-title">estimation</text>
-<text x="501" y="1112" class="t-mono">oephase.py</text>
+<text x="501" y="1112" class="t-mono">preprocess.py</text>
 <text x="501" y="1130" class="t-text">readout-delay sweep</text>
 <text x="501" y="1146" class="t-text">and linear phase</text>
 <text x="501" y="1162" class="t-text">estimation, on whitened</text>

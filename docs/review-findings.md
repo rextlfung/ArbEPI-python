@@ -4087,6 +4087,42 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   20260924ball RSS images persists at the calibrated delay (outside/inside
   intensity ratio 0.305 at −1.0 vs 0.203 at +0.35, frame 5 of Series 4), so
   it has another cause.
+- [x] **257. Repo-wide documentation consistency pass: docs that had drifted
+  from the code.** [2026-09-29, against `a5acd0a`] A scripted cross-check
+  (every backticked path/identifier, CLI flag, `params.*`/`cfg.*` field and
+  markdown link/anchor in the READMEs, CLAUDE.md and docs/TODO.md against the
+  tree), then a read of each doc against its code. All CLI flags and config
+  fields named in the docs exist, and `tests/test_pipeline_diagram.py`
+  passed. Drift found and fixed:
+  (a) CLAUDE.md's `recon/` table listed a nonexistent
+  `estimate_operator_noise_factor` in `recon/utils.py`; (b) CLAUDE.md cited
+  `seq2ge/validate_against_matlab.py` (now `ge/`); (c) CLAUDE.md's opening
+  layout sentence omitted `preprocess/`/`recon/`; (d) `ge/README.md` linked
+  twice to a root-README anchor (`#ge-export-pge`) that no longer exists;
+  (e) README's USER CONFIGURATION table lacked `excitation`; (f) `params.py`'s
+  `volume_tr` comment quoted min_tr 60.224 ms/shot, from before the 6 ms SLR
+  fat-sat (item 255) -- [measured] 61.864 ms/shot x 15 = 927.96 ms in fat-sat
+  mode, 54.532 ms/shot in water mode (seed=0 defaults); (g) `params.py` and
+  `lib/make_spoilers.py` pointed at a "CLAUDE.md RF-spoiling section" that
+  never existed (`git log -S` finds none); (h) `params.py`'s `custom_omegas`
+  comment said `main.py` reads it directly (it goes through
+  `resolve_omegas`); (i) `preprocess/README.md` omitted the `r2star_n_echoes`
+  and `seqname` attrs and `test_preprocess_delay.py`, and its test command
+  synced the main `.venv` instead of using `.venv-preprocessing` as its own
+  Setup section does; (j) `recon/README.md` didn't document `--b0map` (whose
+  output shares `sense_<reg>_b0/` with a default-map run); (k) the pipeline
+  diagram called W the "noise covariance matrix" (it is the whitening matrix)
+  and put the readout-delay sweep in `oephase.py` (it is `preprocess.py`'s
+  `calibrate_odd_even`/`sweep_delay`); (l) `preprocess/demo.ipynb` no
+  longer ran: `b8e3f6e` (PCA removal) dropped a parameter from
+  `calibrate_odd_even`/`prepare_cal_data`, but cell 7 still passed the old
+  `None` (TypeError), and its saved output still listed the pre-2026-09-28
+  names (`b0map_hz`, `cc_matrix`, `cc_method`). Fixed and re-executed
+  (outputs to a scratch outdir): 15 virtual coils, `noise_var` 0.9345,
+  17x11 calibration region, delay −0.35 -- consistent with
+  `preprocess/README.md`. A static check of every repo-function call in
+  `demo.ipynb` and `recon/demo.ipynb` against the current signatures found
+  nothing else.
 
 ## Test & tooling health
 

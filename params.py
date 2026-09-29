@@ -82,7 +82,8 @@ class Params:
     # entirely: R/Nshots are instead derived from the mask's own sample
     # count. custom_omegas holds the already-loaded, already-broadcast
     # (Ny, Nz, Nframes) mask (None on the built-in gen_sampling_masks path);
-    # main.py uses it directly in place of calling gen_sampling_masks.
+    # sampling/gen_sampling_masks.py's resolve_omegas returns it in place of
+    # calling gen_sampling_masks.
     custom_mask_path: str | None
     custom_omegas: np.ndarray | None
 
@@ -151,9 +152,8 @@ class Params:
     # shot-to-shot (uniform-random within this range, independently per
     # axis) rather than held constant, so a residual coherence pathway
     # that survives one RF-spoiling phase-cycle period doesn't also see
-    # an identical net spoiler moment -- see CLAUDE.md's RF-spoiling
-    # section for why a constant per-shot spoiler moment lets that
-    # periodicity through undisturbed.
+    # an identical net spoiler moment: a constant per-shot spoiler moment
+    # would let that periodicity through undisturbed.
     spoil_cycles_min: float  # cycles/voxel
     spoil_cycles_max: float  # cycles/voxel
 
@@ -218,9 +218,10 @@ def load_params(output_dir: str = 'output') -> Params:
     TE = 30e-3
     # Time to acquire one full 3D volume (all shots), s. Must clear min_tr
     # (Nshots * per-shot min TR, printed as a warning by calc_te_tr_delays
-    # if not) -- at the current ETL=60/R=6/Nx=90/res=2.4mm config this
-    # measures min_tr = 60.224 ms/shot * 15 shots = 903.36 ms; 1.0s leaves
-    # ~6.4% margin (explicit user decision, 2026-09-15).
+    # if not). 1.0 s was an explicit user decision (2026-09-15); measured
+    # 2026-09-29 at the ETL=60/R=6/Nx=90/res=2.4mm defaults (seed=0), in
+    # fat-sat mode: min_tr = 61.864 ms/shot * 15 shots = 927.96 ms, ~7% under
+    # 1.0 s (4.8 ms/shot slack). Water mode: 54.532 ms/shot.
     volume_tr = 1.0
     # Total scan duration across all frames/timepoints, s.
     duration = 60

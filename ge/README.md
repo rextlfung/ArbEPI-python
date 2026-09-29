@@ -9,7 +9,7 @@ infrastructure.
 `coppe.py` is a Python port (with upgrades) of the MATLAB lab utility
 [`../toppe/+toppe/+utils/coppe.m`](../../toppe/+toppe/+utils/coppe.m). It
 takes a folder of compiled `.pge` sequences (e.g. `output/*.pge`, written
-by [`main.py --ge`](../README.md#ge-export-pge)) and:
+by [`main.py --ge`](../README.md#executing-on-ge-scanners)) and:
 
 1. Scans the scanner's `pulseq/v7/` directory for entry numbers (`N`,
    0–9999) that aren't already in use by anyone else's sequence.
@@ -266,7 +266,7 @@ scanner"):
 ## Troubleshooting
 
 - **`no .pge files found in 'output'`**: run `uv run python main.py --ge`
-  first (see the [main README](../README.md#ge-export-pge)).
+  first (see the [main README](../README.md#executing-on-ge-scanners)).
 - **`Permission denied (publickey)` on the first ssh command**: hop 1
   isn't set up — see [SSH key setup](#ssh-key-setup-required-once-per-user)
   above.

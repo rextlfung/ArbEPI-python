@@ -110,7 +110,9 @@ $PY -m recon.utils tsnr $DAT/recon/rss/${SEQ}_recon.nii.gz --tr 1.0
 ```
 
 Use `--frames` (e.g. `0-9` or `0,5,7`) and `--niter` to try settings quickly
-before a full run. From Python, `run_sense(...)` takes the same options and
+before a full run. `--b0map <file.h5>` swaps in a different `b0_map` (and implies
+`--B0`); its output goes to the same `sense_<reg>_b0/` directory, so it replaces a
+run with the preprocessed map unless you move that first. From Python, `run_sense(...)` takes the same options and
 returns the result in memory instead of saving it (see `demo.ipynb`).
 
 ## Outputs
