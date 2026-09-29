@@ -11,18 +11,20 @@ the diagram names no longer exists in the repo.
 
 README.md embeds the two files in a <picture> element, so GitHub shows the one
 matching the reader's theme. Each SVG carries its own <style> and no web fonts
-(an SVG shown through <img> cannot load any), so text is sized for common
-system fonts: `Drawing.box`/`Drawing.tag` raise if a line is likely to overflow
-its box (or its box is too short), using per-character widths that are
-generous for Helvetica/Arial. A box's ('para', ...) lines are wrapped to its
-width; each section is placed relative to the one above, so resizing a box
-moves everything below it.
+(an SVG shown through <img> cannot load any). Text uses Helvetica, or its
+metric twins Arial and Liberation Sans, and is measured with the Helvetica
+metrics bundled with matplotlib, so ('para', ...) lines fill each box's width
+before wrapping and boxes size their height to their text. LaTeX lines
+('math', 'mathc') are drawn as paths with matplotlib's mathtext. Each section is
+placed relative to the one above, so longer text moves everything below it.
 
 Layout: one column of steps (config -> masks -> partitioning) that fans out
 into four lanes, one per sequence (deGRE, noise, EPIcal, ArbEPI). Each lane
 keeps its x position from sequence generation through the scanner into the
 preprocessing step that consumes that sequence's raw data. scan_info.mat is the
-dashed line on the right: it goes around the scanner.
+dashed line on the right: it goes around the scanner. Iterative SENSE is a
+dotted group of its parts: the objective, then one row per option of the
+encoding operator A, the regularizer g and the solver that goes with g.
 """
 
 import os
@@ -52,8 +54,7 @@ THEMES = {
     },
 }
 
-SANS = ('"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, '
-        '"Liberation Sans", sans-serif')
+SANS = 'Helvetica, Arial, "Liberation Sans", sans-serif'  # metric-compatible fonts
 MONO = ('"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", '
         'monospace')
 
@@ -72,6 +73,7 @@ STYLE = f"""
 .box.key {{ stroke-width: 2.5; }}
 .box.dashed {{ stroke-dasharray: 5 4; }}
 .group {{ fill: none; stroke: var(--pre); stroke-width: 1; stroke-dasharray: 3 3; }}
+.group.rec {{ stroke: var(--rec); }}
 .chip {{ fill: var(--chip); stroke: none; }}
 .chip.hand {{ fill: var(--hand-bg); stroke: var(--hand); stroke-width: 1.5; }}
 .flow {{ fill: none; stroke: var(--line); stroke-width: 1.5; }}
@@ -97,10 +99,43 @@ STYLE = f"""
 .rule {{ stroke: var(--line); stroke-opacity: .25; stroke-width: 1; }}
 """
 
-# Upper-bound pixel width per character for each text class, used only to
-# catch lines that would overflow their box after an edit.
-CHAR_PX = {'title': 7.8, 'mono': 7.2, 'mono-s': 6.6, 'mono-b': 7.5, 'text': 6.6, 'indent': 6.6}
+# Text is measured with the Helvetica metrics that ship with matplotlib; Arial
+# and Liberation Sans (the rest of SANS) share them, so a line measured to fit
+# does fit on macOS, Windows and Linux. Monospace fonts are 0.6 em per character.
+TEXT_STYLE = {  # kind -> (bold, font size px, monospace)
+    'title': (True, 14, False), 'text': (False, 12.5, False), 'indent': (False, 12.5, False),
+    'mono': (False, 12, True), 'mono-s': (False, 11, True), 'mono-b': (True, 12.5, True),
+}
+FIT = 0.98  # use at most this fraction of a box's inner width
 INDENT = 14  # px, for 'indent' lines in a box
+MATH_SIZE = {'math': 15, 'mathc': 18}  # px, LaTeX lines in a box
+_GLYPH_NAMES = {'·': 'periodcentered', '×': 'multiply', '–': 'endash', '—': 'emdash',
+                '’': 'quoteright', '‘': 'quoteleft', '“': 'quotedblleft', '”': 'quotedblright'}
+_AFM = {}
+
+
+def text_width(kind, text):
+    """Rendered width in px of `text` in a box line of this kind."""
+    bold, size, mono = TEXT_STYLE[kind]
+    if mono:
+        return len(text) * 0.6 * size
+    if bold not in _AFM:
+        import matplotlib
+        from matplotlib import _afm
+        name = 'Helvetica-Bold.afm' if bold else 'Helvetica.afm'
+        path = os.path.join(matplotlib.get_data_path(), 'fonts', 'pdfcorefonts', name)
+        with open(path, 'rb') as f:
+            _AFM[bold] = _afm.AFM(f)
+    afm = _AFM[bold]
+    units = 0
+    for ch in text:
+        try:
+            units += (afm.get_width_char(ord(ch)) if ord(ch) < 128
+                      else afm.get_width_from_char_name(_GLYPH_NAMES[ch]))
+        except KeyError:
+            units += 900  # arrows, Greek, math symbols: wider than an average letter
+    return units * size / 1000
+
 
 ARIA = (
     'ArbEPI workflow: scanner specs and scan parameters feed sampling-mask generation (bypassed '
@@ -125,22 +160,57 @@ class Drawing:
         self.out.append(s)
 
     def box(self, x, y, w, h, cls, lines, dashed=False):
-        """A processing step. `lines` are (kind, text) pairs, usually one or more 'title'
-        lines, a 'mono' module path, then details: 'text' (one line), 'indent' (one
-        line, indented) or 'para' (wrapped to the box width)."""
+        """A processing step; returns its height. `lines` are (kind, text) pairs, usually
+        a 'title' (wrapped if long), a 'mono' module path, then details: 'para'
+        (wrapped to fill the box width), 'text' (one line), 'indent', or LaTeX as
+        'math' (left-aligned) or 'mathc' (centered, larger). h=None sizes the box
+        to its text; a given h must be tall enough."""
+        placed, need = self._layout(y, w, lines)
+        h = need if h is None else h
+        if need > h:
+            raise ValueError(f'{lines[0][1]!r}: text runs past the bottom of its box '
+                             f'(needs a height of at least {need})')
         self.add(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="6" '
                  f'class="box {cls}{" dashed" if dashed else ""}"/>')
-        ty, prev = y, None
-        for kind, text in self._wrap(lines, w - 32):
-            ty += 22 if prev is None else 18 if prev in ('title', 'mono', 'mono-s') else 16
+        for kind, text, ty in placed:
+            if kind in ('math', 'mathc'):
+                size = MATH_SIZE[kind]
+                if kind == 'mathc':
+                    self.math(x + w / 2, ty, text, size=size, anchor='middle')
+                else:
+                    self.math(x + 16, ty, text, size=size)
+                continue
             dx = INDENT if kind == 'indent' else 0
-            self._check_fit(kind, text, w - 32 - dx)
             cls_t = 'text' if kind == 'indent' else kind
             self.add(f'<text x="{x + 16 + dx}" y="{ty}" class="t-{cls_t}">{escape(text)}</text>')
-            prev = kind
-        if ty > y + h - 12:
-            raise ValueError(f'{lines[0][1]!r}: text runs past the bottom of its box '
-                             f'(needs a height of at least {ty - y + 12})')
+        return h
+
+    def box_height(self, w, lines):
+        """The height box() would give these lines at width w."""
+        return self._layout(0, w, lines)[1]
+
+    def _layout(self, y, w, lines):
+        """([(kind, text, baseline)], height needed) for a box's lines."""
+        placed, ty, prev, prev_descent = [], y, None, 0
+        for kind, text in self._wrap(lines, w - 32):
+            if kind in ('math', 'mathc'):
+                _, width, ascent, descent = _math_path(text, MATH_SIZE[kind])
+                if width > w - 32:
+                    raise ValueError(f'math {text!r} is wider than its box ({w - 32}px)')
+                ty += max(22, ascent + 8) if prev is None else max(18, prev_descent + ascent + 6)
+            else:
+                dx = INDENT if kind == 'indent' else 0
+                self._check_fit(kind, text, w - 32 - dx)
+                descent = 4
+                if prev is None:
+                    ty += 22
+                elif prev in ('math', 'mathc'):
+                    ty += max(16, prev_descent + 14)
+                else:
+                    ty += 18 if prev in ('title', 'mono', 'mono-s') else 16
+            placed.append((kind, text, ty))
+            prev, prev_descent = kind, descent
+        return placed, ty - y + max(14, prev_descent + 10)
 
     def chip(self, cx, cy, text, cls=''):
         """A file or array passed between steps, centered on an arrow."""
@@ -166,7 +236,7 @@ class Drawing:
         """LaTeX (matplotlib mathtext, Computer Modern) drawn as SVG paths, so it
         needs no fonts or MathJax when GitHub shows the SVG as an image. Returns
         the rendered width in px."""
-        path, width = _math_path(tex, size)
+        path, width, _, _ = _math_path(tex, size)
         x0 = x - width / 2 if anchor == 'middle' else x
         self.add(f'<path transform="translate({x0:.1f} {baseline})" class="t-math" d="{path}"/>')
         return width
@@ -192,32 +262,34 @@ class Drawing:
 
     @staticmethod
     def _wrap(lines, avail):
-        """Wraps 'para' lines, and 'title' lines too long for the box, at word breaks."""
+        """Wraps 'para' lines, and 'title' lines too long for the box, at word
+        breaks, filling each line as far as it measurably fits."""
         for kind, text in lines:
             if kind not in ('para', 'title'):
                 yield kind, text
                 continue
             out = 'text' if kind == 'para' else 'title'
-            per_line = int(avail // CHAR_PX[out])
             cur = ''
             for word in text.split():
-                if cur and len(cur) + 1 + len(word) > per_line:
+                trial = f'{cur} {word}' if cur else word
+                if cur and text_width(out, trial) > avail * FIT:
                     yield out, cur
                     cur = word
                 else:
-                    cur = f'{cur} {word}' if cur else word
+                    cur = trial
             if cur:
                 yield out, cur
 
     @staticmethod
     def _check_fit(kind, text, avail):
-        if len(text) * CHAR_PX[kind] > avail:
-            raise ValueError(f'{text!r} is likely wider than its box ({avail}px); '
+        if text_width(kind, text) > avail:
+            raise ValueError(f'{text!r} is wider than its box ({avail}px); '
                              'shorten it or widen the box')
 
 
 def _math_path(tex, size):
-    """(SVG path data with y pointing down and the baseline at 0, width) for `tex`."""
+    """(SVG path data with y pointing down and the baseline at 0, width, ascent,
+    descent) for `tex`, in px."""
     import matplotlib
     from matplotlib.font_manager import FontProperties
     from matplotlib.path import Path
@@ -233,7 +305,8 @@ def _math_path(tex, size):
             continue
         pts = ' '.join(f'{vx:.2f} {-vy:.2f}' for vx, vy in verts.reshape(-1, 2))
         parts.append(f'{cmd[code]}{pts}')
-    return ''.join(parts), tp.get_extents().x1
+    ext = tp.get_extents()
+    return ''.join(parts), ext.x1, round(max(ext.y1, 0)), round(max(-ext.y0, 0))
 
 
 # x centers of the four sequence lanes, kept from generation to preprocessing
@@ -253,61 +326,66 @@ def draw_legend(d):
 
 
 def draw(d):
-    """Draws the diagram body and returns its height. Each section is placed
-    relative to the one above it, so a taller box pushes everything below down."""
+    """Draws the diagram body and returns its height. Boxes size to their text
+    (h=None), boxes in a row share the tallest one's height, and each section is
+    placed relative to the one above it, so longer text pushes everything down."""
+
+    def row(w_lines):
+        """Common height for boxes drawn side by side: [(width, lines), ...]."""
+        return max(d.box_height(w, lines) for w, lines in w_lines)
+
     # ---- one column: scanner specs / parameters -> masks -> trajectory ----
     sx, sw = 365, 470
     sc = sx + sw // 2
-    top, row_h, step = 28, 92, 148  # step: top of one box to the top of the next
-    mid = top + row_h // 2
-    d.box(60, top, 270, row_h, 'seq', [
-        ('title', 'Scanner specs'),
-        ('mono', 'scanners.py'),
-        ('text', 'ScannerSpec: GE_MR750 | GE_UHP'),
-        ('text', 'gradient, slew, B1 and PNS limits'),
-    ])
+    top, gap = 28, 56  # gap: between boxes in the column (room for a chip)
+    specs = [
+        ('title', 'Scanner specs'), ('mono', 'scanners.py'),
+        ('para', 'ScannerSpec: GE_MR750 | GE_UHP; gradient, slew, B1 and PNS limits'),
+    ]
+    params = [
+        ('title', 'Scan parameters'), ('mono', 'params.py · load_params() → Params'),
+        ('para', 'resolution, matrix, R, ETL, TE, volume TR, readout slews; derives Nshots, '
+                 'then TR, then flip angle (Ernst angle)'),
+    ]
+    custom = [
+        ('title', 'Custom mask (optional)'), ('mono-s', 'sampling/external_mask.py'),
+        ('para', '(ky, kz) or (ky, kz, t) .mat; sets Nshots and effective R'),
+    ]
+    top_h = row([(270, specs), (sw, params), (225, custom)])
+    mid = top + top_h // 2
+    d.box(60, top, 270, top_h, 'seq', specs)
     d.arrow(f'M330 {mid} H{sx - 2}')
-    d.box(sx, top, sw, row_h, 'seq', [
-        ('title', 'Scan parameters'),
-        ('mono', 'params.py · load_params() → Params'),
-        ('text', 'resolution, matrix, R, ETL, TE, volume TR, readout slews'),
-        ('text', 'derives Nshots, then TR, then flip angle (Ernst angle)'),
-    ])
-    d.box(860, top, 225, row_h, 'seq', [
-        ('title', 'Custom mask (optional)'),
-        ('mono-s', 'sampling/external_mask.py'),
-        ('text', '(ky, kz) or (ky, kz, t) .mat'),
-        ('text', 'sets Nshots and effective R'),
-    ], dashed=True)
+    d.box(sx, top, sw, top_h, 'seq', params)
+    d.box(860, top, 225, top_h, 'seq', custom, dashed=True)
     d.arrow(f'M860 {mid} H{sx + sw + 2}', 'flow dashed')
 
-    y_mask, y_traj = top + step, top + 2 * step
-    d.arrow(f'M{sc} {top + row_h} V{y_mask - 2}')
-    d.chip(sc, top + row_h + 28, 'Params (+ sys, spec)')
-    d.box(sx, y_mask, sw, row_h, 'seq', [
-        ('title', 'Sampling mask generation'),
-        ('mono', 'sampling/ · resolve_omegas()'),
-        ('text', 'independently generate (ky, kz) masks per frame'),
-        ('text', 'skipped when a custom mask is given'),
+    y_mask = top + top_h + gap
+    d.arrow(f'M{sc} {top + top_h} V{y_mask - 2}')
+    d.chip(sc, top + top_h + gap // 2, 'Params (+ sys, spec)')
+    mask_h = d.box(sx, y_mask, sw, None, 'seq', [
+        ('title', 'Sampling mask generation'), ('mono', 'sampling/ · resolve_omegas()'),
+        ('para', 'independently generate (ky, kz) masks per frame; skipped when a custom '
+                 'mask is given'),
     ])
-    y_omegas = y_mask + row_h + 28
-    d.arrow(f'M{sc} {y_mask + row_h} V{y_traj - 2}')
+    y_traj = y_mask + mask_h + gap
+    y_omegas = y_mask + mask_h + gap // 2
+    d.arrow(f'M{sc} {y_mask + mask_h} V{y_traj - 2}')
     w_omegas = d.chip(sc, y_omegas, 'omegas · Ny × Nz × Nframes, bool')
     # a custom mask goes straight to omegas
-    d.arrow(f'M972 {top + row_h} V{y_omegas} H{sc + w_omegas / 2 + 2:.0f}', 'flow dashed')
+    d.arrow(f'M972 {top + top_h} V{y_omegas} H{sc + w_omegas / 2 + 2:.0f}', 'flow dashed')
     for i, text in enumerate(['custom mask:', 'bypasses mask', 'generation']):
         d.label(962, y_mask + 8 + 16 * i, text, 'end', 't-small')
-    d.box(sx, y_traj, sw, row_h, 'seq', [
-        ('title', 'Trajectory computation'),
-        ('mono', 'lib/mask2epi.py · radial | laminar'),
-        ('text', "split each frame's samples into Nshots trains of ETL echoes"),
-        ('text', '3-step sorting: min-sum TSP → bottleneck 2-opt → uncross (radial)'),
+    traj_h = d.box(sx, y_traj, sw, None, 'seq', [
+        ('title', 'Trajectory computation'), ('mono', 'lib/mask2epi.py · radial | laminar'),
+        ('para', "split each frame's samples into Nshots trains of ETL echoes; 3-step sorting: "
+                 'min-sum TSP → bottleneck 2-opt → uncross (radial)'),
     ])
 
     # ---- four sequences, one lane each ----
-    seq_y, seq_h, lw = y_traj + row_h + 90, 168, 190
-    d.arrow(f'M{sc} {y_traj + row_h} V{seq_y - 26} H{LANE["epi"]} V{seq_y - 2}')
-    d.chip(sc, y_traj + row_h + 30, 'schedules · Nframes × Nshots × ETL × (ky, kz, t)')
+    lw = 190
+    seq_y = y_traj + traj_h + 90
+    d.arrow(f'M{sc} {y_traj + traj_h} V{seq_y - 26} H{LANE["epi"]} V{seq_y - 2}')
+    d.chip(sc, y_traj + traj_h + 30, 'schedules · Nframes × Nshots × ETL × (ky, kz, t)')
     d.label(55, seq_y - 14, 'Sequence generation · sequences/ (pypulseq)', 'start', 't-section')
     seqs = [
         ('gre', 'deGRE', 'deGRE.py',
@@ -320,9 +398,12 @@ def draw(d):
         ('epi', 'ArbEPI', 'ArbEPI.py',
          'Main 3D-EPI sequence with arbitrary phase-encoding described by schedules'),
     ]
-    for key, name, mod, desc in seqs:
+    seq_lines = {key: [('title', name), ('mono', mod), ('para', desc)]
+                 for key, name, mod, desc in seqs}
+    seq_h = row([(lw, lines) for lines in seq_lines.values()])
+    for key, lines in seq_lines.items():
         d.box(LANE[key] - lw // 2, seq_y, lw, seq_h, 'seq' + (' key' if key == 'epi' else ''),
-              [('title', name), ('mono', mod), ('para', desc)])
+              lines)
     info_y = seq_y + 12
     d.tag(905, info_y, 180, 84, [
         ('mono-b', 'scan_info.mat'),
@@ -342,144 +423,137 @@ def draw(d):
         d.label(905, info_y + 116 + i * 16 + (6 if i >= 2 else 0), text, 'start', cls)
 
     # ---- GE export ----
-    ge_y, ge_h = seq_y + seq_h + 56, 88
+    ge_y = seq_y + seq_h + 56
     for key, name, _, _ in seqs:
         d.arrow(f'M{LANE[key]} {seq_y + seq_h} V{ge_y - 2}')
         d.chip(LANE[key], seq_y + seq_h + 28, f'{name}.seq')
-    d.box(55, ge_y, 820, ge_h, 'seq', [
-        ('title', 'GE export'),
-        ('mono', 'ge/ · main.py --ge'),
-        ('text', 'checks all four first: gradient, slew, B1 limits · PNS (fails above 100%, '
-                 'warns above 80%) · gradient acoustics (warns)'),
-        ('text', 'then seq2ceq → writeceq writes one .pge per sequence '
-                 '(pure Python port of PulCeq)'),
+    ge_h = d.box(55, ge_y, 820, None, 'seq', [
+        ('title', 'GE export'), ('mono', 'ge/ · main.py --ge'),
+        ('para', 'checks all four first: gradient, slew, B1 limits · PNS (fails above 100%, '
+                 'warns above 80%) · gradient acoustics (warns); then seq2ceq → writeceq writes '
+                 'one .pge per sequence (pure Python port of PulCeq)'),
     ])
     d.band(0, ge_y + ge_h + 20, 'seq', 'SEQUENCE DESIGN · main.py')
 
     # ---- scanner ----
-    sc_y, sc_h = ge_y + ge_h + 86, 60
+    sc_y = ge_y + ge_h + 86
     pge_y = ge_y + ge_h + 42
     for key, name, _, _ in seqs:
         d.arrow(f'M{LANE[key]} {ge_y + ge_h} V{sc_y - 2}')
         d.chip(LANE[key], pge_y, f'{name}.pge')
     d.label(905, pge_y - 6, 'copy to the scanner:', 'start', 't-note')
     d.label(905, pge_y + 10, 'ge/coppe.py (optional)', 'start', 't-note-mono')
-    d.box(55, sc_y, 820, sc_h, 'scan', [
+    sc_h = d.box(55, sc_y, 820, None, 'scan', [
         ('title', 'GE scanner · pge2 interpreter'),
-        ('text', 'runs each .pge as a pge2 entry; raw data saved as GE ScanArchives '
+        ('para', 'runs each .pge as a pge2 entry; raw data saved as GE ScanArchives '
                  '(HDF5, read only by the Orchestra SDK)'),
     ])
     d.band(sc_y - 22, sc_y + sc_h + 20, 'scan', 'SCANNER')
 
-    # ---- preprocess, raw data: one step per lane, then the EPI chain down lane 4 ----
+    # ---- preprocess, raw data: two rows of steps in lanes 2-4 ----
+    # row 1: whitening -> odd/even delay estimation -> gridding
+    # row 2:             linear phase correction    -> placement in (ky, kz)
     pre_y0 = sc_y + sc_h + 70
     sa_y0 = pre_y0 + 18
-    sb_y, sbw = sa_y0 + 36, 170
-    reg_h, corr_h, scat_h = 136, 104, 172  # the EPI chain down lane 4
-    corr_y = sb_y + reg_h + 36
-    scat_y = corr_y + corr_h + 36
-    sa_y1 = scat_y + scat_h + 18
+    r1_y, sbw = sa_y0 + 36, 170
+    ex, ew = LANE['epi'] - sbw // 2, sbw + 24  # lane-4 boxes: left edge, width
+    cx0 = LANE['cal'] - sbw // 2  # lane-3 boxes: left edge
+    whiten = [('title', 'Whitening'), ('mono', 'coils.py'),
+              ('para', 'Estimate noise covariance matrix W')]
+    oe_est = [('title', 'Odd/even delay estimation'), ('mono', 'oephase.py'),
+              ('para', 'readout-delay sweep and linear phase estimation, on whitened '
+                       'calibration data')]
+    grid = [('title', 'Grid ramp-sampled data'), ('mono', 'epi_gridding.py'),
+            ('para', 'whitened readouts onto Cartesian kx (1D NUFFT); odd/even kx shifted by '
+                     'the calibrated delay')]
+    corr = [('title', 'Linear phase correction'), ('mono', 'oephase.py'),
+            ('para', 'subtracts a[0] + a[1]·x from every even echo')]
+    place = [('title', 'Place samples at their (ky, kz) coordinates'), ('mono', 'preprocess.py'),
+             ('para', 'place each (shot, echo) indexed sample into their respective k-space '
+                      'location, zero-filling unsampled locations')]
+    r1_h = row([(sbw, whiten), (sbw, oe_est), (ew, grid)])
+    r2_y = r1_y + r1_h + 44
+    r2_h = row([(sbw, corr), (ew, place)])
+    sa_y1 = r2_y + r2_h + 18
     for key in ('noise', 'cal', 'epi'):
-        d.arrow(f'M{LANE[key]} {sc_y + sc_h} V{sb_y - 2}')
+        d.arrow(f'M{LANE[key]} {sc_y + sc_h} V{r1_y - 2}')
     archives = {'gre': 'gre.h5', 'noise': '<seq>_noise.h5',
                 'cal': '<seq>_cal.h5', 'epi': '<seq>_epi.h5'}
     for key, text in archives.items():
         d.chip(LANE[key], sc_y + sc_h + 45, text)
-
     d.add(f'<rect x="255" y="{sa_y0}" width="644" height="{sa_y1 - sa_y0}" rx="8" '
           'class="group pre"/>')
-    d.label(262, sa_y1 + 22, 'Raw-data processing (dotted) · all coils, cached, resumable', 'start',
-            't-section')
-    ex, ew = LANE['epi'] - sbw // 2, sbw + 24  # lane-4 boxes: left edge, width (wider titles)
-    d.box(LANE['noise'] - sbw // 2, sb_y, sbw, 104, 'pre', [
-        ('title', 'Whitening'), ('mono', 'coils.py'),
-        ('para', 'Estimate noise covariance matrix W'),
-    ])
-    cal_h = 152
-    d.box(LANE['cal'] - sbw // 2, sb_y, sbw, cal_h, 'pre', [
-        ('title', 'Odd/even delay'), ('title', 'estimation'), ('mono', 'oephase.py'),
-        ('para', 'readout-delay sweep and linear phase estimation, on whitened calibration '
-                 'data'),
-    ])
-    d.box(ex, sb_y, ew, reg_h, 'pre', [
-        ('title', 'Grid ramp-sampled data'), ('mono', 'epi_gridding.py'),
-        ('para', 'whitened readouts onto Cartesian kx (1D NUFFT); odd/even kx shifted by the '
-                 'calibrated delay'),
-    ])
-    d.box(ex, corr_y, ew, corr_h, 'pre', [
-        ('title', 'Linear phase correction'), ('mono', 'oephase.py'),
-        ('text', 'subtracts a[0] + a[1]·x'), ('text', 'from every even echo'),
-    ])
-    d.box(ex, scat_y, ew, scat_h, 'pre', [
-        ('title', 'Place samples at their (ky, kz) coordinates'), ('mono', 'preprocess.py'),
-        ('para', 'place each (shot, echo) indexed sample into their respective k-space '
-                 'location, zero-filling unsampled locations'),
-    ])
-    my = sb_y + 52
-    d.arrow(f'M{LANE["noise"] + sbw // 2} {my} H{LANE["cal"] - sbw // 2 - 2}')
+    # the group's name sits in the free slot under the whitening box
+    for i, text in enumerate(['Raw-data processing', '(dotted): all physical', 'coils, cached per',
+                              'frame, resumable']):
+        d.label(LANE['noise'] - sbw // 2, r2_y + 16 + 18 * i, text, 'start', 't-section')
+    d.box(LANE['noise'] - sbw // 2, r1_y, sbw, r1_h, 'pre', whiten)
+    d.box(cx0, r1_y, sbw, r1_h, 'pre', oe_est)
+    d.box(ex, r1_y, ew, r1_h, 'pre', grid)
+    d.box(cx0, r2_y, sbw, r2_h, 'pre', corr)
+    d.box(ex, r2_y, ew, r2_h, 'pre', place)
+    my, my2 = r1_y + 44, r2_y + r2_h // 2
+    d.arrow(f'M{LANE["noise"] + sbw // 2} {my} H{cx0 - 2}')
     d.label((LANE['noise'] + LANE['cal']) / 2, my - 6, 'W')
-    d.arrow(f'M{LANE["cal"] + sbw // 2} {my} H{ex - 2}')
-    d.label((LANE['cal'] + LANE['epi']) / 2, my - 6, 'delay')
-    d.arrow(f'M{LANE["cal"]} {sb_y + cal_h} V{corr_y + corr_h // 2} H{ex - 2}')
-    d.label((LANE['cal'] + ex) / 2, corr_y + corr_h // 2 - 6, 'a')
+    d.arrow(f'M{cx0 + sbw} {my} H{ex - 2}')
+    d.label((cx0 + sbw + ex) / 2, my - 6, 'delay')
     d.arrow(f'M{LANE["noise"] - sbw // 2} {my} H{LANE["gre"] + 3}')
     d.label((LANE['noise'] - sbw // 2 + LANE['gre']) / 2 + 8, my - 6, 'W')
-    d.arrow(f'M{LANE["epi"]} {sb_y + reg_h} V{corr_y - 2}')
-    d.arrow(f'M{LANE["epi"]} {corr_y + corr_h} V{scat_y - 2}')
+    # gridded data drops to the correction; the phase model a comes straight down
+    gap_y = r1_y + r1_h + 22
+    d.arrow(f'M{LANE["epi"]} {r1_y + r1_h} V{gap_y} H{LANE["cal"] + 40} V{r2_y - 2}')
+    d.arrow(f'M{LANE["cal"] - 40} {r1_y + r1_h} V{r2_y - 2}')
+    d.label(LANE['cal'] - 48, gap_y + 4, 'a', 'end')
+    d.arrow(f'M{cx0 + sbw} {my2} H{ex - 2}')
 
-    # scan_info.mat goes around the scanner: kxo/kxe to the regrid, schedules to the scatter
-    d.arrow(f'M1070 {info_y + 84} V{scat_y + scat_h // 2} H{ex + ew + 2}', 'hand')
-    d.arrow(f'M1070 {sb_y + 60} H{ex + ew + 2}', 'hand')
+    # scan_info.mat goes around the scanner: kxo/kxe to the gridding, schedules to the placement
+    d.arrow(f'M1070 {info_y + 84} V{my2} H{ex + ew + 2}', 'hand')
+    d.arrow(f'M1070 {r1_y + r1_h // 2} H{ex + ew + 2}', 'hand')
 
     # ---- preprocess: deGRE maps | coil compression, R2* | k-space; then the output ----
     col_l, col_m, col_r = (55, 250), (345, 240), (625, 250)  # (x, width)
-    ya, rha, rhb = sa_y1 + 66, 150, 120  # row heights: a (ESPIRiT, GCC, compress), b
+    smaps_x, b0_x = 72, 88  # B0 sits right of a lane carrying the smaps down to the output
+    b0_w = col_l[0] + col_l[1] - b0_x
+    espirit = [('title', 'Sensitivity maps (ESPIRiT)'), ('mono', 'smaps.py'),
+               ('para', 'ESPIRiT on echo 1, resized to the EPI grid, masked and smoothed; then '
+                        'compressed with GCC')]
+    gcc = [('title', 'Coil compression fit (GCC)'), ('mono', 'coils.py'),
+           ('para', 'geometric-decomposition coil compression (GCC) on the whitened deGRE data: '
+                    'per-x SVD-based compression with default threshold at keeping 99.9% '
+                    'of coil energy')]
+    compress = [('title', 'Compress EPI k-space using GCC'),
+                ('mono', 'preprocess.py · write_output()'),
+                ('para', 'compress the cached k-space frame by frame with GCC')]
+    b0 = [('title', 'B0 map (optional)'), ('mono-s', 'b0map.py + julia/b0map.jl'),
+          ('para', 'MRIFieldmaps.jl on both echoes from a ROMEO.jl start; skip with --no-b0')]
+    r2s = [('title', 'R2* map (optional)'), ('mono', 'r2star.py'),
+           ('para', 'log-linear fit in the B0 mask (placeholder); skip with --no-r2star')]
+    calib = [('title', 'Calibration region extraction'), ('mono', 'find_calib_region()'),
+             ('para', 'extract the (ky, kz) block sampled in every frame, cut out as ksp_calib')]
+    ya = sa_y1 + 66
+    rha = row([(col_l[1], espirit), (col_m[1], gcc), (col_r[1], compress)])
     yb = ya + rha + 40
+    rhb = row([(b0_w, b0), (col_m[1], r2s), (col_r[1], calib)])
     yc = yb + rhb + 40
-    d.arrow(f'M{LANE["epi"]} {scat_y + scat_h} V{ya - 2}')
+    d.arrow(f'M{LANE["epi"]} {r2_y + r2_h} V{ya - 2}')
     d.chip(LANE['epi'], sa_y1 + 32, '<seq>_gridded.h5')
     # the whitened deGRE feeds ESPIRiT (down its lane) and GCC (branch)
     gcc_cx = col_m[0] + col_m[1] // 2
     d.arrow(f'M{LANE["gre"]} {sc_y + sc_h} V{ya - 2}')
     d.arrow(f'M{LANE["gre"]} {ya - 18} H{gcc_cx} V{ya - 2}')
-    d.box(col_l[0], ya, col_l[1], rha, 'pre', [
-        ('title', 'Sensitivity maps (ESPIRiT)'), ('mono', 'smaps.py'),
-        ('para', 'ESPIRiT on echo 1, resized to the EPI grid, masked and smoothed; then '
-                 'compressed with GCC'),
-    ])
-    d.box(col_m[0], ya, col_m[1], rha, 'pre', [
-        ('title', 'Coil compression fit (GCC)'), ('mono', 'coils.py'),
-        ('para', 'geometric-decomposition coil compression (GCC) on the whitened deGRE data: '
-                 'per-x SVD-based compression with default threshold at keeping 99.9% '
-                 'of coil energy'),
-    ])
-    d.box(col_r[0], ya, col_r[1], rha, 'pre', [
-        ('title', 'Compress EPI k-space using GCC'), ('mono', 'preprocess.py · write_output()'),
-        ('para', 'compress the cached k-space frame by frame with GCC'),
-    ])
+    d.box(col_l[0], ya, col_l[1], rha, 'pre', espirit)
+    d.box(col_m[0], ya, col_m[1], rha, 'pre', gcc)
+    d.box(col_r[0], ya, col_r[1], rha, 'pre', compress)
     mid_a = ya + rha // 2
     d.arrow(f'M{col_m[0]} {mid_a} H{col_l[0] + col_l[1] + 2}')
     d.label((col_m[0] + col_l[0] + col_l[1]) / 2, mid_a - 6, 'GCC')
     d.arrow(f'M{col_m[0] + col_m[1]} {mid_a} H{col_r[0] - 2}')
     d.label((col_m[0] + col_m[1] + col_r[0]) / 2, mid_a - 6, 'GCC')
 
-    # B0 sits right of a lane that carries the smaps straight down to the output
-    smaps_x, b0_x = 72, 88
-    b0_w = col_l[0] + col_l[1] - b0_x
     b0_cx = b0_x + b0_w // 2
-    d.box(b0_x, yb, b0_w, rhb, 'pre', [
-        ('title', 'B0 map (optional)'), ('mono-s', 'b0map.py + julia/b0map.jl'),
-        ('para', 'MRIFieldmaps.jl on both echoes from a ROMEO.jl start; skip with --no-b0'),
-    ], dashed=True)
-    d.box(col_m[0], yb, col_m[1], rhb, 'pre', [
-        ('title', 'R2* map (optional)'), ('mono', 'r2star.py'),
-        ('para', 'log-linear fit in the B0 mask (placeholder); skip with --no-r2star'),
-    ], dashed=True)
-    d.box(col_r[0], yb, col_r[1], rhb, 'pre', [
-        ('title', 'Calibration region extraction'), ('mono', 'find_calib_region()'),
-        ('para', 'extract the (ky, kz) block sampled in every frame, cut out as '
-                 'ksp_calib'),
-    ])
+    d.box(b0_x, yb, b0_w, rhb, 'pre', b0, dashed=True)
+    d.box(col_m[0], yb, col_m[1], rhb, 'pre', r2s, dashed=True)
+    d.box(col_r[0], yb, col_r[1], rhb, 'pre', calib)
     d.arrow(f'M{b0_cx} {ya + rha} V{yb - 2}')
     d.label(b0_cx + 8, yb - 14, 'smaps, emap', 'start')
     mid_b = yb + rhb // 2
@@ -494,79 +568,104 @@ def draw(d):
     d.arrow(f'M{r_cx} {yb + rhb} V{yc - 2}')
     d.label(r_cx + 8, yc - 14, 'ksp_calib', 'start')
     r_x1 = col_r[0] + col_r[1]  # compressed k-space goes around the calibration box
-    d.arrow(f'M{r_x1} {mid_a} H{r_x1 + 22} V{yc + 46} H{r_x1 + 2}')
-    d.label(r_x1 + 30, mid_b + 4, 'ksp_epi_zf', 'start')
-    wh = 92
-    d.box(55, yc, 820, wh, 'pre', [
+    wh = d.box(55, yc, 820, None, 'pre', [
         ('title', 'Write all output to a single HDF5 file'),
         ('mono', 'write_output() → <seq>_preprocessed.h5'),
-        ('text', 'ksp_epi_zf, ksp_calib, smaps, b0map_hz, r2star, omegas, echo_times, W, '
-                 'GCC; attrs noise_var, t_ref_s'),
-        ('text', 'the three maps also go to .nii.gz + .json for viewing'),
+        ('para', 'ksp_epi_zf, ksp_calib, smaps, b0map_hz, r2star, omegas, echo_times, W, '
+                 'GCC; attrs noise_var, t_ref_s. The three maps also go to .nii.gz + .json '
+                 'for viewing'),
     ])
+    d.arrow(f'M{r_x1} {mid_a} H{r_x1 + 22} V{yc + wh // 2} H{r_x1 + 2}')
+    d.label(r_x1 + 30, mid_b + 4, 'ksp_epi_zf', 'start')
     pre_y1 = yc + wh + 22
     d.band(pre_y0, pre_y1, 'pre', 'PREPROCESS · .venv-preprocessing')
 
-    # ---- recon ----
+    # ---- recon: RSOS | iterative SENSE (dotted: objective, then A, g and solver) ----
     rec_y0 = pre_y1 + 50
-    bus_y, r_y, r_h = rec_y0 + 12, rec_y0 + 28, 234
-    rss_x, rss_w, sense_x, sense_w = 55, 250, 325, 550
-    rss_cx, sense_cx = rss_x + rss_w // 2, sense_x + sense_w // 2
-    d.line(f'M470 {yc + wh} V{bus_y}')
-    d.line(f'M{rss_cx} {bus_y} H{sense_cx}')
-    d.arrow(f'M{rss_cx} {bus_y} V{r_y - 2}')
-    d.arrow(f'M{sense_cx} {bus_y} V{r_y - 2}')
+    bus_y, r_y = rec_y0 + 12, rec_y0 + 28
+    rss_x, rss_w = 55, 250
+    rss_cx = rss_x + rss_w // 2
+    gx0, gx1 = 325, 1085  # the SENSE group
+    ix0, iw = gx0 + 18, gx1 - gx0 - 36  # inside it
+    obj_y = r_y + 36
+    obj_cx = ix0 + iw // 2
     d.chip(470, pre_y1 + 25,
            '<seq>_preprocessed.h5 · ksp_epi_zf, smaps, b0map_hz, r2star, echo_times')
-    d.box(rss_x, r_y, rss_w, 152, 'rec', [
-        ('title', 'Root-sum-of-squares (RSOS)'), ('title', 'coil-combined IFT'),
-        ('title', 'reconstruction'), ('mono', 'rss.py'),
-        ('text', 'zero-filled inverse FFT per coil,'), ('text', 'then RSS over coils'),
-        ('text', 'first look, aliasing kept'),
+    d.line(f'M470 {yc + wh} V{bus_y}')
+    d.line(f'M{rss_cx} {bus_y} H{obj_cx}')
+    d.arrow(f'M{rss_cx} {bus_y} V{r_y - 2}')
+    d.arrow(f'M{obj_cx} {bus_y} V{obj_y - 2}')
+    rss_h = d.box(rss_x, r_y, rss_w, None, 'rec', [
+        ('title', 'Root-sum-of-squares (RSOS) coil-combined IFT reconstruction'),
+        ('mono', 'rss.py'),
+        ('para', 'zero-filled inverse FFT per coil, then RSS over coils; first look, '
+                 'aliasing kept'),
     ])
+    d.label(gx0 + 14, r_y + 22, 'Iterative SENSE (dotted) · sense.py', 'start', 't-section')
+    obj_h = d.box(ix0, obj_y, iw, None, 'rec', [
+        ('title', 'Objective'), ('mono', 'sense.py · run_sense()'),
+        ('mathc', r'\hat{x} = \arg\min_x \ \dfrac{1}{2}\,\|Ax - y\|_2^2 + g(x)'),
+        ('para', 'x: one 3D image per frame. y: only the sampled k-space points, scaled to unit '
+                 'noise variance. For lowrank, A is divided by its largest singular value, and '
+                 'λ defaults to R.'),
+    ])
+    cw, cg = 224, (iw - 3 * 224) // 2  # three columns: A | g | solver
+    cols = [ix0, ix0 + cw + cg, ix0 + 2 * (cw + cg)]
+    head_y = obj_y + obj_h + 28
+    for x, text in zip(cols, ['A · ENCODING OPERATOR', 'g · REGULARIZER  (--reg)', 'SOLVER']):
+        d.label(x, head_y, text, 'start', 't-colhead')
+    comps = [  # one row per option: (A, dashed?), g, solver
+        ([('title', 'SENSE'), ('mono', 'operators.SENSE'),
+          ('para', 'coil sensitivity maps, then a 3D FFT, keeping only the sampled (ky, kz) '
+                   'points (no zero-filled grid)')], False,
+         [('title', 'None (--reg none)'), ('math', r'g(x) = 0'),
+          ('para', 'plain least-squares SENSE')],
+         [('title', 'Conjugate gradient'), ('mono', 'solvers.cg'),
+          ('math', r'A^H A\, x = A^H y'), ('para', 'fast when there is no regularizer')]),
+        ([('title', '+ B0 off-resonance (--B0)'), ('mono', 'operators.SENSE_B0'),
+          ('math', r'\exp(i 2\pi\, \Delta f(\mathbf{r})\, t)'),
+          ('para', 'phase accrual along the echo train; time-segmented, L = 32')], True,
+         [('title', 'Multi-scale low rank (--reg lowrank)'), ('mono', 'MultiScaleLowRank'),
+          ('math', r'\sum_k \lambda_k \sum_b \|P_b(X_k)\|_*'),
+          ('para', 'one component X_k per patch scale; nuclear norm of space × time patches '
+                   '(Ong & Lustig)')],
+         [('title', 'POGM with restart'), ('mono', 'solvers.pogm_restart'),
+          ('para', 'proximal gradient; the prox is singular-value soft-thresholding of each '
+                   'patch. --mom fpgm or pgm also available')]),
+        ([('title', '+ R2* decay (--R2star)'), ('mono', 'operators.SENSE_B0_R2star'),
+          ('math', r'\exp(-R_2^*(\mathbf{r})\,(t - \mathrm{TE}))'),
+          ('para', 'with --B0; the image is referenced to the nominal TE')], True,
+         [('title', 'Wavelet + TV (--reg wavelet-tv)'), ('mono', 'WaveletTV'),
+          ('math', r'\lambda_{\ell_1}\|Wx\|_1 + \lambda_{TV}\|Dx\|_1'),
+          ('para', 'per frame: sparse 3D wavelet coefficients and image gradients')],
+         [('title', 'Primal-dual (PDHG)'), ('mono', 'solvers.pdhg'),
+          ('para', 'Condat–Vũ, via mirtorch FBPD; TV has no closed-form prox')]),
+    ]
+    y = head_y + 14
+    for a_lines, a_opt, g_lines, s_lines in comps:
+        h = row([(cw, a_lines), (cw, g_lines), (cw, s_lines)])
+        d.box(cols[0], y, cw, h, 'rec', a_lines, dashed=a_opt)
+        d.box(cols[1], y, cw, h, 'rec', g_lines)
+        d.box(cols[2], y, cw, h, 'rec', s_lines)
+        d.arrow(f'M{cols[1] + cw} {y + h // 2} H{cols[2] - 2}')
+        y += h + 20
+    g_y1 = y - 20 + 18
+    d.add(f'<rect x="{gx0}" y="{r_y}" width="{gx1 - gx0}" height="{g_y1 - r_y}" rx="8" '
+          'class="group rec"/>')
 
-    # Iterative SENSE: the objective, then what A and g can be
-    d.box(sense_x, r_y, sense_w, r_h, 'rec', [
-        ('title', 'Iterative SENSE reconstruction'),
-        ('mono', 'sense.py · operators.py · regularizers.py · solvers.py'),
-    ])
-    d.math(sense_cx, r_y + 78,
-           r'\hat{x} = \arg\min_x \ \dfrac{1}{2}\,\|Ax - y\|_2^2 + g(x)', size=18,
-           anchor='middle')
-    d.line(f'M{sense_x + 16} {r_y + 102} H{sense_x + sense_w - 16}', 'rule')
-    ax, gx = sense_x + 16, sense_x + 392  # column x: A (encoding), g (regularizer)
-    d.label(ax, r_y + 122, 'A · ENCODING OPERATOR', 'start', 't-colhead')
-    d.label(gx, r_y + 122, 'g → SOLVER  (--reg)', 'start', 't-colhead')
-    rows = [r_y + 146, r_y + 170, r_y + 194]
-    mx = ax + 112  # x where the math/description column starts
-    d.label(ax, rows[0], 'SENSE', 'start', 't-text')
-    d.label(mx, rows[0], 'coil maps → 3D FFT → samples', 'start', 't-text')
-    d.label(ax, rows[1], '+ B0  (--B0)', 'start', 't-text')
-    w = d.math(mx, rows[1], r'\exp(i 2\pi\, \Delta f(\mathbf{r})\, t)', size=15)
-    d.label(mx + w + 10, rows[1], 'time-segmented, L = 32', 'start', 't-small')
-    d.label(ax, rows[2], '+ R2*  (--R2star)', 'start', 't-text')
-    d.math(mx, rows[2], r'\exp(-R_2^*(\mathbf{r})\,(t - \mathrm{TE}))', size=15)
-    for y, (reg, solver) in zip(rows, [('none', 'CG'), ('lowrank', 'POGM'),
-                                       ('wavelet-tv', 'PDHG')]):
-        d.label(gx, y, reg, 'start', 't-chip')
-        d.label(gx + 88, y, f'→ {solver}', 'start', 't-text')
-    d.label(ax, r_y + 220, 'y: sampled k-space points only, scaled to unit noise variance · '
-            'λ = R by default', 'start', 't-small')
-    d.arrow(f'M{sense_x + sense_w} {r_y + 76} H903')
-    tag_y, tag_h = r_y + 18, 132
-    d.tag(905, tag_y, 180, tag_h, [
+    # ---- recon output, below both methods ----
+    out_y = g_y1 + 40
+    d.arrow(f'M{rss_cx} {r_y + rss_h} V{out_y - 2}')
+    d.arrow(f'M{obj_cx} {g_y1} V{out_y - 2}')
+    out_h = 84
+    d.tag(55, out_y, gx1 - 55, out_h, [
         ('mono-b', '<datdir>/recon/'),
-        ('mono-s', 'sense_<reg>/'),
-        ('mono-s', 'sense_<reg>_b0/'),
-        ('mono-s', 'sense_<reg>_b0r2star/'),
-        ('text', '→ .h5 + .nii.gz + .json'),
-        ('mono-s', 'rss/'),
-        ('text', '→ .nii.gz + .json'),
+        ('mono-s', 'rss/<seq>_recon.nii.gz + .json'),
+        ('mono-s', 'sense_<reg>[_b0 | _b0r2star]/<seq>_recon.h5 + .nii.gz + .json'),
+        ('text', '.nii.gz: magnitude image for viewing · .json: every setting, R, σ1(A), runtime '
+                 '· .h5: complex image and per-iteration solver traces'),
     ])
-    # RSS output runs under the SENSE box to the same tag
-    under = r_y + r_h + 18
-    d.arrow(f'M{rss_cx} {r_y + 152} V{under} H995 V{tag_y + tag_h + 2}')
-    rec_y1 = under + 20
+    rec_y1 = out_y + out_h + 20
     d.band(rec_y0, rec_y1, 'rec', 'RECON · .venv-recon')
     return rec_y1 + 12
 
