@@ -9,6 +9,7 @@ for that), just confirmation the full pipeline (operators + mslr + solvers
 
 
 import h5py
+import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -259,6 +260,25 @@ def test_run_sense_rejects_r2star_without_b0(tmp_path):
     with pytest.raises(ValueError, match="requires fn_b0map"):
         run_sense(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg="none", device=DEVICE,
                   r2star_map=torch.zeros(16, 16, 4, device=DEVICE))
+
+
+def test_run_sense_reads_the_b0_map_under_its_current_and_old_names(tmp_path):
+    """Preprocessed files written before 2026-09-28 store the field map as
+    b0map_hz; it must still load, and give the same result as b0_map."""
+    _, fn_ksp, fn_smaps = _phantom_setup(tmp_path)
+    with h5py.File(fn_ksp, "a") as f:
+        f.create_dataset("echo_times", data=np.full((16, 4, 1), 1e-3, np.float32))
+    field = np.linspace(0, 5, 16 * 16 * 4, dtype=np.float32).reshape(16, 16, 4)
+    results = []
+    for key in ("b0_map", "b0map_hz"):
+        fn_b0 = tmp_path / f"{key}.h5"
+        with h5py.File(fn_b0, "w") as f:
+            f.create_dataset(key, data=field)
+        r = run_sense(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg="none", niters=10, device=DEVICE,
+                      fn_b0map=str(fn_b0))
+        results.append(r.X_recon)
+    assert torch.isfinite(results[0].abs()).all()
+    torch.testing.assert_close(results[0], results[1])
 
 
 def test_run_sense_divides_kspace_by_recorded_noise_var(tmp_path):

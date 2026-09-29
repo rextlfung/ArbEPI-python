@@ -563,15 +563,18 @@ def draw(d):
     d.arrow(f'M{r_cx} {ya + rha} V{yb - 2}')
 
     d.arrow(f'M{smaps_x} {ya + rha} V{yc - 2}')
+    d.label(smaps_x + 6, yc - 14, 'smaps', 'start')
     d.arrow(f'M{b0_cx} {yb + rhb} V{yc - 2}', 'flow dashed')
+    d.label(b0_cx + 8, yc - 14, 'b0_map', 'start')
     d.arrow(f'M{gcc_cx} {yb + rhb} V{yc - 2}', 'flow dashed')
+    d.label(gcc_cx + 8, yc - 14, 'r2star_map', 'start')
     d.arrow(f'M{r_cx} {yb + rhb} V{yc - 2}')
     d.label(r_cx + 8, yc - 14, 'ksp_calib', 'start')
     r_x1 = col_r[0] + col_r[1]  # compressed k-space goes around the calibration box
     wh = d.box(55, yc, 820, None, 'pre', [
         ('title', 'Write all output to a single HDF5 file'),
         ('mono', 'write_output() → <seq>_preprocessed.h5'),
-        ('para', 'ksp_epi_zf, ksp_calib, smaps, b0map_hz, r2star, omegas, echo_times, W, '
+        ('para', 'ksp_epi_zf, ksp_calib, smaps, b0_map, r2star_map, omegas, echo_times, W, '
                  'GCC; attrs noise_var, t_ref_s. The three maps also go to .nii.gz + .json '
                  'for viewing'),
     ])
@@ -580,23 +583,23 @@ def draw(d):
     pre_y1 = yc + wh + 22
     d.band(pre_y0, pre_y1, 'pre', 'PREPROCESS · .venv-preprocessing')
 
-    # ---- recon: RSOS | iterative SENSE (dotted: objective, then A, g and solver) ----
+    # ---- recon: iterative SENSE (dotted: objective, then A, R and solver) | RSS ----
     rec_y0 = pre_y1 + 50
     bus_y, r_y = rec_y0 + 12, rec_y0 + 28
-    rss_x, rss_w = 55, 250
-    rss_cx = rss_x + rss_w // 2
-    gx0, gx1 = 325, 1085  # the SENSE group
+    gx0, gx1 = 55, 815  # the SENSE group
     ix0, iw = gx0 + 18, gx1 - gx0 - 36  # inside it
+    rss_x, rss_w = gx1 + 20, 1085 - gx1 - 20
+    rss_cx = rss_x + rss_w // 2
     obj_y = r_y + 36
     obj_cx = ix0 + iw // 2
     d.chip(470, pre_y1 + 25,
-           '<seq>_preprocessed.h5 · ksp_epi_zf, smaps, b0map_hz, r2star, echo_times')
+           '<seq>_preprocessed.h5 · ksp_epi_zf, smaps, b0_map, r2star_map, echo_times')
     d.line(f'M470 {yc + wh} V{bus_y}')
-    d.line(f'M{rss_cx} {bus_y} H{obj_cx}')
-    d.arrow(f'M{rss_cx} {bus_y} V{r_y - 2}')
+    d.line(f'M{obj_cx} {bus_y} H{rss_cx}')
     d.arrow(f'M{obj_cx} {bus_y} V{obj_y - 2}')
+    d.arrow(f'M{rss_cx} {bus_y} V{r_y - 2}')
     rss_h = d.box(rss_x, r_y, rss_w, None, 'rec', [
-        ('title', 'Root-sum-of-squares (RSOS) coil-combined IFT reconstruction'),
+        ('title', 'Root-sum-of-squares (RSS) coil-combined IFT reconstruction'),
         ('mono', 'rss.py'),
         ('para', 'zero-filled inverse FFT per coil, then RSS over coils; first look, '
                  'aliasing kept'),
@@ -615,38 +618,47 @@ def draw(d):
     head_y = obj_y + obj_h + 28
     for x, text in zip(cols, ['A · ENCODING OPERATOR', 'R · REGULARIZER  (--reg)', 'SOLVER']):
         d.label(x, head_y, text, 'start', 't-colhead')
-    comps = [  # one row per option: (A, dashed?), g, solver
+    operators = [  # (lines, optional?)
         ([('title', 'SENSE'), ('mono', 'operators.SENSE'),
-          ('para', 'coil sensitivity maps, then a 3D FFT, keeping only the sampled (ky, kz) '
-                   'points (no zero-filled grid)')], False,
-         [('title', 'None (--reg none)'), ('math', r'R(x) = 0'),
+          ('math', r'A = P\,F\,S'),
+          ('para', 'S: coil sensitivity maps (smaps)'),
+          ('para', 'F: centered 3D FFT'),
+          ('para', 'P: keep only the sampled (ky, kz) points (no zero-filled grid)')], False),
+        ([('title', '+ B0 off-resonance (--B0)'), ('mono', 'operators.SENSE_B0'),
+          ('math', r'A = \sum_{l=1}^{L} W_l\, P\,F\,S\, \Phi_l'),
+          ('math', r'\Phi_l = \mathrm{diag}(e^{\,i 2\pi \Delta f(\mathbf{r})\, t_l})'),
+          ('para', 'Φₗ: B0 phase at segment time tₗ, from b0_map (Δf)'),
+          ('para', 'Wₗ: per-sample interpolation weights across the echo train'),
+          ('para', 'L = 32 time segments')], True),
+        ([('title', '+ R2* decay (--R2star)'), ('mono', 'operators.SENSE_B0_R2star'),
+          ('math', r'\Phi_l = \mathrm{diag}(e^{\,\psi(\mathbf{r})\,(t_l - \mathrm{TE})})'),
+          ('math', r'\psi = i 2\pi \Delta f(\mathbf{r}) - R_2^*(\mathbf{r})'),
+          ('para', 'the same A as + B0, with R2* decay from r2star_map added to Φₗ'),
+          ('para', 'needs --B0; the image is referenced to the nominal TE')], True),
+    ]
+    regularizers = [  # (R, the solver it uses)
+        ([('title', 'None (--reg none)'), ('math', r'R(x) = 0'),
           ('para', 'plain least-squares SENSE')],
          [('title', 'Conjugate gradient'), ('mono', 'solvers.cg'),
           ('math', r'A^H A\, x = A^H y'), ('para', 'fast when there is no regularizer')]),
-        ([('title', '+ B0 off-resonance (--B0)'), ('mono', 'operators.SENSE_B0'),
-          ('math', r'\exp(i 2\pi\, \Delta f(\mathbf{r})\, t)'),
-          ('para', 'phase accrual along the echo train; time-segmented, L = 32')], True,
-         [('title', 'Multi-scale low rank (--reg mslr)'), ('mono', 'MultiScaleLowRank'),
+        ([('title', 'Wavelet + TV (--reg wavelet-tv)'), ('mono', 'WaveletTV'),
+          ('math', r'R(x) = \lambda_{\ell_1}\|Wx\|_1 + \lambda_{TV}\|Dx\|_1'),
+          ('para', 'per frame: sparse 3D wavelet coefficients and image gradients')],
+         [('title', 'Primal-dual (PDHG)'), ('mono', 'solvers.pdhg'),
+          ('para', 'via mirtorch FBPD; TV has no closed-form prox')]),
+        ([('title', 'Multi-scale low rank (--reg mslr)'), ('mono', 'MultiScaleLowRank'),
           ('math', r'R(x) = \sum_k \lambda_k \sum_b \|P_b(x_k)\|_*'),
           ('math', r'x = \sum_k x_k'),
           ('para', 'one component per patch scale; nuclear norm of each space × time patch')],
          [('title', 'POGM with restart'), ('mono', 'solvers.pogm_restart'),
           ('para', 'proximal gradient; the prox is singular-value soft-thresholding of each '
                    'patch. --mom fpgm or pgm also available')]),
-        ([('title', '+ R2* decay (--R2star)'), ('mono', 'operators.SENSE_B0_R2star'),
-          ('math', r'\exp(-R_2^*(\mathbf{r})\,(t - \mathrm{TE}))'),
-          ('para', 'with --B0; the image is referenced to the nominal TE')], True,
-         [('title', 'Wavelet + TV (--reg wavelet-tv)'), ('mono', 'WaveletTV'),
-          ('math', r'R(x) = \lambda_{\ell_1}\|Wx\|_1 + \lambda_{TV}\|Dx\|_1'),
-          ('para', 'per frame: sparse 3D wavelet coefficients and image gradients')],
-         [('title', 'Primal-dual (PDHG)'), ('mono', 'solvers.pdhg'),
-          ('para', 'via mirtorch FBPD; TV has no closed-form prox')]),
     ]
     y = head_y + 14
-    for a_lines, a_opt, g_lines, s_lines in comps:
-        h = row([(cw, a_lines), (cw, g_lines), (cw, s_lines)])
+    for (a_lines, a_opt), (r_lines, s_lines) in zip(operators, regularizers):
+        h = row([(cw, a_lines), (cw, r_lines), (cw, s_lines)])
         d.box(cols[0], y, cw, h, 'rec', a_lines, dashed=a_opt)
-        d.box(cols[1], y, cw, h, 'rec', g_lines)
+        d.box(cols[1], y, cw, h, 'rec', r_lines)
         d.box(cols[2], y, cw, h, 'rec', s_lines)
         d.arrow(f'M{cols[1] + cw} {y + h // 2} H{cols[2] - 2}')
         y += h + 20
@@ -656,10 +668,10 @@ def draw(d):
 
     # ---- recon output, below both methods ----
     out_y = g_y1 + 40
-    d.arrow(f'M{rss_cx} {r_y + rss_h} V{out_y - 2}')
     d.arrow(f'M{obj_cx} {g_y1} V{out_y - 2}')
+    d.arrow(f'M{rss_cx} {r_y + rss_h} V{out_y - 2}')
     out_h = 84
-    d.tag(55, out_y, gx1 - 55, out_h, [
+    d.tag(55, out_y, 1085 - 55, out_h, [
         ('mono-b', '<datdir>/recon/'),
         ('mono-s', 'rss/<seq>_recon.nii.gz + .json'),
         ('mono-s', 'sense_<reg>[_b0 | _b0r2star]/<seq>_recon.h5 + .nii.gz + .json'),

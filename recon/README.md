@@ -57,8 +57,8 @@ One file, `<datdir>/recon/<seq>_preprocessed.h5`, as written by `preprocess/`:
 | `omegas`, `echo_times` | (Ny, Nz, Nframes) sampling mask, and each sample's time since excitation (s) | everything |
 | attrs `noise_var`, `whitened` | thermal-noise variance of `ksp_epi_zf`; whether a noise scan whitened it | scaling |
 | `smaps` | (Nx, Ny, Nz, Ncoils) ESPIRiT sensitivity maps, in the same coil space as `ksp_epi_zf` | SENSE |
-| `b0map_hz` | (Nx, Ny, Nz) B0 field map in Hz on the EPI grid | `--B0` |
-| `r2star`, attr `t_ref_s` | (Nx, Ny, Nz) R2* map in 1/s, and the nominal-TE reference time | `--R2star` |
+| `b0_map` | (Nx, Ny, Nz) B0 field map in Hz on the EPI grid | `--B0` |
+| `r2star_map`, attr `t_ref_s` | (Nx, Ny, Nz) R2* map in 1/s, and the nominal-TE reference time | `--R2star` |
 
 It also holds `ksp_calib` (the fully sampled central calibration region), the
 whitening/compression matrices and deGRE-grid QA volumes; see preprocess/demo.ipynb.

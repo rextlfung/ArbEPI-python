@@ -58,10 +58,10 @@ def test_estimate_b0map_recovers_known_field_map():
     r = estimate_b0map(_synthetic_echoes(rng, f0_true, mask.astype(float), te), te)
 
     # numpy axis order (the HDF5.jl reversal round trip is what this checks)
-    assert r['b0map_hz'].shape == f0_true.shape
-    diff = r['b0map_hz'][mask] - f0_true[mask]
+    assert r['b0_map'].shape == f0_true.shape
+    diff = r['b0_map'][mask] - f0_true[mask]
     assert np.sqrt(np.mean(diff**2)) < 5.0  # the true map spans +-48 Hz in the mask
-    assert np.corrcoef(r['b0map_hz'][mask], f0_true[mask])[0, 1] > 0.98
+    assert np.corrcoef(r['b0_map'][mask], f0_true[mask])[0, 1] > 0.98
     assert r['mask'][mask].mean() > 0.95
 
 
@@ -79,8 +79,8 @@ def test_estimate_b0map_unwraps_beyond_the_naive_unambiguous_range():
     r = estimate_b0map(_synthetic_echoes(rng, f0_true, amp, te), te)
     m = r['mask']
     assert np.abs(r['finit_hz'][m]).max() > 300
-    assert np.sqrt(np.mean((r['b0map_hz'][m] - f0_true[m]) ** 2)) < 60.0
-    assert np.corrcoef(r['b0map_hz'][m], f0_true[m])[0, 1] > 0.95
+    assert np.sqrt(np.mean((r['b0_map'][m] - f0_true[m]) ** 2)) < 60.0
+    assert np.corrcoef(r['b0_map'][m], f0_true[m])[0, 1] > 0.95
 
 
 @needs_julia

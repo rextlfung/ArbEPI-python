@@ -141,13 +141,15 @@ def run_sense(
         A = build_sense(smaps_chw, omega)
     else:
         print(f"  Loading B0 field map from {fn_b0map} (L={L_b0}, nbins={nbins_b0})...")
-        b0map_hz = torch.from_numpy(load_array(fn_b0map, "b0map_hz").astype(np.float32)).to(device)
-        assert tuple(b0map_hz.shape) == (Nx, Ny, Nz), (
-            f"b0map_hz shape {tuple(b0map_hz.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz})"
+        with h5py.File(fn_b0map, "r") as f:  # files from before 2026-09-28 say b0map_hz
+            b0_key = "b0_map" if "b0_map" in f else "b0map_hz"
+        b0_map = torch.from_numpy(load_array(fn_b0map, b0_key).astype(np.float32)).to(device)
+        assert tuple(b0_map.shape) == (Nx, Ny, Nz), (
+            f"b0_map shape {tuple(b0_map.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz})"
         )
         echo_times_yz = load_echo_times(fn_ksp, device)[..., frames]
         if r2star_map is None:
-            A = build_sense_b0(smaps_chw, omega, b0map_hz, echo_times_yz, L=L_b0, nbins=nbins_b0)
+            A = build_sense_b0(smaps_chw, omega, b0_map, echo_times_yz, L=L_b0, nbins=nbins_b0)
         else:
             print(f"  R2* correction enabled (t_ref_s={t_ref_s * 1000:.3f} ms)...")
             assert tuple(r2star_map.shape) == (Nx, Ny, Nz), (
@@ -156,7 +158,7 @@ def run_sense(
             A = build_sense_b0_r2star(
                 smaps_chw,
                 omega,
-                b0map_hz,
+                b0_map,
                 echo_times_yz,
                 r2star_map,
                 t_ref_s,
@@ -402,10 +404,11 @@ def main(
     with h5py.File(fn_pre, "r") as f:
         fov = tuple(f.attrs["fov"])
         if R2star:
-            if "r2star" not in f:
+            r2_key = "r2star_map" if "r2star_map" in f else "r2star"  # older files: r2star
+            if r2_key not in f:
                 raise ValueError(f"{fn_pre} has no R2* map (was estimate_r2star=False?)")
             t_ref_s = float(f.attrs["t_ref_s"])
-            r2 = f["r2star"][()]
+            r2 = f[r2_key][()]
             print(f"R2* map from preprocessing (TE_nominal={t_ref_s * 1000:.3f} ms)")
             kwargs.update(r2star_map=torch.from_numpy(r2).to(device), t_ref_s=t_ref_s)
 
@@ -485,10 +488,10 @@ def _cli() -> None:
     p.add_argument("datdir")
     p.add_argument("seqname")
     p.add_argument("--reg", choices=REGULARIZERS, required=True)
-    p.add_argument("--B0", action="store_true", help="model B0 phase accrual (b0map_hz)")
+    p.add_argument("--B0", action="store_true", help="model B0 phase accrual (b0_map)")
     p.add_argument(
         "--b0map", default=None,
-        help=".h5 with a 'b0map_hz' to use instead of the preprocessed one (implies --B0)",
+        help=".h5 with a 'b0_map' to use instead of the preprocessed one (implies --B0)",
     )
     p.add_argument("--R2star", action="store_true", help="also model R2* decay (needs --B0)")
     p.add_argument("--L", type=int, default=32, dest="L_b0", help="B0 time segments")

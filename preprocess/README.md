@@ -109,11 +109,11 @@ looks), plain numpy-order HDF5:
 | `echo_times` | (Ny, Nz, Nt) | time since excitation of each sample (s); 0 where unsampled |
 | `ksp_calib` | (Nx, Ny_c, Nz_c, Nc, Nt) | fully sampled central region, full kx; attrs `calib_y_range`, `calib_z_range` |
 | `smaps` | (Nx, Ny, Nz, Nc) complex64 | sensitivity maps, same coil space as `ksp_epi_zf`, unit RSS in the support |
-| `b0map_hz`, `b0_mask` | (Nx, Ny, Nz) | B0 field map (Hz) and the voxels it was fit on |
-| `r2star` | (Nx, Ny, Nz) | R2* (1/s) |
+| `b0_map`, `b0_mask` | (Nx, Ny, Nz) | B0 field map (Hz) and the voxels it was fit on |
+| `r2star_map` | (Nx, Ny, Nz) | R2* (1/s) |
 | `W` | (Ncoils, Ncoils) | whitening matrix |
 | `GCC`, `cc_evals` | (Nx, Nv, Ncoils), (Nx, Ncoils) | GCC matrices and per-x eigenvalues |
-| `degre/` | deGRE grid | QA volumes: `img_echoes`, `b0map_hz`, `finit_hz`, `mask`, `smaps`, `emap`, `r2star` |
+| `degre/` | deGRE grid | QA volumes: `img_echoes`, `b0_map`, `finit_hz`, `mask`, `smaps`, `emap`, `r2star_map` |
 | `delay_sweep/` | (241,) each | readout-delay calibration: `delay`, `a1`, `a2` (odd/even constant and linear term), `wrap_count` |
 
 Attributes: `noise_var` (thermal-noise variance of `ksp_epi_zf` per complex
@@ -122,7 +122,7 @@ sample), `whitened`, `coil_compressed`, `Ncoils`, `Nc_out`,
 `delay` (calibrated readout delay, samples), `t_ref_s` (nominal TE), `TE_degre`, `fov`, `fov_degre`,
 `n_frames_discard`, `r2star_method`.
 
-Also written: `<seq>_smaps`, `<seq>_b0map` and `<seq>_r2star` as `.nii.gz` +
+Also written: `<seq>_smaps`, `<seq>_b0_map` and `<seq>_r2star_map` as `.nii.gz` +
 `.json` for viewing (magnitude only; voxel spacing is right but there is no patient
 orientation). With `keep_cache=True`, `<seq>_gridded.h5` (whitened, all coils) is
 kept too.

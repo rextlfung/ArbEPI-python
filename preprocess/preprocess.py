@@ -662,11 +662,11 @@ def estimate_maps(
             mask_thresh=cfg.b0map_mask_thresh, precon=cfg.b0map_precon,
         )
         mask_degre = r['mask']
-        b0, b0_mask = resize_to_epi(r['b0map_hz'], mask_degre, fov_degre, fov, n_epi,
+        b0, b0_mask = resize_to_epi(r['b0_map'], mask_degre, fov_degre, fov, n_epi,
                                     zero_pad_z=cfg.zero_pad_z)
         maps.update({
-            'b0map_hz': b0, 'b0_mask': b0_mask,
-            'degre/b0map_hz': r['b0map_hz'].astype(np.float32),
+            'b0_map': b0, 'b0_mask': b0_mask,
+            'degre/b0_map': r['b0_map'].astype(np.float32),
             'degre/finit_hz': r['finit_hz'].astype(np.float32),
             'degre/mask': mask_degre,
         })
@@ -680,8 +680,8 @@ def estimate_maps(
         r2 = resize_to_epi_grid(
             r2_degre * mask_degre, fov_degre, fov, n_epi, order=3, zero_pad_z=cfg.zero_pad_z
         )
-        maps['r2star'] = np.clip(r2, 0, None).astype(np.float32)  # spline overshoot
-        maps['degre/r2star'] = r2_degre
+        maps['r2star_map'] = np.clip(r2, 0, None).astype(np.float32)  # spline overshoot
+        maps['degre/r2star_map'] = r2_degre
     return maps
 
 
@@ -788,7 +788,7 @@ def write_output(
         f.attrs['t_ref_s'] = utils.nominal_te_s(paths.scan_info, sp.ETL)
         if sp.TE_degre is not None:
             f.attrs['TE_degre'] = np.asarray(sp.TE_degre)
-        if 'r2star' in maps:
+        if 'r2star_map' in maps:
             f.attrs['r2star_method'] = R2STAR_METHOD
             f.attrs['r2star_n_echoes'] = len(sp.TE_degre)
         for key, val in maps.items():
@@ -797,9 +797,9 @@ def write_output(
         f.close()
 
     base = os.path.join(cfg.outdir, paths.seqname)
-    for key, suffix in (('smaps', 'smaps'), ('b0map_hz', 'b0map'), ('r2star', 'r2star')):
+    for key in ('smaps', 'b0_map', 'r2star_map'):
         if key in maps:
-            utils.save_recon_nifti(f'{base}_{suffix}', maps[key], fov=sp.fov, seqname=paths.seqname)
+            utils.save_recon_nifti(f'{base}_{key}', maps[key], fov=sp.fov, seqname=paths.seqname)
     if GCC is not None and not cfg.keep_cache:
         os.remove(paths.cache)
 

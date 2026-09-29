@@ -53,6 +53,6 @@ def fit_r2star(
     log_s = np.log(img_echoes[valid].astype(np.float64))  # [Nvalid, n_echoes]
     tc = te - te.mean()
     slope = (log_s - log_s.mean(axis=-1, keepdims=True)) @ tc / np.sum(tc**2)
-    r2star = np.zeros(img_echoes.shape[:-1], dtype=np.float32)
-    r2star[valid] = np.clip(-slope, 0.0, r2star_max)
-    return r2star
+    r2star_map = np.zeros(img_echoes.shape[:-1], dtype=np.float32)
+    r2star_map[valid] = np.clip(-slope, 0.0, r2star_max)
+    return r2star_map

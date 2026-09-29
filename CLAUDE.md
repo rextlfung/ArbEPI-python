@@ -848,8 +848,8 @@ It started as a Python/PyTorch port of the companion Julia repo `../mslr-recon`
 (multi-scale locally-low-rank fMRI reconstruction, Ong & Lustig 2016),
 built on [mirtorch](https://github.com/guanhuaw/MIRTorch) in place of
 MIRT.jl + LinearMapsAA, and consumes this repo's own `preprocess/` output
-directly (`<seqname>_preprocessed.h5`'s `ksp_epi_zf`, `smaps`, `b0map_hz`,
-`r2star`).
+directly (`<seqname>_preprocessed.h5`'s `ksp_epi_zf`, `smaps`, `b0_map`,
+`r2star_map`).
 
 **All of `recon/` runs in `.venv-recon`** (the `recon` optional-dependency
 group: torch, mirtorch, h5py, nibabel, PyWavelets, scipy, matplotlib,
@@ -996,7 +996,7 @@ CLI is its production consumer.
 ### B0 off-resonance correction
 
 Two-stage B0 correction on top of the plain `SENSE` encoding
-operator, consuming the field map `b0map_hz` and per-sample `echo_times`
+operator, consuming the field map `b0_map` and per-sample `echo_times`
 in `<seqname>_preprocessed.h5` (`preprocess/b0map.py`, `preprocess/preprocess.py`):
 
 - **Static single-segment correction (formerly `demodulate_smaps`, removed in the
@@ -1017,7 +1017,7 @@ in `<seqname>_preprocessed.h5` (`preprocess/b0map.py`, `preprocess/preprocess.py
   time-segmented stage, via `mirtorch.linear.mri.mri_exp_approx` (the same
   min-max frequency-segmentation fit `mirtorch`'s own NUFFT-based
   `Gmri`/`GmriGram` use). `build_sense_b0(smaps, omega,
-  b0map_hz, echo_times_yz, L, nbins)` solves the segmentation fit once
+  b0_map, echo_times_yz, L, nbins)` solves the segmentation fit once
   against this pipeline's real per-frame-invariant ETL distinct echo
   times (not once per frame -- an earlier version did, which also OOM'd a
   real reconstruction by storing an independent per-frame copy of the
@@ -1041,7 +1041,7 @@ phase. `build_sense_b0` is the phase-only operator; an all-zero R2* map reproduc
 `preprocess/r2star.py`'s log-linear fit over the same dual-echo deGRE
 data used for Δf(r) (a placeholder -- see the `preprocess/` section);
 `recon/sense.py --R2star` reads it and the nominal-TE reference time
-(`r2star`, attr `t_ref_s`) from `<seqname>_preprocessed.h5`, and saves
+(`r2star_map`, attr `t_ref_s`) from `<seqname>_preprocessed.h5`, and saves
 under a separate `sense_<reg>_b0r2star/` output directory so an
 `--R2star` run never collides with a plain B0-only run.
 
@@ -1085,14 +1085,14 @@ Both stages share one convention, derived from Sutton, Noll, Fessler
 ("Fast, iterative image reconstruction for MRI in the presence of field
 inhomogeneities," IEEE TMI 2003) and cross-checked against
 `mirtorch.linear.mri.Gmri`'s own demo notebook, not just re-derived: the
-forward operator needs `exp(+i 2*pi*b0map_hz(r)*t)` multiplied into the
+forward operator needs `exp(+i 2*pi*b0_map(r)*t)` multiplied into the
 image before the spatial-encoding FFT -- see `recon/operators.py`'s
 module docstring for the full sign derivation. `mri_exp_approx(b0, bins,
 lseg, t)` (read directly from mirtorch 0.3.1's own source, the pinned
 dependency) expects `b0` in **Hz** and `t` in **milliseconds** (it divides
 by 1000 internally, twice), and returns `tl` already in **seconds** -- so
 `operators.py` passing `echo_times_s * 1000` against an unscaled-Hz
-field map is correct, not a units bug, and `-b0map_hz` (not `+`) is what
+field map is correct, not a units bug, and `-b0_map` (not `+`) is what
 composes correctly with `mri_exp_approx`'s own internal sign to reproduce
 the physically-correct convention above (matching `Gmri`'s own
 `zmap=-b0` call, which exists for the same reason).
@@ -1120,7 +1120,7 @@ against, and a real signal-loss-plus-incoherent-noise bug in its own
 right, independent of `L`.** `mri_exp_approx` builds its fit from an
 *equal-width*, plain voxel-count histogram (mirtorch 0.3.1's
 `_uniform_histogram` -- no magnitude weighting, unlike MIRT's original,
-whose weight-vector argument mirtorch's port dropped) of `b0map_hz`'s
+whose weight-vector argument mirtorch's port dropped) of `b0_map`'s
 *entire* range, background included and unmasked. At this pipeline's real
 scale (~half the volume near-zero background, in-object range wide and
 asymmetric -- roughly -300 to +70 Hz, not symmetric around 0), mirtorch's
@@ -1193,7 +1193,7 @@ this dataset's own results depend on.
 **`grid_resize.py`'s `grid_mode=True` alignment fix (see
 `preprocess/`'s section below) is directly load-bearing here.**
 `SENSE_B0.c_phasors` (and the removed static-stage phasor) are both
-per-voxel functions of `b0map_hz`, which reaches the encoding operator
+per-voxel functions of `b0_map`, which reaches the encoding operator
 already resized onto the EPI grid by that same code path -- a
 pixel-center-vs-edge alignment error there would silently mis-register
 the field map against `smaps`/the image grid the operator actually

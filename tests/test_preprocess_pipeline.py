@@ -201,7 +201,7 @@ def test_nvcoils_sets_the_exact_virtual_coil_count(dataset):
         # compressed maps are unit-RSS inside their support
         rss = np.sqrt(np.sum(np.abs(f['smaps'][()]) ** 2, axis=-1))
         assert np.allclose(rss[rss > 0], 1, atol=1e-4)
-        assert f['r2star'].shape == (NX, NY, NZ)
+        assert f['r2star_map'].shape == (NX, NY, NZ)
         assert 'degre/img_echoes' in f and 'ksp_calib' in f
 
 
@@ -308,9 +308,9 @@ def test_cache_left_by_a_failed_start_is_replaced(dataset):
 def test_full_pipeline_with_b0(dataset):
     out = preprocess(_cfg(dataset, estimate_b0=True), SEQ, a=A_FIXED)
     with h5py.File(out, 'r') as f:
-        assert f['b0map_hz'].shape == (NX, NY, NZ)
+        assert f['b0_map'].shape == (NX, NY, NZ)
         assert f['b0_mask'].dtype == bool
-        assert f['degre/b0map_hz'].shape == (NXD, NYD, NZD)
-        assert {'smaps', 'r2star', 'ksp_calib', 'omegas', 'echo_times'} <= set(f.keys())
+        assert f['degre/b0_map'].shape == (NXD, NYD, NZD)
+        assert {'smaps', 'r2star_map', 'ksp_calib', 'omegas', 'echo_times'} <= set(f.keys())
     paths = utils.plot_gre_b0_diagnostics(out)
     assert all(os.path.exists(p) for p in paths)
