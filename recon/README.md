@@ -48,6 +48,18 @@ that build doesn't fit your GPU, pin a different one in `pyproject.toml`
 (a `[[tool.uv.index]]` for the PyTorch CUDA index plus a `[tool.uv.sources]`
 entry for `torch`) and re-lock, rather than installing it by hand.
 
+Notebooks (`demo.ipynb`) use the plain `python3` kernel, and `ipykernel` is in
+the `recon` extra, so an editor can use `.venv-recon/bin/python` as the kernel
+directly. To run Jupyter itself, layer it on with `--with` rather than
+installing it into the env (the next sync would remove it):
+
+```bash
+export UV_PROJECT_ENVIRONMENT=.venv-recon
+uv run --extra recon --with jupyter jupyter lab recon/demo.ipynb
+# or headless, e.g. to refresh the saved outputs
+uv run --extra recon --with nbconvert jupyter nbconvert --to notebook --execute --inplace recon/demo.ipynb
+```
+
 Run everything from the repository root (`recon/` imports helpers from
 `preprocess/`). Everything also runs on CPU, just much more slowly; the
 device defaults to `cuda` when a GPU is available and `cpu` otherwise
