@@ -3,7 +3,7 @@ small synthetic multi-coil Cartesian acquisition, writes it out in the same
 .h5 layout preprocess/ produces (ksp_epi_zf, smaps), and checks that MSLR
 reconstruction runs to completion with a monotonically-behaved cost and no
 NaNs -- not a golden-output comparison (see the plan's real-data validation
-for that), just confirmation the full pipeline (operators + lowrank + solvers
+for that), just confirmation the full pipeline (operators + mslr + solvers
 + I/O) is wired together correctly.
 """
 
@@ -275,12 +275,12 @@ def test_run_sense_divides_kspace_by_recorded_noise_var(tmp_path):
     torch.testing.assert_close(r.X_recon, x_true / 2, atol=1e-3, rtol=1e-3)
 
 
-def test_run_sense_lowrank_normalizes_operator_by_sigma1(tmp_path):
-    """With normalize_operator (the default), lowrank solves with A / sigma1A
+def test_run_sense_mslr_normalizes_operator_by_sigma1(tmp_path):
+    """With normalize_operator (the default), mslr solves with A / sigma1A
     and doesn't undo it, so with no regularization it recovers
     sigma1A * x_true; normalize_operator=False recovers x_true."""
     x_true, fn_ksp, fn_smaps = _phantom_setup(tmp_path, Nt=2)
-    common = dict(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg="lowrank", patch_sizes=[(1, 1, 1)],
+    common = dict(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg="mslr", patch_sizes=[(1, 1, 1)],
                   strides=[(1, 1, 1)], lambda_global=0.0, niters=100, conv_tol=0.0,
                   sigma1A=2.0, device=DEVICE)
     r = run_sense(**common)
@@ -290,14 +290,14 @@ def test_run_sense_lowrank_normalizes_operator_by_sigma1(tmp_path):
     torch.testing.assert_close(r.X_recon, x_true, atol=1e-2, rtol=1e-2)
 
 
-@pytest.mark.parametrize("reg", ["none", "lowrank", "wavelet-tv"])
+@pytest.mark.parametrize("reg", ["none", "mslr", "wavelet-tv"])
 def test_save_result_writes_h5_nifti_and_json_for_every_regularizer(tmp_path, reg):
     """CG's result has no regularizer cost; saving must still work."""
     pytest.importorskip("nibabel")
     from recon.utils import save_result
 
     _, fn_ksp, fn_smaps = _phantom_setup(tmp_path, Nt=2)
-    extra = dict(patch_sizes=[(4, 4, 4)], strides=[(2, 2, 2)]) if reg == "lowrank" else {}
+    extra = dict(patch_sizes=[(4, 4, 4)], strides=[(2, 2, 2)]) if reg == "mslr" else {}
     r = run_sense(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg=reg, niters=3, device=DEVICE, **extra)
     fn_base = str(tmp_path / f"out_{reg}")
     save_result(fn_base, r, fov=(0.2, 0.2, 0.05), seqname="test")

@@ -802,13 +802,14 @@ of older modules; see git history for those):
 | `operators.py` | the encoding operator A: `SENSE` (smaps -> FFT -> sample), `SENSE_B0` (time-segmented B0 phase accrual), `SENSE_B0_R2star` (phase accrual + R2* magnitude decay), and builders `build_sense`/`build_sense_b0`/`build_sense_b0_r2star` returning a per-frame `BlockDiagonal` |
 | `regularizers.py` | g(x): `MultiScaleLowRank` (multi-scale low-rank prox/cost, patch SVST, `SumScales`), `WaveletTV` (`Wavelet3D` + periodic finite differences, `SectionL1` prox) |
 | `solvers.py` | `pogm_restart` (PGM/FPGM/POGM with gradient restart + `conv_tol`), `pdhg` (Condat-Vu primal-dual via mirtorch's `FBPD`, for regularizers without a closed-form prox), `cg` |
-| `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,lowrank,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, ...). `none` -> CG, `lowrank` -> POGM, `wavelet-tv` -> PDHG (TV has no closed-form prox). `--device` defaults to cuda if available, else cpu (everything also runs on CPU, slowly) |
+| `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,mslr,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, ...). `none` -> CG, `mslr` -> POGM, `wavelet-tv` -> PDHG (TV has no closed-form prox). `--device` defaults to cuda if available, else cpu (everything also runs on CPU, slowly) |
 | `rss.py` | root-sum-of-squares, GPU-batched over frames |
 | `utils.py` | I/O (`read_frames_cropped`, `load_*`, `load_and_gather_ksp`, `save_result`, ...), operator norms (`estimate_spectral_norm`, `check_operator_unitary`, `estimate_operator_noise_factor`), `tsnr_report`, and the one-off `sweep`/`benchmark`/`validate` analyses (`python -m recon.utils {tsnr,sweep,benchmark,validate}`) |
 | `demo.ipynb` | runs every recon type on `20260915ball/2_6x_2.4mm` |
 
 Outputs land in `<datdir>/recon/sense_<reg>[_b0|_b0r2star]/` and
-`<datdir>/recon/rss/` (older runs used `mslr_b0/`, `mslr_local*/`, `cs_b0*/`,
+`<datdir>/recon/rss/` (older runs used `sense_lowrank*/` -- `--reg mslr` was
+`--reg lowrank` until 2026-09-28 -- `mslr_b0/`, `mslr_local*/`, `cs_b0*/`,
 `cgsense*/`, `basic/`). `wavelet-tv` moved from sigpy's PDHG to mirtorch's
 FBPD (`solvers.pdhg`), so its results are not identical to older `cs_b0*` runs.
 
@@ -833,7 +834,7 @@ operator:
   high-SNR datasets: the outer (ky, kz) shell and even the x-background of
   hybrid (x, ky, kz) space (where kx is fully sampled, so there's no aliasing)
   read E|n|^2 ~ 500-10000, dominated by signal leakage, not noise.
-- **operator**: `lowrank` divides A by `sigma1A` (`normalize_operator`,
+- **operator**: `mslr` divides A by `sigma1A` (`normalize_operator`,
   default on). `SENSE` with RSS-normalized smaps already has sigma1 ~ 1; the
   B0 operators measure ~1.2-1.9.
 - Neither scaling is undone on the output (not quantitative imaging). The
@@ -1148,7 +1149,7 @@ reconstruction using this repo's own measured non-encoding overhead
 sweet spot, not a compromise between two competing costs.
 
 **Real reconstruction run**: the (since removed) `recon/run_recon.py mslr-ref` (`--L 32`; today
-`recon/sense.py --reg lowrank --B0 --patch full --patch ...`) reproduced
+`recon/sense.py --reg mslr --B0 --patch full --patch ...`) reproduced
 the existing G+L (multi-scale) config already validated against
 `../mslr-recon` for the uncorrected case, saving to
 `<datdir>/recon/mslr_b0/G+L_L<L>/<name>_recon.*` (one directory per `L`,

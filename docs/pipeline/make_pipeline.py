@@ -431,7 +431,7 @@ def draw(d):
         ('title', 'GE export'), ('mono', 'ge/ · main.py --ge'),
         ('para', 'checks all four first: gradient, slew, B1 limits · PNS (fails above 100%, '
                  'warns above 80%) · gradient acoustics (warns); then seq2ceq → writeceq writes '
-                 'one .pge per sequence (pure Python port of PulCeq)'),
+                 'one .pge per sequence'),
     ])
     d.band(0, ge_y + ge_h + 20, 'seq', 'SEQUENCE DESIGN · main.py')
 
@@ -604,31 +604,32 @@ def draw(d):
     d.label(gx0 + 14, r_y + 22, 'Iterative SENSE (dotted) · sense.py', 'start', 't-section')
     obj_h = d.box(ix0, obj_y, iw, None, 'rec', [
         ('title', 'Objective'), ('mono', 'sense.py · run_sense()'),
-        ('mathc', r'\hat{x} = \arg\min_x \ \dfrac{1}{2}\,\|Ax - y\|_2^2 + g(x)'),
+        ('mathc', r'\hat{x} = \arg\min_x \ \dfrac{1}{2}\,\|Ax - y\|_2^2 + R(x)'),
         ('para', 'x: one 3D image per frame. y: only the sampled k-space points, scaled to unit '
-                 'noise variance. For lowrank, A is divided by its largest singular value, and '
-                 'λ defaults to R.'),
+                 'noise variance. R(x) is the regularizer. For mslr, A is divided by its largest '
+                 'singular value, and λ defaults to the acceleration factor.'),
     ])
-    cw, cg = 224, (iw - 3 * 224) // 2  # three columns: A | g | solver
+    cw = 228  # three columns: A | R | solver
+    cg = (iw - 3 * cw) // 2
     cols = [ix0, ix0 + cw + cg, ix0 + 2 * (cw + cg)]
     head_y = obj_y + obj_h + 28
-    for x, text in zip(cols, ['A · ENCODING OPERATOR', 'g · REGULARIZER  (--reg)', 'SOLVER']):
+    for x, text in zip(cols, ['A · ENCODING OPERATOR', 'R · REGULARIZER  (--reg)', 'SOLVER']):
         d.label(x, head_y, text, 'start', 't-colhead')
     comps = [  # one row per option: (A, dashed?), g, solver
         ([('title', 'SENSE'), ('mono', 'operators.SENSE'),
           ('para', 'coil sensitivity maps, then a 3D FFT, keeping only the sampled (ky, kz) '
                    'points (no zero-filled grid)')], False,
-         [('title', 'None (--reg none)'), ('math', r'g(x) = 0'),
+         [('title', 'None (--reg none)'), ('math', r'R(x) = 0'),
           ('para', 'plain least-squares SENSE')],
          [('title', 'Conjugate gradient'), ('mono', 'solvers.cg'),
           ('math', r'A^H A\, x = A^H y'), ('para', 'fast when there is no regularizer')]),
         ([('title', '+ B0 off-resonance (--B0)'), ('mono', 'operators.SENSE_B0'),
           ('math', r'\exp(i 2\pi\, \Delta f(\mathbf{r})\, t)'),
           ('para', 'phase accrual along the echo train; time-segmented, L = 32')], True,
-         [('title', 'Multi-scale low rank (--reg lowrank)'), ('mono', 'MultiScaleLowRank'),
-          ('math', r'\sum_k \lambda_k \sum_b \|P_b(X_k)\|_*'),
-          ('para', 'one component X_k per patch scale; nuclear norm of space × time patches '
-                   '(Ong & Lustig)')],
+         [('title', 'Multi-scale low rank (--reg mslr)'), ('mono', 'MultiScaleLowRank'),
+          ('math', r'R(x) = \sum_k \lambda_k \sum_b \|P_b(x_k)\|_*'),
+          ('math', r'x = \sum_k x_k'),
+          ('para', 'one component per patch scale; nuclear norm of each space × time patch')],
          [('title', 'POGM with restart'), ('mono', 'solvers.pogm_restart'),
           ('para', 'proximal gradient; the prox is singular-value soft-thresholding of each '
                    'patch. --mom fpgm or pgm also available')]),
@@ -636,10 +637,10 @@ def draw(d):
           ('math', r'\exp(-R_2^*(\mathbf{r})\,(t - \mathrm{TE}))'),
           ('para', 'with --B0; the image is referenced to the nominal TE')], True,
          [('title', 'Wavelet + TV (--reg wavelet-tv)'), ('mono', 'WaveletTV'),
-          ('math', r'\lambda_{\ell_1}\|Wx\|_1 + \lambda_{TV}\|Dx\|_1'),
+          ('math', r'R(x) = \lambda_{\ell_1}\|Wx\|_1 + \lambda_{TV}\|Dx\|_1'),
           ('para', 'per frame: sparse 3D wavelet coefficients and image gradients')],
          [('title', 'Primal-dual (PDHG)'), ('mono', 'solvers.pdhg'),
-          ('para', 'Condat–Vũ, via mirtorch FBPD; TV has no closed-form prox')]),
+          ('para', 'via mirtorch FBPD; TV has no closed-form prox')]),
     ]
     y = head_y + 14
     for a_lines, a_opt, g_lines, s_lines in comps:
@@ -662,7 +663,8 @@ def draw(d):
         ('mono-b', '<datdir>/recon/'),
         ('mono-s', 'rss/<seq>_recon.nii.gz + .json'),
         ('mono-s', 'sense_<reg>[_b0 | _b0r2star]/<seq>_recon.h5 + .nii.gz + .json'),
-        ('text', '.nii.gz: magnitude image for viewing · .json: every setting, R, σ1(A), runtime '
+        ('text', '.nii.gz: magnitude image for viewing · .json: every setting, acceleration '
+                 'factor, σ1(A), runtime '
                  '· .h5: complex image and per-iteration solver traces'),
     ])
     rec_y1 = out_y + out_h + 20

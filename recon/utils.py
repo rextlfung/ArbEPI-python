@@ -609,7 +609,7 @@ def validate(fn_ksp: str, fn_smaps: str, fn_julia_mat: str) -> bool:
     ref = read_julia_mat(fn_julia_mat)
 
     result = run_sense(
-        reg="lowrank",
+        reg="mslr",
         normalize_operator=False,  # Julia uses A as is
         fn_ksp=fn_ksp,
         fn_smaps=fn_smaps,
