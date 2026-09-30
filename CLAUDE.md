@@ -102,9 +102,9 @@ standalone), but does patch its `TE_degre` field with the realized
 `main.py`'s call order always runs `generate_arbepi` first -- see
 `docs/review-findings.md` item 62 for why the realized pair, not
 `params.TE_degre`, is what needs to reach `b0map.jl`'s ΔTE scaling.
-Its defaults (2026-09-30): 3 mm isotropic, FOV >= the EPI's (x/y equal,
-which `load_params()` enforces since preprocessing only crops z; z +4 mm
-per side), `TE_degre` = [1, 2]/f_fat (fat and water in phase at both
+Its defaults (2026-09-30): 3 mm isotropic, FOV >= the EPI's on every
+axis (whole deGRE voxels, rounded up; z +4 mm per side -- preprocessing
+crops any axis, see `grid_resize.py`), `TE_degre` = [1, 2]/f_fat (fat and water in phase at both
 echoes, as in writeB0.m), `TR_degre` 5.70 ms (the measured minimum; the
 old 8 ms paid for 2 mm and a +0.8 ms TE offset), Ernst flip. Its
 prephasers stretch to fill echo 0's TE padding rather than using a fixed
@@ -771,9 +771,12 @@ PCA; `coils.gcc_compression` uses the u^H-of-sum-c-c^H eigenvector convention
 was removed on 2026-09-28 (user decision), and the compression matrices are
 named `GCC` everywhere: the variable, and the output file's dataset (formerly
 `T` in the code and `cc_matrix` on disk; files written before then still have
-`cc_matrix`, which nothing in this repo reads). `coils.gcc_calibration` crops/pads the
-deGRE's kx to the EPI Nx (shared x FOV) so per-x matrices land on EPI x
-positions, and uses a central 24x24 (ky, kz) block (all of ky-kz gave the same
+`cc_matrix`, which nothing in this repo reads). `coils.gcc_calibration` evaluates the
+deGRE's inverse kx transform directly at the EPI's x positions, over the kx
+samples inside the EPI readout band, so per-x matrices land on EPI x
+positions even when the deGRE x-FOV is larger (with equal FOVs this is
+exactly cropping/padding kx to the EPI Nx and inverse-FFTing, the original
+implementation), and uses a central 24x24 (ky, kz) block (all of ky-kz gave the same
 numbers). Caveat, measured by reconstruction (`2_6x_2.4mm`, R = 6,
 unregularized CG-SENSE, 20 frames): the R = 1 retention metric understates the
 loss under acceleration -- 0.99 (10 coils) gave tSNR 0.88 of the 32-coil
@@ -1248,8 +1251,10 @@ center this change specifically targets) once `precon=:diag` is already in
 place, so it's infrastructure for future/noisier datasets, not something
 this dataset's own results depend on.
 
-**`grid_resize.py`'s `grid_mode=True` alignment fix (see
-`preprocess/`'s section below) is directly load-bearing here.**
+**`grid_resize.py`'s edge-aligned voxel convention (the `grid_mode=True`
+alignment fix, review item 12; since item 258 an exact per-axis coordinate
+map rather than a whole-voxel crop plus `zoom`) is directly load-bearing
+here.**
 `SENSE_B0.c_phasors` (and the removed static-stage phasor) are both
 per-voxel functions of `b0_map`, which reaches the encoding operator
 already resized onto the EPI grid by that same code path -- a

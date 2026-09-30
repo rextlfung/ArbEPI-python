@@ -2786,6 +2786,38 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   and this session's 5.4 mm one (2.85 ms; 1.46 ms with B's 8-cycle
   spoiler). `tests/test_make_fatsat_rf.py` locks in the profile, and checks
   that the old Gaussian fails it (26° on resonance).
+- [x] **258. `preprocess/grid_resize.py` misplaced maps in z whenever the
+  deGRE and EPI z-FOVs didn't differ by a whole number of deGRE voxels per
+  side, and required equal x/y FOVs.** [measured 2026-09-30, found while
+  making preprocessing accept a deGRE with a larger x/y FOV] The z crop
+  kept whole deGRE voxels (`matlab_round` of the fractional crop) and then
+  zoomed the kept slab onto the EPI grid, so a fractional crop shifted every
+  map by up to half a deGRE voxel: 1.5 mm at the new 3 mm deGRE default (153
+  vs 144 mm, 1.5 voxels per side). The `zero_pad_z` path (items 196, 203)
+  was worse: it zoomed the *whole* source slab onto the inner target slices,
+  compressing it in z -- 144 mm onto 25 x 5.4 = 135 mm at the 5.4 mm config,
+  up to 4.3 mm off toward the slab edges. Measured by re-resizing the stored
+  deGRE-grid maps with the old and new code: `20260915ball` and
+  `20260918ball`'s `1_1x_5.4mm` (zero-padded) differ by 1.9 Hz rms / 38 Hz
+  max in B0 and 22% (rel. L2) in smaps; `20260924ball`/`20260929ballfat`
+  (154 vs 145.8 mm, 2.05 voxels per side) by 0.12 Hz rms, negligible; the
+  equal-FOV datasets are unchanged (smaps 2e-14). Fixed:
+  `resize_to_epi_grid` maps each EPI voxel center to its continuous
+  position on the deGRE grid (same edge-aligned convention as item 12) and
+  interpolates there (`ndimage.affine_transform`), on all three axes, so any
+  deGRE FOV >= the EPI's works; `zero_pad_z` now zeroes the uncovered target
+  slices of that exact resample. `coils.gcc_calibration` likewise evaluates
+  the deGRE's inverse kx transform at the EPI's x positions instead of
+  cropping kx (identical, to 2e-15, when the FOVs match). `load_params()`'s
+  equal-x/y check (added earlier the same day) is gone. Tests:
+  `test_resize_to_epi_grid_crops_every_axis_to_the_physical_epi_grid`,
+  `..._z_crop_is_not_rounded_to_whole_voxels`,
+  `..._zero_pad_z_places_inner_slices_at_their_physical_positions` (the old
+  code fails the last two by 1.5 and 4.3 mm),
+  `test_gcc_calibration_evaluates_a_larger_source_fov_at_the_target_x_positions`,
+  and `test_degre_with_a_larger_xy_fov_than_the_epi` (end to end). The two
+  `1_1x_5.4mm` datasets need re-preprocessing for correctly registered
+  maps (Stage A is skipped if its cache was kept).
 
 ## Consistency & documentation
 

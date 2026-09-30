@@ -445,23 +445,17 @@ def load_params(output_dir: str = 'output') -> Params:
     # the deGRE slab covers the EPI slab with room to spare even when a
     # single deGRE is shared across EPI variants whose z-FOVs differ by a
     # rounding step (e.g. 144mm vs 145.8mm at 2.4mm vs 5.4mm res) -- avoids
-    # needing preprocess/grid_resize.py's zero_pad_z workaround, since
-    # the z crop path handles any deGRE z-FOV >= the EPI's. x/y must equal
-    # the EPI FOV, not just be >= it: preprocess/grid_resize.py only crops
-    # z, and preprocess/coils.py's gcc_calibration crops kx assuming a
-    # shared kx spacing. Checked below, so an EPI x/y FOV that isn't a
-    # multiple of res_degre fails here rather than at preprocessing, after
-    # the scan (216 mm / 3 mm = 72 at the default).
+    # needing preprocess/grid_resize.py's zero_pad_z workaround.
+    # Preprocessing handles any deGRE FOV >= the EPI's on every axis:
+    # preprocess/grid_resize.py resamples each EPI voxel center from its
+    # physical position on the deGRE grid, and preprocess/coils.py's
+    # gcc_calibration evaluates the deGRE at the EPI's x positions. So the
+    # EPI x/y FOV need not be a multiple of res_degre (216 mm = 72 x 3 mm at
+    # the default; a 202.5 mm EPI FOV would get a 68-voxel, 204 mm deGRE).
     degre_z_margin = 4e-3
     N_degre = np.ceil((fov + np.array([0, 0, 2 * degre_z_margin])) / res_degre - 1e-9).astype(int)
     fov_degre = N_degre * res_degre
     Nx_degre, Ny_degre, Nz_degre = int(N_degre[0]), int(N_degre[1]), int(N_degre[2])
-    if not np.allclose(fov_degre[:2], fov[:2], rtol=1e-6, atol=1e-9):
-        raise ValueError(
-            f'deGRE x/y FOV {fov_degre[:2] * 1e3} mm does not equal the EPI x/y FOV '
-            f'{fov[:2] * 1e3} mm: the EPI x/y FOV must be a multiple of res_degre '
-            f'({res_degre[:2] * 1e3} mm), since preprocessing only crops z.'
-        )
 
     Ndummy_zloops = 4
     # Two echo times for B0 field mapping (see sequences/deGRE.py, ported

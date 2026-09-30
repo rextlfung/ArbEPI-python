@@ -97,10 +97,49 @@ def test_resize_to_epi_grid_nearest_order_keeps_boolean_values():
     assert set(np.unique(out)) <= {0.0, 1.0}
 
 
-def test_resize_to_epi_grid_rejects_epi_fov_larger_than_source():
+@pytest.mark.parametrize('fov', [(0.1, 0.1, 0.2), (0.2, 0.1, 0.1), (0.1, 0.2, 0.1)])
+def test_resize_to_epi_grid_rejects_epi_fov_larger_than_source(fov):
     vol = np.zeros((8, 8, 8))
     with pytest.raises(ValueError):
-        resize_to_epi_grid(vol, (0.1, 0.1, 0.1), (0.1, 0.1, 0.2), (4, 4, 4))
+        resize_to_epi_grid(vol, (0.1, 0.1, 0.1), fov, (4, 4, 4))
+
+
+def _centers(n, fov_m):
+    return (np.arange(n) + 0.5) / n * fov_m - fov_m / 2
+
+
+def test_resize_to_epi_grid_crops_every_axis_to_the_physical_epi_grid():
+    """deGRE FOV larger than the EPI's on all three axes, by amounts that are
+    not whole deGRE voxels: a 3 mm deGRE covering 219 x 225 x 153 mm onto the
+    default 2.4 mm 90 x 90 x 60 EPI grid (216 x 216 x 144 mm). A linear
+    function of physical position must land at each EPI voxel's physical
+    center."""
+    n_src, fov_src = (73, 75, 51), (0.219, 0.225, 0.153)
+    n_tgt, fov = (90, 90, 60), (0.216, 0.216, 0.144)
+    xs, ys, zs = (_centers(n, f) for n, f in zip(n_src, fov_src))
+    vol = xs[:, None, None] + 2 * ys[None, :, None] - 3 * zs[None, None, :]
+
+    # Linear interpolation, so the check isolates the coordinate mapping: it
+    # reproduces a linear function exactly wherever the target voxel center
+    # lies inside the source's outermost voxel centers, which holds here.
+    # (A cubic spline adds ~0.07 mm of edge ringing in the outermost couple
+    # of voxels, the same boundary effect the ramp test above bounds.)
+    out = resize_to_epi_grid(vol, fov_src, fov, n_tgt, order=1)
+
+    xt, yt, zt = (_centers(n, f) for n, f in zip(n_tgt, fov))
+    expected = xt[:, None, None] + 2 * yt[None, :, None] - 3 * zt[None, None, :]
+    assert np.abs(out - expected).max() < 1e-12
+
+
+def test_resize_to_epi_grid_z_crop_is_not_rounded_to_whole_voxels():
+    """Review item 258: the z crop used to keep whole deGRE voxels, so a FOV
+    difference of 1.5 voxels per side (153 vs 144 mm at 3 mm) shifted the
+    maps by half a voxel (1.5 mm). Now each EPI slice samples its own
+    physical position."""
+    zs = _centers(51, 0.153)
+    vol = np.broadcast_to(zs[None, None, :], (4, 4, 51)).copy()
+    out = resize_to_epi_grid(vol, (0.1, 0.1, 0.153), (0.1, 0.1, 0.144), (4, 4, 60), order=1)
+    np.testing.assert_allclose(out[0, 0], _centers(60, 0.144), atol=1e-12)
 
 
 def test_resize_to_epi_grid_zero_pad_z_fills_outer_slices_with_zero():
@@ -145,3 +184,16 @@ def test_resize_to_epi_grid_zero_pad_z_matches_real_5p4mm_config():
     assert out.shape == n_target
     zero_slices = [z for z in range(27) if not np.any(out[:, :, z])]
     assert zero_slices == [0, 26]
+
+
+def test_resize_to_epi_grid_zero_pad_z_places_inner_slices_at_their_physical_positions():
+    """Review item 258: the zero_pad_z path used to zoom the whole source slab
+    onto the inner target slices (144 mm onto 25 x 5.4 = 135 mm at the real
+    5.4 mm config), compressing the maps 6% in z -- up to 4.5 mm off at the
+    slab edges. Each covered slice must sample its own physical position."""
+    zs = _centers(72, 0.144)
+    vol = np.broadcast_to(zs[None, None, :], (4, 4, 72)).copy()
+    out = resize_to_epi_grid(vol, (0.1, 0.1, 0.144), (0.1, 0.1, 0.1458), (4, 4, 27),
+                             order=1, zero_pad_z=True)
+    np.testing.assert_allclose(out[0, 0, 1:-1], _centers(27, 0.1458)[1:-1], atol=1e-12)
+    np.testing.assert_array_equal(out[:, :, [0, -1]], 0.0)

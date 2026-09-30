@@ -97,8 +97,9 @@ def process_smaps(
 ) -> np.ndarray:
     """estimate_smaps' output -> maps on the target grid n_target (fov, m).
 
-    1. Resize maps and emap from the deGRE grid (resize_to_epi_grid: z crop,
-       then cubic spline).
+    1. Resize maps and emap from the deGRE grid (resize_to_epi_grid: cubic
+       spline at each target voxel's physical position, which also crops
+       whatever part of the deGRE FOV lies outside the target's).
     2. Mask where the *resized* emap > crop. Thresholding the continuous
        eigenvalue map on the fine grid gives a round boundary; binarizing at
        the 24^3 calibration resolution first gave a blocky one.

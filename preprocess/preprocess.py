@@ -569,19 +569,22 @@ def load_gre(cfg: PreprocessConfig, sp: utils.SeqParams, W: np.ndarray) -> np.nd
 
 
 def coil_compression(
-    cfg: PreprocessConfig, ksp_gre: np.ndarray, Nx: int
+    cfg: PreprocessConfig, sp: utils.SeqParams, ksp_gre: np.ndarray
 ) -> tuple[np.ndarray | None, dict]:
     """(GCC, info) from one whitened deGRE echo [Nx_degre, Ny, Nz, Ncoils].
 
     GCC is None (no compression) or the [Nx, Nv, Nc] geometric-decomposition
-    coil compression matrices on the EPI readout grid. Nv is cfg.Nvcoils if
+    coil compression matrices on the EPI readout grid (sp.Nx over the EPI
+    x-FOV, which the deGRE's may exceed). Nv is cfg.Nvcoils if
     set, else the smallest count keeping cfg.cc_energy_thresh of the
     eigenvalue energy summed over x."""
     Ncoils = ksp_gre.shape[-1]
     if not cfg.compress:
         return None, {'coil_compressed': False, 'Nvcoils': Ncoils}
 
-    A0, evals = gcc_compression(gcc_calibration(ksp_gre, Nx, cfg.cc_calib_size))
+    A0, evals = gcc_compression(gcc_calibration(
+        ksp_gre, sp.Nx, cfg.cc_calib_size, fov_src=sp.fov_degre[0], fov=sp.fov[0]
+    ))
 
     if cfg.Nvcoils is not None:
         if not 1 <= cfg.Nvcoils <= Ncoils:
@@ -820,7 +823,7 @@ def preprocess(cfg: PreprocessConfig, seqname: str, a: np.ndarray | None = None)
     with h5py.File(paths.cache, 'r') as f:
         W = f['W'][()]
     ksp_gre = load_gre(cfg, sp, W)
-    GCC, cc_info = coil_compression(cfg, ksp_gre[..., cfg.gre_echo_idx, :], sp.Nx)
+    GCC, cc_info = coil_compression(cfg, sp, ksp_gre[..., cfg.gre_echo_idx, :])
     maps = estimate_maps(cfg, sp, ksp_gre, GCC)
     del ksp_gre
     write_output(cfg, paths, sp, GCC, cc_info, maps)

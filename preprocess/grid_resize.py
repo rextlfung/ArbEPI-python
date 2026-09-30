@@ -1,25 +1,30 @@
 """Move a volume from the deGRE grid onto the EPI grid.
 
 Sensitivity, B0 and R2* maps are all estimated on the deGRE grid and needed
-on the EPI grid. The two acquisitions share an isocenter and their x/y FOV
-(params.py's fov_degre tracks fov in x/y), so only z needs cropping: the
-central part of the deGRE slab matching the EPI z-FOV is kept, then the
-volume is resampled to the EPI matrix size.
+on the EPI grid. The two acquisitions share an isocenter, and the deGRE FOV
+covers the EPI FOV on every axis (params.py sizes it that way: at res_degre
+spacing the FOV can only equal the EPI's when it divides evenly, so it is
+usually larger). Each EPI voxel center is mapped to its continuous position
+on the deGRE grid and the volume is interpolated there, which crops and
+resamples in one step, on all three axes.
 
-Voxel convention: FOV/edge-aligned. N voxels tile the FOV edge to edge, which
-is what the proportional z crop assumes, so the resample uses
-scipy.ndimage.zoom(grid_mode=True). scipy's default (grid_mode=False) anchors
-the first/last voxel centers instead and misplaced a linear ramp by 0.27 mm
-on average (0.63 mm max) at the real 108 -> 240 resize; grid_mode=True gets
-0.006 mm (review item 12; tests/test_preprocess_grid_resize.py).
-mode='nearest' holds the edge value where the target grid extends past the
-outermost source voxel centers.
+Voxel convention: FOV/edge-aligned. N voxels tile a FOV centered on
+isocenter edge to edge, so voxel i's center is at (i + 0.5) * FOV/N - FOV/2
+-- the same convention scipy.ndimage.zoom(grid_mode=True) uses for a pure
+resize, which this reduces to when the FOVs match. scipy's default
+(grid_mode=False) anchors the first/last voxel centers instead and misplaced
+a linear ramp by 0.27 mm on average (0.63 mm max) at the real 108 -> 240
+resize; this convention gets 0.006 mm (review item 12;
+tests/test_preprocess_grid_resize.py). The crop is exact too: an earlier
+version cropped whole deGRE voxels and then zoomed, which shifted the maps by
+half a voxel whenever the FOV difference wasn't an even number of voxels
+(1.5 mm in z at the 3 mm deGRE default; review item 258). mode='nearest'
+holds the edge value where the target grid extends past the outermost
+source voxel centers.
 """
 
 import numpy as np
 from scipy import ndimage
-
-from preprocess.utils import matlab_round
 
 
 def resize_to_epi_grid(
@@ -31,78 +36,56 @@ def resize_to_epi_grid(
     zero_pad_z: bool = False,
 ) -> np.ndarray:
     """vol [Nx_src, Ny_src, Nz_src, ...] -> [Nx, Ny, Nz, ...] on the target
-    grid n_target with FOV `fov` (m). Trailing axes pass through. The x/y FOVs
-    must match.
+    grid n_target with FOV `fov` (m). Trailing axes pass through. The source
+    FOV must cover the target FOV on every axis (both centered on isocenter).
 
     order: spline order; 3 (cubic, like MATLAB imresize3) for maps, 0 for
         masks so they stay binary.
     zero_pad_z: if the target z-FOV is larger than the source's (normally an
-        error), resample onto the inner target slices the source covers and
-        zero the rest (review items 196, 203: an EPI resolution whose rounded
-        z-FOV slightly exceeds the deGRE slab).
+        error), zero the target slices the source doesn't fully cover (rounded
+        inward, so a partly covered slice gets zero) instead of raising
+        (review items 196, 203: an EPI resolution whose rounded z-FOV slightly
+        exceeds the deGRE slab).
     """
-    Nx_src, Ny_src, Nz_src = vol.shape[:3]
-    Nx, Ny, Nz = n_target
-    if not np.allclose(fov_src[:2], fov[:2], rtol=1e-6, atol=1e-6):
+    fov_src = np.asarray(fov_src, dtype=np.float64)
+    fov = np.asarray(fov, dtype=np.float64)
+    n_src = np.array(vol.shape[:3])
+    n_tgt = np.array(n_target)
+    short = fov_src < fov * (1 - 1e-6)
+    if short[:2].any() or (short[2] and not zero_pad_z):
+        axis = 'xyz'[int(np.argmax(short))]
         raise ValueError(
-            f'resize_to_epi_grid: source x/y FOV {fov_src[:2]} does not match '
-            f'target x/y FOV {fov[:2]} -- only z is cropped/resized here, so '
-            f'x/y must already agree.'
+            f'resize_to_epi_grid: target {axis}-FOV ({fov[int(np.argmax(short))]:.4f} m) '
+            f'exceeds source {axis}-FOV ({fov_src[int(np.argmax(short))]:.4f} m); '
+            f'the deGRE must cover the EPI FOV (z only: pass zero_pad_z=True).'
         )
-    if fov_src[2] < fov[2]:
-        if not zero_pad_z:
-            raise ValueError(
-                f'resize_to_epi_grid: target z-FOV ({fov[2]:.4f} m) exceeds '
-                f'source z-FOV ({fov_src[2]:.4f} m).'
-            )
-        return _resize_with_zero_pad_z(vol, fov_src, fov, n_target, order)
 
-    z_frac = (fov_src[2] - fov[2]) / fov_src[2] / 2
-    z_start = matlab_round(z_frac * Nz_src)
-    z_end = matlab_round(Nz_src - z_frac * Nz_src)
-    if z_start < 0 or z_end > Nz_src or z_start >= z_end:
-        raise ValueError(
-            f'resize_to_epi_grid: computed z crop [{z_start}, {z_end}) '
-            f'is out of range [0, {Nz_src}).'
-        )
-    vol = vol[:, :, z_start:z_end, ...]
-
-    return _zoom_grid_aligned(vol, (Nx, Ny, Nz), order)
-
-
-def _zoom_grid_aligned(vol: np.ndarray, n_target: tuple[int, int, int], order: int) -> np.ndarray:
-    """scipy.ndimage.zoom with grid_mode=True, mode='nearest' (see the module
-    docstring); complex volumes are resampled as real and imaginary parts."""
-    Nx, Ny, Nz = n_target
-    zoom = (Nx / vol.shape[0], Ny / vol.shape[1], Nz / vol.shape[2]) + (1.0,) * (vol.ndim - 3)
-    zoom_kwargs = dict(order=order, grid_mode=True, mode='nearest')
+    # Target index j -> source continuous index s = scale * j + offset, from
+    # the voxel centers above: -fov/2 + (j + 0.5) d = -fov_src/2 + (s + 0.5) d_src.
+    d_src, d_tgt = fov_src / n_src, fov / n_tgt
+    scale = d_tgt / d_src
+    offset = (fov_src - fov) / (2 * d_src) + 0.5 * scale - 0.5
+    extra = vol.ndim - 3
+    matrix = np.concatenate([scale, np.ones(extra)])
+    offsets = np.concatenate([offset, np.zeros(extra)])
+    out_shape = tuple(n_tgt) + vol.shape[3:]
+    kwargs = dict(matrix=matrix, offset=offsets, output_shape=out_shape, order=order,
+                  mode='nearest')
     if np.iscomplexobj(vol):
-        return (ndimage.zoom(vol.real, zoom, **zoom_kwargs)
-                + 1j * ndimage.zoom(vol.imag, zoom, **zoom_kwargs))
-    return ndimage.zoom(vol.astype(np.float64), zoom, **zoom_kwargs)
+        out = (ndimage.affine_transform(vol.real, **kwargs)
+               + 1j * ndimage.affine_transform(vol.imag, **kwargs))
+    else:
+        out = ndimage.affine_transform(vol.astype(np.float64), **kwargs)
 
-
-def _resize_with_zero_pad_z(
-    vol: np.ndarray,
-    fov_src: tuple[float, float, float],
-    fov: tuple[float, float, float],
-    n_target: tuple[int, int, int],
-    order: int,
-) -> np.ndarray:
-    """zero_pad_z path: resample onto the inner target slices inside the
-    source's z coverage (rounded inward, so a slice that is only partly
-    covered gets zero) and zero-fill the rest."""
-    Nx, Ny, Nz = n_target
-    z_frac = (fov[2] - fov_src[2]) / fov[2] / 2  # uncovered fraction of the target, per side
-    z_start = int(np.ceil(z_frac * Nz - 1e-9))
-    z_end = int(np.floor(Nz - z_frac * Nz + 1e-9))
-    if z_start < 0 or z_end > Nz or z_start >= z_end:
-        raise ValueError(
-            f'resize_to_epi_grid: zero-pad inner target range [{z_start}, {z_end}) '
-            f'is out of range [0, {Nz}).'
-        )
-
-    inner = _zoom_grid_aligned(vol, (Nx, Ny, z_end - z_start), order)
-    out = np.zeros((Nx, Ny, Nz) + vol.shape[3:], dtype=inner.dtype)
-    out[:, :, z_start:z_end, ...] = inner
+    if short[2]:
+        Nz = n_tgt[2]
+        z_frac = (fov[2] - fov_src[2]) / fov[2] / 2  # uncovered fraction of the target, per side
+        z_start = int(np.ceil(z_frac * Nz - 1e-9))
+        z_end = int(np.floor(Nz - z_frac * Nz + 1e-9))
+        if z_start >= z_end:
+            raise ValueError(
+                f'resize_to_epi_grid: zero-pad inner target range [{z_start}, {z_end}) is empty.'
+            )
+        out[:, :, :z_start] = 0
+        out[:, :, z_end:] = 0
     return out
