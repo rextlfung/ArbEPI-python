@@ -27,7 +27,7 @@ at the front of a rise ramp creates a *new*, larger PNS peak nearby
 rather than lowering the original one, because this train's chronaxie
 (334us) is comparable to or longer than the whole rise/fall/blip cycle --
 there's no quiet stretch to hide a burst in. The paper's adaptive gain
-comes from a longer-flat-top regime this repo's ETL=60 train doesn't have.
+comes from a longer-flat-top regime this repo's ETL=54-60 trains don't have.
 
 Geometry notation used throughout (see also the derivation in the repo's
 CLAUDE.md): t_s = blip_duration/2; r/flat/d = rise/flat/fall times; A =

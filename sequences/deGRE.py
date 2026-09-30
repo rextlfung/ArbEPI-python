@@ -55,15 +55,12 @@ from params import Params
 def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     os.makedirs(params.output_dir, exist_ok=True)
     # Own copy of params.sys (not the shared instance -- see params.py's
-    # Params.sys docstring) with its own slew derate: this sequence's
-    # single-line spoiled readout has a much lower PNS profile than the
-    # EPI train's blip train, so it doesn't need nearly as aggressive a
-    # cap. Measured on a full build (peak PNS vs max_slew, IEC 60601-2-33's
-    # 80% normal-mode threshold): 200 T/m/s (hardware) -> 83.4%, 180 ->
-    # 79.7%, 175 -> 78.7%. 175 T/m/s clears normal mode with a small
-    # margin.
+    # Params.sys docstring) with its own slew derate, params.slew_degre: this
+    # sequence's single-line spoiled readout has a much lower PNS profile
+    # than the EPI train's blip train, so it doesn't need nearly as
+    # aggressive a cap (see that field's comment for the measured numbers).
     sys = copy.deepcopy(params.sys)
-    sys.max_slew = 175 * sys.gamma  # T/m/s -> Hz/m/s (pypulseq's internal unit)
+    sys.max_slew = params.slew_degre * sys.gamma  # T/m/s -> Hz/m/s (pypulseq's internal unit)
     crt = params.crt
 
     seq = pp.Sequence(system=sys)
@@ -116,26 +113,8 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     dwell_degre = math.ceil(dwell_degre / sys.adc_raster_time) * sys.adc_raster_time
     Tread = params.Nx_degre * dwell_degre
 
-    gy_pre = trap4ge(
-        pp.make_trapezoid(
-            'y', system=sys, area=params.Ny_degre * deltak[1] / 2, duration=params.Tpre
-        ),
-        crt,
-        sys,
-    )
-    gz_pre = trap4ge(
-        pp.make_trapezoid(
-            'z', system=sys, area=params.Nz_degre * deltak[2] / 2, duration=params.Tpre
-        ),
-        crt,
-        sys,
-    )
-
     gxtmp = pp.make_trapezoid(
         'x', system=sys, amplitude=params.Nx_degre * deltak[0] / Tread, flat_time=Tread
-    )
-    gx_pre = trap4ge(
-        pp.make_trapezoid('x', system=sys, area=-gxtmp.area / 2, duration=params.Tpre), crt, sys
     )
 
     adc = pp.make_adc(params.Nx_degre, system=sys, duration=Tread, delay=gxtmp.rise_time)
@@ -169,6 +148,54 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         sys,
     )
 
+    # Prephasers: all three share one duration t_pre, the *longest* that
+    # still reaches params.TE_degre[0] -- i.e. they absorb echo 0's TE
+    # padding instead of playing at full slew and then waiting. TE is fixed
+    # by TE_degre, so a longer prephaser costs no time, and it lowers their
+    # amplitude and slew-time, lowering PNS: at the 3 mm/175 T/m/s default,
+    # shortest-duration prephasers (all three ramping at full slew
+    # together) measured 85.5% peak PNS vs 79.2% stretched (2026-09-30).
+    # Floored at the shortest duration that fits the
+    # largest area; the TE guard below then raises if even that is too long.
+    # The y/z rewinders are separate trapezoids sized to gx_spoil's duration
+    # (they play in its block), so t_pre never lengthens TR.
+    te_base = (
+        max(pp.calc_duration(rf), pp.calc_duration(gz_ss)) - (rf.delay + pp.calc_rf_center(rf)[0])
+        + pp.calc_duration(gz_ssr)
+        + adc.delay
+        + Tread / 2
+    )
+    pre_areas = {
+        'x': -gxtmp.area / 2,
+        'y': params.Ny_degre * deltak[1] / 2,
+        'z': params.Nz_degre * deltak[2] / 2,
+    }
+
+    def _make_pre(duration):
+        return tuple(
+            trap4ge(pp.make_trapezoid(ax, system=sys, area=area, duration=duration), crt, sys)
+            for ax, area in pre_areas.items()
+        )
+
+    t_pre_min = max(
+        pp.calc_duration(pp.make_trapezoid(ax, system=sys, area=area))
+        for ax, area in pre_areas.items()
+    )
+    t_pre_min = math.ceil(t_pre_min / crt - 1e-9) * crt
+    t_pre = max(t_pre_min, math.floor((params.TE_degre[0] - te_base) / crt + 1e-9) * crt)
+    gx_pre, gy_pre, gz_pre = _make_pre(t_pre)
+    # trap4ge rounds each ramp/flat segment up to crt, which can overshoot
+    # t_pre by a raster step or two; back off until echo 0 fits.
+    while t_pre > t_pre_min and te_base + pp.calc_duration(gx_pre) > params.TE_degre[0] + 1e-9:
+        t_pre -= crt
+        gx_pre, gy_pre, gz_pre = _make_pre(t_pre)
+
+    t_spoil = pp.calc_duration(gx_spoil)
+    gy_rew, gz_rew = (
+        trap4ge(pp.make_trapezoid(ax, system=sys, area=-pre_areas[ax], duration=t_spoil), crt, sys)
+        for ax in ('y', 'z')
+    )
+
     # Phase-encode step vectors
     pe1_steps = (np.arange(params.Ny_degre) - params.Ny_degre / 2) / params.Ny_degre * 2
     pe2_steps = (np.arange(params.Nz_degre) - params.Nz_degre / 2) / params.Nz_degre * 2
@@ -176,13 +203,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     # TE and TR delays, one pair per echo (TE_degre is a 2-element array --
     # see params.py). te_min doesn't depend on which echo, since both
     # echoes share the same excitation/prephasing timing.
-    te_min = (
-        max(pp.calc_duration(rf), pp.calc_duration(gz_ss)) - (rf.delay + pp.calc_rf_center(rf)[0])
-        + pp.calc_duration(gz_ssr)
-        + pp.calc_duration(gx_pre)
-        + adc.delay
-        + Tread / 2
-    )
+    te_min = te_base + pp.calc_duration(gx_pre)
     raster = sys.grad_raster_time
     # Echo 0 anchors the pair: ceil'd so its realized TE is never earlier
     # than prescribed, same as before. Every later echo's delay is derived
@@ -213,7 +234,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         + delay_te
         + max(pp.calc_duration(gx_pre), pp.calc_duration(gy_pre), pp.calc_duration(gz_pre))
         + pp.calc_duration(gx)
-        + max(pp.calc_duration(gx_spoil), pp.calc_duration(gy_pre), pp.calc_duration(gz_pre))
+        + max(pp.calc_duration(gx_spoil), pp.calc_duration(gy_rew), pp.calc_duration(gz_rew))
     )
     delay_tr = np.array([math.ceil((params.TR_degre - tr) / raster) * raster for tr in tr_min])
     if np.any(delay_tr < 0):
@@ -261,7 +282,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
                 else:
                     seq.add_block(gx, adc)
                 seq.add_block(
-                    gx_spoil, pp.scale_grad(gy_pre, -y_step), pp.scale_grad(gz_pre, -z_step)
+                    gx_spoil, pp.scale_grad(gy_rew, y_step), pp.scale_grad(gz_rew, z_step)
                 )
                 seq.add_block(pp.make_delay(delay_tr[c]))
 

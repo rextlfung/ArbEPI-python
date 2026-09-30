@@ -180,7 +180,7 @@ class Params:
     alpha_degre: float  # degrees
     rf_dur_degre: float
     n_cycles_spoil_degre: int
-    Tpre: float
+    slew_degre: float  # T/m/s, deGRE's own slew limit (sequences/deGRE.py)
 
     pd_calib_frac: float
     pd_crop_corner: bool
@@ -218,11 +218,16 @@ def load_params(output_dir: str = 'output') -> Params:
     TE = 30e-3
     # Time to acquire one full 3D volume (all shots), s. Must clear min_tr
     # (Nshots * per-shot min TR, printed as a warning by calc_te_tr_delays
-    # if not). 1.0 s was an explicit user decision (2026-09-15); measured
-    # 2026-09-29 at the ETL=60/R=6/Nx=90/res=2.4mm defaults (seed=0), in
-    # fat-sat mode: min_tr = 61.864 ms/shot * 15 shots = 927.96 ms, ~7% under
-    # 1.0 s (4.8 ms/shot slack). Water mode: 54.532 ms/shot.
-    volume_tr = 1.0
+    # if not -- it then silently plays the longer TR). Set to the fastest
+    # achievable, rounded up to the next ms (explicit user decision,
+    # 2026-09-30): measured at the ETL=54/R=10/Nx=90/res=2.4mm/TE=30ms
+    # water-excitation defaults (seed=0, slews below), min_tr = 50.524
+    # ms/shot * 10 shots = 505.24 ms. Any change to TE, ETL, R, resolution,
+    # the slews, the spoilers, the excitation mode, epi_trajectory or the
+    # mask seed moves this minimum (e.g. 'laminar' needs 51.71 ms/shot, for
+    # its larger blips); re-measure (min_tr from calc_te_tr_delays) and
+    # update.
+    volume_tr = 0.506
     # Total scan duration across all frames/timepoints, s.
     duration = 60
     # Tissue T1, s -- used below to compute the Ernst-angle flip angle.
@@ -238,7 +243,7 @@ def load_params(output_dir: str = 'output') -> Params:
     Nframes = round((duration + discard_duration) / volume_tr)
 
     # Echo train length (number of echoes acquired per shot).
-    ETL = 60
+    ETL = 54
 
     # Custom ky-kz(-t) sampling mask (optional): path to a collaborator-
     # provided .mat file holding an externally-designed 0/1 sampling mask
@@ -264,7 +269,7 @@ def load_params(output_dir: str = 'output') -> Params:
         custom_omegas = None
 
         # Acceleration factor applied to the (ky, kz) sampling pattern.
-        R = 6
+        R = 10
         Nshots = math.ceil(Ny * Nz / R / ETL)
 
         # ky-kz(-t) sampling pattern: 'pd' (Poisson-disc, recommended), 'caipi',
@@ -289,9 +294,9 @@ def load_params(output_dir: str = 'output') -> Params:
     # protocol, but water off resonance gets less flip -- see
     # lib/make_water_excitation.py and `water_exc` below). Dropping the crusher
     # also halves the random spoiling between excitations (only the
-    # post-readout spoiler remains); raise spoil_cycles_min/max to 6-8 to keep
-    # fat-sat mode's per-TR spoiling range.
-    excitation = 'fatsat'
+    # post-readout spoiler remains), which spoil_cycles_min/max below account
+    # for. 'water' is the default since 2026-09-30 (explicit user decision).
+    excitation = 'water'
 
     # Number of receive coil channels (used for the noise prescan).
     Ncoils = 32
@@ -330,41 +335,38 @@ def load_params(output_dir: str = 'output') -> Params:
     # required k-space area at some Nx/fov/slew/mask combinations).
 
     # PNS-driven slew limits (T/m/s) -- see the Params field comments.
-    # Values below are the outcome of an empirical sweep (2026-08-27, ~600
-    # rise/fall/blip candidates, each a full-dims worst-frame ArbEPI build
-    # evaluated with ge/pns.py's RSS-combined total; see CLAUDE.md's PNS
-    # section) against the protocol shipped at the time -- the sweep's own
+    # Values below are the fastest found by an empirical sweep (2026-09-30,
+    # ~9000 rise/fall/blip/slew_derate candidates on the current default
+    # protocol, each a full-dims worst-frame ArbEPI build with every shot's
+    # spoiler forced to spoil_cycles_max, scored by ge/pns.py's RSS-combined
+    # whole-sequence peak; objective: shortest per-shot min TR at <= 79%
+    # PNS, leaving ~1% under GE's 80% normal-mode limit). The sweep's own
     # measured percentages/TEs are NOT reproduced here since they're
     # protocol-dependent and go stale on every resolution/R/ETL/TE change
-    # (docs/review-findings.md item 204: an earlier version of this comment
-    # kept quoting the pre-ABCD-protocol numbers long after `0b9c25f`
-    # switched the default, making its own "re-verify after any change"
-    # instruction describe a build that no longer existed). For the
-    # *current* build's real numbers, don't trust a comment -- either read
-    # docs/review-findings.md's "Current baseline" table (refreshed each
-    # review pass) or just run `main.py --ge`/`tests/test_ge_check.py`'s
+    # (docs/review-findings.md item 204). For the *current* build's real
+    # numbers, read docs/review-findings.md's "Current baseline" table or
+    # run `main.py --ge`/`tests/test_ge_check.py`'s
     # `test_arbepi_default_params_peak_pns_under_normal_mode_limit`, which
     # regression-guards peak PNS staying under the 80% normal-mode line on
-    # every test run regardless of what these three values are set to.
+    # every test run regardless of what these values are set to.
     #
-    # What stays true regardless of protocol (the qualitative shape of the
-    # tuning, not a specific number): rise < fall, and blip_slew is tuned
-    # independently of both, because the y/z blips play centered on the kx
-    # turnaround -- exactly where the readout's POPE fall ramp ends -- so an
-    # aggressive fall slew RSS-combines with the blip into a 3-channel PNS
-    # hotspot (e.g. rise/fall/blip 95/200/170 can look fine per-channel but
-    # RSS-total well over 100%) even though per-channel numbers look safe.
-    # This is why the tuned fall/rise ratio is milder than a naive
-    # hardware-limit fall would suggest, and why blip_slew is swept as its
-    # own axis rather than just set to match rise or fall. Re-run the sweep
-    # (not just eyeball these three numbers) after any change to
-    # seed/mask/R/ETL/resolution/TE -- the right rise/fall/blip combination
-    # is a joint, non-monotonic function of all of those, not just this
-    # protocol's.
-    slew_derate = 100.0
-    ro_slew_rise = 100.0  # POPE-throttled ramp-up
-    ro_slew_fall = 120.0  # ramp-down; not PNS-limited per se, but see above
-    blip_slew = 105.0  # tuned jointly with rise/fall above; re-sweep after any protocol change
+    # What the sweeps have shown (the qualitative shape of the tuning, not a
+    # specific number): rise < fall, and blip_slew is tuned independently of
+    # both, because the y/z blips play centered on the kx turnaround --
+    # exactly where the readout's POPE fall ramp ends -- so an aggressive
+    # fall slew RSS-combines with the blip into a 3-channel PNS hotspot
+    # (e.g. rise/fall/blip 95/200/170 can look fine per-channel but RSS-total
+    # well over 100% on the 2026-08 protocol). slew_derate is limited by the
+    # post-readout spoiler, not the readout: past ~120 its PNS takes over
+    # (2026-09-30 sweep: 125 -> +0.8%, 150 -> +9%), while it only moves min
+    # TR by tens of microseconds per shot. Re-run the sweep (not just
+    # eyeball these numbers) after any change to seed/mask/R/ETL/
+    # resolution/TE/spoilers -- the right combination is a joint,
+    # non-monotonic function of all of those.
+    slew_derate = 120.0
+    ro_slew_rise = 155.0  # POPE-throttled ramp-up
+    ro_slew_fall = 190.0  # ramp-down; see above
+    blip_slew = 200.0  # tuned jointly with rise/fall above; re-sweep after any protocol change
 
     # PNS channel weights: the IEC 60601-2-33:2022-recommended
     # [0.8, 1.0, 0.7] for human scanning, or [0, 0, 0] to disable the PNS
@@ -389,10 +391,13 @@ def load_params(output_dir: str = 'output') -> Params:
     # increments.
     rf_phase_0 = 115.4
     # Gradient spoiler cycles/voxel range -- see Params.spoil_cycles_min's
-    # comment. 3-4 cycles/voxel, independently per axis, drawn fresh each
-    # shot (see sequences/ArbEPI.py's per-shot loop).
-    spoil_cycles_min = 3.0
-    spoil_cycles_max = 4.0
+    # comment. 2-6 cycles/voxel (explicit user decision, 2026-09-30),
+    # independently per axis, drawn fresh each shot (see
+    # sequences/ArbEPI.py's per-shot loop). The spoiler trapezoids are built
+    # at spoil_cycles_max, so it sets their duration (and min TR) and their
+    # PNS (the slew sweep above assumes the max on every shot).
+    spoil_cycles_min = 2.0
+    spoil_cycles_max = 6.0
 
     fat_chem_shift = 3.5 * 1e-6
     fat_offres_freq = sys.gamma * sys.B0 * fat_chem_shift
@@ -401,39 +406,39 @@ def load_params(output_dir: str = 'output') -> Params:
     # and <= 3.8 deg down to -200 Hz; fat >= 81 deg within +-50 Hz, >= 60 deg
     # within +-100 Hz. Sized against measured in-object B0 (99% of voxels in
     # -144..+79 Hz in vivo, 20260922xiaokai; -57..+35 Hz in the ball phantom)
-    # and the per-shot TR budget: +2 ms over the old 4 ms pulse fits the
-    # default protocol (6.2 ms slack) and 20260924ball's 5.4 mm one (2.85 ms).
+    # and the per-shot TR budget: +2 ms over the old 4 ms pulse fit the
+    # 2026-09 fat-sat default protocol (90x90x60, R=6, ETL=60; 6.2 ms slack)
+    # and 20260924ball's 5.4 mm one (2.85 ms). On the current default
+    # protocol fat-sat mode needs 58.55 ms/shot (vs 50.52 ms in water mode),
+    # so switching `excitation` back needs volume_tr >= 0.586 s.
     # A longer pulse protects water further out but narrows the fat band and
     # costs TR -- re-check with flip_profile (and tests/test_make_fatsat_rf.py)
     # before changing these. The old pypulseq Gaussian (90 deg, TBW 3, 4 ms)
     # tipped on-resonance water 26 deg: docs/review-findings.md item 255.
     fatsat = FatsatParams(flip=90, tbw=2, dur=6e-3, ftype='min')
     # Used when excitation == 'water'. Bloch-simulated at the default protocol
-    # (18.2 deg, 129.6 mm slab; lib/bloch.py): fat <= 0.8 deg anywhere in the
-    # slab within +-100 Hz of the fat peak; water 0.89x the flip at +-80 Hz,
-    # 0.64x at -150 Hz; slab FWHM 129.1 mm, <= 0.5% profile overshoot (Hanning;
-    # 16% unapodized at TBW 8). tests/test_make_water_excitation.py guards it.
+    # (15.9 deg, 129.6 mm slab; lib/bloch.py; 2026-09-30): fat <= 0.7 deg
+    # anywhere in the slab within +-100 Hz of the fat peak; water 0.89x the
+    # flip at +-80 Hz, 0.64x at -150 Hz; slab FWHM 128.1 mm, <= 0.5% profile
+    # overshoot (Hanning; 16% unapodized at TBW 8).
+    # tests/test_make_water_excitation.py guards it.
     water_exc = WaterExcParams(binomial=(1, 3, 3, 1), tbw=8, apodization=0.5)
     if excitation not in ('fatsat', 'water'):
         raise ValueError(f"excitation must be 'fatsat' or 'water', got {excitation!r}")
 
     # deGRE (dual-echo GRE) parameters
-    res_degre = np.array([2, 2, 2]) * 1e-3
+    res_degre = np.array([3, 3, 3]) * 1e-3
     # N_degre (and hence fov_degre = N_degre*res_degre) tracks the EPI FOV
     # (`fov` above) rather than independently hardcoded numbers, so it
     # stays in sync if the EPI FOV ever changes. N_degre is the smallest
     # integer voxel count at res_degre spacing whose FOV is still >= the
     # EPI FOV per axis (np.ceil, not round) -- e.g. fov[2]=40.5mm at
-    # res_degre[2]=2mm needs ceil(40.5/2)=21 voxels, giving
-    # fov_degre[2]=42mm exactly, not some in-between value 2mm voxels
-    # can't actually represent. z needs fov_degre[2] >= fov[2]
-    # specifically (preprocess/smaps.py's process_smaps raises
-    # otherwise); x/y get the same treatment for consistency even though
-    # nothing currently enforces it there. This replaces the old
-    # independent 216mm x/y, 42mm z values.
+    # res_degre[2]=3mm needs ceil(40.5/3)=14 voxels, giving
+    # fov_degre[2]=42mm exactly, not some in-between value 3mm voxels
+    # can't actually represent. So the deGRE FOV is always >= the EPI FOV.
     # Epsilon before ceil, same fix as lib/trap4ge.py's _round_up_to_raster
-    # -- float64 noise can make an exact ratio like 216mm/2mm evaluate to
-    # 108.00000000000001 instead of 108.0, which would otherwise make
+    # -- float64 noise can make an exact ratio like 216mm/3mm evaluate to
+    # 72.00000000000001 instead of 72.0, which would otherwise make
     # ceil silently add a spurious extra voxel.
     #
     # degre_z_margin (m, per side) extends only the z-FOV past the EPI's, so
@@ -441,35 +446,52 @@ def load_params(output_dir: str = 'output') -> Params:
     # single deGRE is shared across EPI variants whose z-FOVs differ by a
     # rounding step (e.g. 144mm vs 145.8mm at 2.4mm vs 5.4mm res) -- avoids
     # needing preprocess/grid_resize.py's zero_pad_z workaround, since
-    # the z crop path handles any deGRE z-FOV >= the EPI's. x/y must still
-    # match the EPI FOV exactly (grid_resize.py raises otherwise).
+    # the z crop path handles any deGRE z-FOV >= the EPI's. x/y must equal
+    # the EPI FOV, not just be >= it: preprocess/grid_resize.py only crops
+    # z, and preprocess/coils.py's gcc_calibration crops kx assuming a
+    # shared kx spacing. Checked below, so an EPI x/y FOV that isn't a
+    # multiple of res_degre fails here rather than at preprocessing, after
+    # the scan (216 mm / 3 mm = 72 at the default).
     degre_z_margin = 4e-3
     N_degre = np.ceil((fov + np.array([0, 0, 2 * degre_z_margin])) / res_degre - 1e-9).astype(int)
     fov_degre = N_degre * res_degre
     Nx_degre, Ny_degre, Nz_degre = int(N_degre[0]), int(N_degre[1]), int(N_degre[2])
+    if not np.allclose(fov_degre[:2], fov[:2], rtol=1e-6, atol=1e-9):
+        raise ValueError(
+            f'deGRE x/y FOV {fov_degre[:2] * 1e3} mm does not equal the EPI x/y FOV '
+            f'{fov[:2] * 1e3} mm: the EPI x/y FOV must be a multiple of res_degre '
+            f'({res_degre[:2] * 1e3} mm), since preprocessing only crops z.'
+        )
 
     Ndummy_zloops = 4
     # Two echo times for B0 field mapping (see sequences/deGRE.py, ported
-    # from HarmonizedMRI/B0shimming's writeB0.m): ΔTE is fixed at exactly
-    # 1/fat_offres_freq so fat accumulates one full extra 2*pi of phase
-    # between TE1 and TE2, making its contribution to the echo-to-echo
-    # phase difference (what the field map is computed from) identical at
-    # both echoes and cancel out -- no separate fat-sat pulse needed. The
-    # +8e-4 s offset applied to both (preserving that exact delta) is the
-    # same margin the old single-echo TE_degre used, needed because this
-    # sequence's slab-selective excitation/prephasing (unlike writeB0.m's
-    # non-selective block pulse) doesn't clear a bare 1/fat_offres_freq.
-    TE_degre = 1 / fat_offres_freq * np.array([1.0, 2.0]) + 8e-4
-    # TR_degre must clear tr_min for the *longer* of the two TEs (~7.6ms at
-    # the values above, given this sequence's slab-selective excitation
-    # timing) -- the old single-echo GRE's 6e-3 no longer fits once TE2 is
-    # roughly double TE1. 8e-3 leaves a small margin.
-    TR_degre = 8e-3
+    # from HarmonizedMRI/B0shimming's writeB0.m, which uses the same pair):
+    # ΔTE is exactly 1/fat_offres_freq, so fat accumulates one full extra
+    # 2*pi of phase between TE1 and TE2, making its contribution to the
+    # echo-to-echo phase difference (what the field map is computed from)
+    # identical at both echoes and cancel out -- no separate fat-sat pulse
+    # needed. TE1 = 1/fat_offres_freq also puts fat and water in phase at
+    # both echoes. Until 2026-09-30 both TEs carried a +0.8 ms offset,
+    # because at 2 mm with fixed 1 ms prephasers the minimum TE didn't
+    # clear a bare 1/fat_offres_freq (2.237 ms at 3 T); at 3 mm it is
+    # 1.26 ms, and sequences/deGRE.py stretches the prephasers to fill the
+    # rest.
+    TE_degre = 1 / fat_offres_freq * np.array([1.0, 2.0])
+    # TR_degre: the minimum for the longer TE, measured 5.700 ms at the
+    # 3 mm/slew_degre=175 defaults (2026-09-30). generate_degre raises, with
+    # the achievable minimum, if a parameter change pushes it past this.
+    TR_degre = 5.70e-3
     alpha_degre = 180 / math.pi * math.acos(math.exp(-TR_degre / T1))  # T1 set above
 
     rf_dur_degre = 0.4e-3
     n_cycles_spoil_degre = 2
-    Tpre = 1.0e-3
+    # deGRE slew limit (T/m/s). Its PNS peak is the x spoiler ramping up
+    # right after the readout. Measured peak PNS on the full 3 mm default
+    # build (GE_MR750, PNSwt [0.8, 1.0, 0.7], 2026-09-30): 170 -> 78.3%,
+    # 175 -> 79.2%, 190 -> 81.4%, 200 (hardware) -> 83.3%, while TR only
+    # drops 5.70 -> 5.65 ms from 175 to 200. 175 is the fastest (in 5 T/m/s
+    # steps) under the 80% normal-mode limit.
+    slew_degre = 175.0
 
     # Fully-sampled central calibration region: a centered rectangle sized
     # so its pixel area equals this fraction of the R-dependent sample
@@ -526,7 +548,7 @@ def load_params(output_dir: str = 'output') -> Params:
         alpha_degre=alpha_degre,
         rf_dur_degre=rf_dur_degre,
         n_cycles_spoil_degre=n_cycles_spoil_degre,
-        Tpre=Tpre,
+        slew_degre=slew_degre,
         Ncoils=Ncoils,
         output_dir=output_dir,
         spec=spec,

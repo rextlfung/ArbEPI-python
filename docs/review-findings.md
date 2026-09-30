@@ -705,6 +705,30 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   TR 60.46 → 62.46 ms (+2 ms of fat-sat; 4.20 ms of slack left at the
   66.67 ms per-shot TR). Both still all `OK`, no `calc_te_tr_delays`
   warning, and both `.pge` exports run clean.
+- **Changed since (2026-09-30, new default protocol; explicit user
+  request):** EPI R=6 -> 10, ETL 60 -> 54 (10 shots of 54 = the 540-sample
+  mask exactly), water excitation instead of fat-sat, spoilers 3-4 -> 2-6
+  cycles/voxel, slews re-swept to `slew_derate` 120 and rise/fall/blip
+  155/190/200 (CLAUDE.md's PNS history), `volume_tr` 1.0 -> 0.506 s
+  (per-shot min TR 50.524 ms x 10; 119 frames; flip 15.9 deg). deGRE 2 ->
+  3 mm (72 x 72 x 51, 216 x 216 x 153 mm), `TE_degre` [3.04, 5.27] ->
+  [2.237, 4.474] ms, `TR_degre` 8 -> 5.70 ms, prephasers stretched to fill
+  the TE1 padding, slew moved to `params.slew_degre` (175). Full builds
+  (GE_MR750, seed=0, PNSwt [0.8, 1.0, 0.7]):
+
+  | sequence | peak PNS | acoustics | max grad | max slew | max B1 |
+  |---|---|---|---|---|---|
+  | `ArbEPI.seq` | 78.9% | 0.088-0.093 | 27.37 mT/m | 196.6 T/m/s | 0.0359 G |
+  | `EPIcal.seq` | 78.4% | 0.0929 | 27.18 mT/m | 188.8 T/m/s | 0.0359 G |
+  | `deGRE.seq` | 79.2% | 0.2837 | 49.55 mT/m | 174.5 T/m/s | 0.0492 G |
+
+  All `OK`; no `calc_te_tr_delays` warning, realized TE 30.00 ms (min TE
+  18.67 ms), echo spacing 0.576 ms. ArbEPI's peak is the readout and
+  doesn't depend on the spoiler draws (78.9% with every spoiler forced to
+  6 cycles/voxel, and on two random builds). All three now sit within
+  ~1 point of the 80% line, deGRE closest. Test suites: `.venv` 186
+  passed/19 skipped, `.venv-recon` 252 passed/12 skipped, and the sigpy
+  files in `.venv-preprocessing` 55 passed (all skips are import skips).
 
 ## Correctness
 
