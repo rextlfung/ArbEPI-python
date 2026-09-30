@@ -126,9 +126,9 @@ def test_water_excitation_te_anchor_is_physical(setup):
 
 def test_excitation_factory_modes():
     p = load_params()
-    assert p.excitation == 'fatsat'  # default stays fat-sat
+    assert p.excitation == 'water'  # default since 2026-09-30
     sys_ = derated_sys(p)
     *_, rfsat = make_excitation_from_params(p, sys_)
-    assert rfsat is not None
-    *_, rfsat = make_excitation_from_params(replace(p, excitation='water'), sys_)
     assert rfsat is None
+    *_, rfsat = make_excitation_from_params(replace(p, excitation='fatsat'), sys_)
+    assert rfsat is not None

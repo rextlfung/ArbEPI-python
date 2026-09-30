@@ -232,7 +232,7 @@ def nominal_te_value(per_echo_values, ETL: int):
     nominal-TE echo index ETL/2 - 0.5 -- lib/calc_te_tr_delays.py's own
     min_te definition of the nominal TE echo. Exact index ETL//2 for odd
     ETL; average of ETL//2-1 and ETL//2 for even ETL (the shipped default,
-    ETL=60). Shared by plot_one_tr below and
+    ETL=54). Shared by plot_one_tr below and
     plotting/compare_readout_pns.py's te_realized, which used to embody two
     different, individually half-wrong (correct only for one parity)
     conventions for this same quantity -- see docs/review-findings.md

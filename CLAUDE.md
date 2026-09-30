@@ -102,6 +102,14 @@ standalone), but does patch its `TE_degre` field with the realized
 `main.py`'s call order always runs `generate_arbepi` first -- see
 `docs/review-findings.md` item 62 for why the realized pair, not
 `params.TE_degre`, is what needs to reach `b0map.jl`'s ΔTE scaling.
+Its defaults (2026-09-30): 3 mm isotropic, FOV >= the EPI's on every
+axis (whole deGRE voxels, rounded up; z +4 mm per side -- preprocessing
+crops any axis, see `grid_resize.py`), `TE_degre` = [1, 2]/f_fat (fat and water in phase at both
+echoes, as in writeB0.m), `TR_degre` 5.70 ms (the measured minimum; the
+old 8 ms paid for 2 mm and a +0.8 ms TE offset), Ernst flip. Its
+prephasers stretch to fill echo 0's TE padding rather than using a fixed
+duration -- free, since TE is fixed, and it lowers PNS (85.5% -> 79.2%
+at `slew_degre=175`).
 
 ### Index convention — read this before touching lib/mask2epi.py or the sequence files
 
@@ -424,20 +432,32 @@ asymmetric readout (see `lib/make_readout_grads.py`'s paragraph above)
 plus an empirical slew sweep (2026-08-27, ~600 rise/fall/blip candidates,
 full-dims worst-frame ArbEPI builds scored by `ge/pns.py`'s RSS-combined
 total, on the protocol shipped at the time: 0.9 mm, 240x240x45, R=9,
-TE 34.9 ms): the tuned defaults in `params.py`
+TE 34.9 ms): the defaults it produced
 (`slew_derate=100`, `ro_slew_rise=100`, `ro_slew_fall=120`,
-`blip_slew=105`) measure **79.8% peak on the full ArbEPI build (GE_MR750,
+`blip_slew=105`; since re-swept, see below) measured **79.8% peak on the full ArbEPI build (GE_MR750,
 seed=0) at min TE 34.86 ms**, vs 77.4% at min TE ~35.8 ms for the
 symmetric-100 design through the same code -- POPE spends ~2.4% of PNS
 margin to shorten TE by ~0.9 ms. `blip_slew=105` was a deliberate
 ride-the-line choice (explicit user decision) leaving only ~0.2% margin
 to the 80% limit on that protocol (`blip_slew=100` measured 78.3% at min
-TE 35.10 ms). The 2026-09-15 switch to the current default protocol
-(2.4 mm, 90x90x60, R=6, TE 30 ms, `0b9c25f`) kept these slews without
-re-sweeping, and at it ArbEPI peaks around 70% (see
-`docs/review-findings.md`'s "Current baseline" table) -- so the ~0.2%
-margin no longer applies, and a re-sweep could trade some of the ~10
-percentage points of headroom for shorter echo spacing. Two sweep lessons worth keeping: (a) the
+TE 35.10 ms). The 2026-09-15 switch to a 2.4 mm, 90x90x60, R=6, ETL=60,
+TE 30 ms protocol (`0b9c25f`) kept these slews without re-sweeping, and
+ArbEPI peaked around 70% there. **Re-swept 2026-09-30** for the current
+default protocol (same 2.4 mm 90x90x60, now R=10, ETL=54, water
+excitation, 2-6 cycles/voxel spoilers; explicit user request: fastest
+volume TR within PNS limits): ~9000 rise/fall/blip/`slew_derate`
+candidates, each a worst-frame ArbEPI build with every shot's spoiler
+forced to `spoil_cycles_max` (so the unseeded spoiler draws can't push a
+real build above the swept number; the 2-frame worst-case build matched a
+full 111-frame build to 0.1 points once the spoiler was forced), scored
+by whole-sequence RSS PNS, objective shortest per-shot min TR at <= 79%.
+Result: `slew_derate=120`, rise/fall/blip 155/190/200 -- echo spacing
+680 -> 576 us, per-shot min TR 53.40 -> 50.52 ms (volume TR 0.506 s),
+78.9% on the full 119-frame build. Findings: the readout sets the
+peak, not the spoiler, up to `slew_derate` ~120; past that, the
+post-readout spoiler takes over (125 -> 79.45%, 150 -> 87.7%) for only
+tens of microseconds of TR; and `blip_slew` now sits at the hardware max
+without being the limiter. Two sweep lessons worth keeping: (a) the
 per-channel PNS maxima are badly misleading here -- the y/z blips play
 centered on the kx turnaround, exactly where the readout fall ramp ends,
 so aggressive fall/blip slews RSS-combine into a 3-channel hotspot (e.g.
@@ -466,7 +486,7 @@ here, and should not be retried without addressing the reason below
 first.** The paper's own description (Methods, Fig. 2B) is a genuinely
 different design from what this repo implements: `lib/make_readout_grads.py`
 throttles the *entire* rise ramp to one constant slew
-(`ro_slew_rise=100`), whereas the paper only throttles the *tail* of the
+(`ro_slew_rise`, 100 at the time, 155 since 2026-09-30), whereas the paper only throttles the *tail* of the
 ramp and lets the early part run at full hardware slew (250 T/m/s on
 their Siemens system) -- worth trying since a nerve-integration PNS
 kernel weights recent slew history much more than distant history, so
@@ -541,8 +561,8 @@ no longer called them, for the same reason.
   fluctuation in static scans (`docs/review-findings.md` item 255). Check
   any parameter change with `lib/make_fatsat_rf.py`'s `flip_profile` (a
   Bloch simulation); `tests/test_make_fatsat_rf.py` guards the default.
-- **Water excitation** (`params.excitation = 'water'`; default stays
-  `'fatsat'`): `lib/make_water_excitation.py`, a slab-selective binomial
+- **Water excitation** (`params.excitation = 'water'`, the default since
+  2026-09-30; `'fatsat'` remains available): `lib/make_water_excitation.py`, a slab-selective binomial
   1-3-3-1 train (Hanning sinc subpulses, TBW 8, spaced half a fat period,
   1.12 ms at 3 T) replacing both the fat-sat block and its crusher in
   ArbEPI/EPIcal, via `lib/make_excitation_pulse.py`'s
@@ -558,8 +578,9 @@ no longer called them, for the same reason.
   event for the whole train, so GE's RF dead time/ringdown are paid once;
   Hanning apodization (unapodized TBW 8 overshoots the slab profile 16%).
   Cost: water off resonance gets cos³(π f τ) of the flip (0.64 at −150 Hz).
-  Saves 7.3 ms of per-shot min TR on the default protocol, adds 1.1 ms to
-  min TE. `scan_info.mat` records the mode as `water_excitation` (0/1).
+  Saves 8.0 ms of per-shot min TR on the default protocol (7.3 ms on the
+  2026-09 R=6/ETL=60 one), adds 1.1 ms to min TE; switching the default
+  back to `'fatsat'` needs `volume_tr` >= 0.586 s. `scan_info.mat` records the mode as `water_excitation` (0/1).
   `tests/test_make_water_excitation.py` guards the profile;
   `tests/test_trajectory_matches_schedule.py` runs its sequence checks in
   both modes.
@@ -750,9 +771,12 @@ PCA; `coils.gcc_compression` uses the u^H-of-sum-c-c^H eigenvector convention
 was removed on 2026-09-28 (user decision), and the compression matrices are
 named `GCC` everywhere: the variable, and the output file's dataset (formerly
 `T` in the code and `cc_matrix` on disk; files written before then still have
-`cc_matrix`, which nothing in this repo reads). `coils.gcc_calibration` crops/pads the
-deGRE's kx to the EPI Nx (shared x FOV) so per-x matrices land on EPI x
-positions, and uses a central 24x24 (ky, kz) block (all of ky-kz gave the same
+`cc_matrix`, which nothing in this repo reads). `coils.gcc_calibration` evaluates the
+deGRE's inverse kx transform directly at the EPI's x positions, over the kx
+samples inside the EPI readout band, so per-x matrices land on EPI x
+positions even when the deGRE x-FOV is larger (with equal FOVs this is
+exactly cropping/padding kx to the EPI Nx and inverse-FFTing, the original
+implementation), and uses a central 24x24 (ky, kz) block (all of ky-kz gave the same
 numbers). Caveat, measured by reconstruction (`2_6x_2.4mm`, R = 6,
 unregularized CG-SENSE, 20 frames): the R = 1 retention metric understates the
 loss under acceleration -- 0.99 (10 coils) gave tSNR 0.88 of the 32-coil
@@ -1227,8 +1251,10 @@ center this change specifically targets) once `precon=:diag` is already in
 place, so it's infrastructure for future/noisier datasets, not something
 this dataset's own results depend on.
 
-**`grid_resize.py`'s `grid_mode=True` alignment fix (see
-`preprocess/`'s section below) is directly load-bearing here.**
+**`grid_resize.py`'s edge-aligned voxel convention (the `grid_mode=True`
+alignment fix, review item 12; since item 258 an exact per-axis coordinate
+map rather than a whole-voxel crop plus `zoom`) is directly load-bearing
+here.**
 `SENSE_B0.c_phasors` (and the removed static-stage phasor) are both
 per-voxel functions of `b0_map`, which reaches the encoding operator
 already resized onto the EPI grid by that same code path -- a

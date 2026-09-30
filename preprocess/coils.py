@@ -55,18 +55,6 @@ def select_nvcoils(evals: np.ndarray, energy_thresh: float) -> int:
     return int(np.searchsorted(kept / kept[-1], energy_thresh - 1e-12) + 1)
 
 
-def _center_crop_pad(a: np.ndarray, n: int, axis: int = 0) -> np.ndarray:
-    """Crop or zero-pad `a` to length n along `axis`, keeping index N//2 (the
-    k = 0 sample of centered k-space) at index n//2."""
-    a = np.moveaxis(a, axis, 0)
-    N = a.shape[0]
-    out = np.zeros((n,) + a.shape[1:], dtype=a.dtype)
-    lo = min(N // 2, n // 2)
-    hi = min(N - N // 2, n - n // 2)
-    out[n // 2 - lo:n // 2 + hi] = a[N // 2 - lo:N // 2 + hi]
-    return np.moveaxis(out, 0, axis)
-
-
 def _ifftc_x(ksp: np.ndarray) -> np.ndarray:
     """Centered, unitary inverse FFT along axis 0 (kx -> x)."""
     return np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(ksp, axes=0), axis=0, norm='ortho'), axes=0)
@@ -77,22 +65,44 @@ def _fftc_x(img: np.ndarray) -> np.ndarray:
     return np.fft.fftshift(np.fft.fft(np.fft.ifftshift(img, axes=0), axis=0, norm='ortho'), axes=0)
 
 
-def gcc_calibration(ksp: np.ndarray, nx: int, calib_size: int = 24) -> np.ndarray:
+def gcc_calibration(
+    ksp: np.ndarray,
+    nx: int,
+    calib_size: int = 24,
+    fov_src: float | None = None,
+    fov: float | None = None,
+) -> np.ndarray:
     """Hybrid-space calibration data for GCC.
 
     ksp: [Nx_src, Ny, Nz, Nc] fully sampled, centered k-space (the whitened
-        deGRE), covering the same x FOV as the target grid.
+        deGRE).
     nx: readout length of the grid the compression will be applied on (EPI Nx).
-        kx is cropped or zero-padded to nx, so after the inverse FFT along kx
-        the x positions are exactly the target grid's.
-    Returns [nx, M, Nc]: at each x, the central calib_size x calib_size (ky, kz)
-    block (the paper uses the ACS region), flattened to M samples.
+    fov_src, fov: x-FOVs (m) of ksp and of the target grid; fov_src >= fov.
+        Omitted, they are taken as equal.
+    Returns [nx, M, Nc]: at each target x, the central calib_size x calib_size
+    (ky, kz) block (the paper uses the ACS region), flattened to M samples.
+
+    The inverse Fourier transform along kx is evaluated directly at the target
+    grid's x positions, x_j = (j - nx//2) * fov/nx (the centered-FFT
+    convention apply_gcc_kspace uses), over the kx samples inside the target
+    readout's band, [-(nx//2), nx - nx//2 - 1] / fov. With equal FOVs this is
+    exactly cropping or zero-padding kx to nx and inverse-FFTing; a larger
+    source FOV (finer kx spacing) needs the general sum.
     """
-    hyb = _ifftc_x(_center_crop_pad(ksp, nx, axis=0))
-    _, Ny, Nz, Nc = hyb.shape
+    Nx_src, Ny, Nz, Nc = ksp.shape
+    fov_src = 1.0 if fov_src is None else fov_src
+    fov = fov_src if fov is None else fov
+    if fov_src < fov * (1 - 1e-6):
+        raise ValueError(f'gcc_calibration: source x-FOV {fov_src} m < target x-FOV {fov} m')
     cy, cz = min(calib_size, Ny), min(calib_size, Nz)
-    blk = hyb[:, Ny // 2 - cy // 2:Ny // 2 - cy // 2 + cy, Nz // 2 - cz // 2:Nz // 2 - cz // 2 + cz]
-    return blk.reshape(nx, -1, Nc)
+    blk = ksp[:, Ny // 2 - cy // 2:Ny // 2 - cy // 2 + cy, Nz // 2 - cz // 2:Nz // 2 - cz // 2 + cz]
+    kx = (np.arange(Nx_src) - Nx_src // 2) / fov_src
+    band = (kx * fov >= -(nx // 2) - 1e-6) & (kx * fov <= nx - nx // 2 - 1 + 1e-6)
+    x = (np.arange(nx) - nx // 2) * fov / nx
+    F = np.exp(2j * np.pi * np.outer(x, kx[band])) / np.sqrt(nx)
+    return (F @ blk[band].reshape(int(band.sum()), -1)).reshape(nx, cy * cz, Nc).astype(
+        np.result_type(ksp.dtype, np.complex64)
+    )
 
 
 def gcc_compression(calib: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
