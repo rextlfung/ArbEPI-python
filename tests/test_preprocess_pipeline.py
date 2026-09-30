@@ -307,10 +307,13 @@ def test_cache_left_by_a_failed_start_is_replaced(dataset):
 
 
 @pytest.mark.skipif(shutil.which('julia') is None, reason='julia not on PATH')
+@pytest.mark.parametrize('dataset', [FOV_DEGRE, (0.15, 0.135, 0.08)], indirect=True,
+                         ids=['same-xy-fov', 'larger-xy-fov'])
 def test_full_pipeline_with_b0(dataset):
     out = preprocess(_cfg(dataset, estimate_b0=True), SEQ, a=A_FIXED)
     with h5py.File(out, 'r') as f:
         assert f['b0_map'].shape == (NX, NY, NZ)
+        assert np.all(np.isfinite(f['b0_map'][()])) and np.all(np.isfinite(f['r2star_map'][()]))
         assert f['b0_mask'].dtype == bool
         assert f['degre/b0_map'].shape == (NXD, NYD, NZD)
         assert {'smaps', 'r2star_map', 'ksp_calib', 'omegas', 'echo_times'} <= set(f.keys())
