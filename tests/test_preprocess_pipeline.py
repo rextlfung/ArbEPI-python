@@ -74,9 +74,11 @@ def _schedules(rng):
 
 
 @pytest.fixture
-def dataset(tmp_path, monkeypatch):
+def dataset(tmp_path, monkeypatch, request):
     """A datdir with scan_info.mat, placeholder archive files, and the fake
-    archive contents patched into preprocess.utils."""
+    archive contents patched into preprocess.utils. Parametrize indirectly
+    with a deGRE FOV to override FOV_DEGRE."""
+    fov_degre = getattr(request, 'param', FOV_DEGRE)
     rng = np.random.default_rng(0)
     seqdir = tmp_path / 'seqs' / SEQ
     seqdir.mkdir(parents=True)
@@ -85,7 +87,7 @@ def dataset(tmp_path, monkeypatch):
     fields = {
         'Nx': NX, 'Ny': NY, 'Nz': NZ, 'ETL': ETL, 'R': 2.0, 'fov': np.array(FOV),
         'volume_tr': 1.0, 'discard_duration': 0.0,
-        'Nx_degre': NXD, 'Ny_degre': NYD, 'Nz_degre': NZD, 'fov_degre': np.array(FOV_DEGRE),
+        'Nx_degre': NXD, 'Ny_degre': NYD, 'Nz_degre': NZD, 'fov_degre': np.array(fov_degre),
         'n_echoes_degre': 2, 'TE_degre': np.array(TE_DEGRE),
         'kxo': kxo, 'kxe': kxo[::-1].copy(), 'schedules': _schedules(rng),
     }
@@ -305,12 +307,30 @@ def test_cache_left_by_a_failed_start_is_replaced(dataset):
 
 
 @pytest.mark.skipif(shutil.which('julia') is None, reason='julia not on PATH')
+@pytest.mark.parametrize('dataset', [FOV_DEGRE, (0.15, 0.135, 0.08)], indirect=True,
+                         ids=['same-xy-fov', 'larger-xy-fov'])
 def test_full_pipeline_with_b0(dataset):
     out = preprocess(_cfg(dataset, estimate_b0=True), SEQ, a=A_FIXED)
     with h5py.File(out, 'r') as f:
         assert f['b0_map'].shape == (NX, NY, NZ)
+        assert np.all(np.isfinite(f['b0_map'][()])) and np.all(np.isfinite(f['r2star_map'][()]))
         assert f['b0_mask'].dtype == bool
         assert f['degre/b0_map'].shape == (NXD, NYD, NZD)
         assert {'smaps', 'r2star_map', 'ksp_calib', 'omegas', 'echo_times'} <= set(f.keys())
     paths = utils.plot_gre_b0_diagnostics(out)
     assert all(os.path.exists(p) for p in paths)
+
+
+@pytest.mark.parametrize('dataset', [(0.15, 0.135, 0.08)], indirect=True)
+def test_degre_with_a_larger_xy_fov_than_the_epi(dataset):
+    """The deGRE's x/y FOV may exceed the EPI's (params.py rounds it up to
+    whole deGRE voxels): the maps and the GCC matrices land on the EPI grid,
+    and the output k-space is still the GCC-compressed gridded data."""
+    out = preprocess(_cfg(dataset), SEQ, a=A_FIXED)
+    with h5py.File(out, 'r') as f:
+        ksp, GCC, W, smaps = f['ksp_epi_zf'][()], f['GCC'][()], f['W'][()], f['smaps'][()]
+        delay = f.attrs['delay']
+    assert GCC.shape[0] == NX
+    assert smaps.shape[:3] == (NX, NY, NZ) and np.all(np.isfinite(smaps))
+    ref, _ = _reference(dataset, W, GCC, delay)
+    assert _rel(ksp, ref) < 1e-5

@@ -169,3 +169,21 @@ def test_gcc_calibration_lands_on_the_target_readout_grid():
         energy_x = np.sum(np.abs(calib) ** 2, axis=(1, 2))
         assert calib.shape == (nx, 16, nc)
         assert np.argmax(energy_x) == nx // 2
+
+
+def test_gcc_calibration_evaluates_a_larger_source_fov_at_the_target_x_positions():
+    """A deGRE with a larger x-FOV has finer kx spacing than the EPI grid, so
+    cropping kx to nx would put the wrong x positions on the target grid. A
+    single kx sample (a complex exponential in x) must come out as that
+    exponential evaluated at the target's own x positions."""
+    rng = np.random.default_rng(8)
+    nx_src, fov_src, nx, fov = 30, 0.25, 20, 0.2
+    ny, nz, nc = 6, 6, 2
+    m = nx_src // 2 + 5  # kx = 5 / fov_src = 20 cycles/m, inside the target band (+-50)
+    ksp = np.zeros((nx_src, ny, nz, nc), dtype=complex)
+    ksp[m] = _crandn(rng, ny, nz, nc)
+    calib = gcc_calibration(ksp, nx, calib_size=4, fov_src=fov_src, fov=fov)
+    x = (np.arange(nx) - nx // 2) * fov / nx
+    blk = ksp[m, 1:5, 1:5].reshape(-1, nc)
+    expected = np.exp(2j * np.pi * (5 / fov_src) * x)[:, None, None] * blk[None] / np.sqrt(nx)
+    np.testing.assert_allclose(calib, expected, atol=1e-12)

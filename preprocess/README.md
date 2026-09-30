@@ -25,7 +25,7 @@ are documented and set. Start there. Ported from the MATLAB
 | `smaps.py` | ESPIRiT sensitivity maps and their resize/mask/smooth/normalize |
 | `b0map.py` + `julia/` | B0 field map: runs `julia/b0map.jl` (MRIFieldmaps.jl + ROMEO.jl) |
 | `r2star.py` | R2* fit over the deGRE echoes (see [R2*](#r2-a-placeholder)) |
-| `grid_resize.py` | deGRE grid → EPI grid (z crop + edge-aligned resample) |
+| `grid_resize.py` | deGRE grid → EPI grid (crop + edge-aligned resample; the deGRE FOV may exceed the EPI's on any axis) |
 | `utils.py` | ScanArchive, `scan_info.mat` and NIfTI I/O; small numerics; QA figures |
 | `demo.ipynb` | Worked example on `20260915ball/2_6x_2.4mm` |
 
@@ -238,7 +238,9 @@ faster recon; `compress=False` keeps everything.
 
 - **Sensitivity maps**: one ESPIRiT calibration (sigpy) on the whitened,
   uncompressed first echo at a 24³ calibration size, then resized to the EPI grid
-  (`grid_resize`), masked where ESPIRiT's eigenvalue map exceeds `crop` (0.95),
+  (`grid_resize`: each EPI voxel is interpolated at its physical position on the
+  deGRE grid, so a deGRE FOV larger than the EPI's, on any axis, is cropped
+  exactly), masked where ESPIRiT's eigenvalue map exceeds `crop` (0.95),
   smoothed (6 mm Gaussian, mask-normalized), RSS-normalized and compressed. `crop`
   0.95 gives a support slightly larger than the object (43% vs 39% of the volume
   on `01_fullsamp_4p55mm`); tighter values start cutting into the object.
