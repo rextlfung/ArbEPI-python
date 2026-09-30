@@ -10,7 +10,8 @@ fast, vendor-agnostic 3D-EPI MRI pulse sequences from arbitrary 2D
 points and global config (`main.py`, `demo.ipynb`, `params.py`,
 `scanners.py`) sit at the repo root, mirroring `../ArbEPI` having `params.m`/`main.m` directly
 at its own root — everything else lives under
-`lib/`/`sequences/`/`sampling/`/`plotting/`/`ge/`, matching
+`lib/`/`sequences/`/`sampling/`/`plotting/`/`ge/` (plus the
+`preprocess/`/`recon/` data-processing stages, and `tests/`/`docs/`), matching
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
 for the full layout).
 
@@ -833,7 +834,7 @@ of older modules; see git history for those):
 | `solvers.py` | `pogm_restart` (PGM/FPGM/POGM with gradient restart + `conv_tol`), `pdhg` (Condat-Vu primal-dual via mirtorch's `FBPD`, for regularizers without a closed-form prox), `cg` |
 | `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,mslr,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, ...). `none` -> CG, `mslr` -> POGM, `wavelet-tv` -> PDHG (TV has no closed-form prox). `--device` defaults to cuda if available, else cpu (everything also runs on CPU, slowly) |
 | `rss.py` | root-sum-of-squares, GPU-batched over frames |
-| `utils.py` | I/O (`read_frames_cropped`, `load_*`, `load_and_gather_ksp`, `save_result`, ...), operator norms (`estimate_spectral_norm`, `check_operator_unitary`, `estimate_operator_noise_factor`), `tsnr_report`, and the one-off `sweep`/`benchmark`/`validate` analyses (`python -m recon.utils {tsnr,sweep,benchmark,validate}`) |
+| `utils.py` | I/O (`read_frames_cropped`, `load_*`, `load_and_gather_ksp`, `save_result`, ...), operator norms (`estimate_spectral_norm`, `check_operator_unitary`), `tsnr_report`, and the one-off `sweep`/`benchmark`/`validate` analyses (`python -m recon.utils {tsnr,sweep,benchmark,validate}`) |
 | `demo.ipynb` | runs every recon type on `20260915ball/2_6x_2.4mm` |
 
 Outputs land in `<datdir>/recon/sense_<reg>[_b0|_b0r2star]/` and
@@ -968,7 +969,7 @@ All six configs converge to the *same* iteration count as the corresponding
 Julia run (confirming `pogm_restart`'s gradient-restart and early-stopping
 logic matches exactly, not just the final answer) and match to float32
 summation-order noise -- the same class of ~1-ULP difference
-`seq2ge/validate_against_matlab.py` already documents against real MATLAB
+`ge/validate_against_matlab.py` already documents against real MATLAB
 output, just for a very different (iterative, GPU-batched-SVD-heavy)
 numerical pipeline. `reg_cost[-1]`'s check gets a looser tolerance
 (`rtol=5e-4` vs the default `1e-4`) specifically for the two-scale `G+L`
