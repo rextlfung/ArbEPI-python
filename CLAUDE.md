@@ -432,9 +432,9 @@ asymmetric readout (see `lib/make_readout_grads.py`'s paragraph above)
 plus an empirical slew sweep (2026-08-27, ~600 rise/fall/blip candidates,
 full-dims worst-frame ArbEPI builds scored by `ge/pns.py`'s RSS-combined
 total, on the protocol shipped at the time: 0.9 mm, 240x240x45, R=9,
-TE 34.9 ms): the tuned defaults in `params.py`
+TE 34.9 ms): the defaults it produced
 (`slew_derate=100`, `ro_slew_rise=100`, `ro_slew_fall=120`,
-`blip_slew=105`) measure **79.8% peak on the full ArbEPI build (GE_MR750,
+`blip_slew=105`; since re-swept, see below) measured **79.8% peak on the full ArbEPI build (GE_MR750,
 seed=0) at min TE 34.86 ms**, vs 77.4% at min TE ~35.8 ms for the
 symmetric-100 design through the same code -- POPE spends ~2.4% of PNS
 margin to shorten TE by ~0.9 ms. `blip_slew=105` was a deliberate
@@ -486,7 +486,7 @@ here, and should not be retried without addressing the reason below
 first.** The paper's own description (Methods, Fig. 2B) is a genuinely
 different design from what this repo implements: `lib/make_readout_grads.py`
 throttles the *entire* rise ramp to one constant slew
-(`ro_slew_rise=100`), whereas the paper only throttles the *tail* of the
+(`ro_slew_rise`, 100 at the time, 155 since 2026-09-30), whereas the paper only throttles the *tail* of the
 ramp and lets the early part run at full hardware slew (250 T/m/s on
 their Siemens system) -- worth trying since a nerve-integration PNS
 kernel weights recent slew history much more than distant history, so

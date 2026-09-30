@@ -106,8 +106,9 @@ def test_arbepi_default_params_peak_pns_under_normal_mode_limit(tmp_path):
     Under the earlier 240x240x45 default protocol, which left only ~0.2%
     margin, that gap decided the outcome (78.92% at frame 0 vs. 79.84% at
     frame 10; see docs/review-findings.md item 38). The current default
-    has far more margin (see that file's "Current baseline" table), but a
-    hard safety bound should still check the worst frame."""
+    (slews re-swept 2026-09-30 for the fastest volume TR) is again close:
+    78.9% on the full build, ~1 point under the line (see that file's
+    "Current baseline" table), so the worst-frame build matters."""
     import warnings
     from dataclasses import replace
 
