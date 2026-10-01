@@ -93,6 +93,7 @@ class PreprocessConfig:
     crop: float = 0.95  # ESPIRiT eigenvalue threshold, also the smaps/B0 support mask
     smaps_smooth_sigma_mm: float = 6.0  # Gaussian smoothing of smaps on the EPI grid; 0 = off
     b0map_mask_thresh: float = 0.1  # fraction of peak echo-1 magnitude fit by b0map.jl
+    b0map_min_component: int = 64  # drop fit-mask islands smaller than this (voxels)
     b0map_precon: str = 'diag'  # MRIFieldmaps NCG preconditioner (see julia/b0map.jl)
     r2star_max: float = 200.0  # 1/s
     # Zero-fill EPI slices outside the deGRE's z coverage instead of raising
@@ -667,6 +668,7 @@ def estimate_maps(
         r = estimate_b0map(
             ksp_gre, te, smaps_degre, emap_degre, crop=cfg.crop,
             mask_thresh=cfg.b0map_mask_thresh, precon=cfg.b0map_precon,
+            min_component=cfg.b0map_min_component,
         )
         mask_degre = r['mask']
         b0, b0_mask = resize_to_epi(r['b0_map'], mask_degre, fov_degre, fov, n_epi,
@@ -682,7 +684,8 @@ def estimate_maps(
         if te is None or te.size < 2:
             raise ValueError('estimate_r2star needs a multi-echo deGRE (TE_degre in scan_info.mat)')
         if mask_degre is None:
-            mask_degre = fit_mask(img_echoes[..., 0], cfg.b0map_mask_thresh, emap_degre, cfg.crop)
+            mask_degre = fit_mask(img_echoes[..., 0], cfg.b0map_mask_thresh, emap_degre, cfg.crop,
+                                  cfg.b0map_min_component)
         r2_degre = fit_r2star(img_echoes, te, mask_degre, cfg.r2star_max)
         r2 = resize_to_epi_grid(
             r2_degre * mask_degre, fov_degre, fov, n_epi, order=3, zero_pad_z=cfg.zero_pad_z

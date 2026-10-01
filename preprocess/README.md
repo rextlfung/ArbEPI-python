@@ -121,7 +121,7 @@ Attributes: `noise_var` (thermal-noise variance of `ksp_epi_zf` per complex
 sample), `whitened`, `coil_compressed`, `Ncoils`, `Nc_out`,
 `Nvcoils`, `Nvcoils_source` (`energy` or `user`), `cc_energy_kept`, `oephase_a`
 (odd/even phase, `(ETL//2, 2)`: constant and linear term per echo pair; `(2,)` in
-files written before review item 259),
+files written before review item 260),
 `delay` (calibrated readout delay, samples), `t_ref_s` (nominal TE), `TE_degre`, `fov`, `fov_degre`,
 `n_frames_discard`, `r2star_method`, `r2star_n_echoes`, `seqname`.
 
@@ -166,7 +166,7 @@ kept too.
    no signal in the calibration data is an error. On `20260915ball` the coil
    basis used for the estimate (raw, whitened, compressed) moved `a` by less than
    the estimate's own noise (half-split of the calibration shots). See review
-   item 259 for the ported fit this replaced.
+   item 260 for the ported fit this replaced.
 4. **Per frame**: regrid the ramp-sampled readouts onto Cartesian kx (1D NUFFT,
    density-compensated; separate trajectories for odd and even echoes, shifted by
    the calibrated delay), apply the odd/even correction, and scatter each (shot,
@@ -257,8 +257,16 @@ faster recon; `compress=False` keeps everything.
   deGRE grid from both echoes, combining coils with the sensitivity maps, starting
   from a ROMEO-unwrapped phase difference, with the `:diag` preconditioner (the
   default `:ichol` made the regularization ineffective and the map speckled; see
-  the script's header). The map is zeroed outside the fit mask and resized to the
-  EPI grid.
+  the script's header). The fit mask drops islands smaller than
+  `b0map_min_component` (64) voxels: an isolated voxel is barely held by the
+  smoothness penalty, and on a head scan (20260922xiaokai, whose mask had hundreds
+  of tiny islands) a few of them diverged to megahertz values, which broke the
+  recon's B0 operator for the whole volume. As a safety net, any voxel the fit
+  moved more than two phase wraps (2/ΔTE, ~900 Hz) from its ROMEO start is reset
+  to it. Not half a wrap: the fit legitimately moves voxels by about one wrap
+  where ROMEO unwrapped them wrong (seen on 20260922xiaokai and 20260929ballfat,
+  up to 1.26 wraps, every one agreeing with its neighbours). The map is zeroed
+  outside the fit mask and resized to the EPI grid.
 - **R2\***: see below. `t_ref_s` records the nominal-TE echo time the recon's
   R2* model is referenced to.
 

@@ -59,7 +59,7 @@ def _pair_drift(etl, mid, slope):
 
 def test_getoephase_recovers_echo_dependent_drift():
     """The odd/even phase drifts along the train on real data (review item
-    259); getoephase's per-pair model recovers a linear drift in both terms."""
+    260); getoephase's per-pair model recovers a linear drift in both terms."""
     rng = np.random.default_rng(3)
     nx, etl, ncoils = 64, 60, 4
     a0 = _pair_drift(etl, -0.33, -0.002)
@@ -75,7 +75,7 @@ def test_getoephase_recovers_echo_dependent_drift():
 
 
 def test_getoephase_estimates_a_strongly_decayed_train():
-    """Regression for review item 259: on 20260930ballfat's 1x radial run the
+    """Regression for review item 260: on 20260930ballfat's 1x radial run the
     last quarter of a 60-echo train fell below 10% of the first echo, the
     ported getoephase.m mask came out empty and np.linalg.lstsq silently
     returned a = [0, 0]. Here the last echo is ~1% of the first."""
@@ -89,7 +89,7 @@ def test_getoephase_estimates_a_strongly_decayed_train():
 
 
 def test_getoephase_raises_without_signal():
-    """No signal must be an error, not a silent a = 0 (review item 259)."""
+    """No signal must be an error, not a silent a = 0 (review item 260)."""
     with pytest.raises(ValueError, match='cannot determine'):
         getoephase(np.zeros((64, 20, 4), dtype=complex))
 

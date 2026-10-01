@@ -48,7 +48,7 @@ def getoephase(
 
     The phase difference drifts along the echo train (on 20260930ballfat, a0
     moved by 0.05-0.09 rad and a1 by up to ~0.1 rad/fov between the first and
-    last pair, the same way in every run; docs/review-findings.md item 259),
+    last pair, the same way in every run; docs/review-findings.md item 260),
     so one value per train is biased toward whichever echoes it is fit on.
     Every pair is used, weighted by its coil-combined |signal|^2 (the inverse
     of the phase variance), over the central half of x. The ported
@@ -130,7 +130,7 @@ def epiphasecorrect(d: np.ndarray, a: np.ndarray) -> np.ndarray:
     d: [nx, etl, ...] Cartesian EPI k-space.
     a: [etl//2, 2], one (constant, linear) pair per even echo, as returned by
        getoephase; or [2], the same correction for every even echo (the
-       pre-item-259 model, e.g. `oephase_a` in older preprocessed files).
+       pre-item-260 model, e.g. `oephase_a` in older preprocessed files).
 
     Uses the standard centered-FFT pairing along x, which round-trips exactly
     for odd nx too (the MATLAB source's fftshift-on-both-sides spelling only

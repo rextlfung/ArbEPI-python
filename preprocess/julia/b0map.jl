@@ -8,7 +8,8 @@ with `ksp_gre_echoes` [Nx, Ny, Nz, n_echoes, Ncoils] (whitened k-space), a
 `TE_degre` attribute (s), and optionally `smaps_degre`/`emap_degre`.
 
     julia --project=preprocess/julia preprocess/julia/b0map.jl \
-        <gre_h5> <output_h5> [smaps_h5] [eig_mask_threshold] [mask_threshold] [precon]
+        <gre_h5> <output_h5> [smaps_h5] [eig_mask_threshold] [mask_threshold] [precon] \
+        [min_component]
 
 Writes `b0_map`, `finit_hz` and `mask` on the deGRE grid.
 
@@ -23,6 +24,14 @@ Choices:
   (MRIFieldmaps' b0init default 0.1), ANDed with emap > eig_mask_threshold when
   maps are given. Without a mask, an exactly-zero voxel gives 0/0 in the coil
   combine and the NaN spreads to the whole map.
+- Mask components (6-connected) smaller than min_component voxels (default 64)
+  are dropped before unwrapping and fitting. The roughness penalty barely
+  constrains an isolated voxel, and the data term is periodic in 1/dTE, so NCG
+  can walk such a voxel through thousands of wraps: on 20260922xiaokai (a head,
+  whose fit mask had 600-1300 components) 4-8 deGRE voxels in 1-18-voxel islands
+  ended at up to -4.7 MHz while their finit was -120..+15 Hz, and through the
+  B0 operator's histogram that one outlier disabled the whole time-segmented
+  correction. Components of >= 64 voxels stayed within +-650 Hz there.
 - With sensitivity maps, coils are combined with them (matched filter) instead
   of MRIFieldmaps' phase-contrast fallback, which weights each coil by its own
   noisy first-echo image.
@@ -86,6 +95,39 @@ function magnitude_mask(images, threshold::Real)
     sos1 .> (threshold * maximum(sos1))
 end
 
+"`mask` without its 6-connected components smaller than `min_size` voxels
+(flood fill; scipy.ndimage.label's default connectivity, as in b0map.py)."
+function drop_small_components(mask::AbstractArray{Bool,3}, min_size::Integer)
+    min_size <= 1 && return copy(mask)
+    keep = falses(size(mask))
+    seen = falses(size(mask))
+    steps = (CartesianIndex(1, 0, 0), CartesianIndex(-1, 0, 0), CartesianIndex(0, 1, 0),
+             CartesianIndex(0, -1, 0), CartesianIndex(0, 0, 1), CartesianIndex(0, 0, -1))
+    R = CartesianIndices(mask)
+    component = CartesianIndex{3}[]
+    for start in R
+        (mask[start] && !seen[start]) || continue
+        empty!(component)
+        stack = [start]
+        seen[start] = true
+        while !isempty(stack)
+            p = pop!(stack)
+            push!(component, p)
+            for s in steps
+                q = p + s
+                if q in R && mask[q] && !seen[q]
+                    seen[q] = true
+                    push!(stack, q)
+                end
+            end
+        end
+        if length(component) >= min_size
+            keep[component] .= true
+        end
+    end
+    keep
+end
+
 "ROMEO-unwrapped field map initial guess, in Hz -- see the module docstring
 for why `zdata[...,2]` (not `zdata[...,1]`, which is identically zero) is
 the array that actually needs unwrapping."
@@ -101,7 +143,7 @@ function main(
     gre_h5_path::AbstractString, output_h5_path::AbstractString,
     smaps_h5_path::AbstractString = "",
     eig_mask_threshold::Real = 0.95,
-    threshold::Real = 0.1, precon::Symbol = :diag,
+    threshold::Real = 0.1, precon::Symbol = :diag, min_component::Integer = 64,
 )
     println("Loading '$gre_h5_path'...")
     images, echotime = load_gre_images(gre_h5_path)
@@ -129,6 +171,9 @@ function main(
         println("  combined (magnitude & ESPIRiT-eigenvalue) mask: " *
                 "$(count(mask)) / $(length(mask)) voxels")
     end
+    n_before = count(mask)
+    mask = drop_small_components(mask, min_component)
+    println("  dropped $(n_before - count(mask)) voxels in components < $(min_component) voxels")
 
     println("Unwrapping finit via ROMEO...")
     finit = romeo_finit(images, echotime, mask)
@@ -151,18 +196,20 @@ function main(
         attributes(f)["precon"] = String(precon)
         attributes(f)["used_smap"] = !isnothing(smap)
         attributes(f)["eig_mask_threshold"] = eig_mask_threshold
+        attributes(f)["min_component"] = min_component
     end
     println("Wrote '$output_h5_path'.")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    2 <= length(ARGS) <= 6 ||
+    2 <= length(ARGS) <= 7 ||
         error("usage: julia b0map.jl <gre_h5_path> <output_h5_path> [smaps_h5_path] " *
-              "[eig_mask_threshold] [mask_threshold] [precon]")
+              "[eig_mask_threshold] [mask_threshold] [precon] [min_component]")
     args = (ARGS[1], ARGS[2],
             (length(ARGS) >= 3 ? (ARGS[3],) : ())...,
             (length(ARGS) >= 4 ? (parse(Float64, ARGS[4]),) : ())...,
             (length(ARGS) >= 5 ? (parse(Float64, ARGS[5]),) : ())...,
-            (length(ARGS) >= 6 ? (Symbol(ARGS[6]),) : ())...)
+            (length(ARGS) >= 6 ? (Symbol(ARGS[6]),) : ())...,
+            (length(ARGS) >= 7 ? (parse(Int, ARGS[7]),) : ())...)
     main(args...)
 end
