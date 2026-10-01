@@ -15,6 +15,7 @@ mri_exp_approx fits exp(-i 2 pi b t), so it is passed -b0_map.
 import math
 import warnings
 
+import numpy as np
 import torch
 from mirtorch.linear import BlockDiagonal
 from mirtorch.linear.linearmaps import LinearMap
@@ -170,6 +171,26 @@ def _check_b_weight_row_sums(b: torch.Tensor, frame_idx: int | str, tol: float =
         )
 
 
+def clip_b0_outliers(b0_map: torch.Tensor, percentile: float = 0.1) -> torch.Tensor:
+    """b0_map clipped to its [percentile, 100 - percentile] percentile range
+    (order statistics, so a small map keeps its min and max). mri_exp_approx
+    fits the segmentation over the map's full range, so a few diverged voxels
+    widen every histogram bin past the real spread and disable the correction
+    everywhere: 10-50 of 486k voxels at up to -4.7 MHz made a B0-corrected
+    CG-SENSE differ from plain SENSE by 80% (review item 259). 0 disables."""
+    if not percentile:
+        return b0_map
+    vals = b0_map.detach().float().cpu().numpy().ravel()
+    lo = float(np.percentile(vals, percentile, method='lower'))
+    hi = float(np.percentile(vals, 100 - percentile, method='higher'))
+    n = int(((vals < lo) | (vals > hi)).sum())
+    if n:
+        print(f"  b0_map: clipped {n} voxel(s) to its {percentile:g}-{100 - percentile:g} "
+              f"percentile range [{lo:.0f}, {hi:.0f}] Hz (full range "
+              f"[{vals.min():.0f}, {vals.max():.0f}] Hz)")
+    return b0_map.clamp(lo, hi)
+
+
 def _segment_fit(
     omega: torch.Tensor,
     b0_map: torch.Tensor,
@@ -217,6 +238,7 @@ def build_sense_b0(
     echo_times_yz: torch.Tensor,
     L: int = 32,
     nbins: int = 128,
+    b0_clip_percentile: float = 0.1,
 ) -> BlockDiagonal:
     """Like build_sense, with B0 phase accrual (see SENSE_B0).
 
@@ -224,9 +246,11 @@ def build_sense_b0(
     (Ny,Nz,Nt) seconds since excitation of each sampled (ky,kz). L: number of
     time segments (32 keeps forward-model error under 1% at ETL=60). nbins:
     histogram bins for the fit (the mirtorch default of 20 is ill-conditioned on
-    real field maps). The spectral norm is not 1; estimate it before solving.
+    real field maps). b0_clip_percentile: see clip_b0_outliers. The spectral
+    norm is not 1; estimate it before solving.
     """
     N = tuple(smaps.shape[1:])
+    b0_map = clip_b0_outliers(b0_map, b0_clip_percentile)
     b_by_echo, c, _tl, _t, pos_per_frame = _segment_fit(omega, b0_map, echo_times_yz, L, nbins)
     b_by_echo = b_by_echo.to(smaps.dtype)
     c_phasors = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)
@@ -246,9 +270,11 @@ def build_sense_b0_r2star(
     t_ref_s: float,
     L: int = 32,
     nbins: int = 128,
+    b0_clip_percentile: float = 0.1,
 ) -> BlockDiagonal:
     """build_sense_b0 plus R2* decay (see SENSE_B0_R2star). r2star_map:
     (Nx,Ny,Nz) in 1/s. t_ref_s: nominal-TE echo time (the preprocessed file's t_ref_s attr)."""
+    b0_map = clip_b0_outliers(b0_map, b0_clip_percentile)
     b_by_echo, _c, tl, _t, pos_per_frame = _segment_fit(
         omega, b0_map, echo_times_yz, L, nbins, t_ref_s=t_ref_s,
     )

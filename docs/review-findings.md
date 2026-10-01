@@ -2818,6 +2818,41 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   and `test_degre_with_a_larger_xy_fov_than_the_epi` (end to end). The two
   `1_1x_5.4mm` datasets need re-preprocessing for correctly registered
   maps (Stage A is skipped if its cache was kept).
+- [x] **259. Isolated voxels in the B0 fit mask diverged to megahertz values
+  and disabled the recon's B0 correction for the whole volume.** [measured
+  2026-10-01 on `20260922xiaokai`] The fit mask (magnitude > 0.1 x peak AND
+  ESPIRiT eigenvalue > crop) had 600-1300 6-connected components on this
+  head scan (one per earlier phantom session). In 4-8 deGRE voxels per map,
+  all in 1-18-voxel islands in the slab's outermost slice, MRIFieldmaps' NCG
+  ended at up to -4.7 MHz while `finit` there was -120..+15 Hz: the
+  roughness penalty barely holds a voxel with 0-2 masked neighbours and the
+  data term is periodic in 1/dTE. The cubic resize spread them to 10-50 EPI
+  voxels, and `mri_exp_approx` builds its segmentation histogram over the
+  map's full range, so 128 bins became tens of kHz wide and the real
+  -160..+95 Hz spread fell in one bin: CG-SENSE with `SENSE_B0` differed
+  from plain `SENSE` by 80% (rel. L2) vs 15-27% on `20260920ball` (same
+  protocol, clean maps). Every mask component of >= 64 voxels stayed
+  within +-650 Hz. Fixed: `b0map.jl` drops components smaller than
+  `min_component` (`PreprocessConfig.b0map_min_component`, default 64)
+  before unwrapping and fitting; `b0map.fit_mask` (the no-julia R2* mask)
+  applies the same rule. Phantom sessions' masks are single components, so
+  they are unaffected. Two safety nets on top: (1) `b0map.reset_diverged`
+  resets voxels the fit moved more than 2 wraps (2/dTE, ~900 Hz) from
+  `finit` back to it. A first version reset at half a wrap and would have
+  been wrong: the fit legitimately moves voxels by ~1 wrap where ROMEO
+  unwrapped them wrong -- 82-229 voxels in large components per
+  20260922xiaokai map and 27 on 20260929ballfat, up to 566 Hz (1.26 wraps),
+  each within 8-46 Hz of the local median of the fit while `finit` was
+  240-312 Hz from it; no clean phantom session moved any voxel more than
+  101 Hz. (2) recon's `clip_b0_outliers` clips the map to its 0.1-99.9
+  percentile range (order statistics, so small test grids keep their
+  extremes) before `build_sense_b0`/`build_sense_b0_r2star`. Tests:
+  `test_fit_mask_drops_small_components`,
+  `test_b0map_jl_drops_mask_islands_like_fit_mask`,
+  `test_reset_diverged_keeps_one_wrap_corrections_and_resets_runaways`,
+  `test_clip_b0_outliers_keeps_small_maps_and_clips_rare_extremes`,
+  `test_build_sense_b0_is_robust_to_a_few_diverged_voxels` (two diverged
+  voxels: operator 30%+ off unclipped, < 5% clipped).
 
 ## Consistency & documentation
 

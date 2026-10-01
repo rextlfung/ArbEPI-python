@@ -248,8 +248,16 @@ faster recon; `compress=False` keeps everything.
   deGRE grid from both echoes, combining coils with the sensitivity maps, starting
   from a ROMEO-unwrapped phase difference, with the `:diag` preconditioner (the
   default `:ichol` made the regularization ineffective and the map speckled; see
-  the script's header). The map is zeroed outside the fit mask and resized to the
-  EPI grid.
+  the script's header). The fit mask drops islands smaller than
+  `b0map_min_component` (64) voxels: an isolated voxel is barely held by the
+  smoothness penalty, and on a head scan (20260922xiaokai, whose mask had hundreds
+  of tiny islands) a few of them diverged to megahertz values, which broke the
+  recon's B0 operator for the whole volume. As a safety net, any voxel the fit
+  moved more than two phase wraps (2/ΔTE, ~900 Hz) from its ROMEO start is reset
+  to it. Not half a wrap: the fit legitimately moves voxels by about one wrap
+  where ROMEO unwrapped them wrong (seen on 20260922xiaokai and 20260929ballfat,
+  up to 1.26 wraps, every one agreeing with its neighbours). The map is zeroed
+  outside the fit mask and resized to the EPI grid.
 - **R2\***: see below. `t_ref_s` records the nominal-TE echo time the recon's
   R2* model is referenced to.
 

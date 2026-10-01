@@ -827,7 +827,20 @@ the map was speckled; `:diag` made it ~4x smoother and cut B0-correction speckle
 in reconstructions ~3x (+61.1 -> +19.5 excess roughness), and `l2b`/`niter` were
 dropped from the CLI. The fit mask (magnitude > 0.1 x peak, AND ESPIRiT
 eigenvalue > crop) is mandatory: an exactly-zero voxel gives 0/0 in the coil
-combine and NaN everywhere. `finit` is ROMEO-unwrapped (Dymerska et al., MRM
+combine and NaN everywhere. Its 6-connected components smaller than
+`b0map_min_component` (64) voxels are dropped (review item 259): the roughness
+penalty barely holds an isolated voxel and the data term is periodic in 1/dTE,
+so on 20260922xiaokai (a head; 600-1300 mask components) 4-8 island voxels
+diverged to up to -4.7 MHz, and through `mri_exp_approx`'s whole-range
+histogram that disabled the B0 correction for the whole volume (B0 vs no-B0
+recon differed 80%, vs 15-27% on 20260920ball). Two safety nets on top:
+`b0map.reset_diverged` resets voxels the fit moved > 2 wraps from `finit`
+(not 0.5: the fit legitimately moves voxels ~1 wrap where ROMEO unwrapped
+wrong -- 27-232 per map on 20260922xiaokai/20260929ballfat, up to 1.26 wraps,
+each agreeing with its neighbours to 8-46 Hz while `finit` was 240-310 Hz
+off; a half-wrap reset would have broken them), and recon's
+`clip_b0_outliers` clips the map to its 0.1-99.9 percentile range before
+building the B0 operators. `finit` is ROMEO-unwrapped (Dymerska et al., MRM
 2021): NCG only finds the local optimum near its start (207 Hz RMSE from a
 wrapped start vs < 60 Hz on a +-450 Hz synthetic field); the unwrapped array is
 the phase-contrast combine's echo 2, `y2 conj(y1)/sos` -- its echo 1 is
@@ -1191,7 +1204,9 @@ ill-conditioned everywhere else: measured per-sample `b_weights` row sums
 (`operators.py`'s `_check_b_weight_row_sums` -- each row should sum to
 ~1.0 when well-conditioned) ranged `[0.12, 2.89]` at `nbins=20` vs.
 `[0.9985, 1.0022]` at `nbins=100` on the same real data. `nbins=128`
-(comfortably past that threshold) is the production default; raise it
+(comfortably past that threshold) is the production default (and the map
+is first clipped to its 0.1-99.9 percentile range, `clip_b0_outliers`, since
+the histogram spans the whole range: review item 259); raise it
 further before lowering it.
 
 **Cost of that choice, measured not extrapolated**
