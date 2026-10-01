@@ -115,11 +115,13 @@ looks), plain numpy-order HDF5:
 | `W` | (Ncoils, Ncoils) | whitening matrix |
 | `GCC`, `cc_evals` | (Nx, Nv, Ncoils), (Nx, Ncoils) | GCC matrices and per-x eigenvalues |
 | `degre/` | deGRE grid | QA volumes: `img_echoes`, `b0_map`, `finit_hz`, `mask`, `smaps`, `emap`, `r2star_map` |
-| `delay_sweep/` | (241,) each | readout-delay calibration: `delay`, `a1`, `a2` (odd/even constant and linear term), `wrap_count` |
+| `delay_sweep/` | (241,) each | readout-delay calibration: `delay`, `a1`, `a2` (odd/even constant and linear term at mid-train), `wrap_count` |
 
 Attributes: `noise_var` (thermal-noise variance of `ksp_epi_zf` per complex
 sample), `whitened`, `coil_compressed`, `Ncoils`, `Nc_out`,
-`Nvcoils`, `Nvcoils_source` (`energy` or `user`), `cc_energy_kept`, `oephase_a`,
+`Nvcoils`, `Nvcoils_source` (`energy` or `user`), `cc_energy_kept`, `oephase_a`
+(odd/even phase, `(ETL//2, 2)`: constant and linear term per echo pair; `(2,)` in
+files written before review item 260),
 `delay` (calibrated readout delay, samples), `t_ref_s` (nominal TE), `TE_degre`, `fov`, `fov_degre`,
 `n_frames_discard`, `r2star_method`, `r2star_n_echoes`, `seqname`.
 
@@ -154,10 +156,17 @@ kept too.
 3. **Odd/even phase.** Opposite-direction readouts leave a phase difference
    between odd and even echoes that ghosts the image by FOV/2. From the calibration
    scan (no phase encoding) the phase between neighboring echo pairs is fit as
-   `a[0] + a[1]·x` (`oephase.getoephase`) on whitened, uncompressed data, and
-   `epiphasecorrect` removes it from every even echo. On `20260915ball` the coil
+   `a0 + a1·x`, with `a0` and `a1` each linear in echo-pair index
+   (`oephase.getoephase`), on whitened, uncompressed data: one weighted least
+   squares over every echo pair and the central half of x, weighted by signal
+   power. `epiphasecorrect` removes pair j's value from even echo 2j+1. The phase
+   drifts along the train (on `20260930ballfat`, a0 by 0.05–0.09 rad from the
+   first to the last pair, the same way in every run), though correcting the drift
+   changed the measured ghost level by under 0.1% of the object signal there;
+   no signal in the calibration data is an error. On `20260915ball` the coil
    basis used for the estimate (raw, whitened, compressed) moved `a` by less than
-   the estimate's own noise (half-split of the calibration shots).
+   the estimate's own noise (half-split of the calibration shots). See review
+   item 260 for the ported fit this replaced.
 4. **Per frame**: regrid the ramp-sampled readouts onto Cartesian kx (1D NUFFT,
    density-compensated; separate trajectories for odd and even echoes, shifted by
    the calibrated delay), apply the odd/even correction, and scatter each (shot,

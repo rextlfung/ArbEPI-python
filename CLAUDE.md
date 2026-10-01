@@ -804,6 +804,23 @@ every dataset so far has even Nx). Note `rampsamp2cart` itself keeps MATLAB's
 fftshift-both-sides forward FFT, so for odd Nx "the frame" is defined by the
 estimate/apply pair agreeing, not by absolute position.
 
+**Odd/even model: per echo pair, all echoes (review item 260).** `getoephase`
+fits `a0 + a1·x` with `a0`, `a1` linear in echo-pair index, by one
+signal-power-weighted least squares over every pair (central half of x), and
+returns `a` as `(ETL//2, 2)`; `epiphasecorrect` applies pair j to even echo
+2j+1 and still accepts the old `(2,)` form (`oephase_a` in older files). The
+off-resonance accrual it removes first is now estimated from the odd echoes:
+the even echoes carry the odd/even offset, so with a drifting offset the old
+even-echo estimate absorbed half the drift. The ported getoephase.m fit only
+pairs ETL/4..ETL/2-1, masked by echoes 3·ETL/4..ETL-1 at 10% of the train's
+peak; on `20260930ballfat`'s 1x radial run (784 us echo spacing) that mask was
+empty and `np.linalg.lstsq` silently returned `a = [0, 0]` -- no correction --
+at every candidate delay, so the delay sweep also picked a wrong delay. No
+signal is now a `ValueError`. Measured on that session's two fully sampled
+runs, the drift is real (a0 −0.27 → −0.36 rad along the train) but correcting
+it moved the FOV/2 ghost by under 0.1% of the object signal, so the change is
+about robustness, not image quality.
+
 **Per-acquisition scan parameters travel in `scan_info.mat`**, not a copied
 script (MATLAB `run()`s a per-acquisition `params.m`; copying `params.py` would
 drag pypulseq into the GERecon venv and tie a data record to changing code).

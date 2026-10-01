@@ -2853,6 +2853,44 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `test_clip_b0_outliers_keeps_small_maps_and_clips_rare_extremes`,
   `test_build_sense_b0_is_robust_to_a_few_diverged_voxels` (two diverged
   voxels: operator 30%+ off unclipped, < 5% clipped).
+- [x] **260. `getoephase` silently returned no odd/even correction on a long,
+  decayed echo train, and fit an arbitrary subset of echoes.** [measured
+  2026-10-01 on `20260930ballfat`, against `add706d`] The ported
+  getoephase.m fit `a0 + a1·x` only to echo pairs ETL/4..ETL/2-1 (echoes
+  ETL/2..ETL-1), masked by `mask[:, etl//2:]` -- i.e. pair j by echo
+  ETL/2+j, not its own echoes -- at 10% of the peak over the whole train.
+  On the 1x radial run (ETL 60, 784 us echo spacing, slowed for PNS) echoes
+  45-59 were 6.5-9.6% of the first echo in the central half of x, the mask
+  was empty, and `np.linalg.lstsq` on zero rows returned `a = [0, 0]` with no
+  error, at every one of the 241 candidate delays; `select_best_delay` then
+  took the first wrap-free delay (−1.15, vs −0.30 on every other run), and
+  the frames were gridded with no ghost correction. The 1x laminar run (672
+  us) kept 59 pixels. Fitting each pair alone shows the phase drifts along
+  the train, the same way in every run (a0 by 0.05-0.09 rad and a1 by up to
+  ~0.1 rad/fov from the first to the last pair), so any single value is
+  biased toward the echoes it is fit on. Fixed: `getoephase` fits every pair
+  by signal-power-weighted least squares (central half of x), with a0 and a1
+  linear in echo-pair index (`echo_order`), returns `a` as `(ETL//2, 2)`,
+  and raises `ValueError` when fewer than `min_pixels` pixels carry signal;
+  `epiphasecorrect` applies pair j to even echo 2j+1 (`(2,)` still accepted);
+  `sweep_delay`'s `a1`/`a2` are the mid-train values. The off-resonance
+  accrual removed before the fit is now estimated from the odd echoes: the
+  even echoes carry the odd/even offset, so a drifting offset leaked half
+  into it (0.001 rad per 0.002 rad/pair of drift on synthetic data). Effect
+  on images is small: grid one frame of each fully sampled run with each
+  correction, RSS, and the FOV/2 ghost band (object rolled by Ny/2, outside
+  the dilated object) was 8.85/8.81% of the object with the old/new
+  correction on 1x laminar (16.49% with none; background floor 5.2%), and
+  28.27/28.24% on 1x radial (30.46% with none), whose plain-IFFT band is
+  dominated by off-resonance artifact from radial ordering, not odd/even
+  phase. So the fix is for robustness. The ~3.6% residual ghost above the
+  floor on 1x laminar is not explained by this phase model and is still
+  open. Tests: `test_getoephase_recovers_echo_dependent_drift`,
+  `test_getoephase_estimates_a_strongly_decayed_train`,
+  `test_getoephase_raises_without_signal`,
+  `test_epiphasecorrect_applies_a_per_echo_pair`. `20260930ballfat` was
+  preprocessed before this fix, with a per-run mask threshold of 0.05 for
+  1x radial (its `preprocess_all.py`).
 
 ## Consistency & documentation
 

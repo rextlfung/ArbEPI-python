@@ -167,7 +167,8 @@ def compute_oephase(
     """Odd/even phase model from blip-free calibration echo trains.
 
     ksp_cal: [Nfid, ETL_even, N_cal_shots, Nc] from prepare_cal_data().
-    Returns (a, th): getoephase's model and its per-echo-pair phase mismatch.
+    Returns (a, th): getoephase's per-echo-pair model [ETL_even//2, 2] and its
+    per-echo-pair phase mismatch.
     Uses the same centered-IFFT pairing (ifftshift in, fftshift out) along x as
     oephase.epiphasecorrect, so `a` is estimated in the pixel frame it is
     applied in (docs/review-findings.md item 251).
@@ -209,7 +210,8 @@ def sweep_delay(
     no-wrap linear fit breaks. For each delay this counts adjacent-pixel jumps
     > wrap_thresh in the odd/even phase over the central half of x (later echo
     pairs). ksp_cal: [Nfid, ETL_even, N_cal_shots, Nc] from prepare_cal_data().
-    Returns {'delay', 'a1', 'a2', 'wrap_count'}, one entry per delay.
+    Returns {'delay', 'a1', 'a2', 'wrap_count'}, one entry per delay; a1/a2 are
+    the model's mid-train (TE) constant and linear terms.
     """
     Nfid = ksp_cal.shape[0]
     rows = slice(matlab_round(Nx / 4), matlab_round(3 * Nx / 4))
@@ -217,7 +219,7 @@ def sweep_delay(
     for d in delays:
         a, th = compute_oephase(ksp_cal, *apply_delay(kxo0, kxe0, Nfid, d), Nx, fov_x_cm)
         d_th = np.diff(th[rows, th.shape[1] // 2:], axis=0)
-        a_all.append(a)
+        a_all.append(a.mean(axis=0))  # mid-train value: getoephase's fit is centered there
         wraps.append(int(np.sum(np.abs(d_th) > wrap_thresh)))
     a_all = np.array(a_all)
     return {'delay': np.asarray(delays, dtype=float), 'a1': a_all[:, 0], 'a2': a_all[:, 1],
@@ -273,7 +275,9 @@ def calibrate_odd_even(
         )
     kxo, kxe = apply_delay(kxo0, kxe0, Nfid, delay)
     a, _ = compute_oephase(ksp_cal, kxo, kxe, Nx, fov_x_cm)
-    print(f'  odd/even phase: constant {a[0]:.4f} rad, linear {a[1]:.4f} rad/FOV')
+    print(f'  odd/even phase at mid-train: constant {a[:, 0].mean():.4f} rad, linear '
+          f'{a[:, 1].mean():.4f} rad/FOV; first to last echo pair: {a[-1, 0] - a[0, 0]:+.4f} rad, '
+          f'{a[-1, 1] - a[0, 1]:+.4f} rad/FOV')
     return kxo, kxe, a, sweep
 
 

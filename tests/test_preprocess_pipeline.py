@@ -286,8 +286,9 @@ def test_readout_delay_is_calibrated_from_the_cal_scan(dataset):
     assert len({len(v) for v in sweep.values()}) == 1
     best = np.argmin(np.abs(sweep['delay'] - D_TRUE))
     assert sweep['wrap_count'][best] == 0 and sweep['wrap_count'].max() > 0
-    # at the calibrated delay only the constant odd/even phase is left
-    assert a[0] == pytest.approx(0.3, abs=0.05) and abs(a[1]) < 0.3
+    # at the calibrated delay only the constant odd/even phase is left, in every echo pair
+    assert a.ndim == 2 and a.shape[1] == 2
+    assert np.allclose(a[:, 0], 0.3, atol=0.05) and np.all(np.abs(a[:, 1]) < 0.3)
 
 
 def test_cache_left_by_a_failed_start_is_replaced(dataset):
