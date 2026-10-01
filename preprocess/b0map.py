@@ -8,7 +8,8 @@ project (pinned Project.toml + Manifest.toml). First-time setup:
 b0map.jl estimates on the deGRE grid; resize_to_epi moves the result onto the
 EPI grid, zeroing unfit voxels first so the cubic spline doesn't blend in
 background. See b0map.jl's header for its choices (ROMEO-unwrapped
-initialization, :diag preconditioner, the mandatory fit mask).
+initialization, :diag preconditioner, the mandatory fit mask and its
+small-component removal).
 """
 
 import os
@@ -18,6 +19,7 @@ import tempfile
 
 import h5py
 import numpy as np
+from scipy import ndimage
 
 from preprocess.grid_resize import resize_to_epi_grid
 
@@ -29,17 +31,33 @@ def julia_available() -> bool:
     return shutil.which('julia') is not None
 
 
+def drop_small_components(mask: np.ndarray, min_size: int) -> np.ndarray:
+    """mask without its 6-connected components smaller than min_size voxels."""
+    if min_size <= 1 or not mask.any():
+        return mask.copy()
+    labels, n = ndimage.label(mask)
+    sizes = np.bincount(labels.ravel(), minlength=n + 1)
+    keep = sizes >= min_size
+    keep[0] = False
+    return keep[labels]
+
+
 def fit_mask(
-    img_echo1: np.ndarray, mask_thresh: float, emap: np.ndarray | None = None, crop: float = 0.95
+    img_echo1: np.ndarray,
+    mask_thresh: float,
+    emap: np.ndarray | None = None,
+    crop: float = 0.95,
+    min_component: int = 64,
 ) -> np.ndarray:
     """The voxel mask b0map.jl fits within: first-echo RSS magnitude above
     mask_thresh x its peak (MRIFieldmaps' own b0init default is 0.1), ANDed
-    with ESPIRiT's eigenvalue map above `crop` when given. Python copy of the
-    rule, for when julia isn't run."""
+    with ESPIRiT's eigenvalue map above `crop` when given, without components
+    smaller than min_component voxels. Python copy of the rule, for when
+    julia isn't run."""
     mask = img_echo1 > mask_thresh * img_echo1.max()
     if emap is not None:
         mask &= emap > crop
-    return mask
+    return drop_small_components(mask, min_component)
 
 
 def estimate_b0map(
@@ -50,6 +68,8 @@ def estimate_b0map(
     crop: float = 0.95,
     mask_thresh: float = 0.1,
     precon: str = 'diag',
+    min_component: int = 64,
+    max_wraps: float = 2.0,
 ) -> dict[str, np.ndarray]:
     """Run julia/b0map.jl on deGRE k-space.
 
@@ -60,6 +80,15 @@ def estimate_b0map(
         b0map.jl combines coils with the maps (matched filter) and tightens the
         fit mask with emap > crop; without, it falls back to a phase-contrast
         combine and a magnitude-only mask.
+    min_component: mask components smaller than this many voxels are dropped
+        before the fit (isolated voxels can diverge; see b0map.jl's header).
+    max_wraps: safety net against a diverged fit. Voxels the fit moved more
+        than max_wraps phase wraps (max_wraps / dTE Hz) from finit are reset
+        to finit. Not 0.5: the fit legitimately moves voxels by about one wrap
+        where ROMEO unwrapped them wrong (measured on 20260922xiaokai and
+        20260929ballfat: up to 566 Hz = 1.26 wraps, every such voxel agreeing
+        with its neighbours to ~10-50 Hz while finit was a wrap off), whereas
+        diverged voxels moved 16 to 10^4 wraps (review item 259).
     Returns deGRE-grid 'b0_map', 'finit_hz' (the ROMEO-unwrapped start) and
     'mask' (bool).
     """
@@ -81,16 +110,29 @@ def estimate_b0map(
             [
                 shutil.which('julia'), f'--project={JULIA_DIR}', JULIA_SCRIPT,
                 fn_in, fn_out, fn_in if smaps_degre is not None else '',
-                str(crop), str(mask_thresh), precon,
+                str(crop), str(mask_thresh), precon, str(int(min_component)),
             ],
             check=True,
         )
         with h5py.File(fn_out, 'r') as f:
-            return {
-                'b0_map': f['b0_map'][()],
-                'finit_hz': f['finit_hz'][()],
-                'mask': f['mask'][()].astype(bool),
-            }
+            b0, finit = f['b0_map'][()], f['finit_hz'][()]
+            mask = f['mask'][()].astype(bool)
+    return {'b0_map': reset_diverged(b0, finit, mask, te, max_wraps), 'finit_hz': finit,
+            'mask': mask}
+
+
+def reset_diverged(
+    b0: np.ndarray, finit: np.ndarray, mask: np.ndarray, te: np.ndarray, max_wraps: float = 2.0
+) -> np.ndarray:
+    """b0 with the mask voxels that moved more than max_wraps phase wraps
+    (max_wraps / dTE Hz) from finit reset to finit (see estimate_b0map)."""
+    te = np.asarray(te, dtype=np.float64)
+    diverged = mask & (np.abs(b0 - finit) > max_wraps / abs(te[1] - te[0]))
+    if not diverged.any():
+        return b0
+    print(f'  B0 fit: reset {int(diverged.sum())} voxel(s) that moved > {max_wraps:g} '
+          f'wraps from the ROMEO start back to it')
+    return np.where(diverged, finit, b0)
 
 
 def resize_to_epi(

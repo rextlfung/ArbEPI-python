@@ -19,6 +19,7 @@ from recon.operators import (  # noqa: E402
     build_sense,
     build_sense_b0,
     build_sense_b0_r2star,
+    clip_b0_outliers,
 )
 from recon.utils import (  # noqa: E402
     _brute_force_time_varying_ksp,
@@ -338,6 +339,47 @@ def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
         )
         y_manual = A_manual.apply(x[..., it])
         torch.testing.assert_close(y_batched[..., it], y_manual, atol=1e-5, rtol=1e-4)
+
+
+def test_clip_b0_outliers_keeps_small_maps_and_clips_rare_extremes():
+    small = torch.tensor([-5.0, 0.0, 5.0], device=DEVICE)
+    torch.testing.assert_close(clip_b0_outliers(small), small)  # order statistics: no clip
+    g = torch.Generator(device=DEVICE).manual_seed(7)
+    b0 = torch.randn(4000, generator=g, device=DEVICE) * 50
+    b0[3], b0[99] = -4e6, 1e5
+    out = clip_b0_outliers(b0)
+    assert -400 < out.min() and out.max() < 400
+    assert (out != b0).sum() <= 10  # only the most extreme few move
+    assert clip_b0_outliers(b0, 0) is b0
+
+
+def test_build_sense_b0_is_robust_to_a_few_diverged_voxels():
+    """Two diverged voxels (review item 259: -4 MHz in a +-100 Hz map) widen
+    mri_exp_approx's histogram so far that the segmentation fails everywhere;
+    with the default percentile clip the operator matches the clean map's."""
+    Nx, Ny, Nz, Nc, Nt, L = 16, 16, 12, 2, 1, 8
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=70)
+    yy = torch.linspace(-1, 1, Ny, device=DEVICE).reshape(1, Ny, 1)
+    b0 = (100.0 * yy).expand(Nx, Ny, Nz).contiguous()
+    b0_bad = b0.clone()
+    b0_bad[0, 0, 0], b0_bad[1, 0, 0] = -4e6, 1e5
+    g = torch.Generator(device=DEVICE).manual_seed(71)
+    omega = (torch.rand(Nx, Ny, Nz, generator=g, device=DEVICE) > 0.5).unsqueeze(-1)
+    t = 0.02 + 0.001 * torch.arange(Ny, device=DEVICE, dtype=torch.float32)
+    echo_times = t.reshape(Ny, 1, 1).expand(Ny, Nz, Nt).contiguous()
+    x = _complex_randn(Nx, Ny, Nz, Nt, seed=72)
+    x[0, 0, 0] = x[1, 0, 0] = 0  # the diverged voxels' own model doesn't matter here
+
+    def fwd(b, pct):
+        return build_sense_b0(smaps, omega, b, echo_times, L=L, nbins=64,
+                              b0_clip_percentile=pct).apply(x)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the unclipped fit trips the row-sum check
+        y_clean, y_clip, y_raw = fwd(b0, 0), fwd(b0_bad, 0.1), fwd(b0_bad, 0)
+    rel = lambda a: ((a - y_clean).norm() / y_clean.norm()).item()  # noqa: E731
+    assert rel(y_clip) < 0.05
+    assert rel(y_raw) > 0.3
 
 
 def test_r2star_zero_map_matches_phase_only_operator():

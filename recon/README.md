@@ -161,6 +161,11 @@ interpolation weights. The weights come from mirtorch's `mri_exp_approx`.
 - `nbins = 128` histogram bins for the fit. The mirtorch default of 20 made the
   fit ill-conditioned on real field maps, causing signal loss and speckle. A
   warning is printed if the fit looks ill-conditioned.
+- The histogram spans the map's whole range, so the field map is first clipped
+  to its 0.1–99.9 percentile range (`b0_clip_percentile`, `clip_b0_outliers`;
+  0 disables). A few diverged voxels (up to −4.7 MHz in 10–50 of 486k voxels on
+  20260922xiaokai, before preprocessing dropped mask islands) otherwise make
+  every bin kilohertz wide and disable the correction everywhere.
 - Sign convention (Sutton, Noll & Fessler 2003): the forward model multiplies
   the image by $e^{+i 2\pi \Delta f(r) t}$ before the FFT.
 - Each segment is a full SENSE transform, so cost grows linearly with L: one

@@ -15,11 +15,15 @@ import pytest
 
 pytest.importorskip('scipy')
 
+from scipy import ndimage  # noqa: E402
+
 from preprocess.b0map import (  # noqa: E402
     JULIA_DIR,
     JULIA_SCRIPT,
+    drop_small_components,
     estimate_b0map,
     fit_mask,
+    reset_diverged,
     resize_to_epi,
 )
 
@@ -111,8 +115,59 @@ def test_resize_to_epi_moves_field_map_and_mask_onto_the_epi_grid():
 def test_fit_mask_combines_magnitude_and_eigenvalue_masks():
     img = np.array([[[1.0, 0.05, 0.5]]])
     emap = np.array([[[0.99, 0.99, 0.5]]])
-    np.testing.assert_array_equal(fit_mask(img, 0.1), [[[True, False, True]]])
-    np.testing.assert_array_equal(fit_mask(img, 0.1, emap, 0.95), [[[True, False, False]]])
+    np.testing.assert_array_equal(fit_mask(img, 0.1, min_component=1), [[[True, False, True]]])
+    np.testing.assert_array_equal(
+        fit_mask(img, 0.1, emap, 0.95, min_component=1), [[[True, False, False]]]
+    )
+
+
+def test_reset_diverged_keeps_one_wrap_corrections_and_resets_runaways():
+    te = np.array([0.0015, 0.0035])  # dTE 2 ms: one wrap = 500 Hz
+    finit = np.array([-50.0, 10.0, 300.0, 20.0, 5.0])
+    b0 = np.array([-40.0, 10.0 - 7000.0, 300.0 - 500.0, 20.0 + 1200.0, 9e6])
+    mask = np.array([True, True, True, False, True])
+    out = reset_diverged(b0, finit, mask, te, max_wraps=2.0)
+    # refinement and a one-wrap ROMEO fix are kept; > 2 wraps reset; unmasked untouched
+    np.testing.assert_array_equal(out, [-40.0, 10.0, -200.0, 1220.0, 5.0])
+    np.testing.assert_array_equal(reset_diverged(b0[:1], finit[:1], mask[:1], te), b0[:1])
+
+
+def _sphere_with_islands():
+    """A 16x16x8 ball plus three 1-voxel and one 2-voxel island, all bright."""
+    xx, yy, zz = _grid((16, 16, 8))
+    ball = np.sqrt(xx**2 + yy**2 + zz**2) < 0.6
+    islands = np.zeros_like(ball)
+    islands[0, 0, 0] = islands[15, 0, 7] = islands[0, 15, 3] = True
+    islands[15, 15, 0] = islands[15, 15, 1] = True
+    assert not (ndimage.binary_dilation(ball) & islands).any()  # really disconnected
+    return ball, islands
+
+
+def test_fit_mask_drops_small_components():
+    ball, islands = _sphere_with_islands()
+    img = (ball | islands).astype(float)
+    np.testing.assert_array_equal(fit_mask(img, 0.1, min_component=64), ball)
+    np.testing.assert_array_equal(fit_mask(img, 0.1, min_component=1), ball | islands)
+    pair = np.zeros_like(islands)
+    pair[15, 15, 0] = pair[15, 15, 1] = True
+    np.testing.assert_array_equal(drop_small_components(islands, 2), pair)
+
+
+@needs_julia
+def test_b0map_jl_drops_mask_islands_like_fit_mask():
+    """b0map.jl's flood fill and fit_mask's scipy labeling agree: isolated
+    bright voxels (which the NCG fit can walk through many wraps, see
+    b0map.jl's header) are left out of the fit mask; the ball is kept."""
+    rng = np.random.default_rng(3)
+    ball, islands = _sphere_with_islands()
+    xx, _, _ = _grid(ball.shape)
+    te = np.array([0.0015, 0.0035])
+    ksp = _synthetic_echoes(rng, 30.0 * xx, (ball | islands).astype(float), te)
+    r = estimate_b0map(ksp, te, min_component=64)
+    assert not r['mask'][islands].any()
+    assert r['mask'][ball].mean() > 0.95
+    r1 = estimate_b0map(ksp, te, min_component=1)
+    assert r1['mask'][islands].mean() > 0.5  # without the filter they are fit
 
 
 @needs_julia
