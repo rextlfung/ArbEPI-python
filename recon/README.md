@@ -311,7 +311,11 @@ fluctuation in non-activated voxels split into below/above 0.15 Hz, each
 ROI's recovered amplitude (GLM; 1 = exact), t-score and leakage into a
 surrounding shell, the false-positive rate (|t| > 3.29) of the block regressor
 elsewhere, and edge sharpness relative to the truth. `--png` adds a panel
-(truth and recon mean, temporal std, block t-map).
+(truth and recon mean, temporal std, block t-map). The `_t_lowband` and
+`false_pos_frac_lowband` entries repeat the GLM on the DCT components below
+the cutoff only, with their own degrees of freedom: a temporal penalty leaves
+the residual band-limited, which inflates the plain per-frame t (25-32% of
+null voxels above |t| = 3.29 on `20260930ballfat`, vs 0.1% in the low band).
 
 ## Performance notes
 
