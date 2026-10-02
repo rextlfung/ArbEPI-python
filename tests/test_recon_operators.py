@@ -303,13 +303,10 @@ def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
     k = counts.min().item()
     omega = omega & (torch.cumsum(omega.reshape(-1, Nt), dim=0) <= k).reshape(Nx, Ny, Nz, Nt)
 
-    # build_sense_b0 now relies on every frame sampling from the
-    # same *set* of distinct echo times (true of this repo's real
-    # acquisitions -- see its own docstring), so this fixture must respect
-    # that: tie each (iy,iz) to a value from a small fixed pool, identical
-    # across every frame (a stronger invariant than physically needed --
-    # real timing only fixes it per echo *index*, not per (iy,iz) -- but
-    # sufficient to keep every frame's sampled times a subset of frame 0's).
+    # build_sense_b0 fits one segmentation on all frames' distinct echo
+    # times. Tie each (iy,iz) to a value from a small fixed pool, identical
+    # across every frame, so that set is small and every frame samples all
+    # of it (as on real acquisitions, where it is one time per echo index).
     n_distinct = 5
     distinct_times = torch.linspace(0.005, 0.055, n_distinct, device=DEVICE)
     yz_idx = (
@@ -325,8 +322,8 @@ def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
     x = _complex_randn(Nx, Ny, Nz, Nt, seed=53)
     y_batched = A.apply(x)
 
-    # build_sense_b0 fits the segmentation once, on frame 0's distinct echo
-    # times; fit the hand-built reference on the same times so this checks
+    # build_sense_b0 fits the segmentation once, on all frames' distinct echo
+    # times (frame 0's here, which samples every one of them); fit the hand-built reference on the same times so this checks
     # the per-frame gather plumbing, not two different fits. (mri_exp_approx
     # places segments at percentiles of the times it's given, so fitting on
     # per-sample times with repeats would give a different, mask-dependent fit.)
@@ -603,3 +600,24 @@ def test_check_operator_unitary_warns_for_real_b0_correction():
     with pytest.warns(UserWarning, match="not unitary"):
         sigma1 = check_operator_unitary(A, x0, niter=100)
     assert abs(sigma1 - 1.0) > 0.05
+
+
+def test_segment_fit_covers_frames_that_sample_different_echo_times():
+    """A frame may sample echo times another frame doesn't (recon/testbed.py
+    applies one run's masks to another run's timing): the shared fit covers
+    the union, and every sample maps to its own time."""
+    from recon.operators import _segment_fit
+
+    Nx, Ny, Nz, Nt = 4, 6, 5, 3
+    times = 0.005 + 0.002 * torch.arange(Ny * Nz, device=DEVICE, dtype=torch.float32)
+    et = times.reshape(Ny, Nz, 1).expand(Ny, Nz, Nt).contiguous()  # every (ky,kz) distinct
+    omega = torch.zeros(Nx, Ny, Nz, Nt, dtype=torch.bool, device=DEVICE)
+    omega[:, :3, :, 0] = True  # frame 0: ky 0-2 only
+    omega[:, 3:, :, 1] = True  # frame 1: ky 3-5, none of frame 0's times
+    omega[:, ::2, :, 2] = True
+    b0 = torch.linspace(-30, 30, Nx * Ny * Nz, device=DEVICE).reshape(Nx, Ny, Nz)
+    _, _, _, unique_t_ms, pos = _segment_fit(omega, b0, et, L=4, nbins=16)
+    assert unique_t_ms.numel() == Ny * Nz
+    for it in range(Nt):
+        idx = torch.nonzero(omega[..., it].reshape(-1)).squeeze(-1) % (Ny * Nz)
+        torch.testing.assert_close(unique_t_ms[pos[it]], times[idx] * 1000, atol=1e-3, rtol=0)
