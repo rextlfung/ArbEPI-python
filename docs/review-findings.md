@@ -2937,6 +2937,22 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `test_extend_harmonic_trivial_masks`,
   `test_resize_to_epi_has_no_field_step_at_the_fit_mask_edge` (fails on the
   old zero fill).
+- [x] **262. The temporal high-pass penalty slowed the joint wavelet-TV
+  solver's convergence in proportion to its weight.** [found 2026-10-02 in
+  the recon sweep on `20260930ballfat`'s radial testbed, while developing
+  `--hp-weight`, before it merged] As first written, `(mu/2)||P x||^2` was
+  part of PDHG's smooth term, so the primal step was 1/(1 + mu). At mu = 30
+  and the default 100 iterations the data-consistency cost ended 20x above
+  the mu = 0 run (8323 vs 411), and the result looked like a worse prior
+  (in-band fluctuation 0.39% -> 1.09%, mean-image error 4.3% -> 9.9%) when
+  it was an unconverged solve. Fixed: the penalty is a dual block of
+  `SpatioTemporalWaveletTV` (G gains P, `SectionProx` applies its closed-form
+  prox v / (1 + alpha mu)), so the step no longer depends on mu; undersampled,
+  mu = 30, 100 iterations, the objective is 3x lower (323 vs 1097). CG solves
+  its normal equations exactly, so it was unaffected. MSLR still takes the
+  penalty as a gradient term (POGM's prox is the low-rank one), so its step
+  is 1/(Nscales (1 + mu)): keep mu modest there or raise `--niter`. Test:
+  `test_hp_penalty_as_a_dual_block_converges_faster_than_as_a_smooth_term`.
 
 ## Consistency & documentation
 

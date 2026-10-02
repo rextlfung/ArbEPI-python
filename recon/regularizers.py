@@ -514,31 +514,81 @@ class TemporalHighPass:
         return 0.5 * mu * self.apply(x).abs().pow(2).sum().item()
 
 
+class _Projector(LinearMap):
+    """TemporalHighPass's P as a LinearMap with flattened output (P is
+    symmetric, so it is its own adjoint)."""
+
+    def __init__(self, hp: "TemporalHighPass", img_shape: tuple[int, ...]):
+        self.hp = hp
+        super().__init__(tuple(img_shape), (math.prod(img_shape),))
+
+    def _apply(self, x):
+        return self.hp.apply(x).reshape(-1)
+
+    def _apply_adjoint(self, y):
+        return self.hp.apply(y.reshape(tuple(self.size_in)))
+
+
+class SectionProx(Prox):
+    """prox of sum_i h_i(v_i) over consecutive sections v_i (sizes), each h_i
+    either lam ||v_i||_1 ('l1') or (lam/2) ||v_i||^2 ('sq', whose prox is
+    v / (1 + alpha lam))."""
+
+    def __init__(self, kinds: list[str], lambdas: list[float], sizes: list[int]):
+        super().__init__()
+        self.kinds, self.lambdas, self.sizes = list(kinds), list(lambdas), list(sizes)
+
+    def _apply(self, v: torch.Tensor, alpha) -> torch.Tensor:
+        out = []
+        for kind, lam, sec in zip(self.kinds, self.lambdas, torch.split(v, self.sizes)):
+            if kind == "sq":
+                out.append(sec / (1 + float(alpha) * lam))
+            else:
+                thresh = float(alpha) * lam
+                out.append(torch.sign(sec) * torch.clamp(sec.abs() - thresh, min=0))
+        return torch.cat(out)
+
+
 class SpatioTemporalWaveletTV:
     """g(x) = lamb_l1 ||W x_t||_1 + lamb_tv ||D x_t||_1 summed over frames, plus
-    lamb_ttv ||D_t x||_1: WaveletTV on every frame of a (Nx,Ny,Nz,Nt) image,
-    jointly, with optional temporal TV (TemporalDiff). G = [W; D; D_t]."""
+    lamb_ttv ||D_t x||_1 and (hp_weight/2) ||P x||^2: WaveletTV on every frame of
+    a (Nx,Ny,Nz,Nt) image, jointly, with optional temporal TV (TemporalDiff) and
+    high-pass penalty (TemporalHighPass). G = [W; D; D_t; P].
+
+    The high-pass penalty sits here, as a dual block with a closed-form prox,
+    rather than in PDHG's smooth term: there its curvature hp_weight would cut
+    the primal step to 1 / (1 + hp_weight), and at hp_weight = 30 100 iterations
+    left the data term 20x above its converged value (review item 262)."""
 
     def __init__(
         self, img_shape: tuple[int, int, int, int], lamb_l1: float, lamb_tv: float,
         lamb_ttv: float = 0.0, wave: str = "db4", levels: int = 3,
+        hp: "TemporalHighPass | None" = None, hp_weight: float = 0.0,
     ):
         sp, Nt = tuple(img_shape[:3]), img_shape[3]
         W = PerFrame(Wavelet3D(sp, wave=wave, levels=levels), Nt)
         D = PerFrame(_Flatten(Diffnd(list(sp), dims=[0, 1, 2])), Nt)
-        ops, lams = [W, D], [lamb_l1, lamb_tv]
+        ops, lams, kinds = [W, D], [lamb_l1, lamb_tv], ["l1", "l1"]
         norm2 = 1 + 4 * len(sp)
         if lamb_ttv > 0:
             ops.append(TemporalDiff(tuple(img_shape)))
             lams.append(lamb_ttv)
+            kinds.append("l1")
             norm2 += 4  # ||D_t||^2 <= 4
+        if hp is not None and hp_weight > 0:
+            ops.append(_Projector(hp, tuple(img_shape)))
+            lams.append(hp_weight)
+            kinds.append("sq")
+            norm2 += 1  # P is an orthogonal projector
         self.G = Vstack(ops, dim=0)
-        self.h_prox = SectionL1(lams, [op.size_out[0] for op in ops])
+        self.h_prox = SectionProx(kinds, lams, [op.size_out[0] for op in ops])
         self.G_norm_squared = 1.05 * norm2
 
     def cost(self, x: torch.Tensor) -> float:
         Gx = self.G.apply(x)
+        p = self.h_prox
         return sum(
-            lam * sec.abs().sum().item()
-            for lam, sec in zip(self.h_prox.lambdas, torch.split(Gx, self.h_prox.sizes))
+            (0.5 * lam * sec.abs().pow(2).sum().item()) if kind == "sq"
+            else lam * sec.abs().sum().item()
+            for kind, lam, sec in zip(p.kinds, p.lambdas, torch.split(Gx, p.sizes))
         )

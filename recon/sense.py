@@ -458,17 +458,17 @@ def _solve_wavelet_tv_joint(
     per-frame scales would themselves vary in time. With lamb_ttv = mu = 0 it
     differs from the per-frame solver only by that scale."""
     Nx, Ny, Nz, Nt = shape
-    g = SpatioTemporalWaveletTV(shape, lamb_l1, lamb_tv, lamb_ttv, wave=wave, levels=levels)
+    mu = hp_weight if hp is not None else 0.0
+    g = SpatioTemporalWaveletTV(shape, lamb_l1, lamb_tv, lamb_ttv, wave=wave, levels=levels,
+                                hp=hp, hp_weight=mu)  # the penalty is a dual block of g
     A_n = (1.0 / sigma1A) * A
     yv = ksp[ksp != 0].abs()
     # numpy, not torch.quantile, which rejects inputs over ~16M elements
     scale = 1.0 / float(np.percentile(yv[:: max(1, yv.numel() // 10_000_000)].cpu().numpy(), 99))
     y_s = ksp * scale
-    mu = hp_weight if hp is not None else 0.0
 
     def dc_grad(x):
-        r = A_n.adjoint(A_n.apply(x) - y_s)
-        return r + mu * hp.apply(x) if mu else r
+        return A_n.adjoint(A_n.apply(x) - y_s)
 
     print(
         f"\nReconstructing {Nt} frames jointly with L1-wavelet + TV (lamb_l1={lamb_l1}, "
@@ -477,10 +477,10 @@ def _solve_wavelet_tv_joint(
     )
     t_start = time.time()
     x0 = torch.zeros(shape, dtype=torch.complex64, device=ksp.device)
-    x = pdhg(dc_grad, 1.0 + mu, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters)
+    x = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters)
     runtime_s = time.time() - t_start
-    dc = 0.5 * (A_n.apply(x) - y_s).norm().item() ** 2 + (hp.cost(x, mu) if mu else 0.0)
-    reg = g.cost(x)
+    dc = 0.5 * (A_n.apply(x) - y_s).norm().item() ** 2
+    reg = g.cost(x)  # includes the high-pass penalty
     X = x / scale / sigma1A
     print(f"Wall-clock: {runtime_s:.1f}s ({runtime_s / Nt:.1f}s/frame)")
     return ReconResult(

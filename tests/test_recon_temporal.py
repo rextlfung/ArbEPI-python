@@ -190,3 +190,32 @@ def test_mslr_and_joint_wavelet_tv_run_with_the_hp_penalty(tmp_path):
 def test_run_sense_rejects_temporal_tv_outside_wavelet_tv(tmp_path):
     with pytest.raises(ValueError, match="lamb_ttv"):
         run_sense(fn_ksp="unused", fn_smaps="unused", reg="mslr", lamb_ttv=0.1)
+
+
+def test_hp_penalty_as_a_dual_block_converges_faster_than_as_a_smooth_term():
+    """Review item 262: as a smooth term the penalty's curvature cuts PDHG's
+    primal step to 1/(1 + mu); as a dual block (SpatioTemporalWaveletTV's hp)
+    it doesn't. Undersampled, mu = 30, 100 iterations: the dual form reaches a
+    3x lower objective (323 vs 1097 when written)."""
+    from recon.regularizers import SpatioTemporalWaveletTV
+    from recon.solvers import pdhg
+
+    Nx, Ny, Nz, Nc, Nt, mu, lam = 12, 12, 8, 2, 40, 30.0, 1e-3
+    x_true = _crandn(Nx, Ny, Nz, 1, seed=11).expand(-1, -1, -1, Nt).contiguous()
+    A = build_sense(_smaps(Nc, (Nx, Ny, Nz)), _random_masks(Nx, Ny, Nz, Nt, 0.15, 6))
+    y = A.apply(x_true)
+    y = y + 0.05 * _crandn(*y.shape, seed=12)
+    hp = TemporalHighPass(Nt, 0.5, 0.15, DEVICE)
+    shape = (Nx, Ny, Nz, Nt)
+    g_dual = SpatioTemporalWaveletTV(shape, lam, lam, wave="db2", levels=1, hp=hp, hp_weight=mu)
+    g_plain = SpatioTemporalWaveletTV(shape, lam, lam, wave="db2", levels=1)
+    z = torch.zeros(shape, dtype=torch.complex64, device=DEVICE)
+
+    def objective(x):
+        return 0.5 * (A.apply(x) - y).norm().item() ** 2 + g_dual.cost(x)
+
+    x_smooth = pdhg(lambda v: A.adjoint(A.apply(v) - y) + mu * hp.apply(v), 1 + mu,
+                    g_plain.h_prox, g_plain.G, g_plain.G_norm_squared, z, niter=100)
+    x_dual = pdhg(lambda v: A.adjoint(A.apply(v) - y), 1.0, g_dual.h_prox, g_dual.G,
+                  g_dual.G_norm_squared, z, niter=100)
+    assert objective(x_dual) < 0.5 * objective(x_smooth)
