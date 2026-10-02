@@ -21,7 +21,14 @@ regions and waveforms of a few injected "activations":
     sin0.25                0.25 Hz sinusoid, out of band (a temporal penalty
                            above 0.15 Hz should remove it)
 
-each zero-mean with peak |w| = 1, so amp is the peak fractional change. The
+each zero-mean with peak |w| = 1, so amp is the peak fractional change
+(amp = 0: a static truth, every frame the fully sampled mean). Variants:
+mask_period=K reuses the first K masks cyclically (frame t gets mask t mod K),
+so the aliasing of anything static repeats with period K; source='measured'
+uses the fully sampled run's measured mean k-space under each mask instead of
+the model (y_t = M_t k_mean + fresh noise topping each sample up to unit
+variance; amp must be 0 and timing 'full'), so the real data's model mismatch
+is in it but no frame-to-frame change of the object or acquisition is. The
 output is a <name>_preprocessed.h5 that recon/sense.py reconstructs as is,
 plus a 'truth' group. It is an inverse crime by construction (same operator
 and B0 segmentation both ways), so it measures sampling, noise and prior
@@ -108,6 +115,7 @@ def build_testbed(
     fn_full: str, fn_masks: str, fn_out: str, volume_tr_s: float, nt: int = 80,
     mask_start: int = 1, amp: float = 0.02, seed: int = 0, device=None, L_b0: int = 32,
     nbins_b0: int = 128, cg_iters: int = 150, timing: str = "full",
+    source: str = "model", mask_period: int | None = None,
 ) -> None:
     import torch
 
@@ -128,14 +136,24 @@ def build_testbed(
         fov = tuple(f.attrs["fov"])
     if timing not in ("full", "masks"):
         raise ValueError(f"timing={timing!r}, expected 'full' or 'masks'")
+    if source not in ("model", "measured"):
+        raise ValueError(f"source={source!r}, expected 'model' or 'measured'")
+    if source == "measured" and (amp != 0 or timing != "full"):
+        raise ValueError("source='measured' needs amp=0 and timing='full' (it is the "
+                         "fully sampled run's own data, acquired with its timing)")
+    n_masks = mask_period or nt
     with h5py.File(fn_masks, "r") as f:
-        om = f["omegas"][:, :, mask_start : mask_start + nt]
-        et_masks = (f["echo_times"][:, :, mask_start : mask_start + nt].astype(np.float32)
+        om = f["omegas"][:, :, mask_start : mask_start + n_masks]
+        et_masks = (f["echo_times"][:, :, mask_start : mask_start + n_masks].astype(np.float32)
                     if timing == "masks" else None)
-    assert om.shape[-1] == nt, f"{fn_masks} has fewer than {mask_start + nt} frames"
+    assert om.shape[-1] == n_masks, f"{fn_masks} has fewer than {mask_start + n_masks} frames"
+    cyc = np.arange(nt) % n_masks
+    om = om[..., cyc]
+    et_masks = et_masks[..., cyc] if et_masks is not None else None
     print(f"testbed: object from the mean of {nf - 1} frames of {fn_full}; masks: frames "
-          f"{mask_start}-{mask_start + nt - 1} of {fn_masks} "
-          f"(R {om[..., 0].size / om[..., 0].sum():.1f})")
+          f"{mask_start}-{mask_start + n_masks - 1} of {fn_masks}"
+          + (f", cycled with period {mask_period}" if mask_period else "")
+          + f" (R {om[..., 0].size / om[..., 0].sum():.1f}); data: {source}")
 
     _, smaps_chw = load_normalized_smaps(fn_full, device)
     b0_t = torch.from_numpy(b0).to(device)
@@ -161,12 +179,19 @@ def build_testbed(
 
     omega = torch.from_numpy(om).to(device).unsqueeze(0).expand(Nx, -1, -1, -1)
     et_np = et_masks if timing == "masks" else np.repeat(et1[..., None], nt, axis=-1)
-    et = torch.from_numpy(et_np).to(device)
-    A = build_sense_b0(smaps_chw, omega, b0_t, et, L=L_b0, nbins=nbins_b0)
-    y = A.apply(x_true)  # (K, Nc, nt)
+    idx = [torch.nonzero(omega[..., t].reshape(-1)).squeeze(-1) for t in range(nt)]
     g = torch.Generator(device=device).manual_seed(seed)
-    y = y + torch.complex(torch.randn(y.shape, generator=g, device=device),
-                          torch.randn(y.shape, generator=g, device=device)) / math.sqrt(2)
+    if source == "model":
+        A = build_sense_b0(smaps_chw, omega, b0_t, torch.from_numpy(et_np).to(device),
+                           L=L_b0, nbins=nbins_b0)
+        y = A.apply(x_true)  # (K, Nc, nt)
+        noise_std = 1.0
+    else:  # the measured mean (noise variance 1/(nf-1)), topped up to unit variance
+        kflat = torch.from_numpy(k_mean).to(device).reshape(-1, Nc)
+        y = torch.stack([kflat[i] for i in idx], -1)
+        noise_std = math.sqrt(1 - 1 / (nf - 1))
+    y = y + noise_std * torch.complex(torch.randn(y.shape, generator=g, device=device),
+                                      torch.randn(y.shape, generator=g, device=device)) / math.sqrt(2)
 
     os.makedirs(os.path.dirname(os.path.abspath(fn_out)), exist_ok=True)
     with h5py.File(fn_out, "w") as f:
@@ -174,7 +199,7 @@ def build_testbed(
                               chunks=(Nx, Ny, Nz, Nc, 1))
         for t in range(nt):
             frame = torch.zeros(Nx * Ny * Nz, Nc, dtype=torch.complex64, device=device)
-            frame[A.A[t].idx] = y[:, :, t]
+            frame[idx[t]] = y[:, :, t]
             ds[..., t] = frame.reshape(Nx, Ny, Nz, Nc).cpu().numpy()
         f["omegas"] = om
         f["echo_times"] = et_np
@@ -185,7 +210,8 @@ def build_testbed(
                        testbed_full=os.path.abspath(fn_full),
                        testbed_masks=os.path.abspath(fn_masks),
                        testbed_mask_start=mask_start, testbed_seed=seed, testbed_amp=amp,
-                       testbed_timing=timing)
+                       testbed_timing=timing, testbed_source=source,
+                       testbed_mask_period=mask_period or 0)
         t_ = f.create_group("truth")
         t_["x0"] = x0.cpu().numpy()
         t_["object"] = obj
@@ -256,8 +282,9 @@ def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,
     out["nrmse_frame_pct"] = 100 * float(np.median(
         np.linalg.norm(M[obj] - T[obj], axis=0) / np.linalg.norm(T[obj], axis=0)))
 
+    static = amp == 0
     near_roi = ndimage.binary_dilation(rois.any(0), iterations=3)
-    bg = interior & ~near_roi
+    bg = interior if static else interior & ~near_roi
     R = (M[bg] - T[bg]) / x0[bg][:, None]  # relative residual, (V, nt)
     Rc = R @ _dct(nt).T
     keep = int((np.arange(nt) / (2 * nt * tr) <= cutoff_hz).sum())
@@ -266,6 +293,10 @@ def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,
     out["fluct_outband_pct"] = 100 * float(np.median(np.sqrt((Rc[:, keep:] ** 2).sum(1) / nt)))
 
     lowband = _dct(nt)[:keep]  # the GLM on low-pass-filtered series (<= cutoff_hz)
+    out["frame_err_max_pct"] = 100 * float(np.max(
+        np.linalg.norm(M[obj] - T[obj], axis=0) / np.linalg.norm(T[obj], axis=0)))
+    if static:  # no activation: ROI/GLM metrics don't apply
+        names, rois, waves = [], rois[:0], waves[:0]
     for name, m, w in zip(names, rois, waves):
         s = M[m] / x0[m][:, None]
         beta, tstat = _glm(s, w)
@@ -280,14 +311,15 @@ def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,
         out[f"{name}_corr"] = (float(np.corrcoef(roi_mean, w)[0, 1])
                                if roi_mean.std() > 1e-12 else 0.0)
         out[f"{name}_leak_ratio"] = float(np.median(beta_shell) / amp)
-    _, t_bg = _glm(M[bg] / x0[bg][:, None], waves[0])
-    out["false_pos_frac_t3.29"] = float(np.mean(np.abs(t_bg) > 3.29))
-    # the same in the low band, against its own t threshold (two-sided p < 0.001)
-    from scipy import stats
+    if not static:
+        _, t_bg = _glm(M[bg] / x0[bg][:, None], waves[0])
+        out["false_pos_frac_t3.29"] = float(np.mean(np.abs(t_bg) > 3.29))
+        # the same in the low band, against its own t threshold (two-sided p < 0.001)
+        from scipy import stats
 
-    _, t_bg_lb = _glm(M[bg] / x0[bg][:, None], waves[0], lowband)
-    thr = float(stats.t.ppf(1 - 0.0005, keep - 3))
-    out["false_pos_frac_lowband"] = float(np.mean(np.abs(t_bg_lb) > thr))
+        _, t_bg_lb = _glm(M[bg] / x0[bg][:, None], waves[0], lowband)
+        thr = float(stats.t.ppf(1 - 0.0005, keep - 3))
+        out["false_pos_frac_lowband"] = float(np.mean(np.abs(t_bg_lb) > thr))
 
     edge = ndimage.binary_dilation(obj, iterations=1) & ~ndimage.binary_erosion(obj, iterations=2)
     gm = np.linalg.norm(np.stack(np.gradient(M.mean(-1))), axis=0)
@@ -298,7 +330,9 @@ def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,
 
 def panel(fn_testbed: str, fn_recon: str, fn_png: str, title: str = "") -> None:
     """Mean image, temporal std (relative) and block-regressor t-map, through
-    the center of block_r3, next to the truth's mean image."""
+    the center of block_r3, next to the truth's mean image. For a static
+    testbed (amp 0), the middle frame instead of the t-map, through the
+    center of the object."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -308,6 +342,7 @@ def panel(fn_testbed: str, fn_recon: str, fn_png: str, title: str = "") -> None:
         g = f["truth"]
         x0 = np.abs(g["x0"][()])
         rois, waves = g["roi_masks"][()], g["waveforms"][()]
+        static = float(g.attrs["amp"]) == 0
     obj, _ = object_masks(x0, 0.1)
     with h5py.File(fn_recon, "r") as f:
         X = np.abs(f["X_recon"][()])
@@ -315,15 +350,20 @@ def panel(fn_testbed: str, fn_recon: str, fn_png: str, title: str = "") -> None:
     M = alpha * X
     mean = M.mean(-1)
     std = M.std(-1) / np.maximum(x0, 1e-6 * x0.max()) * obj
-    _, tmap = _glm((M / np.maximum(x0, 1e-6 * x0.max())[..., None]).reshape(-1, X.shape[-1]),
-                   waves[0])
-    tmap = tmap.reshape(x0.shape) * obj
-    c = np.round(np.argwhere(rois[0]).mean(0)).astype(int)
     vmax = np.percentile(x0[obj], 99.5)
     rows = [("truth mean", x0, dict(cmap="gray", vmin=0, vmax=vmax)),
             ("recon mean", mean, dict(cmap="gray", vmin=0, vmax=vmax)),
-            ("temporal std / truth", std, dict(cmap="magma", vmin=0, vmax=0.08)),
-            ("t (block regressor)", tmap, dict(cmap="RdBu_r", vmin=-8, vmax=8))]
+            ("temporal std / truth", std, dict(cmap="magma", vmin=0, vmax=0.08))]
+    if static:
+        c = np.round(np.argwhere(obj).mean(0)).astype(int)
+        rows.append((f"recon frame {X.shape[-1] // 2}", M[..., X.shape[-1] // 2],
+                     dict(cmap="gray", vmin=0, vmax=vmax)))
+    else:
+        _, tmap = _glm((M / np.maximum(x0, 1e-6 * x0.max())[..., None]).reshape(
+            -1, X.shape[-1]), waves[0])
+        c = np.round(np.argwhere(rois[0]).mean(0)).astype(int)
+        rows.append(("t (block regressor)", tmap.reshape(x0.shape) * obj,
+                     dict(cmap="RdBu_r", vmin=-8, vmax=8)))
     fig, ax = plt.subplots(len(rows), 3, figsize=(9, 3 * len(rows)))
     for i, (lab, vol, kw) in enumerate(rows):
         for j, sl in enumerate([vol[c[0]], vol[:, c[1]], vol[:, :, c[2]]]):
@@ -331,7 +371,7 @@ def panel(fn_testbed: str, fn_recon: str, fn_png: str, title: str = "") -> None:
             ax[i, j].axis("off")
         ax[i, 0].set_title(lab, loc="left")
         fig.colorbar(im, ax=ax[i, 2], fraction=0.046)
-    for m in rois:
+    for m in ([] if static else rois):
         for j, sl in enumerate([m[c[0]], m[:, c[1]], m[:, :, c[2]]]):
             if sl.any():
                 ax[3, j].contour(np.rot90(sl), levels=[0.5], colors="k", linewidths=0.5)
@@ -357,6 +397,10 @@ def _cli() -> None:
     b.add_argument("--device", default=None)
     b.add_argument("--timing", choices=["full", "masks"], default="full",
                    help="echo times from the fully sampled run or from the masks' run")
+    b.add_argument("--source", choices=["model", "measured"], default="model",
+                   help="synthesize with the forward model, or use the measured k-space")
+    b.add_argument("--mask-period", type=int, default=None,
+                   help="cycle the first K masks (frame t gets mask t mod K)")
     s = sub.add_parser("score")
     s.add_argument("testbed")
     s.add_argument("recon")
@@ -366,7 +410,8 @@ def _cli() -> None:
     a = p.parse_args()
     if a.cmd == "build":
         build_testbed(a.full, a.masks, a.out, a.volume_tr, nt=a.nt, mask_start=a.mask_start,
-                      amp=a.amp, seed=a.seed, device=a.device, timing=a.timing)
+                      amp=a.amp, seed=a.seed, device=a.device, timing=a.timing,
+                      source=a.source, mask_period=a.mask_period)
         return
     out = score(a.testbed, a.recon)
     print(json.dumps(out, indent=2))
