@@ -74,7 +74,9 @@ def waveform(kind: str, nt: int, tr_s: float) -> np.ndarray:
 
 def object_masks(x0_abs: np.ndarray, thresh: float = 0.4):
     """(object, interior): the largest connected component above thresh x the
-    99th percentile, and that eroded by 2 voxels."""
+    99th percentile, and that eroded by 2 voxels. build places ROIs in the 0.4
+    interior (brighter voxels); score measures over the 0.1 one (the whole
+    object: on the 20260930ballfat ball, half of it is below 0.4)."""
     lab, _ = ndimage.label(x0_abs > thresh * np.percentile(x0_abs, 99))
     sizes = np.bincount(lab.ravel())
     sizes[0] = 0
@@ -210,15 +212,16 @@ def _glm(s: np.ndarray, w: np.ndarray):
     return B[:, 2], B[:, 2] / np.maximum(se, 1e-30)
 
 
-def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15) -> dict:
+def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,
+          object_thresh: float = 0.1) -> dict:
     with h5py.File(fn_testbed, "r") as f:
         tr = float(f.attrs["volume_tr"])
         g = f["truth"]
         x0 = np.abs(g["x0"][()])
-        obj, interior = g["object"][()], g["interior"][()]
         rois, waves = g["roi_masks"][()], g["waveforms"][()]
         names = list(g.attrs["roi_names"])
         amp = float(g.attrs["amp"])
+    obj, interior = object_masks(x0, object_thresh)
     with h5py.File(fn_recon, "r") as f:
         X = np.abs(f["X_recon"][()]).astype(np.float64)
     nt = X.shape[-1]
@@ -228,7 +231,7 @@ def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15) -> dict:
     alpha = (X[obj] * T[obj]).sum() / (X[obj] ** 2).sum()
     M = alpha * X
 
-    out = dict(alpha=float(alpha))
+    out = dict(alpha=float(alpha), object_thresh=object_thresh)
     mean_err = M[obj].mean(1) - x0[obj]
     out["nrmse_mean_pct"] = 100 * float(np.linalg.norm(mean_err) / np.linalg.norm(x0[obj]))
     out["nrmse_frame_pct"] = 100 * float(np.median(
@@ -277,7 +280,7 @@ def panel(fn_testbed: str, fn_recon: str, fn_png: str, title: str = "") -> None:
         g = f["truth"]
         x0 = np.abs(g["x0"][()])
         rois, waves = g["roi_masks"][()], g["waveforms"][()]
-        obj = g["object"][()]
+    obj, _ = object_masks(x0, 0.1)
     with h5py.File(fn_recon, "r") as f:
         X = np.abs(f["X_recon"][()])
     alpha = (X[obj].mean(1) * x0[obj]).sum() / (X[obj].mean(1) ** 2).sum()
