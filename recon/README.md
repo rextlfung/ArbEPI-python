@@ -267,7 +267,12 @@ Two optional terms couple the frames; any of them makes the solve joint
   which would otherwise leak into the penalized band. $\mu$ is relative to the
   data term's curvature with $A$ normalized to unit norm, so it means the same
   for CG, MSLR and wavelet-TV. Needs the volume TR: `--volume-tr`, or the
-  k-space file's `volume_tr` attr.
+  k-space file's `volume_tr` attr. How each solver takes it: CG adds $\mu P$
+  to its normal equations (exact); wavelet-TV makes it a PDHG dual block with
+  a closed-form prox, so the step size doesn't depend on $\mu$ (review item
+  262: as a smooth term, $\mu = 30$ left 100 iterations far from converged);
+  MSLR adds it to the gradient, which cuts POGM's step to
+  $1/(N_{scales}(1+\mu))$, so keep $\mu$ modest there or raise `--niter`.
 - **`--lamb-ttv L`** (`wavelet-tv`): $+L\|D_t x\|_1$, temporal TV with a
   non-periodic difference (`TemporalDiff`), in `SpatioTemporalWaveletTV`.
   It penalizes frame-to-frame jumps at every frequency, and shrinks the
