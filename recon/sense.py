@@ -664,6 +664,8 @@ def _cli() -> None:
     tp.add_argument("--volume-tr", type=float, default=None,
                     help="s; default: the k-space file's 'volume_tr' attr")
     p.add_argument("--tag", default=None, help="suffix for the output directory")
+    p.add_argument("--sigma1A", type=float, default=None,
+                   help="spectral norm of A, if known (skips the power iteration)")
     a = p.parse_args()
     if a.R2star and not (a.B0 or a.b0map):
         p.error("--R2star requires --B0")
@@ -674,6 +676,7 @@ def _cli() -> None:
         nbins_b0=a.nbins_b0,
         niters=a.niter or {"none": 150, "mslr": 200, "wavelet-tv": 100}[a.reg],
         frames=_parse_frames(a.frames) if a.frames else None,
+        sigma1A=a.sigma1A,
         hp_weight=a.hp_weight,
         hp_cutoff_hz=a.hp_cutoff,
         volume_tr_s=a.volume_tr,
