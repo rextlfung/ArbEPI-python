@@ -8,8 +8,10 @@ frame t is
     y_t = M_t A_B0 x_true(t) + n_t,   x_true(t) = x0 (1 + amp sum_r w_r(t) m_r)
 
 with M_t the sampling mask of frame t of another (undersampled) run, A_B0 the
-B0-SENSE operator with the fully sampled run's echo times (so the B0 model the
-recon uses is exactly the one that made the data), n_t fresh complex white
+B0-SENSE operator (the same one the recon uses), with each sample's echo time
+taken from the fully sampled run (timing='full') or from the undersampled run
+itself (timing='masks': the real per-frame timing of that acquisition, which
+puts each (ky, kz) at a different point of the echo train), n_t fresh complex white
 noise of unit variance (the whitened data's noise level), and m_r, w_r the
 regions and waveforms of a few injected "activations":
 
@@ -105,7 +107,7 @@ def place_rois(interior: np.ndarray, rng: np.random.Generator) -> list[np.ndarra
 def build_testbed(
     fn_full: str, fn_masks: str, fn_out: str, volume_tr_s: float, nt: int = 80,
     mask_start: int = 1, amp: float = 0.02, seed: int = 0, device=None, L_b0: int = 32,
-    nbins_b0: int = 128, cg_iters: int = 150,
+    nbins_b0: int = 128, cg_iters: int = 150, timing: str = "full",
 ) -> None:
     import torch
 
@@ -124,8 +126,12 @@ def build_testbed(
         b0 = f["b0_map"][()].astype(np.float32)
         et1 = f["echo_times"][:, :, 1].astype(np.float32)
         fov = tuple(f.attrs["fov"])
+    if timing not in ("full", "masks"):
+        raise ValueError(f"timing={timing!r}, expected 'full' or 'masks'")
     with h5py.File(fn_masks, "r") as f:
         om = f["omegas"][:, :, mask_start : mask_start + nt]
+        et_masks = (f["echo_times"][:, :, mask_start : mask_start + nt].astype(np.float32)
+                    if timing == "masks" else None)
     assert om.shape[-1] == nt, f"{fn_masks} has fewer than {mask_start + nt} frames"
     print(f"testbed: object from the mean of {nf - 1} frames of {fn_full}; masks: frames "
           f"{mask_start}-{mask_start + nt - 1} of {fn_masks} (R {om[..., 0].size / om[..., 0].sum():.1f})")
@@ -153,7 +159,8 @@ def build_testbed(
     x_true = x0[..., None] * torch.from_numpy(mod).to(device)
 
     omega = torch.from_numpy(om).to(device).unsqueeze(0).expand(Nx, -1, -1, -1)
-    et = torch.from_numpy(np.repeat(et1[..., None], nt, axis=-1)).to(device)
+    et_np = et_masks if timing == "masks" else np.repeat(et1[..., None], nt, axis=-1)
+    et = torch.from_numpy(et_np).to(device)
     A = build_sense_b0(smaps_chw, omega, b0_t, et, L=L_b0, nbins=nbins_b0)
     y = A.apply(x_true)  # (K, Nc, nt)
     g = torch.Generator(device=device).manual_seed(seed)
@@ -169,13 +176,14 @@ def build_testbed(
             frame[A.A[t].idx] = y[:, :, t]
             ds[..., t] = frame.reshape(Nx, Ny, Nz, Nc).cpu().numpy()
         f["omegas"] = om
-        f["echo_times"] = np.repeat(et1[..., None], nt, axis=-1)
+        f["echo_times"] = et_np
         with h5py.File(fn_full, "r") as src:
             f["smaps"] = src["smaps"][()]
         f["b0_map"] = b0
         f.attrs.update(fov=fov, noise_var=1.0, whitened=True, volume_tr=volume_tr_s,
                        testbed_full=os.path.abspath(fn_full), testbed_masks=os.path.abspath(fn_masks),
-                       testbed_mask_start=mask_start, testbed_seed=seed, testbed_amp=amp)
+                       testbed_mask_start=mask_start, testbed_seed=seed, testbed_amp=amp,
+                       testbed_timing=timing)
         t_ = f.create_group("truth")
         t_["x0"] = x0.cpu().numpy()
         t_["object"] = obj
@@ -327,6 +335,8 @@ def _cli() -> None:
     b.add_argument("--amp", type=float, default=0.02)
     b.add_argument("--seed", type=int, default=0)
     b.add_argument("--device", default=None)
+    b.add_argument("--timing", choices=["full", "masks"], default="full",
+                   help="echo times from the fully sampled run or from the masks' run")
     s = sub.add_parser("score")
     s.add_argument("testbed")
     s.add_argument("recon")
@@ -336,7 +346,7 @@ def _cli() -> None:
     a = p.parse_args()
     if a.cmd == "build":
         build_testbed(a.full, a.masks, a.out, a.volume_tr, nt=a.nt, mask_start=a.mask_start,
-                      amp=a.amp, seed=a.seed, device=a.device)
+                      amp=a.amp, seed=a.seed, device=a.device, timing=a.timing)
         return
     out = score(a.testbed, a.recon)
     print(json.dumps(out, indent=2))

@@ -146,3 +146,17 @@ def test_scoring_detects_noise_attenuation_and_blur(built):
         T.imag, (1.5, 1.5, 1.5, 0))
     _write_recon(str(tmp / "blur.h5"), blur)
     assert testbed.score(fn, str(tmp / "blur.h5"))["edge_sharpness_ratio"] < 0.8
+
+
+def test_build_can_take_the_masks_runs_own_echo_times(tmp_path):
+    full = _ball_full(tmp_path)
+    fn_m = _masks(tmp_path)
+    et = np.random.default_rng(3).uniform(0.01, 0.05, (N[1], N[2], NT + 1))
+    with h5py.File(fn_m, "a") as f:
+        f["echo_times"] = et
+    out = str(tmp_path / "recon" / "tbm_preprocessed.h5")
+    testbed.build_testbed(full, fn_m, out, TR, nt=NT, device=DEVICE, L_b0=4, nbins_b0=32,
+                          cg_iters=20, timing="masks")
+    with h5py.File(out, "r") as f:
+        np.testing.assert_allclose(f["echo_times"][()], et[..., 1 : NT + 1], rtol=1e-6)
+        assert f.attrs["testbed_timing"] == "masks"
