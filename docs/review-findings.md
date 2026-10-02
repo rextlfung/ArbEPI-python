@@ -2891,6 +2891,52 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `test_epiphasecorrect_applies_a_per_echo_pair`. `20260930ballfat` was
   preprocessed before this fix, with a per-run mask threshold of 0.05 for
   1x radial (its `preprocess_all.py`).
+- [x] **261. The B0 map was 0 Hz outside the fit mask, but the recon applies
+  it over the larger smaps support; with laminar ordering the resulting field
+  step made B0-SENSE nearly singular at the object edge.** [measured
+  2026-10-01 on `20260930ballfat`, against `19b62e2`] Symptom: the
+  unregularized and MSLR B0-SENSE recons of 6_1x_laminar had a static
+  cluster at (60, 7-9, 42-53) 3.5-4.1x the 99.9th percentile (RSS,
+  wavelet-TV and every 5_1x_radial recon: ~1.3x), and CG hit its 150-
+  iteration cap (residual 4.7e-5 vs 27 iterations to 7.5e-7 on 1x radial).
+  MRIFieldmaps returns `embed(fhat, mask)`, 0 outside the fit mask, and
+  `resize_to_epi` zeroed it again (`b0_map * mask`, meant to stop the cubic
+  spline blending in background -- it blended in 0 Hz instead), so the EPI-grid
+  map ramped 0 -> 45 Hz over 1-2 voxels at the edge (e.g. `[0, 0, -1, 5, 25,
+  43, 46]` along y). The fit mask (ESPIRiT eigenvalue > 0.95 AND first-echo
+  magnitude > 10% of peak) is 18% smaller than the smaps support (eigenvalue
+  alone): 170k vs 206k EPI voxels, and the recon, which never reads
+  `b0_mask`, modeled those 36k low-signal voxels as on resonance. In
+  6_1x_laminar echo time is exactly linear in ky (429 us/line), so B0 is a
+  pure y shift of 0.039 px/Hz and the step moved edge voxels ~1.7 px onto
+  background ones (two unknowns, one measurement); in 5_1x_radial echo time
+  barely tracks ky (12 us/line, 11 ms spread per ky row), so B0 blurs instead.
+  Wavelet-TV penalizes the resulting spatial spike; MSLR's temporal low-rank
+  penalty does not (the spike is static, i.e. rank 1). Fixed:
+  `b0map.extend_harmonic` replaces the values outside the fit mask with the
+  discrete harmonic extension of the fit (7-point Laplacian zero outside the
+  mask, zero flux at the volume edge, Jacobi-PCG, 7-16 s at 72x72x51) before
+  the resize; `b0_mask` still marks the fitted voxels. Verified by CG-SENSE
+  (B0, 150 iterations, frames 1-2) on maps rebuilt from each file's stored
+  `degre/b0_map`/`degre/mask` (the old code reproduces the stored `b0_map`
+  exactly): voxels above 1.5x the 99.9th percentile within 3 voxels of the
+  mask edge went 22/40/55 -> 0/0/0 on 6_1x/4_6x/2_10x laminar, steepest
+  in-support |dB0/dy| 174 -> 60 Hz/voxel. Nearest-value fill (done on the
+  deGRE grid, same resize) also gave 0/0/0 at the edge but overshot the fitted
+  range after the cubic resize (-259..+122 Hz from a -218..+92 Hz fit; harmonic
+  -208..+81). Not fixed by either, and open: hotspots of 2.0-2.7x near the
+  oil tub of that phantom (tub side 11/12/26 voxels harmonic, 0/11/24
+  nearest), inside the tub (1x) or where its residual, chemical-shift-
+  displaced signal lands after wrapping in y (6x/10x; 5-15% of the oil
+  survives water excitation, displaced 20-28 px by the -446 Hz shift plus the
+  local field, which the B0 model does not include), and the fitted field
+  crosses the tub at ~23 Hz/voxel, a near-zero y-shift Jacobian at 1x.
+  CG still hits its cap on laminar runs with either fill. Tests:
+  `test_extend_harmonic_keeps_the_fit_and_is_harmonic_outside_it`,
+  `test_extend_harmonic_exact_one_dimensional_cases`,
+  `test_extend_harmonic_trivial_masks`,
+  `test_resize_to_epi_has_no_field_step_at_the_fit_mask_edge` (fails on the
+  old zero fill).
 
 ## Consistency & documentation
 

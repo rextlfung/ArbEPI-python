@@ -265,8 +265,16 @@ faster recon; `compress=False` keeps everything.
   moved more than two phase wraps (2/ΔTE, ~900 Hz) from its ROMEO start is reset
   to it. Not half a wrap: the fit legitimately moves voxels by about one wrap
   where ROMEO unwrapped them wrong (seen on 20260922xiaokai and 20260929ballfat,
-  up to 1.26 wraps, every one agreeing with its neighbours). The map is zeroed
-  outside the fit mask and resized to the EPI grid.
+  up to 1.26 wraps, every one agreeing with its neighbours). Outside the fit mask
+  the map is the harmonic extension of the fit (Laplace's equation, fit values
+  fixed, zero flux at the volume edge), not 0 Hz, before it is resized to the EPI
+  grid: the recon applies `b0_map` wherever the sensitivity maps are nonzero,
+  which covers 18% more voxels than the fit mask on 20260930ballfat, and a 0 Hz
+  background next to an edge at tens of Hz is a field step the B0 model takes
+  literally. With laminar ordering (echo time linear in ky) that step folds the
+  image along y and left the unregularized and low-rank B0-SENSE recons with
+  static hotspots 3.6-5.2x the 99.9th percentile at the mask edge (review item
+  261). `b0_mask` still marks the fitted voxels.
 - **R2\***: see below. `t_ref_s` records the nominal-TE echo time the recon's
   R2* model is referenced to.
 

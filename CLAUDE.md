@@ -850,7 +850,16 @@ penalty barely holds an isolated voxel and the data term is periodic in 1/dTE,
 so on 20260922xiaokai (a head; 600-1300 mask components) 4-8 island voxels
 diverged to up to -4.7 MHz, and through `mri_exp_approx`'s whole-range
 histogram that disabled the B0 correction for the whole volume (B0 vs no-B0
-recon differed 80%, vs 15-27% on 20260920ball). Two safety nets on top:
+recon differed 80%, vs 15-27% on 20260920ball). Outside the fit mask the map
+is `b0map.extend_harmonic`'s harmonic extension of the fit, not the 0 Hz
+MRIFieldmaps returns (review item 261): the recon applies `b0_map` over the
+whole smaps support, 18% larger than the fit mask, and with laminar ordering
+(echo time linear in ky, so B0 is a pure y shift) a 0 Hz background next to a
+tens-of-Hz edge folds the image and made the B0-SENSE inverse nearly singular
+there -- static hotspots 3.6-5.2x the 99.9th percentile in the unregularized
+and MSLR recons on 20260930ballfat (wavelet-TV hid them). Nearest-value fill
+removed them equally but its steps made the cubic resize overshoot the fitted
+range. Radial ordering decorrelates echo time from ky, so it was unaffected. Two safety nets on top:
 `b0map.reset_diverged` resets voxels the fit moved > 2 wraps from `finit`
 (not 0.5: the fit legitimately moves voxels ~1 wrap where ROMEO unwrapped
 wrong -- 27-232 per map on 20260922xiaokai/20260929ballfat, up to 1.26 wraps,
