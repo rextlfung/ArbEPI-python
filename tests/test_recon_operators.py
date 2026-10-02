@@ -323,7 +323,8 @@ def test_build_encoding_operator_b0_matches_manual_per_frame_construction():
     y_batched = A.apply(x)
 
     # build_sense_b0 fits the segmentation once, on all frames' distinct echo
-    # times (frame 0's here, which samples every one of them); fit the hand-built reference on the same times so this checks
+    # times (frame 0's here, which samples every one of them); fit the
+    # hand-built reference on the same times so this checks
     # the per-frame gather plumbing, not two different fits. (mri_exp_approx
     # places segments at percentiles of the times it's given, so fitting on
     # per-sample times with repeats would give a different, mask-dependent fit.)

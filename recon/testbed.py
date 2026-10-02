@@ -134,7 +134,8 @@ def build_testbed(
                     if timing == "masks" else None)
     assert om.shape[-1] == nt, f"{fn_masks} has fewer than {mask_start + nt} frames"
     print(f"testbed: object from the mean of {nf - 1} frames of {fn_full}; masks: frames "
-          f"{mask_start}-{mask_start + nt - 1} of {fn_masks} (R {om[..., 0].size / om[..., 0].sum():.1f})")
+          f"{mask_start}-{mask_start + nt - 1} of {fn_masks} "
+          f"(R {om[..., 0].size / om[..., 0].sum():.1f})")
 
     _, smaps_chw = load_normalized_smaps(fn_full, device)
     b0_t = torch.from_numpy(b0).to(device)
@@ -181,7 +182,8 @@ def build_testbed(
             f["smaps"] = src["smaps"][()]
         f["b0_map"] = b0
         f.attrs.update(fov=fov, noise_var=1.0, whitened=True, volume_tr=volume_tr_s,
-                       testbed_full=os.path.abspath(fn_full), testbed_masks=os.path.abspath(fn_masks),
+                       testbed_full=os.path.abspath(fn_full),
+                       testbed_masks=os.path.abspath(fn_masks),
                        testbed_mask_start=mask_start, testbed_seed=seed, testbed_amp=amp,
                        testbed_timing=timing)
         t_ = f.create_group("truth")
@@ -207,11 +209,20 @@ def _dct(nt: int) -> np.ndarray:
     return C
 
 
-def _glm(s: np.ndarray, w: np.ndarray):
-    """Fit s (V, nt) = c0 + c1 t + beta w; return (beta, t-stat), each (V,)."""
+def _glm(s: np.ndarray, w: np.ndarray, basis: np.ndarray | None = None):
+    """Fit s (V, nt) = c0 + c1 t + beta w; return (beta, t-stat), each (V,).
+
+    basis (k, nt), orthonormal rows: fit in that subspace instead (data and
+    regressors projected onto it, k - 3 degrees of freedom). With the DCT
+    components up to the cutoff, this is the GLM on low-pass-filtered series --
+    the fair comparison for recons whose residual is itself band-limited (a
+    temporal penalty leaves it smooth, and the plain t assumes independent
+    frames, overstating it by up to sqrt(nt / k))."""
     nt = s.shape[1]
     t = np.linspace(-1, 1, nt)
     X = np.stack([np.ones(nt), t, w], 1)
+    if basis is not None:
+        s, X, nt = s @ basis.T, basis @ X, basis.shape[0]
     XtXi = np.linalg.inv(X.T @ X)
     B = s @ X @ XtXi  # (V, 3)
     res = s - B @ X.T
@@ -254,11 +265,14 @@ def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,
     out["fluct_inband_pct"] = 100 * float(np.median(np.sqrt((Rc[:, 1:keep] ** 2).sum(1) / nt)))
     out["fluct_outband_pct"] = 100 * float(np.median(np.sqrt((Rc[:, keep:] ** 2).sum(1) / nt)))
 
+    lowband = _dct(nt)[:keep]  # the GLM on low-pass-filtered series (<= cutoff_hz)
     for name, m, w in zip(names, rois, waves):
         s = M[m] / x0[m][:, None]
         beta, tstat = _glm(s, w)
-        shell = (ndimage.binary_dilation(m, iterations=4) & ~ndimage.binary_dilation(m, iterations=1)
-                 & interior & ~(rois.any(0) & ~m))
+        if name.startswith("block") or name == "sin0.10":  # in-band waveforms
+            out[f"{name}_t_lowband"] = float(np.median(_glm(s, w, lowband)[1]))
+        shell = (ndimage.binary_dilation(m, iterations=4)
+                 & ~ndimage.binary_dilation(m, iterations=1) & interior & ~(rois.any(0) & ~m))
         beta_shell, _ = _glm(M[shell] / x0[shell][:, None], w)
         out[f"{name}_amp_ratio"] = float(np.median(beta) / amp)
         out[f"{name}_t"] = float(np.median(tstat))
@@ -268,6 +282,12 @@ def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,
         out[f"{name}_leak_ratio"] = float(np.median(beta_shell) / amp)
     _, t_bg = _glm(M[bg] / x0[bg][:, None], waves[0])
     out["false_pos_frac_t3.29"] = float(np.mean(np.abs(t_bg) > 3.29))
+    # the same in the low band, against its own t threshold (two-sided p < 0.001)
+    from scipy import stats
+
+    _, t_bg_lb = _glm(M[bg] / x0[bg][:, None], waves[0], lowband)
+    thr = float(stats.t.ppf(1 - 0.0005, keep - 3))
+    out["false_pos_frac_lowband"] = float(np.mean(np.abs(t_bg_lb) > thr))
 
     edge = ndimage.binary_dilation(obj, iterations=1) & ~ndimage.binary_erosion(obj, iterations=2)
     gm = np.linalg.norm(np.stack(np.gradient(M.mean(-1))), axis=0)

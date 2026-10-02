@@ -151,8 +151,8 @@ def test_hp_penalty_keeps_the_low_band_and_shrinks_the_high_band_exactly(tmp_pat
     coef = torch.einsum("xyzt,kt->xyzk", x / x0, C.to(torch.complex64))  # DCT along t
     torch.testing.assert_close(coef[..., 4].real, torch.ones_like(coef[..., 4].real), atol=2e-3,
                                rtol=0)
-    torch.testing.assert_close(coef[..., 30].real, torch.full_like(coef[..., 30].real, 1 / (1 + mu)),
-                               atol=2e-3, rtol=0)
+    torch.testing.assert_close(coef[..., 30].real,
+                               torch.full_like(coef[..., 30].real, 1 / (1 + mu)), atol=2e-3, rtol=0)
     assert t[-1] > 0  # (time axis used only to document the frequencies above)
 
 
