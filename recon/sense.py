@@ -9,6 +9,14 @@ decides the solver (recon/solvers.py):
     --reg mslr     multi-scale low-rank         -> POGM (or FPGM / PGM)
     --reg wavelet-tv  L1-wavelet + TV, per frame   -> PDHG (primal-dual)
 
+Temporal regularization (all frames reconstructed jointly):
+    --lamb-ttv L      wavelet-tv only: + L ||D_t x||_1, temporal TV (PDHG)
+    --hp-weight MU    any reg: + (MU/2) ||P x||^2, P the projector onto temporal
+                      frequencies above --hp-cutoff (0.15 Hz); zero penalty below
+    --joint           wavelet-tv: joint solver even without a temporal term
+MU is relative to the data term's curvature (A normalized to unit norm), so it
+means the same for every reg.
+
     UV_PROJECT_ENVIRONMENT=.venv-recon uv run --extra recon python -m recon.sense <datdir> <seqname> --reg mslr \\
         --patch 6 6 6 --stride 3 3 3 [--B0 [--R2star]] [--frames 0,1,2] [--niter 200]
 
@@ -27,7 +35,12 @@ import numpy as np
 import torch
 
 from recon.operators import build_sense, build_sense_b0, build_sense_b0_r2star
-from recon.regularizers import MultiScaleLowRank, WaveletTV
+from recon.regularizers import (
+    MultiScaleLowRank,
+    SpatioTemporalWaveletTV,
+    TemporalHighPass,
+    WaveletTV,
+)
 from recon.solvers import cg, pdhg, pogm_restart
 from recon.utils import (
     estimate_spectral_norm,
@@ -88,6 +101,12 @@ def run_sense(
     levels: int = 3,
     # none (CG)
     cg_tol: float = 1e-6,
+    # temporal regularization
+    lamb_ttv: float = 0.0,
+    hp_weight: float = 0.0,
+    hp_cutoff_hz: float = 0.15,
+    volume_tr_s: float | None = None,
+    joint: bool = False,
 ) -> ReconResult:
     """Reconstruct the frames of fn_ksp with regularizer `reg`.
 
@@ -95,6 +114,13 @@ def run_sense(
     phase accrual (SENSE_B0), using fn_ksp's per-sample 'echo_times'. With
     r2star_map (1/s, EPI grid) as well, A also models R2* decay relative to
     t_ref_s, the nominal-TE echo time (SENSE_B0_R2star).
+
+    lamb_ttv (wavelet-tv only): temporal TV weight. hp_weight: weight mu of the
+    quadratic penalty (mu/2)||P x||^2 on temporal frequencies above
+    hp_cutoff_hz (TemporalHighPass), relative to the curvature of the data term
+    with A normalized to unit norm; needs volume_tr_s (default: fn_ksp's
+    'volume_tr' attr). joint (wavelet-tv): reconstruct all frames together, with
+    one data scale, even with no temporal term (implied by lamb_ttv/hp_weight).
 
     device: default "cuda" if available, else "cpu".
     sigma1A: spectral norm of A; measured by power iteration when None.
@@ -113,6 +139,8 @@ def run_sense(
     """
     if reg not in REGULARIZERS:
         raise ValueError(f"reg={reg!r}, expected one of {REGULARIZERS}")
+    if lamb_ttv > 0 and reg != "wavelet-tv":
+        raise ValueError("lamb_ttv (temporal TV) is only implemented for reg='wavelet-tv'")
     if r2star_map is not None and fn_b0map is None:
         raise ValueError("r2star_map requires fn_b0map (R2* is modeled on top of B0)")
     device = resolve_device(device)
@@ -166,7 +194,23 @@ def run_sense(
                 nbins=nbins_b0,
             )
 
-    if sigma1A is None and reg != "none":
+    hp = None
+    if hp_weight > 0:
+        if volume_tr_s is None:
+            with h5py.File(fn_ksp, "r") as f:
+                if "volume_tr" not in f.attrs:
+                    raise ValueError(
+                        f"hp_weight needs the volume TR: pass volume_tr_s ({fn_ksp} has no "
+                        "'volume_tr' attr; it is scan_info.mat's volume_tr)"
+                    )
+                volume_tr_s = float(f.attrs["volume_tr"])
+        hp = TemporalHighPass(Nt, volume_tr_s, hp_cutoff_hz, device)
+        print(
+            f"  temporal high-pass penalty: mu={hp_weight}, cutoff {hp_cutoff_hz} Hz, TR "
+            f"{volume_tr_s:.4f} s: {hp.keep} of {Nt} DCT components left unpenalized"
+        )
+
+    if sigma1A is None and (reg != "none" or hp is not None):
         print("  sigma1A not supplied -- measuring via power iteration...")
         x0 = torch.randn(Nx, Ny, Nz, dtype=torch.complex64, device=device)
         sigma1A = estimate_spectral_norm(A, x0)
@@ -199,9 +243,17 @@ def run_sense(
         print(f"  VRAM free after loading gathered k-space: {free_gb:.2f} / {total_gb:.2f} GB")
 
     common = dict(omega=omega, R=R, sigma1A=float("nan") if sigma1A is None else sigma1A)
+    temporal = dict(hp_weight=hp_weight, hp_cutoff_hz=hp_cutoff_hz if hp else None,
+                    volume_tr_s=volume_tr_s if hp else None, hp_keep=hp.keep if hp else None)
     if reg == "none":
-        return _solve_cg(A, ksp, (Nx, Ny, Nz, Nt), niters, cg_tol, common)
+        return _solve_cg(A, ksp, (Nx, Ny, Nz, Nt), niters, cg_tol, common, hp, hp_weight, sigma1A,
+                         temporal)
     if reg == "wavelet-tv":
+        if joint or lamb_ttv > 0 or hp is not None:
+            return _solve_wavelet_tv_joint(
+                A, ksp, (Nx, Ny, Nz, Nt), sigma1A, lamb_l1, lamb_tv, lamb_ttv, wave, levels,
+                niters, hp, hp_weight, common, temporal,
+            )
         return _solve_wavelet_tv(
             A, ksp, (Nx, Ny, Nz, Nt), sigma1A, lamb_l1, lamb_tv, wave, levels, niters, common
         )
@@ -220,13 +272,22 @@ def run_sense(
         conv_tol,
         normalize_operator,
         common,
+        hp,
+        hp_weight,
+        temporal,
     )
 
 
-def _solve_cg(A, ksp, shape, niters, tol, common) -> ReconResult:
+def _solve_cg(
+    A, ksp, shape, niters, tol, common, hp=None, hp_weight=0.0, sigma1A=None, temporal=None
+) -> ReconResult:
     print(f"\nRunning CG-SENSE ({niters} iterations max, tol={tol})...")
+    reg_normal = None
+    if hp is not None:
+        mu = hp_weight * sigma1A**2  # A is not normalized here; scale mu to match
+        reg_normal = lambda x: mu * hp.apply(x)  # noqa: E731
     t_start = time.time()
-    X, residuals = cg(A, ksp, shape, num_iter=niters, tol=tol)
+    X, residuals = cg(A, ksp, shape, num_iter=niters, tol=tol, reg_normal=reg_normal)
     runtime_s = time.time() - t_start
     print(
         f"Done in {runtime_s:.1f} s ({len(residuals) - 1} iterations, final relative residual "
@@ -242,7 +303,7 @@ def _solve_cg(A, ksp, shape, niters, tol, common) -> ReconResult:
         L=float("nan"),
         lambdas=[],
         runtime_s=runtime_s,
-        meta=dict(niters=niters, tol=tol),
+        meta=dict(niters=niters, tol=tol, **(temporal or {})),
         **common,
     )
 
@@ -260,6 +321,9 @@ def _solve_mslr(
     conv_tol,
     normalize_operator,
     common,
+    hp=None,
+    hp_weight=0.0,
+    temporal=None,
 ) -> ReconResult:
     g = MultiScaleLowRank(patch_sizes, strides, shape, lambda_global)
     S = g.synthesis  # (Nx,Ny,Nz,Nt,Nscales) -> (Nx,Ny,Nz,Nt)
@@ -269,14 +333,21 @@ def _solve_mslr(
         print(f"  Normalizing A by 1/sigma1A = 1/{sigma1A:.4f}")
         A = (1.0 / sigma1A) * A
         sigma1A = 1.0
-    L = Nscales * sigma1A**2  # Lipschitz constant of grad f for f(X) = 0.5||A S X - y||^2
+    # f(X) = 0.5||A S X - y||^2 [+ (mu/2)||P S X||^2]; mu relative to ||A||^2, so
+    # mu * sigma1A^2 once A is normalized (sigma1A = 1) or not.
+    mu = hp_weight * sigma1A**2 if hp is not None else 0.0
+    L = Nscales * (sigma1A**2 + mu)  # Lipschitz constant of grad f
     print(f"Regularization weights lambdas = {[round(lam, 6) for lam in g.lambdas]}")
 
     def dc_cost(X):
-        return 0.5 * (A.apply(S.apply(X)) - ksp).norm().item() ** 2
+        x = S.apply(X)
+        c = 0.5 * (A.apply(x) - ksp).norm().item() ** 2
+        return c + hp.cost(x, mu) if mu else c
 
     def dc_grad(X):
-        return S.adjoint(A.adjoint(A.apply(S.apply(X)) - ksp))
+        x = S.apply(X)
+        r = A.adjoint(A.apply(x) - ksp)
+        return S.adjoint(r + mu * hp.apply(x) if mu else r)
 
     print("Initializing X0...")
     X0 = S.adjoint(A.adjoint(ksp) / Nscales)
@@ -320,6 +391,7 @@ def _solve_mslr(
             patch_sizes=g.patch_sizes,
             strides=g.strides,
             normalize_operator=normalize_operator,
+            **(temporal or {}),
         ),
         **common,
     )
@@ -375,6 +447,58 @@ def _solve_wavelet_tv(
     )
 
 
+def _solve_wavelet_tv_joint(
+    A, ksp, shape, sigma1A, lamb_l1, lamb_tv, lamb_ttv, wave, levels, niters, hp, hp_weight,
+    common, temporal,
+) -> ReconResult:
+    """All frames at once: min_x 0.5||A x - y||^2 [+ (mu/2)||P x||^2] +
+    SpatioTemporalWaveletTV(x), by PDHG. Same normalization as the per-frame
+    solver (unit-norm operator, data scaled to O(1) by its 99th-percentile
+    magnitude), but with one scale for all frames, as a temporal term needs:
+    per-frame scales would themselves vary in time. With lamb_ttv = mu = 0 it
+    differs from the per-frame solver only by that scale."""
+    Nx, Ny, Nz, Nt = shape
+    g = SpatioTemporalWaveletTV(shape, lamb_l1, lamb_tv, lamb_ttv, wave=wave, levels=levels)
+    A_n = (1.0 / sigma1A) * A
+    yv = ksp[ksp != 0].abs()
+    # numpy, not torch.quantile, which rejects inputs over ~16M elements
+    scale = 1.0 / float(np.percentile(yv[:: max(1, yv.numel() // 10_000_000)].cpu().numpy(), 99))
+    y_s = ksp * scale
+    mu = hp_weight if hp is not None else 0.0
+
+    def dc_grad(x):
+        r = A_n.adjoint(A_n.apply(x) - y_s)
+        return r + mu * hp.apply(x) if mu else r
+
+    print(
+        f"\nReconstructing {Nt} frames jointly with L1-wavelet + TV (lamb_l1={lamb_l1}, "
+        f"lamb_tv={lamb_tv}, lamb_ttv={lamb_ttv}, hp_weight={mu}), {niters} PDHG iterations, "
+        f"operator normalized by 1/{sigma1A:.4f}..."
+    )
+    t_start = time.time()
+    x0 = torch.zeros(shape, dtype=torch.complex64, device=ksp.device)
+    x = pdhg(dc_grad, 1.0 + mu, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters)
+    runtime_s = time.time() - t_start
+    dc = 0.5 * (A_n.apply(x) - y_s).norm().item() ** 2 + (hp.cost(x, mu) if mu else 0.0)
+    reg = g.cost(x)
+    X = x / scale / sigma1A
+    print(f"Wall-clock: {runtime_s:.1f}s ({runtime_s / Nt:.1f}s/frame)")
+    return ReconResult(
+        X=X.unsqueeze(-1),
+        X_recon=X,
+        dc_costs=[dc],
+        reg_costs=[reg],
+        restarts=[],
+        rel_changes=[],
+        L=float("nan"),
+        lambdas=[lamb_l1, lamb_tv, lamb_ttv],
+        runtime_s=runtime_s,
+        meta=dict(niters=niters, wave=wave, levels=levels, joint=True, lamb_ttv=lamb_ttv,
+                  **temporal),
+        **common,
+    )
+
+
 # ---------------------------------------------------------------- command line
 
 
@@ -386,10 +510,12 @@ def main(
     B0: bool = False,
     fn_b0map: str | None = None,
     R2star: bool = False,
+    tag: str | None = None,
     **kwargs,
 ) -> str:
     """Reconstruct <datdir>/recon/<seqname>_preprocessed.h5 and save the
-    result. kwargs go to run_sense. For reg='mslr', a GPU out-of-memory
+    result to <datdir>/recon/sense_<reg>[_b0|_b0r2star][_<tag>]/ (tag keeps
+    differently configured runs apart). kwargs go to run_sense. For reg='mslr', a GPU out-of-memory
     error falls back from POGM to FPGM to PGM (less solver state each time).
     Returns the output path without extension."""
     recon_dir = os.path.join(datdir, "recon")
@@ -434,7 +560,7 @@ def main(
             )
 
     suffix = "_b0r2star" if R2star else ("_b0" if B0 else "")
-    out_dir = os.path.join(recon_dir, f"sense_{reg}{suffix}")
+    out_dir = os.path.join(recon_dir, f"sense_{reg}{suffix}" + (f"_{tag}" if tag else ""))
     os.makedirs(out_dir, exist_ok=True)
     frames = kwargs.get("frames")
     tag = "" if frames is None else "_frames" + _format_frames(frames)
@@ -529,6 +655,15 @@ def _cli() -> None:
     wt.add_argument("--lamb-tv", type=float, default=0.005)
     wt.add_argument("--wave", default="db4")
     wt.add_argument("--levels", type=int, default=3)
+    wt.add_argument("--lamb-ttv", type=float, default=0.0, help="temporal TV weight (joint)")
+    wt.add_argument("--joint", action="store_true", help="joint solver without a temporal term")
+    tp = p.add_argument_group("temporal (any reg)")
+    tp.add_argument("--hp-weight", type=float, default=0.0,
+                    help="weight of the quadratic penalty on temporal frequencies > --hp-cutoff")
+    tp.add_argument("--hp-cutoff", type=float, default=0.15, help="Hz (default 0.15)")
+    tp.add_argument("--volume-tr", type=float, default=None,
+                    help="s; default: the k-space file's 'volume_tr' attr")
+    p.add_argument("--tag", default=None, help="suffix for the output directory")
     a = p.parse_args()
     if a.R2star and not (a.B0 or a.b0map):
         p.error("--R2star requires --B0")
@@ -539,6 +674,9 @@ def _cli() -> None:
         nbins_b0=a.nbins_b0,
         niters=a.niter or {"none": 150, "mslr": 200, "wavelet-tv": 100}[a.reg],
         frames=_parse_frames(a.frames) if a.frames else None,
+        hp_weight=a.hp_weight,
+        hp_cutoff_hz=a.hp_cutoff,
+        volume_tr_s=a.volume_tr,
     )
     if a.reg == "mslr":
         with h5py.File(os.path.join(a.datdir, "recon", f"{a.seqname}_preprocessed.h5"), "r") as f:
@@ -555,7 +693,8 @@ def _cli() -> None:
             conv_tol=a.conv_tol,
         )
     elif a.reg == "wavelet-tv":
-        kwargs.update(lamb_l1=a.lamb_l1, lamb_tv=a.lamb_tv, wave=a.wave, levels=a.levels)
+        kwargs.update(lamb_l1=a.lamb_l1, lamb_tv=a.lamb_tv, wave=a.wave, levels=a.levels,
+                      lamb_ttv=a.lamb_ttv, joint=a.joint)
     main(
         a.datdir,
         a.seqname,
@@ -563,6 +702,7 @@ def _cli() -> None:
         B0=a.B0,
         fn_b0map=a.b0map,
         R2star=a.R2star,
+        tag=a.tag,
         **kwargs,
     )
 
