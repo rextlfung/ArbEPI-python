@@ -5,11 +5,18 @@ MRIFieldmaps.jl has no Python port, so julia/ is a small self-contained Julia
 project (pinned Project.toml + Manifest.toml). First-time setup:
     julia --project=preprocess/julia -e 'import Pkg; Pkg.instantiate()'
 
-b0map.jl estimates on the deGRE grid; resize_to_epi moves the result onto the
-EPI grid, zeroing unfit voxels first so the cubic spline doesn't blend in
-background. See b0map.jl's header for its choices (ROMEO-unwrapped
-initialization, :diag preconditioner, the mandatory fit mask and its
-small-component removal).
+b0map.jl estimates on the deGRE grid, within a fit mask (see its header for
+its choices: ROMEO-unwrapped initialization, :diag preconditioner, the
+mandatory fit mask and its small-component removal), and returns 0 Hz outside
+it. resize_to_epi replaces those zeros with the harmonic extension of the
+fitted field (extend_harmonic) before moving the map onto the EPI grid. The
+recon applies b0_map wherever the sensitivity maps are nonzero, which reaches
+past the fit mask (ESPIRiT's eigenvalue mask alone vs. that AND 10% of peak
+magnitude; 18% more voxels on 20260930ballfat), so the value there matters: a
+0 Hz background next to a fitted edge at tens of Hz is a field step the
+forward model takes literally, and with laminar ordering (echo time linear in
+ky) it is a fold along y that left the B0-SENSE inverse nearly singular there
+(review item 261).
 """
 
 import os
@@ -19,7 +26,9 @@ import tempfile
 
 import h5py
 import numpy as np
+import scipy.sparse as sp
 from scipy import ndimage
+from scipy.sparse.linalg import cg
 
 from preprocess.grid_resize import resize_to_epi_grid
 
@@ -135,6 +144,55 @@ def reset_diverged(
     return np.where(diverged, finit, b0)
 
 
+def extend_harmonic(f: np.ndarray, mask: np.ndarray, rtol: float = 1e-8) -> np.ndarray:
+    """f with its values outside `mask` replaced by the discrete harmonic
+    extension of f[mask]: the 7-point Laplacian is zero at every voxel outside
+    the mask, with f fixed inside it and zero normal derivative at the volume
+    boundary. The result is continuous across the mask edge and stays within
+    the range of f[mask] (discrete maximum principle; on this grid -- a later
+    cubic resize can still overshoot slightly), so it adds no field steps and
+    no new extremes. Away from its sources the susceptibility field is
+    harmonic too, though here the extension is a smoothness prior, not a
+    physical model: it also fills low-signal object voxels.
+
+    Nearest-value fill was the alternative considered: on 20260930ballfat it
+    removed the mask-edge hotspots equally well, but its steps between
+    neighbouring fill regions made the cubic resize overshoot the fitted range
+    (-259..+122 Hz from a -218..+92 Hz fit), where this stays inside it.
+
+    Solved by Jacobi-preconditioned CG (the system is a Dirichlet graph
+    Laplacian, symmetric positive definite whenever the mask is nonempty):
+    7-16 s on a 72x72x51 deGRE grid with 177k unfit voxels, vs 51 s for a
+    sparse direct solve. An empty mask gives zeros.
+    """
+    mask = np.asarray(mask, dtype=bool)
+    out = np.where(mask, f, 0).astype(np.float64)
+    if mask.all() or not mask.any():
+        return out
+    idx = np.arange(mask.size).reshape(mask.shape)
+    pairs = []
+    for ax in range(mask.ndim):
+        lo = [slice(None)] * mask.ndim
+        hi = [slice(None)] * mask.ndim
+        lo[ax], hi[ax] = slice(0, -1), slice(1, None)
+        pairs.append((idx[tuple(lo)].ravel(), idx[tuple(hi)].ravel()))
+    p = np.concatenate([a for a, b in pairs] + [b for a, b in pairs])
+    q = np.concatenate([b for a, b in pairs] + [a for a, b in pairs])
+    adj = sp.csr_matrix((np.ones(p.size), (p, q)), shape=(mask.size, mask.size))
+    known = mask.ravel()
+    unknown = ~known
+    degree = np.asarray(adj.sum(axis=1)).ravel()[unknown]
+    adj_u = adj[unknown]
+    A = (sp.diags(degree) - adj_u[:, unknown]).tocsr()
+    b = adj_u[:, known] @ out.ravel()[known]
+    x, info = cg(A, b, rtol=rtol, maxiter=20 * max(mask.shape) ** 2,
+                 M=sp.diags(1 / degree))
+    if info != 0:
+        raise RuntimeError(f'extend_harmonic: CG did not converge (info={info})')
+    out.ravel()[unknown] = x
+    return out
+
+
 def resize_to_epi(
     b0_map: np.ndarray,
     mask: np.ndarray,
@@ -143,11 +201,14 @@ def resize_to_epi(
     n_target: tuple[int, int, int],
     zero_pad_z: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """(b0_map, mask) on the EPI grid. The field map is zeroed outside the fit
-    mask before the cubic-spline resize, and the mask is resized with nearest
-    neighbor so it stays binary."""
+    """(b0_map, mask) on the EPI grid. The field map outside the fit mask is
+    replaced by the harmonic extension of the fit (extend_harmonic; b0map.jl
+    leaves 0 Hz there) before the cubic-spline resize, so there is no field
+    step at the mask edge to blend. The mask is resized with nearest neighbor
+    so it stays binary, and still marks the fitted voxels."""
     b0 = resize_to_epi_grid(
-        b0_map * mask, fov_degre, fov, n_target, order=3, zero_pad_z=zero_pad_z
+        extend_harmonic(b0_map, mask), fov_degre, fov, n_target, order=3,
+        zero_pad_z=zero_pad_z,
     ).astype(np.float32)
     m = resize_to_epi_grid(mask, fov_degre, fov, n_target, order=0, zero_pad_z=zero_pad_z) > 0.5
     return b0, m

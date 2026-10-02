@@ -22,6 +22,7 @@ from preprocess.b0map import (  # noqa: E402
     JULIA_SCRIPT,
     drop_small_components,
     estimate_b0map,
+    extend_harmonic,
     fit_mask,
     reset_diverged,
     resize_to_epi,
@@ -110,6 +111,72 @@ def test_resize_to_epi_moves_field_map_and_mask_onto_the_epi_grid():
     assert b0_epi.shape == n_epi and m_epi.shape == n_epi
     assert m_epi.dtype == bool
     assert np.abs(b0_epi).max() <= 1.5 * np.abs(b0 * mask).max() + 1.0
+
+
+def _laplacian_neumann(f):
+    """7-point Laplacian with zero normal derivative at the volume boundary
+    (each voxel against its in-volume neighbours only)."""
+    out = np.zeros_like(f)
+    for ax in range(f.ndim):
+        d = np.diff(f, axis=ax)
+        lo = [slice(None)] * f.ndim
+        hi = [slice(None)] * f.ndim
+        lo[ax], hi[ax] = slice(0, -1), slice(1, None)
+        out[tuple(lo)] += d
+        out[tuple(hi)] -= d
+    return out
+
+
+def test_extend_harmonic_keeps_the_fit_and_is_harmonic_outside_it():
+    rng = np.random.default_rng(4)
+    xx, yy, zz = _grid((20, 18, 12))
+    mask = np.sqrt(xx**2 + yy**2 + zz**2) < 0.7
+    f = 80.0 * xx - 50.0 * yy**2 + rng.normal(size=mask.shape)
+    out = extend_harmonic(np.where(mask, f, 0.0), mask)
+    np.testing.assert_array_equal(out[mask], f[mask])
+    assert np.abs(_laplacian_neumann(out)[~mask]).max() < 1e-5 * np.abs(f[mask]).max()
+    # maximum principle: no new extremes
+    assert f[mask].min() - 1e-9 <= out.min() and out.max() <= f[mask].max() + 1e-9
+
+
+def test_extend_harmonic_exact_one_dimensional_cases():
+    """A field varying only along x, masked to slabs: beyond a slab face the
+    zero-flux extension is constant (the face value), and between two slabs it
+    is the linear interpolation -- the discrete harmonic functions in 1D."""
+    n = (12, 3, 2)
+    x = np.arange(n[0])[:, None, None] * np.ones(n)
+    mask = (x == 3) | (x == 8)
+    f = np.where(x == 3, -40.0, 60.0)
+    out = extend_harmonic(np.where(mask, f, 0.0), mask)
+    expected = np.interp(np.arange(n[0]), [3, 8], [-40.0, 60.0])  # constant beyond 3 and 8
+    np.testing.assert_allclose(out, expected[:, None, None] * np.ones(n), atol=1e-6)
+
+
+def test_extend_harmonic_trivial_masks():
+    f = np.arange(24.0).reshape(2, 3, 4)
+    np.testing.assert_array_equal(extend_harmonic(f, np.ones(f.shape, bool)), f)
+    np.testing.assert_array_equal(extend_harmonic(f, np.zeros(f.shape, bool)), 0 * f)
+    one = np.zeros(f.shape, bool)
+    one[1, 2, 3] = True
+    np.testing.assert_allclose(extend_harmonic(f, one), np.full(f.shape, f[1, 2, 3]))
+
+
+def test_resize_to_epi_has_no_field_step_at_the_fit_mask_edge():
+    """Review item 261: b0map.jl leaves 0 Hz outside the fit mask; resizing
+    that put a 0 -> edge-value ramp into the voxels just outside the mask,
+    which the recon's smaps support still covers. With the harmonic extension
+    the EPI-grid map changes no faster than the fitted field does."""
+    xx, yy, zz = _grid((24, 24, 12))
+    mask = np.sqrt(xx**2 + yy**2 + zz**2) < 0.7
+    b0 = 40.0 + 30.0 * xx  # in-mask range ~ +19..+61 Hz
+    n_epi = (36, 36, 18)
+    b0_epi, m_epi = resize_to_epi(np.where(mask, b0, 0.0), mask, (0.2, 0.2, 0.1),
+                                  (0.2, 0.2, 0.1), n_epi)
+    fitted_step = 30.0 * (2 / 23) * (24 / 36)  # Hz per EPI voxel along x
+    for ax in range(3):
+        assert np.abs(np.diff(b0_epi, axis=ax)).max() < 2 * fitted_step + 1e-3
+    assert b0_epi.min() > 15.0  # never pulled toward 0 Hz
+    assert m_epi.sum() < m_epi.size  # the mask still marks only the fitted voxels
 
 
 def test_fit_mask_combines_magnitude_and_eigenvalue_masks():
