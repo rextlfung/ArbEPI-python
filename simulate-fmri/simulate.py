@@ -37,9 +37,9 @@ from .export import export
 from .handlers import EllipsoidActivationHandler
 from .phantom import (
     brainweb_phantom,
-    centered_fov,
     ellipsoid_phantom,
     ellipsoid_phantom_roi,
+    place_fov,
     to_acquisition_grid,
 )
 from .sampler import ArbEPISampler
@@ -219,7 +219,7 @@ def simulate(
         if phantom == 'ellipsoid' and roi is None:
             roi = ellipsoid_phantom_roi()
         phantom = makers[phantom]()
-    fov = centered_fov(phantom, protocol.shape, protocol.res_mm)
+    fov = place_fov(phantom, protocol.shape, protocol.res_mm)
     sim_conf = make_sim_conf(protocol, n_coils, fov, seed)
     phantom = to_acquisition_grid(phantom, sim_conf, coils_per_ring)
 
@@ -255,6 +255,12 @@ def simulate(
         resample_early=False,  # to_acquisition_grid already put it on the grid
     )
     fn_pre = export(fn_mrd, protocol, outdir, name, snr)
+    with h5py.File(fn_pre, 'r') as f:
+        if 'sim_snr0_gm' in f.attrs:
+            print(
+                f'snr = {snr:g}: gray-matter SNR of a fully sampled reconstruction '
+                f'{f.attrs["sim_snr0_gm"]:.0f}'
+            )
     print(f'Wrote {fn_mrd}\n      {fn_pre}')
     return {'mrd': fn_mrd, 'preprocessed': fn_pre}
 

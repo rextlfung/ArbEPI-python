@@ -95,7 +95,8 @@ def export(fn_mrd: str, protocol, outdir: str, name: str, snr: float) -> str:
     os.makedirs(os.path.join(outdir, 'recon'), exist_ok=True)
     fn_out = os.path.join(outdir, 'recon', f'{name}_preprocessed.h5')
 
-    with CartesianFrameDataLoader(fn_mrd, squeeze_dims=False) as loader, h5py.File(fn_out, 'w') as f:
+    loader = CartesianFrameDataLoader(fn_mrd, squeeze_dims=False)
+    with loader, h5py.File(fn_out, 'w') as f:
         sim_conf = loader.get_sim_conf()
         phantom = loader.get_phantom()
         n_coils = loader.n_coils
@@ -128,6 +129,12 @@ def export(fn_mrd: str, protocol, outdir: str, name: str, snr: float) -> str:
         noise_var = noise_variance(tissues.sum(axis=0), snr)
         if noise_var is not None:
             f.attrs['noise_var'] = noise_var
+            # What that noise level means for an image: signal of a pure
+            # gray-matter voxel over the noise std of one component of a fully
+            # sampled reconstruction with these (unit root-sum-of-squares) coils.
+            if 'gm' in phantom.labels_idx:
+                gm_signal = float(tissues[phantom.labels_idx['gm']].max())
+                f.attrs['sim_snr0_gm'] = gm_signal / np.sqrt(noise_var / 2)
         f.attrs['whitened'] = True  # the simulated noise is white by construction
         f.attrs['t_ref_s'] = protocol.t_ref_s
         f.attrs['fov'] = np.asarray(protocol.fov_mm) / 1e3

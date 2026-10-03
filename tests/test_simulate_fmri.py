@@ -252,7 +252,7 @@ def test_activation_roi_is_the_same_anatomy_on_any_grid():
             fov_mm=tuple(n * res for n in shape),
         )
         sim_conf = simulate.make_sim_conf(
-            protocol, 1, phantoms.centered_fov(phantom, shape, (res,) * 3)
+            protocol, 1, phantoms.place_fov(phantom, shape, (res,) * 3)
         )
         on_grid = phantoms.to_acquisition_grid(phantom, sim_conf)
         handler = handlers.EllipsoidActivationHandler(block_on=1, block_off=1, duration=4, **roi)

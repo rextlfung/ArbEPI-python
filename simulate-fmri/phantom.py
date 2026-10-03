@@ -6,7 +6,7 @@
 - ellipsoid_phantom: the same three tissues as nested ellipsoids, built
   analytically. Needs no download; used by the tests and for quick runs.
 - ellipsoid_phantom_roi: where to put the activation in that phantom.
-- centered_fov: places an acquisition field of view on a phantom's tissue.
+- place_fov: places an acquisition field of view on a phantom's tissue.
 - to_acquisition_grid: resamples a phantom onto the simulation grid and
   attaches coil sensitivities defined on that grid.
 - birdcage_smaps: rings of coils around the z axis.
@@ -105,21 +105,29 @@ def ellipsoid_phantom_roi(
     }
 
 
-def centered_fov(
+def place_fov(
     phantom: Phantom, shape: tuple[int, int, int], res_mm: tuple[float, float, float]
 ) -> FOVConfig:
-    """The (shape, res_mm) field of view centered on the bounding box of the
-    phantom's tissue. Axis-aligned with the phantom."""
+    """The (shape, res_mm) field of view on a phantom, axis-aligned with it and
+    centered on the bounding box of its tissue -- except along z when the
+    tissue is taller than the field of view (BrainWeb's brain, brainstem and
+    cord against a 144 mm slab): the slab then keeps the top of the head, one
+    voxel clear of its upper edge, and loses the inferior end, the way a scan
+    would be prescribed. Assumes +z is superior (BrainWeb, ellipsoid_phantom)."""
     occupied = phantom.masks.sum(axis=0) > 0.1
-    center_vox = [
-        (np.flatnonzero(occupied.any(axis=tuple(a for a in range(3) if a != ax)))[[0, -1]]).mean()
-        for ax in range(3)
-    ]
-    center_mm = phantom.affine[:3, :3] @ np.array(center_vox) + phantom.affine[:3, 3]
     res = np.asarray(res_mm, dtype=float)
-    offset = center_mm - (np.array(shape) - 1) / 2 * res
+    n = np.array(shape)
+    offset = np.empty(3)
+    for ax in range(3):
+        idx = np.flatnonzero(occupied.any(axis=tuple(a for a in range(3) if a != ax)))
+        step, origin = phantom.affine[ax, ax], phantom.affine[ax, 3]
+        lo, hi = origin + idx[0] * step, origin + idx[-1] * step  # voxel centers, mm
+        offset[ax] = (lo + hi) / 2 - (n[ax] - 1) / 2 * res[ax]
+        if ax == 2 and hi - lo + step > n[ax] * res[ax]:
+            top_edge = hi + step / 2 + res[ax]
+            offset[ax] = top_edge - (n[ax] - 0.5) * res[ax]
     return FOVConfig(
-        size=tuple(float(s) for s in np.array(shape) * res),
+        size=tuple(float(v) for v in n * res),
         res_mm=tuple(float(r) for r in res),
         offset=tuple(float(o) for o in offset),
     )
