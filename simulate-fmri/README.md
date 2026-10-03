@@ -146,9 +146,12 @@ settings, reconstructed two ways and scored by `recon.testbed score`:
 | edge sharpness vs truth | 0.26 | 0.93 |
 
 Unregularized, each frame is inverted alone at R = 10 with 16 coils and the
-noise swamps a 2% activation. The regularized reconstruction finds it, at about
-half its true size. These are one simulation's numbers, there to show the
-chain works; they are not a study of either method.
+noise swamps a 2% activation (`snr = 1000` is a gray-matter SNR of 60 for a
+fully sampled reconstruction). The regularized reconstruction finds it, at
+about half its true size. These are one simulation's numbers, there to show
+the chain works; they are not a study of either method. `demo.ipynb` repeats
+the regularized run; its numbers differ in the last digits because the noise
+does (see below).
 
 Timing on a 64-core machine with an RTX A6000 shared with another job: the
 simulation takes about 100 s with 16 workers (`--workers 16`), some 60 s of it
@@ -159,6 +162,13 @@ the preprocessed file 0.8 GB.
 Noise is seeded (`--seed`), but with more than one worker the shots finish in
 a different order from run to run and SNAKE draws the noise in that order, so
 two noisy runs differ in their noise. Noise-free runs are identical.
+
+`demo.ipynb` keeps its outputs. To refresh them (about 8 minutes, GPU):
+
+```bash
+UV_PROJECT_ENVIRONMENT=.venv-simulate uv run --extra simulate --extra recon --with nbconvert \
+    jupyter nbconvert --to notebook --execute --inplace simulate-fmri/demo.ipynb
+```
 
 ## What is simulated
 
@@ -208,6 +218,11 @@ divides by its square root, as for a whitened scan.
   nothing for `--B0` or `--R2star` to correct: the output has no `b0_map`.
   T2* decay *is* simulated and the plain SENSE operator does not model it; that
   mismatch is real.
+- **Echo-time dependence of BOLD.** SNAKE's activation scales the amplitude of
+  a gray-matter copy, by the same fraction (`TE / delta_r2s`) at every echo. A
+  real BOLD change is a change in R2*, whose effect grows with each sample's
+  echo time. So a simulation shows how an echo-train ordering blurs and weights
+  the image through T2* decay, but not how it changes BOLD sensitivity.
 - **Readout imperfections.** No Nyquist ghost, no ramp sampling, no gradient
   delays. Samples sit on the Cartesian grid. `preprocess/` has nothing to do and
   is skipped.

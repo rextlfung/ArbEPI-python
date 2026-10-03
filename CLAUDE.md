@@ -1465,7 +1465,7 @@ same reconstruction). `amp_map` itself is left exact everywhere, so
 
 **Checked end to end on the default protocol** (2026-10-03; 90 x 90 x 60,
 R = 10 pd, radial, ETL 54, 119 frames; BrainWeb, 16 coils, T2s model,
-`snr=1000`, i.e. gray-matter SNR ~77 fully sampled): about 100 s to simulate
+`snr=1000`, i.e. gray-matter SNR 60 fully sampled): about 100 s to simulate
 with 16 workers. Unregularized CG-SENSE reconstructs the right anatomy in the
 right place but with 37% temporal fluctuation, and does not detect the 2%
 activation (median t 0.13); joint wavelet-TV with `--hp-weight 3` gives 4.5%
@@ -1481,6 +1481,15 @@ simulated from a generated `scan_info.mat` is `resolve_omegas`' mask.
 **Noisy runs are not bit-reproducible with several workers**: SNAKE draws each
 chunk's noise in the main process, in the order the workers finish. One
 worker, or `snr=inf`, is deterministic (tested for the latter).
+
+**SNAKE's BOLD is an amplitude change, not an R2* change.** The ROI tissue
+has gray matter's T2* and a weight following the regressor, so the fractional
+change is `TE / delta_r2s` at every echo of the train, where a real ΔR2*
+effect grows with each sample's echo time. Since the ordering decides which
+(ky, kz) gets which echo time, a simulation can compare orderings by their T2*
+blurring and contrast, not by their BOLD sensitivity. Modeling it would mean
+giving the ROI its own, time-varying T2* in `_job_model_T2s` (the grouping by
+T2* there assumes it is static).
 
 **Not modeled, so not tested by a simulation**: B0 (no `b0_map` is written,
 and `--B0`/`--R2star` have nothing to correct), Nyquist ghosting, ramp
