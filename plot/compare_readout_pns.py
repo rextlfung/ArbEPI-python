@@ -1,4 +1,4 @@
-"""Symmetric-vs-POPE readout comparison: `uv run python -m plotting.compare_readout_pns`.
+"""Symmetric-vs-POPE readout comparison: `uv run python -m plot.compare_readout_pns`.
 
 Builds two full ArbEPI sequences from the SAME sampling masks (params.seed
 must be set) and identical nominal parameters -- FOV, matrix, ETL, dwell,
@@ -38,8 +38,8 @@ from ge.pns import pns
 from lib.mask2epi import max_blip_steps
 from lib.readout_from_params import make_readout_grads_from_params
 from params import load_params
-from plotting.plotting import nominal_te_value, plot_pns_one_tr
-from sampling.gen_sampling_masks import resolve_omegas
+from plot.plotting import nominal_te_value, plot_pns_one_tr
+from sample.gen_sampling_masks import resolve_omegas
 from sequences.ArbEPI import _compute_schedules, generate_arbepi
 
 

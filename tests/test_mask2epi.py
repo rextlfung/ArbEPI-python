@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from lib.mask2epi import _center_out, _weighted_step, mask2epi_laminar, mask2epi_radial
-from sampling.caipi_sample import caipi_sample
+from sample.caipi_sample import caipi_sample
 
 
 def _max_weighted_step(schedule: np.ndarray, Nshots: int, deltak) -> float:

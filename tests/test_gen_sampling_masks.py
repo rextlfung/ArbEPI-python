@@ -3,7 +3,7 @@ from dataclasses import replace
 import numpy as np
 
 from params import load_params
-from sampling.gen_sampling_masks import gen_sampling_masks
+from sample.gen_sampling_masks import gen_sampling_masks
 
 
 def _small_caipi_params():

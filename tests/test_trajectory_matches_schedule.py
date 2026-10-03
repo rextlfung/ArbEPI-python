@@ -15,7 +15,7 @@ import pytest
 
 from lib.readout_from_params import make_readout_grads_from_params
 from params import load_params
-from sampling.gen_sampling_masks import resolve_omegas
+from sample.gen_sampling_masks import resolve_omegas
 from sequences.ArbEPI import _compute_schedules, generate_arbepi
 from sequences.deGRE import generate_degre
 from sequences.EPIcal import generate_epical

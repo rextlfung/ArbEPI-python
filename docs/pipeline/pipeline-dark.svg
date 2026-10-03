@@ -75,14 +75,14 @@
 <text x="381" y="102" class="t-text">then TR, then flip angle (Ernst angle)</text>
 <rect x="860" y="28" width="225" height="88" rx="6" class="box seq dashed"/>
 <text x="876" y="50" class="t-title">Custom mask (optional)</text>
-<text x="876" y="68" class="t-mono-s">sampling/external_mask.py</text>
+<text x="876" y="68" class="t-mono-s">sample/external_mask.py</text>
 <text x="876" y="86" class="t-text">(ky, kz) or (ky, kz, t) .mat; sets</text>
 <text x="876" y="102" class="t-text">Nshots and effective R</text>
 <path d="M860 72 H837" class="flow dashed" marker-end="url(#ah)"/>
 <path d="M600 116 V170" class="flow" marker-end="url(#ah)"/>
 <rect x="365" y="172" width="470" height="88" rx="6" class="box seq"/>
 <text x="381" y="194" class="t-title">Sampling mask generation</text>
-<text x="381" y="212" class="t-mono">sampling/ · resolve_omegas()</text>
+<text x="381" y="212" class="t-mono">sample/ · resolve_omegas()</text>
 <text x="381" y="230" class="t-text">independently generate (ky, kz) masks per frame; skipped when a custom</text>
 <text x="381" y="246" class="t-text">mask is given</text>
 <path d="M600 260 V314" class="flow" marker-end="url(#ah)"/>

@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import scipy.io as sio
 
-from sampling.external_mask import load_external_mask
+from sample.external_mask import load_external_mask
 
 
 def _write_mat(tmp_path, array, key='samp', filename='mask.mat'):
