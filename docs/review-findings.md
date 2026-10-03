@@ -57,7 +57,7 @@ shows only this doc itself changed between `639345e` and `3930358`
 were confirmed still open exactly as described (none needed closing).
 This pass split the review across six parallel subagents (`ge/`;
 `lib/`+`sequences/`+`params.py`/`scanners.py`/`main.py`;
-`sampling/`+`plotting/`; `preprocessing/`; `recon/`; a dedicated
+`sample/`+`plot/`; `preprocessing/`; `recon/`; a dedicated
 docs-vs-code consistency sweep), each briefed on the open items in its
 scope to avoid duplication; every new finding below was independently
 re-verified against the live tree (not just trusted from the subagent's
@@ -66,9 +66,9 @@ reproduction of item 136's sampling bug and item 137's trigger-detection
 bug. Items 147-159 are new findings from a later pass (2026-09-09,
 against `eab904b`) that also re-verified every item 107-146 against the
 current tree: `git diff 3930358 HEAD --stat` shows `CLAUDE.md`,
-`README.md`, `main.py`, `params.py`, `plotting/plotting.py`,
-`sampling/caipi_sample.py`, `sampling/external_mask.py`,
-`sampling/gen_sampling_masks.py`, and several test files changed in that
+`README.md`, `main.py`, `params.py`, `plot/plotting.py`,
+`sample/caipi_sample.py`, `sample/external_mask.py`,
+`sample/gen_sampling_masks.py`, and several test files changed in that
 span (a "Simplify user-facing config" reorg of `params.py`/README, a
 generalization of the top-level sampling-mask flow to accept
 collaborator-provided masks, and a rewrite of `caipi_sample.py`'s
@@ -76,7 +76,7 @@ collaborator-provided masks, and a rewrite of `caipi_sample.py`'s
 there) -- none of those changed files are cited by any item 107-146's own
 file:line citations, so all forty were confirmed still open exactly as
 described (none needed closing). This pass split the review across four
-parallel subagents (`sampling/`+`plotting/`;
+parallel subagents (`sample/`+`plot/`;
 `params.py`/`main.py`/`scanners.py`+README/CLAUDE.md consistency;
 `ge/`+`lib/`+`sequences/`; `preprocessing/`+`recon/`), each briefed on
 the open items already tracked in its scope plus an explicit note to
@@ -88,9 +88,9 @@ regression and item 150's `noise.py` timing shortfall. Items 160-165 are
 new findings from a later pass (2026-09-10, against `dac8252`) that also
 re-verified every item 107-145 against the current tree: `git diff
 eab904b HEAD --stat` shows `ge/read_pge.py`, `ge/seq2ceq.py`, `params.py`,
-`plotting/compare_readout_pns.py`, `plotting/plotting.py`,
+`plot/compare_readout_pns.py`, `plot/plotting.py`,
 `preprocessing/gre_diagnostics.py`, `preprocessing/run_b0map.py`,
-`sampling/caipi_sample.py`, `sampling/ticaipi_sample.py`, `scanners.py`,
+`sample/caipi_sample.py`, `sample/ticaipi_sample.py`, `scanners.py`,
 `sequences/noise.py`, and several test files changed in that span (items
 127/147-159's fixes), alongside this doc itself -- of the still-open
 107-145 items, all were confirmed still open with unchanged substance
@@ -110,7 +110,7 @@ item 151's fix widened it), and item 133 (still open, citation updated --
 `gre_diagnostics.py`'s `fn_gre` path line moved from `:34` to `:39` after
 item 152's docstring expansion). This pass split the review across four
 parallel subagents with the same scope split as the previous pass
-(`sampling/`+`plotting/`; `ge/`+`lib/`+`sequences/`+`params.py`/`main.py`/
+(`sample/`+`plot/`; `ge/`+`lib/`+`sequences/`+`params.py`/`main.py`/
 `scanners.py`+docs; `preprocessing/`; `recon/`), each re-verifying its
 assigned open items against the live tree (not just re-reading this file)
 before reporting, and independently hunting for new findings in its
@@ -129,8 +129,8 @@ addition with no production-code change) changed in that span -- so every
 still-open item's cited code is exactly as it was when last verified, and
 none needed re-checking line-by-line; this pass instead spent its budget
 entirely on hunting for new findings. Split across four parallel
-subagents with the same scope as the previous two passes (`sampling/`+
-`plotting/`; `ge/`+`lib/`+`sequences/`; `preprocessing/`; `recon/`+
+subagents with the same scope as the previous two passes (`sample/`+
+`plot/`; `ge/`+`lib/`+`sequences/`; `preprocessing/`; `recon/`+
 `params.py`/`main.py`/`scanners.py`+docs), each independently re-verifying
 its assigned scope's open items were still accurately described (not just
 trusting this file) before hunting for anything new; three findings
@@ -186,7 +186,7 @@ numbers and the identical item-169 TE-feasibility warning) all matching
 the previous pass's baseline exactly -- so no still-open item needed
 re-verification against changed code this pass; the entire budget went
 into hunting for new findings. Split across four parallel subagents with
-the same scope as the previous several passes (`sampling/`+`plotting/`;
+the same scope as the previous several passes (`sample/`+`plot/`;
 `ge/`+`lib/`+`sequences/`+`params.py`/`main.py`/`scanners.py`;
 `preprocessing/`; `recon/`), each confirming its assigned scope's open
 items were unchanged before hunting for anything new; seven findings
@@ -195,7 +195,7 @@ trusted from each subagent's own report -- every one below was re-checked
 by direct code reading and, where executable, a fresh reproduction) and
 are recorded as items 181-187 below. Also sharpened item 115's own
 citation: one of its supporting sub-claims ("no test file... imports
-`plotting.plotting` at all") went stale after `tests/test_plotting.py` was
+`plot.plotting` at all") went stale after `tests/test_plotting.py` was
 added for items 127/149, though that item's substantive finding -- none of
 the actual plotting *functions* are tested -- remains fully open. Item 188
 is a new finding from a later pass (2026-09-14, against `a6759be`) that
@@ -209,7 +209,7 @@ extras, 34 passed for `tests/test_recon_*.py` alone), and a fresh `main.py
 --ge` build (identical peak-PNS/acoustics numbers and the identical
 item-169 TE-feasibility warning) all matching the previous pass's baseline
 exactly. Split across four parallel subagents with the same scope as the
-previous several passes (`sampling/`+`plotting/`; `ge/`+`lib/`+`sequences/`+
+previous several passes (`sample/`+`plot/`; `ge/`+`lib/`+`sequences/`+
 `params.py`/`main.py`/`scanners.py`; `preprocessing/`; `recon/`), each
 independently re-verifying its assigned open items against the live tree
 (not just trusting this file) before hunting for anything new. Three of the
@@ -223,7 +223,7 @@ subagent's one candidate finding, a third untracked instance of item 133's
 cache-path-duplication pattern (`<seqname>_b0map.h5`, independently
 hand-built in `run_b0map.py:76`/`gre_diagnostics.py:40`), survived
 independent re-verification and is recorded as item 188 below. The
-`sampling/`+`plotting/` subagent confirmed all eight of its assigned open
+`sample/`+`plot/` subagent confirmed all eight of its assigned open
 items unchanged, found no new findings, but while re-running item 136's own
 reproduction methodology found that one of its two reported mechanisms
 needed a substantive correction: mechanism (b) (the calibration-disc
@@ -251,7 +251,7 @@ gzip compression on `ksp_epi_zf`, and `smaps.py` gained masked Gaussian
 re-smoothing helpers, GPU device auto-selection, and a post-resize
 re-mask step while dropping a now-redundant pre-resize mask -- alongside
 this doc itself. Every item citing only the unchanged files (ge/, lib/,
-sequences/, sampling/, plotting/, recon/, params.py, scanners.py,
+sequences/, sample/, plot/, recon/, params.py, scanners.py,
 main.py -- byte-identical since the last several passes, reconfirmed
 again this pass by a fresh `uv run ruff check .` (29 errors, all
 `E501`), `uv run pytest` (143 passed/15 skipped plain, 209 passed/5
@@ -286,7 +286,7 @@ current tree: `git diff b701489 HEAD --stat` shows `CLAUDE.md`,
 `lib/readout_from_params.py`, `main.py`, `params.py`, two brand-new files
 (`preprocessing/lowres_calib_recon.py`, `preprocessing/r2star_map.py`),
 `recon/operators_b0.py`, `recon/reconstruct.py`, `recon/run_b0_recon.py`,
-`sampling/pd_sample.py`, `sequences/ArbEPI.py`, `sequences/deGRE.py`, and
+`sample/pd_sample.py`, `sequences/ArbEPI.py`, `sequences/deGRE.py`, and
 three test files changed in that span (item 194/195's acoustic-resonance
 dwell-selection and calibration-sizing fixes, a default-protocol switch to
 "ABCD" at 2.4mm iso/90x90x60/R=6/TE=30ms, deGRE now generated last, and a
@@ -303,7 +303,7 @@ triggers the TE-feasibility warning the item described, though the
 underlying golden-angle mechanism it flagged is confirmed still present
 in a smaller, currently-harmless form. This pass split its budget across
 four parallel subagents with the same scope as the previous several
-passes (`sampling/`+`plotting/`; `ge/`+`lib/`+`sequences/`+`params.py`/
+passes (`sample/`+`plot/`; `ge/`+`lib/`+`sequences/`+`params.py`/
 `main.py`/`scanners.py`; `preprocessing/`; `recon/`), each re-verifying
 its assigned open items against the live tree before hunting for anything
 new, with explicit instruction to give the newly-changed/newly-added code
@@ -328,14 +328,14 @@ of two independent calibrations), a brand-new file (`recon/cg_sense_b0.py`,
 `run_rss.py`, `run_recon_sigpy.py`, `recon_sigpy.py`,
 `lowres_calib_recon.py`), and several test files changed/added in that
 span, alongside this doc itself (items 196-202, added in the prior commit).
-`ge/`, `lib/`, `sequences/`, `sampling/`, `plotting/`, `params.py`,
+`ge/`, `lib/`, `sequences/`, `sample/`, `plot/`, `params.py`,
 `main.py`, and `scanners.py` are confirmed byte-identical to the tree the
 previous pass reviewed (`git diff de3d535 HEAD --stat -- ge/ lib/
 sequences/ params.py main.py scanners.py` produces no output), so every
 item citing only those files needed no re-verification beyond a
 representative spot check. This pass split its budget across four parallel
 subagents with the same scope as the previous several passes
-(`sampling/`+`plotting/`; `ge/`+`lib/`+`sequences/`+`params.py`/`main.py`/
+(`sample/`+`plot/`; `ge/`+`lib/`+`sequences/`+`params.py`/`main.py`/
 `scanners.py`; `preprocessing/`, briefed to give the `smaps.py`/
 `grid_resize.py` rewrite the heaviest scrutiny; `recon/`, briefed to give
 the brand-new `cg_sense_b0.py` the heaviest scrutiny), each re-verifying
@@ -374,10 +374,10 @@ low-res calibration reconstruction and a temporal-stability diagnostic
 comparing them, alongside this doc itself (items 204-212, added in the
 prior commit, and items 200/211/213, added directly by commit `1adc368`
 outside the automated-pass process -- see that commit for item 213's full
-writeup). `ge/`, `lib/`, `sequences/`, `sampling/`, `plotting/`, `params.py`,
+writeup). `ge/`, `lib/`, `sequences/`, `sample/`, `plot/`, `params.py`,
 `main.py`, and `scanners.py` are confirmed byte-identical to the tree the
 previous pass reviewed (`git diff ad2fdc4 HEAD --stat -- ge/ lib/
-sequences/ sampling/ plotting/ params.py main.py scanners.py` produces no
+sequences/ sample/ plot/ params.py main.py scanners.py` produces no
 output), so every item citing only those files needed no re-verification
 beyond a representative spot check, and the whole-sequence feasibility
 table below is carried forward unchanged (not re-measured, since nothing
@@ -412,7 +412,7 @@ Items 220-221 are new findings from a later pass (2026-09-19, against
 pass (107-135, 137-142, 144, 160-167, 170-175, 178-192, 196-199, 202,
 205-212, 216-219) against the current tree, via five parallel agents (three
 covering disjoint slices of the 80 open items, two hunting for new findings
-in recently-changed code and in `ge/`/`sampling/`/`lib/`/`recon/` areas not
+in recently-changed code and in `ge/`/`sample/`/`lib/`/`recon/` areas not
 covered by the other prior passes' most recent citations). None of the 80
 were found fixed or mistaken -- every one is still open and substantively
 unchanged, though twelve (130, 133, 140, 141, 142, 166, 167, 172, 179, 181,
@@ -427,9 +427,9 @@ finding in the new `recon/lowres_temporal_stability.py`) are the only two
 new findings that survived independent verification this pass -- both
 agents doing fresh-finding hunts independently concluded the six files
 touched since the last pass (`lib/make_excitation_pulse.py`, `params.py`,
-`plotting/plotting.py`, `sequences/ArbEPI.py`, `sequences/EPIcal.py`,
+`plot/plotting.py`, `sequences/ArbEPI.py`, `sequences/EPIcal.py`,
 `sequences/deGRE.py`) and the four less-recently-reviewed areas
-(`ge/`, `sampling/`, most of `lib/`, most of `recon/`) are otherwise in
+(`ge/`, `sample/`, most of `lib/`, most of `recon/`) are otherwise in
 good shape, with several independently-rederived candidate bugs turning
 out to already be tracked (items 107, 126, 133, 136(a)/196, 170, 197, 198,
 199, 202) -- itself a useful cross-check that those citations are accurate.
@@ -446,7 +446,7 @@ at its start (107-135, 137-142, 144, 160-167, 170-175, 178-192, 196-199,
 byte-for-byte the tree the immediately preceding pass already re-verified
 against, not a fresh independent re-read of all 83 open items line by line; two
 parallel subagents (one covering `ge/`+`lib/`+`sequences/`+`params.py`/
-`scanners.py`/`main.py`+`sampling/`+`plotting/`, one covering
+`scanners.py`/`main.py`+`sample/`+`plot/`, one covering
 `preprocessing/`+`recon/`) each spot-checked a representative sample of
 their scope's open items against current source (12 and 5 items
 respectively, all confirmed still open and substantively unchanged) and
@@ -474,7 +474,7 @@ addition) -- no production source file has changed since `d620951`, so
 this pass's re-verification rested on the same "byte-for-byte unchanged"
 basis the previous pass documented, not a fresh line-by-line re-read of
 every open item. Four parallel subagents ran with the full four-way scope
-split used by most earlier passes (`sampling/`+`plotting/`; `ge/`+`lib/`+
+split used by most earlier passes (`sample/`+`plot/`; `ge/`+`lib/`+
 `sequences/`+`params.py`/`main.py`/`scanners.py`; `preprocessing/`;
 `recon/`), each spot-checking a representative sample of its scope's open
 items against current source before hunting for anything new. The
@@ -482,7 +482,7 @@ items against current source before hunting for anything new. The
 126, 142, 170, 181, 220) with no drift and found nothing new after a full
 read of `main.py`, `scanners.py`, `params.py`, `ge/blocks.py`, `ge/pns.py`,
 `ge/acoustics.py`, `ge/writeceq.py`, and `lib/calc_te_tr_delays.py`. The
-`sampling/`+`plotting/` subagent re-verified every open item in its scope
+`sample/`+`plot/` subagent re-verified every open item in its scope
 (118, 136(a), 160, 166, 187, 196, 115, 185) plus every closed item's fix,
 found one citation drift (item 118, corrected in place below), and no new
 findings. The `recon/` subagent re-verified essentially every open item
@@ -533,7 +533,7 @@ absolute-scale fix (commit `645c9c3`) and minor changes to `cg_sense.py`/
 `preprocess.py`/`r2star_map.py`/`run_b0map.py`/`smaps.py`, alongside
 substantial `CLAUDE.md`/`README.md` rewrites documenting the restructuring
 and `docs/review-findings.md` itself (items 222/223, added by the previous
-two passes). `ge/`, `lib/`, `sequences/`, `sampling/`, `plotting/`,
+two passes). `ge/`, `lib/`, `sequences/`, `sample/`, `plot/`,
 `params.py`, `main.py`, and `scanners.py` are confirmed byte-identical to
 the tree the previous pass reviewed. This pass split its budget across
 three parallel subagents given the shape of the diff: one dedicated
@@ -542,7 +542,7 @@ hunting for new findings in the restructured modules; one dedicated to
 every open item citing `preprocessing/` (36 items, 19 overlapping the
 `recon/` agent's scope for cross-checking) plus hunting there; and one
 covering the remaining 28 open items (`ge/`/`lib/`/`sequences/`/
-`sampling/`/`plotting/`/`params.py`/`scanners.py`/`main.py`, confirmed
+`sample/`/`plot/`/`params.py`/`scanners.py`/`main.py`, confirmed
 unchanged) plus a dedicated CLAUDE.md/README.md-vs-code consistency sweep
 and a fresh `ruff`/`pytest`/`--ge` baseline run. Every item update and new
 finding below was independently re-verified against the live tree before
@@ -586,7 +586,7 @@ cited code is exactly as described -- none needed reopening or
 substance changes, beyond the two closures below. This pass split the
 review across four parallel subagents, each briefed on the open items
 already tracked in its scope (`ge/`+`lib/`+`sequences/`+`params.py`/
-`scanners.py`/`main.py`; `sampling/`+`plotting/`; `preprocessing/`;
+`scanners.py`/`main.py`; `sample/`+`plot/`; `preprocessing/`;
 `recon/`, the last one also asked to scrutinize the recent 25-module ->
 7-module consolidation for merge artifacts specifically); every new
 finding below was independently re-verified against the live tree (not
@@ -607,14 +607,14 @@ a checkpoint left mid-pre-allocation by an interrupted run crashes the
 resume path with a raw `KeyError`); a `main.py` `--ge` pre-check that
 only ever surfaces the first of up to four infeasible sequences despite
 its own comment (235); a validation gap in
-`sampling/external_mask.py:44`'s bare `.astype(bool)` cast, which
+`sample/external_mask.py:44`'s bare `.astype(bool)` cast, which
 silently accepts `NaN`/negative/fractional values as sampled points
 (236); seven consistency findings, mostly stale numbers/references
 surviving the 2026-09-15 ABCD-protocol switch and the `recon/`
 consolidation (237–241, 243) plus an extension of item 160's citation
 list (242); and three conciseness findings (244, duplicated per-shot
 spoiler logic between `sequences/ArbEPI.py`/`EPIcal.py`; 245, a dead
-re-clamp in `sampling/pd_sample.py`; 246, seven dead fields on
+re-clamp in `sample/pd_sample.py`; 246, seven dead fields on
 `PreprocessingConfig`). Two items were closed this pass, both without any
 code change: item 179 (superseded -- its cited file,
 `recon/sweep_time_segments.py`, no longer exists anywhere in the tree,
@@ -634,7 +634,7 @@ confirmed accurate as of the previous pass and did not need re-checking
 line by line this pass; this pass's budget instead went entirely to
 hunting for new findings, split across the same four parallel subagents
 as recent passes (`ge/`+`lib/`+`sequences/`+`params.py`/`scanners.py`/
-`main.py`; `sampling/`+`plotting/`; `preprocessing/`; `recon/`), each
+`main.py`; `sample/`+`plot/`; `preprocessing/`; `recon/`), each
 briefed on the open items already tracked in its scope and told
 explicitly not to re-verify them, only to hunt for new ones; every
 candidate finding below was independently re-verified against the live
@@ -645,7 +645,7 @@ direct read confirming items 247/249/250's cited code. Four findings
 survived: a real correctness bug in `sequences/deGRE.py`'s `te_min`
 (247, the same `tr_min`-vs-`te_min` prephase-block-duration asymmetry
 item 36 already fixed for `tr_min` alone, now found to persist in
-`te_min`); a real correctness bug in `sampling/pd_sample.py`'s
+`te_min`); a real correctness bug in `sample/pd_sample.py`'s
 Poisson-disc core (248, inherited from upstream real sigpy 0.1.27 but
 kept per this module's own established precedent of auditing and fixing
 sigpy's algorithm rather than trusting it blindly); a CLI consistency gap
@@ -666,8 +666,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   restructures removed every file behind the old `E402`/`recon/` hits).
   By file: `ge/check.py` (1), `ge/validate_against_matlab.py` (2),
   `ge/writeceq.py` (1), `lib/calc_te_tr_delays.py` (2),
-  `lib/make_readout_grads.py` (2), `params.py` (1), `plotting/plotting.py`
-  (2), `sampling/pd_sample.py` (1), `sequences/ArbEPI.py` (2),
+  `lib/make_readout_grads.py` (2), `params.py` (1), `plot/plotting.py`
+  (2), `sample/pd_sample.py` (1), `sequences/ArbEPI.py` (2),
   `sequences/EPIcal.py` (2), `sequences/noise.py` (1),
   `tests/test_gen_gaussian_pdf.py` (1), `tests/test_recon_regularizers.py`
   (1). `demo.ipynb` is clean.
@@ -898,7 +898,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   clear `ValueError` instead of silently needing a value with no
   auto-estimate path. `run_b0_recon.py`'s own pre-measured `sigma1A` is
   still passed explicitly, so its behavior is unchanged.
-- [x] **96.** Resolved by `1ebb2bb`: `plotting/plotting.py`'s `plot_psf`
+- [x] **96.** Resolved by `1ebb2bb`: `plot/plotting.py`'s `plot_psf`
   now computes `np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(omega)))`.
   Verified: for an all-ones `(240, 45)` mask the PSF magnitude now peaks
   at exactly `(Ny//2, Nz//2) = (120, 22)`, matching the analytic delta.
@@ -1152,7 +1152,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   and parametrize `tests/test_preprocessing_epi_gridding.py` over an odd
   `nx` the way item 44's fix parametrized
   `test_epiphasecorrect_removes_odd_even_mismatch` over `[64, 63]`.
-- [x] **121. `plotting/plotting.py`'s `plot_pns_one_tr` loses gradient
+- [x] **121. `plot/plotting.py`'s `plot_pns_one_tr` loses gradient
   history before the window start, contradicting its own docstring's claim
   of exact parity with `check_seq_feasibility`'s PNS number for any
   `shot_index > 0`.** [verify] `plot_pns_one_tr(seq, params, shot_index)`
@@ -1327,8 +1327,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `ge/seq2ceq.py`), and add a regression test with a synthetic `Ceq`
   whose segment size divides 40000 exactly.
 - [x] **127.** Resolved together with item 149 (the mirror-image bug in
-  `plotting/plotting.py`'s `plot_one_tr`): added a shared, parity-aware
-  `plotting.plotting.nominal_te_value(per_echo_values, ETL)` helper
+  `plot/plotting.py`'s `plot_one_tr`): added a shared, parity-aware
+  `plot.plotting.nominal_te_value(per_echo_values, ETL)` helper
   (exact echo `ETL//2` for odd `ETL`, average of `ETL//2-1`/`ETL//2` for
   even `ETL`, matching `calc_te_tr_delays.py`'s continuous `ETL/2 - 0.5`
   definition) and wired `compare_readout_pns.py:65`'s `te_realized` to it.
@@ -1402,7 +1402,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   calibration region's *shape* changed from ellipse to rectangle in the
   same commit range, which independently introduced a different
   corner-stripping bug under `crop_corner=True` -- see item 196.
-- [ ] **136(a). `sampling/pd_sample.py`'s exact-count fill step is
+- [ ] **136(a). `sample/pd_sample.py`'s exact-count fill step is
   unguarded against `crop_corner=True`'s ellipse -- now directly confirmed
   reachable via instrumented reproduction, at small (not production-scale)
   grids.** [measured -- upgraded from `[verify]`/unconfirmed 2026-09-17
@@ -1687,7 +1687,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   non-decreasing in `dwell`, so the first feasible one found is also the
   fastest) and `make_readout_grads_from_params` calls it internally --
   every existing 3-arg call site (`ArbEPI.py`/`EPIcal.py`/`noise.py`,
-  `plotting/compare_readout_pns.py`, and the test suite) needed no
+  `plot/compare_readout_pns.py`, and the test suite) needed no
   signature change. At the reproducing config this landed on `dwell=4e-6`
   (one raster step up from the old fixed `2e-6`), which also happens to
   drop the readout out of the hardware-clamped regime entirely (echo
@@ -1721,7 +1721,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   and shipped-`(240,45,9)`-config tests in both `test_caipi_sample.py` and
   `test_ticaipi_sample.py` asserting the real `params.Nshots*ETL` sample
   count and no `ticaipi_sample` raise.
-- [x] **148.** Resolved: `plotting/compare_readout_pns.py` now imports and
+- [x] **148.** Resolved: `plot/compare_readout_pns.py` now imports and
   calls `resolve_omegas(p0, rng=np.random.default_rng(p0.seed))` instead
   of `gen_sampling_masks(p0.R, p0, ...)` directly. Also broadened the
   `assert p0.seed is not None` a few lines above to `assert p0.seed is not
@@ -1730,7 +1730,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
 - [x] **149.** Resolved together with item 127: `plot_one_tr` now builds
   `echo_centers = t_adc[n_fid//2::n_fid]` (one ADC-center timestamp per
   echo) and marks TE via the same shared
-  `plotting.plotting.nominal_te_value(echo_centers, params.ETL)` helper,
+  `plot.plotting.nominal_te_value(echo_centers, params.ETL)` helper,
   replacing the fixed-parity `(ETL-1)//2` index. Docstring updated to
   describe the parity-aware behavior.
 - [x] **150.** Resolved: `noise.py` now computes `pad_duration =
@@ -1755,7 +1755,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `write_ceq`/`read_pge` round trip (a built `ArbEPI.pge`) and a synthetic
   `n_samples=1` case confirming `_read_arbitrary` now returns a length-1
   tuple, not a bare scalar.
-- [ ] **166. `plotting/compare_readout_pns.py`'s `_overlay_figure` centers its
+- [ ] **166. `plot/compare_readout_pns.py`'s `_overlay_figure` centers its
   "gx zoom" panel ~8ms (about 7.5 echo spacings) away from the actual
   nominal-TE echo, because it mixes two different time origins.** [measured;
   citation updated 2026-09-19 against `d515cd0` -- `compare_readout_pns.py`'s
@@ -2189,7 +2189,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   guard) and raise a clear `ValueError`, or have `_patch_starts` clamp
   `stride` to `patch`; either way, add a regression test exercising
   `stride > patch`.
-- [ ] **196. `sampling/pd_sample.py`'s `crop_corner=True` post-crop can
+- [ ] **196. `sample/pd_sample.py`'s `crop_corner=True` post-crop can
   strip calibration-region cells at a high enough `calib_frac`, directly
   contradicting the function's own docstring claim that `calib_mask` cells
   are always fully sampled.** [measured; found 2026-09-16 against
@@ -2629,11 +2629,11 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   actually happens. Fix: catch and collect each sequence's exception (or
   call the non-raising `check_seq_feasibility` directly and inspect
   `.ok`), evaluating all four before reporting/raising once.
-- [ ] **236. `sampling/external_mask.py`'s `load_external_mask` silently
+- [ ] **236. `sample/external_mask.py`'s `load_external_mask` silently
   accepts any nonzero value -- including `NaN` -- as a sampled point,
   despite its own docstring's "0/1 array" contract, with no validation.**
   [measured 2026-09-23 against `100056a`] `mask = np.asarray(data[key
-  ]).astype(bool)` (`sampling/external_mask.py:44`). The docstring
+  ]).astype(bool)` (`sample/external_mask.py:44`). The docstring
   (`:21-23`) promises the `.mat` variable holds "a 0/1 array," but nothing
   checks that. `.astype(bool)` treats *any* non-zero float as `True`,
   including negative numbers, fractional density weights, and `NaN`
@@ -2676,7 +2676,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   pp.calc_duration(gx_pre)` term to `+ max(pp.calc_duration(gx_pre),
   pp.calc_duration(gy_pre), pp.calc_duration(gz_pre))`, matching
   `tr_min`'s existing pattern, plus a `crt`-varied regression test.
-- [ ] **248. `sampling/pd_sample.py`'s Poisson-disc core never marks its
+- [ ] **248. `sample/pd_sample.py`'s Poisson-disc core never marks its
   own seed point occupied in `mask`, letting later points land inside the
   seed's exclusion radius.** [measured 2026-09-24 against `3ab2854`]
   `_poisson_disc_core_jit` (`:176-184`) sets `pxs[0]`/`pys[0]` to the
@@ -2937,6 +2937,22 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `test_extend_harmonic_trivial_masks`,
   `test_resize_to_epi_has_no_field_step_at_the_fit_mask_edge` (fails on the
   old zero fill).
+- [x] **262. The temporal high-pass penalty slowed the joint wavelet-TV
+  solver's convergence in proportion to its weight.** [found 2026-10-02 in
+  the recon sweep on `20260930ballfat`'s radial testbed, while developing
+  `--hp-weight`, before it merged] As first written, `(mu/2)||P x||^2` was
+  part of PDHG's smooth term, so the primal step was 1/(1 + mu). At mu = 30
+  and the default 100 iterations the data-consistency cost ended 20x above
+  the mu = 0 run (8323 vs 411), and the result looked like a worse prior
+  (in-band fluctuation 0.39% -> 1.09%, mean-image error 4.3% -> 9.9%) when
+  it was an unconverged solve. Fixed: the penalty is a dual block of
+  `SpatioTemporalWaveletTV` (G gains P, `SectionProx` applies its closed-form
+  prox v / (1 + alpha mu)), so the step no longer depends on mu; undersampled,
+  mu = 30, 100 iterations, the objective is 3x lower (323 vs 1097). CG solves
+  its normal equations exactly, so it was unaffected. MSLR still takes the
+  penalty as a gradient term (POGM's prox is the low-rank one), so its step
+  is 1/(Nscales (1 + mu)): keep mu modest there or raise `--niter`. Test:
+  `test_hp_penalty_as_a_dual_block_converges_faster_than_as_a_smooth_term`.
 
 ## Consistency & documentation
 
@@ -2952,7 +2968,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
 - [x] **32.** Closed as investigated, accepted as-is -- no code change.
   Item 29 already eliminated the actual duplicate computation this
   worried about; the one remaining angle (sub-`Sequence` extraction) is
-  the approach `plotting/plotting.py`'s own module docstring already
+  the approach `plot/plotting.py`'s own module docstring already
   documents as tried and abandoned. Nothing further to do.
 - [x] **33.** Closed as kept deliberately, not a bug -- no code change.
   `lib/make_readout_grads.py` already carries the comment explaining
@@ -2975,7 +2991,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   fifth `sampling_method` -- that would need a path parameter on `Params`
   and is a larger change than this item's scope): added a bullet to
   CLAUDE.md's architecture notes and a line in README's directory tree
-  describing `sampling/external_mask.py` as a deliberate manual escape
+  describing `sample/external_mask.py` as a deliberate manual escape
   hatch for a collaborator-supplied mask, used by calling
   `generate_arbepi(omegas, ...)` directly rather than through
   `gen_sampling_masks`.
@@ -3202,7 +3218,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   custom-mask-flow/config-table reorg), substance unchanged]
   `README.md:57` says `--plot` writes
   "diagnostic plots (`mask.png`, `psf.png`, `trajectory.png`,
-  `one_tr.png`)" -- four files. But `plotting/plot_last_run.py:27-58`
+  `one_tr.png`)" -- four files. But `plot/plot_last_run.py:27-58`
   (which `main.py --plot` calls) writes a fifth: `PNS_one_tr.png`, from
   `plot_pns_one_tr` (added alongside the PNS-driven slew-limit work
   documented in CLAUDE.md's "PNS finding history"). Confirmed by grepping
@@ -3484,12 +3500,12 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
 - [x] **156.** Resolved: added a `discard_duration` row to README's USER
   CONFIGURATION table, between `T1` and `ETL` (matching `load_params()`'s
   real field order).
-- [x] **157.** Resolved: CLAUDE.md's `sampling/external_mask.py` paragraph
+- [x] **157.** Resolved: CLAUDE.md's `sample/external_mask.py` paragraph
   now distinguishes the two real `Params` dataclass fields
   (`custom_mask_path`/`custom_omegas`) from the `load_params()`-local
   `custom_mask_key` variable, instead of listing all three as dataclass
   fields.
-- [x] **160. `sampling/caipi_sample.py`'s `balanced_factors` docstring (and
+- [x] **160. `sample/caipi_sample.py`'s `balanced_factors` docstring (and
   `tests/test_caipi_sample.py`'s matching comment) mislabels a hypothetical
   example as "this repo's default."** [measured, low severity; substance
   updated 2026-09-17 against `ad2fdc4` -- the comparison baseline below is
@@ -3501,7 +3517,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `(90, 60, 6)` line up), but whoever fixes this item should use the
   current `(90, 60, 6)` figure, not the `(240, 45, 9)` one below, when
   rewording] Both
-  `sampling/caipi_sample.py:36-37` and `tests/test_caipi_sample.py:35` say
+  `sample/caipi_sample.py:36-37` and `tests/test_caipi_sample.py:35` say
   "At (Ny, Nz, R) = (240, 60, 4) (this repo's default `res`)...". The
   repo's actual shipped default at the time this item was written was
   `(Ny, Nz, R) = (240, 45, 9)`
@@ -3694,9 +3710,9 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   to CLAUDE.md's fuller six-row table) to
   `recon/analysis.py:97-109`.
 - [x] **185. CLAUDE.md's "Plotting" paragraph undercounts
-  `plotting/plot_last_run.py`'s functions -- "four" should be "five" -- and
+  `plot/plot_last_run.py`'s functions -- "four" should be "five" -- and
   has been wrong since the sentence was written.** [measured, low severity]
-  `CLAUDE.md`'s Plotting paragraph says "`plotting/plot_last_run.py` drives
+  `CLAUDE.md`'s Plotting paragraph says "`plot/plot_last_run.py` drives
   all four plotting functions against the most recent `output/` run." But
   `plot_last_run.py:19-23,36-53` actually calls five: `plot_sampling_mask`,
   `plot_psf`, `plot_trajectory`, `plot_one_tr`, and `plot_pns_one_tr`,
@@ -4165,7 +4181,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   README.md` shows this line unchanged since it was first written, never
   touched by the `0b9c25f` default-protocol switch] `README.md:105`:
   "Diagnostic plots from a default-params run (`main.py --plot`; see
-  `plotting/plot_last_run.py`), R = 9, `sampling_method='pd'`." `params.py`'s
+  `plot/plot_last_run.py`), R = 9, `sampling_method='pd'`." `params.py`'s
   current default (non-custom-mask) path sets `R = 6` (`N = [90, 90, 60]`,
   the ABCD protocol). This is a different location from item 160 (which
   is about `caipi_sample.py`'s and one test file's docstring wording, not
@@ -4177,7 +4193,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
 - [x] **242. Extends item 160: two more test-file comments claim
   "(Ny, Nz, R) = (240, 45, 9)" is "the repo's own shipped default,"
   uncited by item 160's own file list.** [measured 2026-09-23 against
-  `100056a`] Item 160 currently cites only `sampling/caipi_sample.py:36-37`
+  `100056a`] Item 160 currently cites only `sample/caipi_sample.py:36-37`
   and `tests/test_caipi_sample.py:35`. The same stale-default claim also
   appears, uncited, at `tests/test_caipi_sample.py:64-70`
   (`test_balanced_factors_and_caipi_sample_at_shipped_default_dims`: "the
@@ -4355,12 +4371,12 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   with only the small per-frame `pos` index arrays (item 75's fix, 69 MB
   total) being genuinely L-independent -- not "static, L-independent"
   overall.
-- [ ] **115. `plotting/` has zero test coverage -- including no regression
+- [ ] **115. `plot/` has zero test coverage -- including no regression
   guard for item 96's real, previously-shipped PSF bug.** [measured; citation
   sharpened 2026-09-13 -- one supporting sub-claim went stale, substance
   unchanged] `tests/test_plotting.py` now exists (added for items 127/149,
-  importing `plotting.plotting.nominal_te_value`) so this item's original
-  "no file under `tests/` ... imports `plotting.plotting` at all" clause is
+  importing `plot.plotting.nominal_te_value`) so this item's original
+  "no file under `tests/` ... imports `plot.plotting` at all" clause is
   no longer literally true. But that file only tests the standalone
   `nominal_te_value` helper -- it does not smoke-test or regression-guard
   any of the five actual plotting *functions*, so a repo-wide grep still
@@ -4370,7 +4386,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   concretely because item 96 documents a real, previously-shipped
   correctness bug in `plot_psf` (wrong FFT-shift convention, fixed by
   switching to `fftshift(ifft2(ifftshift(omega)))`,
-  `plotting/plotting.py:197`) that was verified only by a one-off manual
+  `plot/plotting.py:197`) that was verified only by a one-off manual
   measurement ("PSF magnitude now peaks at exactly `(Ny//2, Nz//2)`"), not
   captured as a regression test -- nothing in the suite would catch that
   bug coming back (e.g. a future edit that "simplifies" the shift calls
@@ -4381,7 +4397,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   plotting functions.
 - [x] **116.** Closed as superseded, no code change needed here. This item
   asked for a `pytest.raises(ValueError)` regression test exercising
-  `sampling/ticaipi_sample.py:39-46`'s divisibility guard via its own
+  `sample/ticaipi_sample.py:39-46`'s divisibility guard via its own
   cited repro, `ticaipi_sample([240, 45], 4, 0)`. Item 147's later fix to
   `balanced_factors` (restricting it to only ever return a `(Ry, Rz)` pair
   that evenly divides `(Ny, Nz)`, or raise first) removed the only path by
@@ -4416,7 +4432,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   must both happen *before* handing data to
   `preprocessing/nifti_io.save_recon_nifti` -- "getting that boundary
   wrong once already lost a completed real reconstruction." This is
-  distinct from item 115 (plotting/'s coverage gap) and from
+  distinct from item 115 (plot/'s coverage gap) and from
   `save_recon_nifti` itself (which *is* tested, in
   `tests/test_preprocessing_nifti_io.py`) -- what's untested is
   `save_result()`'s own orchestration: the CPU/GPU boundary, the `.h5`
@@ -4457,7 +4473,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   (the `NMAXBLOCKSFORGRADHEATCHECK` sliding-window block count, silently
   wrong for any segment whose block count divides 40000 evenly) that no
   test would catch today or after a fix -- the exact same "no regression
-  guard for a known bug" pattern already flagged for `plotting/` (item
+  guard for a known bug" pattern already flagged for `plot/` (item
   115) and `recon/save_result.py` (item 129, directly above). Fix: add
   `tests/test_ge_writeceq.py` with a synthetic small `Ceq` (a handful of
   parent blocks/segments/loop rows, no need for a real `.seq` file) that
@@ -4498,7 +4514,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   93). The only thing that has ever run this branch end to end is the
   one-off production driver `run_b0_recon.py` against real, uncommitted
   acquisition data -- never in the test suite. Distinct from item 129
-  (`save_result.py`, no test file at all) and item 115 (`plotting/`, no
+  (`save_result.py`, no test file at all) and item 115 (`plot/`, no
   test file at all) in that here the *surrounding* function (`run_recon`'s
   plain, non-B0 path) is well covered
   (`test_run_recon_smoke`/`test_run_recon_recovers_signal_without_regularization`)
@@ -4632,7 +4648,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   copied from item 78's pattern) and a brand-new one for
   `b0map_hz_degre` -- neither is exercised by
   any test. Same "one-off diagnostic script with no test file" gap item
-  115 already documents for `plotting/`, not yet flagged for this file.
+  115 already documents for `plot/`, not yet flagged for this file.
   Fix direction: a small synthetic-fixture test (mirroring
   `run_b0map.py`'s own test fixtures) asserting both `ValueError` guards
   fire on malformed inputs, and that `main()` completes and writes the
@@ -4786,7 +4802,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   (e.g. asserting the fitted/observed smoothing extent in physical units
   is similar across axes despite differing voxel size, or directly
   asserting `sigma_vox` per-axis via a stub).
-- [ ] **187. `sampling/gen_sampling_masks.py`'s `'rand'` sampling method has
+- [ ] **187. `sample/gen_sampling_masks.py`'s `'rand'` sampling method has
   zero test coverage through its actual dispatch path.** [measured] The
   `'rand'` branch (`gen_sampling_masks.py:70-72`, including the
   `rand_gaussian_sigma = np.array([Ny, Nz]) / 6` default at `:45-47`) wires
@@ -5221,7 +5237,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   (`tests/test_preprocessing_preprocess.py` has zero references to
   `smaps`/`process_smaps`/`estimate_smaps`), so nothing would catch such a
   miss either -- see item 174.
-- [ ] **118. `sampling/pd_sample.py`'s `dtype` parameter
+- [ ] **118. `sample/pd_sample.py`'s `dtype` parameter
   (`'logical'`/`'double'`/`'complex'`) is dead in production and
   untested.** [measured; citation updated 2026-09-21 against `e04d9aa` --
   shifted from `:389-394` to `:390-395`, substance unchanged; citation
@@ -5420,7 +5436,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   removing its own copy -- or, if the torch/numpy return-type difference is
   deliberate, factor out one shared core (read `omegas` + fallback) with a
   thin per-caller wrapper.
-- [x] **193.** Resolved: `sampling/pd_sample.py`'s `_poisson_disc_core_jit`
+- [x] **193.** Resolved: `sample/pd_sample.py`'s `_poisson_disc_core_jit`
   drew its single initial active point uniformly over the *whole* grid,
   including the pre-filled calibration region -- a seed landing inside it
   collides on every one of its `max_attempts` tries (everything nearby is
@@ -5436,7 +5452,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   ~13%-area calibration region returned zero grown points every time.
   Probability of triggering scales with the calibration region's area
   fraction, which was about to grow under the same change that surfaced
-  this (see `sampling/pd_sample.py`'s `calib_frac` redefinition from an
+  this (see `sample/pd_sample.py`'s `calib_frac` redefinition from an
   area-matched ellipse to a per-axis fraction-of-kmax rectangle). Fixed by
   rejection-sampling the initial seed against `calib_mask` (module
   docstring point 4); verified the fix eliminates the failure across 2000
@@ -5474,7 +5490,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   "close enough" -- tighten or loosen it if a future measured acoustics
   number sits uncomfortably close to 0.3 despite clearing the band by more
   than the margin, or vice versa.
-- [x] **195.** Resolved 2026-09-15: `sampling/pd_sample.py`'s calibration
+- [x] **195.** Resolved 2026-09-15: `sample/pd_sample.py`'s calibration
   region (`8efa7dd`, "redefine calibration region as a per-axis
   kmax-fraction rectangle") sized `calib_mask` as a *fixed fraction of
   k-space* (`side_frac**2 * Ny*Nz` pixels), independent of `accel`/
@@ -5934,11 +5950,11 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   or a new `lib/`-level function) taking `(params, spoil_rng, rf, rg,
   gx_spoil, gy_spoil, gz_spoil, rfsat, trid, rf_count)` and returning the
   updated `rf_count`/scale factors.
-- [ ] **245. `sampling/pd_sample.py`'s `pd_sample()` re-clamps a value
+- [ ] **245. `sample/pd_sample.py`'s `pd_sample()` re-clamps a value
   `_calib_side_frac` already guarantees is clamped.** [measured 2026-09-23
   against `100056a`] `side_frac = _calib_side_frac(target_samples, nx, ny,
   calib_frac)` ... `rho_calib = min(max(side_frac, 0.0), 0.999)`
-  (`sampling/pd_sample.py:319`). `_calib_side_frac` already guarantees its
+  (`sample/pd_sample.py:319`). `_calib_side_frac` already guarantees its
   return value is in `[0, 0.999]` (`math.sqrt(...)` of a non-negative
   quantity strictly less than `calib_frac`, then clamped via
   `min(..., 0.999)`, or exactly `0.0` when `calib_frac <= 0`) -- the

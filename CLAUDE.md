@@ -10,7 +10,7 @@ fast, vendor-agnostic 3D-EPI MRI pulse sequences from arbitrary 2D
 points and global config (`main.py`, `demo.ipynb`, `params.py`,
 `scanners.py`) sit at the repo root, mirroring `../ArbEPI` having `params.m`/`main.m` directly
 at its own root — everything else lives under
-`lib/`/`sequences/`/`sampling/`/`plotting/`/`ge/` (plus the
+`lib/`/`sequences/`/`sample/`/`plot/`/`ge/` (plus the
 `preprocess/`/`recon/` data-processing stages, and `tests/`/`docs/`), matching
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
 for the full layout).
@@ -468,8 +468,8 @@ hardware-limit fall; (b) on that 240x240x45 protocol, a prescribed TE of
 the line, ~33 ms costs >85%, and ~30 ms well over 100%.
 `test_arbepi_default_params_peak_pns_under_normal_mode_limit`
 (tests/test_ge_check.py) now regression-guards the <80% property on every
-test run, and `plotting/compare_readout_pns.py` (`uv run python -m
-plotting.compare_readout_pns`) rebuilds the symmetric-vs-POPE comparison
+test run, and `plot/compare_readout_pns.py` (`uv run python -m
+plot.compare_readout_pns`) rebuilds the symmetric-vs-POPE comparison
 -- two full ArbEPI sequences from the same seed=0 masks and identical
 nominal parameters, per-variant PNS-over-one-TR figures plus a combined
 overlay (`output/compare_pope/`), and a printed table (peak PNS, echo
@@ -552,7 +552,7 @@ no longer called them, for the same reason.
 - **Fat-sat RF pulse**: a 90° min-phase SLR pulse, like the MATLAB
   original's `toppe.utils.rf.makeslr`, designed by `lib/slr.py` (a
   scipy-only port of sigpy's `dzrf` 'ex' path, vendored rather than adding
-  sigpy to the sequence side, like `sampling/pd_sample.py`). Its parameters
+  sigpy to the sequence side, like `sample/pd_sample.py`). Its parameters
   are *not* the original's: TBW 2 over 6 ms instead of TBW 3 over 4 ms, so
   the stop band covers in-object water (−200..+150 Hz). The fat-sat plays
   every shot, and any water it tips becomes coherence the random spoilers
@@ -584,7 +584,7 @@ no longer called them, for the same reason.
   `tests/test_make_water_excitation.py` guards the profile;
   `tests/test_trajectory_matches_schedule.py` runs its sequence checks in
   both modes.
-- **Plotting** (`plotting/plotting.py`): static, non-interactive matplotlib
+- **Plotting** (`plot/plotting.py`): static, non-interactive matplotlib
   equivalents of the sampling-mask/trajectory/PSF plots. The interactive
   scroll/slider mask viewer from the MATLAB repo is not ported — no
   algorithmic content worth preserving there. `plot_one_tr` is an
@@ -604,7 +604,7 @@ no longer called them, for the same reason.
   rest) so where each echo train actually begins is visible at a glance —
   most informative for `mask2epi_radial`, where starts scatter around the
   spoke ends rather than clustering near one corner of k-space like
-  `mask2epi_laminar`'s raster order. `plotting/plot_last_run.py` drives all
+  `mask2epi_laminar`'s raster order. `plot/plot_last_run.py` drives all
   five plotting functions (including `plot_pns_one_tr`) against the most recent `output/` run and is
   wired into `main.py --plot`, which now runs *before* the `--ge` export
   step (both independently depend only on `scan_info.mat`/`ArbEPI.seq`, not
@@ -617,7 +617,7 @@ no longer called them, for the same reason.
   --to notebook --execute --inplace demo.ipynb`) after changes that
   alter the plots. It replaced README's old Demo section and its static
   `docs/demo/` images.
-- **Poisson-disc sampling** (`sampling/pd_sample.py`): a local
+- **Poisson-disc sampling** (`sample/pd_sample.py`): a local
   reimplementation of `sigpy.mri.poisson`'s algorithm, not a dependency on
   the `sigpy` package — see README's "Differences vs. MATLAB original"
   section for the three independent bugs found (in both
@@ -630,7 +630,7 @@ no longer called them, for the same reason.
   Michigan fMRI lab-internal (server names are lab-specific); not part of
   `main.py --ge`'s own export path, and not needed to generate or validate
   `.pge` files. See `ge/README.md` for usage and SSH key setup.
-- **`sampling/external_mask.py`**'s `load_external_mask` loads a
+- **`sample/external_mask.py`**'s `load_external_mask` loads a
   precomputed 2D `(ky, kz)` or 3D `(ky, kz, t)` mask from an outside
   collaborator's own v5 `.mat` file (`scipy.io.loadmat`, not
   `hdf5storage.loadmat` -- v5, not this repo's own v7.3 convention) for a
@@ -657,9 +657,9 @@ no longer called them, for the same reason.
   *inside* `load_params()`, before `TR = volume_tr / Nshots`/`fa`/
   `Ndummyshots` are computed from `Nshots` -- overriding `Nshots` after
   the fact (e.g. via `dataclasses.replace` on an already-built `Params`)
-  would leave those downstream-derived fields stale. `sampling/
+  would leave those downstream-derived fields stale. `sample/
   gen_sampling_masks.py`'s `resolve_omegas(params)` is the single helper
-  every call site (`main.py`, tests, `plotting/compare_readout_pns.py`)
+  every call site (`main.py`, tests, `plot/compare_readout_pns.py`)
   should use to get `omegas` from a `Params`: it returns `params.
   custom_omegas` directly when set, else falls back to `gen_sampling_masks`
   -- calling `gen_sampling_masks` directly on a custom-mask `Params` would
@@ -893,11 +893,12 @@ of older modules; see git history for those):
 | file | contents |
 |---|---|
 | `operators.py` | the encoding operator A: `SENSE` (smaps -> FFT -> sample), `SENSE_B0` (time-segmented B0 phase accrual), `SENSE_B0_R2star` (phase accrual + R2* magnitude decay), and builders `build_sense`/`build_sense_b0`/`build_sense_b0_r2star` returning a per-frame `BlockDiagonal` |
-| `regularizers.py` | g(x): `MultiScaleLowRank` (multi-scale low-rank prox/cost, patch SVST, `SumScales`), `WaveletTV` (`Wavelet3D` + periodic finite differences, `SectionL1` prox) |
+| `regularizers.py` | g(x): `MultiScaleLowRank` (multi-scale low-rank prox/cost, patch SVST, `SumScales`), `WaveletTV` (`Wavelet3D` + periodic finite differences, `SectionL1` prox), `SpatioTemporalWaveletTV` (`WaveletTV` on every frame jointly via `PerFrame`, plus non-periodic temporal TV, `TemporalDiff`), `TemporalHighPass` (DCT projector onto temporal frequencies above a cutoff, for the smooth penalty (mu/2)\|\|P x\|\|^2) |
 | `solvers.py` | `pogm_restart` (PGM/FPGM/POGM with gradient restart + `conv_tol`), `pdhg` (Condat-Vu primal-dual via mirtorch's `FBPD`, for regularizers without a closed-form prox), `cg` |
-| `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,mslr,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, ...). `none` -> CG, `mslr` -> POGM, `wavelet-tv` -> PDHG (TV has no closed-form prox). `--device` defaults to cuda if available, else cpu (everything also runs on CPU, slowly) |
+| `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,mslr,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, `--hp-weight`/`--hp-cutoff` (any reg), `--lamb-ttv`/`--joint` (wavelet-tv), `--tag`, ...). `none` -> CG, `mslr` -> POGM, `wavelet-tv` -> PDHG (TV has no closed-form prox), per frame unless a temporal term or `--joint` makes it joint. `--device` defaults to cuda if available, else cpu (everything also runs on CPU, slowly) |
 | `rss.py` | root-sum-of-squares, GPU-batched over frames |
 | `utils.py` | I/O (`read_frames_cropped`, `load_*`, `load_and_gather_ksp`, `save_result`, ...), operator norms (`estimate_spectral_norm`, `check_operator_unitary`), `tsnr_report`, and the one-off `sweep`/`benchmark`/`validate` analyses (`python -m recon.utils {tsnr,sweep,benchmark,validate}`) |
+| `testbed.py` | known-truth testbed: `build` turns a fully sampled run plus another run's masks into undersampled dynamic data with injected activation (a `<name>_preprocessed.h5` `sense.py` reads as is), `score` compares a recon with the truth (fluctuation in/out of band, activation amplitude/t/leakage, error, edge sharpness) |
 | `demo.ipynb` | runs every recon type on `20260915ball/2_6x_2.4mm` |
 
 Outputs land in `<datdir>/recon/sense_<reg>[_b0|_b0r2star]/` and

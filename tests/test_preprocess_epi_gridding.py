@@ -9,7 +9,7 @@ import hdf5storage  # noqa: E402
 
 from params import load_params  # noqa: E402
 from preprocess.epi_gridding import rampsamp2cart, rampsampepi2cart  # noqa: E402
-from sampling.gen_sampling_masks import gen_sampling_masks  # noqa: E402
+from sample.gen_sampling_masks import gen_sampling_masks  # noqa: E402
 from sequences.ArbEPI import generate_arbepi  # noqa: E402
 
 

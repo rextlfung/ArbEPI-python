@@ -1,7 +1,7 @@
 import numpy as np
 
-from sampling.gen_gaussian_pdf import gen_gaussian_pdf
-from sampling.rand_sample import rand_sample
+from sample.gen_gaussian_pdf import gen_gaussian_pdf
+from sample.rand_sample import rand_sample
 
 
 def test_rand_sample_exact_count_uniform():

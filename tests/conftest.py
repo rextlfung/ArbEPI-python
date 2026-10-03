@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from params import load_params
-from sampling.gen_sampling_masks import resolve_omegas
+from sample.gen_sampling_masks import resolve_omegas
 from sequences.ArbEPI import generate_arbepi
 from sequences.noise import generate_noise
 

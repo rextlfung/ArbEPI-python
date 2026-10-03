@@ -87,7 +87,7 @@ override-dependencies = ["mri-nufft[finufft]>=1.0"]
 py-modules = ["params", "scanners"]
 
 [tool.setuptools.packages.find]
-include = ["sampling*", "lib*", "sequences*", "plotting*", "ge*", "preprocess*", "recon*"]
+include = ["sample*", "lib*", "sequences*", "plot*", "ge*", "preprocess*", "recon*"]
 
 [tool.ruff]
 line-length = 100

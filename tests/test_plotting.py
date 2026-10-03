@@ -1,6 +1,6 @@
 import numpy as np
 
-from plotting.plotting import nominal_te_value
+from plot.plotting import nominal_te_value
 
 
 def test_nominal_te_value_even_etl_averages_middle_pair():

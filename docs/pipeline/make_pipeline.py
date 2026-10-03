@@ -348,7 +348,7 @@ def draw(d):
                  'then TR, then flip angle (Ernst angle)'),
     ]
     custom = [
-        ('title', 'Custom mask (optional)'), ('mono-s', 'sampling/external_mask.py'),
+        ('title', 'Custom mask (optional)'), ('mono-s', 'sample/external_mask.py'),
         ('para', '(ky, kz) or (ky, kz, t) .mat; sets Nshots and effective R'),
     ]
     top_h = row([(270, specs), (sw, params), (225, custom)])
@@ -363,7 +363,7 @@ def draw(d):
     d.arrow(f'M{sc} {top + top_h} V{y_mask - 2}')
     d.chip(sc, top + top_h + gap // 2, 'Params (+ sys, spec)')
     mask_h = d.box(sx, y_mask, sw, None, 'seq', [
-        ('title', 'Sampling mask generation'), ('mono', 'sampling/ · resolve_omegas()'),
+        ('title', 'Sampling mask generation'), ('mono', 'sample/ · resolve_omegas()'),
         ('para', 'independently generate (ky, kz) masks per frame; skipped when a custom '
                  'mask is given'),
     ])

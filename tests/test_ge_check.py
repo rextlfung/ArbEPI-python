@@ -117,7 +117,7 @@ def test_arbepi_default_params_peak_pns_under_normal_mode_limit(tmp_path):
     from ge.check import sample_gradients_tesla_per_m
     from ge.pns import pns
     from params import load_params
-    from sampling.gen_sampling_masks import resolve_omegas
+    from sample.gen_sampling_masks import resolve_omegas
     from sequences.ArbEPI import generate_arbepi
 
     p = replace(load_params(output_dir=str(tmp_path)), seed=0)

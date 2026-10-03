@@ -175,9 +175,11 @@ def pogm_restart(
 
 def cg(
     A, ksp: torch.Tensor, shape: tuple[int, int, int, int], num_iter: int = 20,
-    tol: float = 1e-6,
+    tol: float = 1e-6, reg_normal: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, list[float]]:
-    """Conjugate gradient on A^H A x = A^H ksp, starting from 0.
+    """Conjugate gradient on (A^H A + Q) x = A^H ksp, starting from 0, where Q is
+    reg_normal (a symmetric positive semidefinite map, e.g. mu P for a quadratic
+    penalty (mu/2)||P x||^2; default none).
 
     A: an operator from recon/operators.py. ksp: (K,Nc,Nt). shape: (Nx,Ny,Nz,Nt).
     Returns (X, residuals), residuals[i] = ||r_i|| / ||r_0|| (residuals[0] = 1);
@@ -197,6 +199,8 @@ def cg(
     for _ in range(num_iter):
         AP = A.apply(P)
         AHAP = A.adjoint(AP)
+        if reg_normal is not None:
+            AHAP = AHAP + reg_normal(P)
         alpha = rsold / torch.sum(torch.real(torch.conj(P) * AHAP)).item()
         X = X + alpha * P
         R = R - alpha * AHAP

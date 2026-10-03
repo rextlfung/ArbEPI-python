@@ -21,11 +21,12 @@ results. Start there if you want to see what each option does.
 | File | What it holds |
 |---|---|
 | `operators.py` | The encoding operators `SENSE`, `SENSE_B0`, `SENSE_B0_R2star` and their builders |
-| `regularizers.py` | `MultiScaleLowRank` and `WaveletTV` (plus the pieces they're built from) |
+| `regularizers.py` | `MultiScaleLowRank`, `WaveletTV`, `SpatioTemporalWaveletTV` and `TemporalHighPass` (plus the pieces they're built from) |
 | `solvers.py` | `pogm_restart` (POGM/FPGM/PGM), `pdhg` (primal-dual), `cg` |
 | `sense.py` | `run_sense()` and the `python -m recon.sense` command line |
 | `rss.py` | `run_rss()` and the `python -m recon.rss` command line |
 | `utils.py` | File I/O, spectral-norm estimation, the tSNR report, and one-off analyses |
+| `testbed.py` | A known-truth testbed (undersampled dynamic data with injected activation, built from a fully sampled run) and scoring of recons against it |
 | `demo.ipynb` | Worked examples on `20260915ball/2_6x_2.4mm` |
 
 Tests mirror this: `tests/test_recon_<module>.py`.
@@ -188,7 +189,7 @@ frame (a separate copy per frame doesn't fit in GPU memory).
 |---|---|---|
 | `none` | 0 | `cg`: conjugate gradient on $A^H A x = A^H y$ |
 | `mslr` | multi-scale low rank | `pogm_restart` (default POGM; `--mom fpgm` or `pgm` also available) |
-| `wavelet-tv` | $\lambda_{\ell_1}\|Wx\|_1 + \lambda_{TV}\|Dx\|_1$, per frame | `pdhg` (primal-dual) |
+| `wavelet-tv` | $\lambda_{\ell_1}\|Wx\|_1 + \lambda_{TV}\|Dx\|_1$, per frame (jointly with `--lamb-ttv`/`--hp-weight`/`--joint`) | `pdhg` (primal-dual) |
 
 POGM needs a closed-form proximal operator for $g$; the low-rank regularizer
 has one (singular-value soft-thresholding), TV does not, hence the
@@ -250,6 +251,71 @@ periodic finite difference along x, y and z (anisotropic TV). Each frame is
 solved separately. The operator is divided by $\sigma_1(A)$ and each frame's
 data by its 99th-percentile magnitude, so the default
 `--lamb-l1 0.005 --lamb-tv 0.005` means the same on every dataset.
+
+### Temporal regularization
+
+Two optional terms couple the frames; any of them makes the solve joint
+(all frames at once):
+
+- **`--hp-weight MU`** (any `--reg`): $+\tfrac{\mu}{2}\|Px\|^2$, where $P$
+  (`TemporalHighPass`) is the orthogonal projector onto temporal frequencies
+  above `--hp-cutoff` (default 0.15 Hz), along t in the DCT-II basis. The
+  penalty is exactly zero at and below the cutoff, so it can't bias a signal
+  confined to that band (BOLD), and frequencies above it are shrunk by
+  $1/(1+\mu)$ where the data don't constrain them. The DCT, not the DFT,
+  because its even extension gives a slow drift no jump at the window edge,
+  which would otherwise leak into the penalized band. $\mu$ is relative to the
+  data term's curvature with $A$ normalized to unit norm, so it means the same
+  for CG, MSLR and wavelet-TV. Needs the volume TR: `--volume-tr`, or the
+  k-space file's `volume_tr` attr. How each solver takes it: CG adds $\mu P$
+  to its normal equations (exact); wavelet-TV makes it a PDHG dual block with
+  a closed-form prox, so the step size doesn't depend on $\mu$ (review item
+  262: as a smooth term, $\mu = 30$ left 100 iterations far from converged);
+  MSLR adds it to the gradient, which cuts POGM's step to
+  $1/(N_{scales}(1+\mu))$, so keep $\mu$ modest there or raise `--niter`.
+- **`--lamb-ttv L`** (`wavelet-tv`): $+L\|D_t x\|_1$, temporal TV with a
+  non-periodic difference (`TemporalDiff`), in `SpatioTemporalWaveletTV`.
+  It penalizes frame-to-frame jumps at every frequency, and shrinks the
+  amplitude of real changes too.
+
+With incoherent sampling (a new random mask every frame) the aliasing is
+roughly white in time, so a temporal penalty above the cutoff removes only
+the share of it outside the kept band; the in-band share looks exactly like a
+slow signal to any temporal prior. `--joint` runs the joint wavelet-TV solver
+without a temporal term (one data scale for all frames instead of one per
+frame), the baseline for the temporal variants. `--tag` suffixes the output
+directory so differently configured runs don't overwrite each other.
+
+## Known-truth testbed (`testbed.py`)
+
+```bash
+# 80 frames: the object from a fully sampled run, masks from a 10x run
+$PY -m recon.testbed build $DAT/recon/5_1x_radial_preprocessed.h5 \
+    $DAT/recon/1_10x_radial_preprocessed.h5 $TB/recon/tb_preprocessed.h5 --volume-tr 0.4851
+$PY -m recon.sense $TB tb --reg wavelet-tv --B0 --hp-weight 3 --tag hp3
+$PY -m recon.testbed score $TB/recon/tb_preprocessed.h5 \
+    $TB/recon/sense_wavelet-tv_b0_hp3/tb_recon.h5 --json hp3.json --png hp3.png
+```
+
+`build` makes a `<name>_preprocessed.h5` that `recon.sense` reads as is: the
+object is the B0-SENSE CG reconstruction of the fully sampled run's mean
+frame; each frame applies another run's real sampling mask to it with the
+fully sampled run's echo times (the B0 model is then exactly the one the recon
+uses -- an inverse crime by construction, so this isolates sampling, noise and
+prior effects, not model mismatch) and adds fresh unit-variance noise. Four
+2%-peak activations are injected in spherical ROIs: an HRF-convolved 10 s
+on/off block at radius 3 and at radius 1.5 voxels, a 0.10 Hz sinusoid (in
+band), and a 0.25 Hz sinusoid (out of band). `score` compares magnitudes after
+one global scale: error of the mean image and per frame, temporal
+fluctuation in non-activated voxels split into below/above 0.15 Hz, each
+ROI's recovered amplitude (GLM; 1 = exact), t-score and leakage into a
+surrounding shell, the false-positive rate (|t| > 3.29) of the block regressor
+elsewhere, and edge sharpness relative to the truth. `--png` adds a panel
+(truth and recon mean, temporal std, block t-map). The `_t_lowband` and
+`false_pos_frac_lowband` entries repeat the GLM on the DCT components below
+the cutoff only, with their own degrees of freedom: a temporal penalty leaves
+the residual band-limited, which inflates the plain per-frame t (25-32% of
+null voxels above |t| = 3.29 on `20260930ballfat`, vs 0.1% in the low band).
 
 ## Performance notes
 

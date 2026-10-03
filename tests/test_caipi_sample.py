@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from sampling.caipi_sample import balanced_factors, caipi_sample
+from sample.caipi_sample import balanced_factors, caipi_sample
 
 
 @pytest.mark.parametrize('N,R', [([12, 8], 4), ([24, 16], 6), ([15, 10], 3), ([90, 60], 6)])

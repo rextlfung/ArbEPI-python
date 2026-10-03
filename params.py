@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 import pypulseq as pp
 
-from sampling.external_mask import resolve_custom_omegas
+from sample.external_mask import resolve_custom_omegas
 from scanners import SCANNERS, ScannerSpec
 
 
@@ -75,14 +75,14 @@ class Params:
     sampling_method: str | None
     seed: int | None  # passed to gen_sampling_masks' rng; None = unseeded (fresh mask each run)
 
-    # Custom ky-kz(-t) sampling mask, loaded via sampling/external_mask.py's
+    # Custom ky-kz(-t) sampling mask, loaded via sample/external_mask.py's
     # load_external_mask when custom_mask_path is not None -- see
     # README.md's "Using custom ky-kz-t sampling masks" section. Replaces
     # gen_sampling_masks (and the R/sampling_method/seed fields above)
     # entirely: R/Nshots are instead derived from the mask's own sample
     # count. custom_omegas holds the already-loaded, already-broadcast
     # (Ny, Nz, Nframes) mask (None on the built-in gen_sampling_masks path);
-    # sampling/gen_sampling_masks.py's resolve_omegas returns it in place of
+    # sample/gen_sampling_masks.py's resolve_omegas returns it in place of
     # calling gen_sampling_masks.
     custom_mask_path: str | None
     custom_omegas: np.ndarray | None
@@ -248,7 +248,7 @@ def load_params(output_dir: str = 'output') -> Params:
     # Custom ky-kz(-t) sampling mask (optional): path to a collaborator-
     # provided .mat file holding an externally-designed 0/1 sampling mask
     # (2D (Ny, Nz), reused every frame, or 3D (Ny, Nz, Nframes),
-    # time-resolved), loaded via sampling/external_mask.py's
+    # time-resolved), loaded via sample/external_mask.py's
     # load_external_mask -- see README.md's "Using custom ky-kz-t sampling
     # masks" section. When set, this replaces gen_sampling_masks (and the
     # R/sampling_method/seed fields below) entirely: R and Nshots are
@@ -273,7 +273,7 @@ def load_params(output_dir: str = 'output') -> Params:
         Nshots = math.ceil(Ny * Nz / R / ETL)
 
         # ky-kz(-t) sampling pattern: 'pd' (Poisson-disc, recommended), 'caipi',
-        # 'ticaipi', or 'rand'. See sampling/gen_sampling_masks.py.
+        # 'ticaipi', or 'rand'. See sample/gen_sampling_masks.py.
         sampling_method = 'pd'
         # Sampling-mask RNG seed: an int for a reproducible mask across runs
         # (every PNS/timing number quoted in CLAUDE.md/README uses seed=0), or
@@ -491,7 +491,7 @@ def load_params(output_dir: str = 'output') -> Params:
     # so its pixel area equals this fraction of the R-dependent sample
     # budget (floor(Ny*Nz/R)) -- a constant *share of the acquisition*
     # across every acceleration factor, not a fixed fraction of k-space
-    # (see sampling/pd_sample.py's calib_frac/_calib_side_frac docstrings,
+    # (see sample/pd_sample.py's calib_frac/_calib_side_frac docstrings,
     # and docs/review-findings.md item 195: a fixed-kmax-fraction region
     # left almost no samples outside calibration at high R -- e.g. 487 of
     # 520 target samples at the real 0.8mm/R~94 config).
