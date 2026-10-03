@@ -893,11 +893,12 @@ of older modules; see git history for those):
 | file | contents |
 |---|---|
 | `operators.py` | the encoding operator A: `SENSE` (smaps -> FFT -> sample), `SENSE_B0` (time-segmented B0 phase accrual), `SENSE_B0_R2star` (phase accrual + R2* magnitude decay), and builders `build_sense`/`build_sense_b0`/`build_sense_b0_r2star` returning a per-frame `BlockDiagonal` |
-| `regularizers.py` | g(x): `MultiScaleLowRank` (multi-scale low-rank prox/cost, patch SVST, `SumScales`), `WaveletTV` (`Wavelet3D` + periodic finite differences, `SectionL1` prox) |
+| `regularizers.py` | g(x): `MultiScaleLowRank` (multi-scale low-rank prox/cost, patch SVST, `SumScales`), `WaveletTV` (`Wavelet3D` + periodic finite differences, `SectionL1` prox), `SpatioTemporalWaveletTV` (`WaveletTV` on every frame jointly via `PerFrame`, plus non-periodic temporal TV, `TemporalDiff`), `TemporalHighPass` (DCT projector onto temporal frequencies above a cutoff, for the smooth penalty (mu/2)\|\|P x\|\|^2) |
 | `solvers.py` | `pogm_restart` (PGM/FPGM/POGM with gradient restart + `conv_tol`), `pdhg` (Condat-Vu primal-dual via mirtorch's `FBPD`, for regularizers without a closed-form prox), `cg` |
-| `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,mslr,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, ...). `none` -> CG, `mslr` -> POGM, `wavelet-tv` -> PDHG (TV has no closed-form prox). `--device` defaults to cuda if available, else cpu (everything also runs on CPU, slowly) |
+| `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,mslr,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, `--hp-weight`/`--hp-cutoff` (any reg), `--lamb-ttv`/`--joint` (wavelet-tv), `--tag`, ...). `none` -> CG, `mslr` -> POGM, `wavelet-tv` -> PDHG (TV has no closed-form prox), per frame unless a temporal term or `--joint` makes it joint. `--device` defaults to cuda if available, else cpu (everything also runs on CPU, slowly) |
 | `rss.py` | root-sum-of-squares, GPU-batched over frames |
 | `utils.py` | I/O (`read_frames_cropped`, `load_*`, `load_and_gather_ksp`, `save_result`, ...), operator norms (`estimate_spectral_norm`, `check_operator_unitary`), `tsnr_report`, and the one-off `sweep`/`benchmark`/`validate` analyses (`python -m recon.utils {tsnr,sweep,benchmark,validate}`) |
+| `testbed.py` | known-truth testbed: `build` turns a fully sampled run plus another run's masks into undersampled dynamic data with injected activation (a `<name>_preprocessed.h5` `sense.py` reads as is), `score` compares a recon with the truth (fluctuation in/out of band, activation amplitude/t/leakage, error, edge sharpness) |
 | `demo.ipynb` | runs every recon type on `20260915ball/2_6x_2.4mm` |
 
 Outputs land in `<datdir>/recon/sense_<reg>[_b0|_b0r2star]/` and

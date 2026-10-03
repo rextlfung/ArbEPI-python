@@ -199,8 +199,11 @@ def _segment_fit(
     nbins: int,
     t_ref_s: float = 0.0,
 ):
-    """Fit the time segmentation once on frame 0's distinct echo times (every
-    frame uses the same set) and map each frame's samples to rows of the fit.
+    """Fit the time segmentation once on the distinct echo times of all frames'
+    samples and map each frame's samples to rows of the fit. On acquired data
+    every frame has the same set (one per echo index, ETL values), so this is
+    frame 0's set; a frame that samples only some echo times (e.g. one mask
+    applied to another schedule's timing, recon/testbed.py) is covered too.
     Returns (b_by_echo, c, tl, unique_t_ms, pos_per_frame)."""
     Nt = omega.shape[-1]
     Ny, Nz = omega.shape[1], omega.shape[2]
@@ -209,24 +212,22 @@ def _segment_fit(
     fit_times_flat = echo_times_flat if t_ref_s == 0.0 else echo_times_flat - t_ref_s
     b0_neg = (-b0_map).to(torch.float32)  # sign convention: see module docstring
 
-    samp0 = omega[..., 0]
-    idx0 = torch.nonzero(samp0.reshape(-1), as_tuple=False).squeeze(-1)
-    t0_ms = (fit_times_flat[idx0 % n_yz, 0] * 1000).to(torch.float32)
-    unique_t_ms = torch.unique(t0_ms, sorted=True)
+    t_per_frame = []
+    for it in range(Nt):
+        idx = torch.nonzero(omega[..., it].reshape(-1), as_tuple=False).squeeze(-1)
+        t_per_frame.append((fit_times_flat[idx % n_yz, it] * 1000).to(torch.float32))
+    # distinct to within 1e-4 ms (float noise), so equal times share one row
+    unique_t_ms = torch.unique(torch.round(torch.cat(t_per_frame) * 1e4) / 1e4, sorted=True)
     b_by_echo, c, tl = mri_exp_approx(b0_neg, nbins, L, unique_t_ms)
-    _check_b_weight_row_sums(b_by_echo, "shared (frame 0's distinct echo times)")
+    _check_b_weight_row_sums(b_by_echo, "shared (all frames' distinct echo times)")
 
     pos_per_frame = []
-    for it in range(Nt):
-        samp = omega[..., it]
-        idx = torch.nonzero(samp.reshape(-1), as_tuple=False).squeeze(-1)
-        t_ms = (fit_times_flat[idx % n_yz, it] * 1000).to(torch.float32)
+    for t_ms in t_per_frame:
         pos = torch.searchsorted(unique_t_ms, t_ms).clamp(max=unique_t_ms.numel() - 1)
-        assert torch.allclose(unique_t_ms[pos], t_ms, atol=1e-4), (
-            f"build_sense_b0: frame {it}'s sample echo times aren't "
-            "a subset of frame 0's distinct times -- the frame-invariant-timing "
-            "assumption this function relies on doesn't hold for this dataset."
-        )
+        lower = (pos - 1).clamp(min=0)  # nearest of the two neighbours (rounding above)
+        pos = torch.where((unique_t_ms[lower] - t_ms).abs() < (unique_t_ms[pos] - t_ms).abs(),
+                          lower, pos)
+        assert torch.allclose(unique_t_ms[pos], t_ms, atol=1e-3)
         pos_per_frame.append(pos)
     return b_by_echo, c, tl, unique_t_ms, pos_per_frame
 
