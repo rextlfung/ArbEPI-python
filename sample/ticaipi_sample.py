@@ -21,7 +21,7 @@ from typing import Sequence
 
 import numpy as np
 
-from sampling.caipi_sample import balanced_factors, caipi_sample
+from sample.caipi_sample import balanced_factors, caipi_sample
 
 
 def ticaipi_sample(N: Sequence[int], R: int, frame_idx: int) -> np.ndarray:

@@ -21,7 +21,7 @@ def balanced_factors(N: Sequence[int], R: int) -> tuple[int, int]:
     FOV_y != FOV_z -- worse (tighter, more severe) on whichever axis has
     the smaller FOV. Equalizing the periods instead
     (FOV_y/Ry = FOV_z/Rz) requires Ry/Rz = FOV_y/FOV_z = Ny/Nz (equal
-    resolution assumed), which is also exactly what `sampling/pd_sample.py`'s
+    resolution assumed), which is also exactly what `sample/pd_sample.py`'s
     aspect-matched exclusion ellipse already does continuously -- this
     picks the closest achievable *integer* factor pair to that same ratio,
     since CAIPI's regular decimation can't do fractional Ry/Rz.

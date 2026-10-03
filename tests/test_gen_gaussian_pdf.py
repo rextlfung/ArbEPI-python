@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from sampling.gen_gaussian_pdf import gen_gaussian_pdf
+from sample.gen_gaussian_pdf import gen_gaussian_pdf
 
 
 @pytest.mark.parametrize('dims', [(16, 16), (32, 24), (15, 21)])

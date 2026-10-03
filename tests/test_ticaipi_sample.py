@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from sampling.ticaipi_sample import ticaipi_sample
+from sample.ticaipi_sample import ticaipi_sample
 
 
 @pytest.mark.parametrize('N,R', [([12, 8], 4), ([24, 16], 6), ([90, 60], 6)])

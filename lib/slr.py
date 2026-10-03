@@ -8,7 +8,7 @@ Imaging. 1991;10(1):53-65.
 Ported from SigPy's `sigpy.mri.rf.slr` (license below), itself a port of
 Pauly's MATLAB `rf_tools`, which `toppe.utils.rf.makeslr` (the MATLAB
 original's fat-sat design, see `lib/make_fatsat_rf.py`) calls. Vendored rather
-than depending on sigpy, as `sampling/pd_sample.py` is: the sequence side needs
+than depending on sigpy, as `sample/pd_sample.py` is: the sequence side needs
 ~100 lines of it, and sigpy's FFT wrappers silently cast real input to
 complex64 (this port stays in float64/complex128).
 
