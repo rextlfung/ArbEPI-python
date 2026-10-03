@@ -61,14 +61,12 @@ recon = [
 # PyPI: the PyPI release (0.2.0) predates the FOVConfig/affine API that
 # simulate-fmri/ and the upstream documentation use. ismrmrd 1.15 made
 # ismrmrdHeader's experimentalConditions a required argument, which snake's MRD
-# writer does not pass. scikit-learn is imported by snake.toolkit.analysis but
-# not declared by snake. Installed into its own venv together with `recon`, so
+# writer does not pass. Installed into its own venv together with `recon`, so
 # a simulated dataset can be reconstructed and scored in one environment:
 #   UV_PROJECT_ENVIRONMENT=.venv-simulate uv sync --extra simulate --extra recon --extra test
 simulate = [
     "snake-fmri @ git+https://github.com/mind-inria/snake-fmri@ed04e155d16ab5fd1d434f8250af43a84d3d4eb6",
     "ismrmrd>=1.14,<1.15",
-    "scikit-learn",
     "h5py>=3.10",
     "nibabel>=5.0",
     "matplotlib",

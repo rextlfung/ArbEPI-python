@@ -85,8 +85,6 @@ simulate = [
     { name = "matplotlib", version = "3.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "nbclient" },
     { name = "nibabel" },
-    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "scikit-learn", version = "1.9.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "snake-fmri" },
 ]
 test = [
@@ -117,7 +115,6 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pywavelets", marker = "extra == 'recon'" },
     { name = "ruff", marker = "extra == 'lint'", specifier = ">=0.6" },
-    { name = "scikit-learn", marker = "extra == 'simulate'" },
     { name = "scipy", specifier = ">=1.10" },
     { name = "scipy", marker = "extra == 'preprocessing'", specifier = ">=1.10" },
     { name = "scipy", marker = "extra == 'recon'", specifier = ">=1.10" },

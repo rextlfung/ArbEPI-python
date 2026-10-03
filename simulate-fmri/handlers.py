@@ -13,6 +13,12 @@ phantom's affine instead, so the ROI is the same piece of anatomy on any grid.
 The BOLD model is SNAKE's unchanged: the ROI is a copy of gray matter whose
 weight follows the block design convolved with the HRF, peaking at a fractional
 signal change of TE / delta_r2s (TE in ms).
+
+One default differs: oversampling is 1, not 50. It is the factor by which SNAKE
+refines the time grid, already one point per excitation, before convolving the
+stimulus with the HRF, and the convolution's cost grows with its square. At a
+50 ms shot TR, 50 means a 1 ms grid and minutes to hours for one regressor; 1
+changes the regressor by about 1% of its peak (a shift of half a shot TR).
 """
 
 from __future__ import annotations
@@ -62,6 +68,7 @@ class EllipsoidActivationHandler(BlockActivationHandler):
     semi_axes_mm: tuple[float, float, float] = OCCIPITAL_SEMI_AXES_MM
     euler_angles: tuple[float, float, float] = OCCIPITAL_EULER_ANGLES
     atlas: str | None = None
+    oversampling: int = 1
 
     def _get_roi_base(self, phantom: Phantom) -> NDArray:
         if self.base_tissue_name not in phantom.labels_idx:

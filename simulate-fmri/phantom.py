@@ -5,6 +5,7 @@
   times.
 - ellipsoid_phantom: the same three tissues as nested ellipsoids, built
   analytically. Needs no download; used by the tests and for quick runs.
+- ellipsoid_phantom_roi: where to put the activation in that phantom.
 - centered_fov: places an acquisition field of view on a phantom's tissue.
 - to_acquisition_grid: resamples a phantom onto the simulation grid and
   attaches coil sensitivities defined on that grid.
@@ -91,6 +92,19 @@ def ellipsoid_phantom(
     )
 
 
+def ellipsoid_phantom_roi(
+    shape: tuple[int, int, int] = (64, 64, 48), res_mm: float = 3.0
+) -> dict[str, tuple[float, float, float]]:
+    """An activation ellipsoid for ellipsoid_phantom(shape, res_mm): a patch of
+    its posterior gray matter shell, as EllipsoidActivationHandler arguments."""
+    half = np.array(shape) * res_mm / 2
+    return {
+        'center_mm': (0.0, float(-0.71 * half[1]), 0.0),
+        'semi_axes_mm': tuple(float(v) for v in (0.40, 0.12, 0.30) * half),
+        'euler_angles': (0.0, 0.0, 0.0),
+    }
+
+
 def centered_fov(
     phantom: Phantom, shape: tuple[int, int, int], res_mm: tuple[float, float, float]
 ) -> FOVConfig:
@@ -153,8 +167,10 @@ def to_acquisition_grid(
     sim_conf.hardware.n_coils birdcage sensitivities defined on that grid (none
     for a single coil)."""
     # mode='constant': air, not the phantom's edge voxels, beyond its own grid.
+    # n_jobs: one process per tissue (SNAKE's default starts one per CPU).
     on_grid = phantom.resample(
-        new_affine=sim_conf.fov.affine, new_shape=sim_conf.shape, mode='constant'
+        new_affine=sim_conf.fov.affine, new_shape=sim_conf.shape, mode='constant',
+        n_jobs=len(phantom.masks),
     )
     on_grid.masks = np.clip(on_grid.masks, 0, 1)  # cubic resampling overshoots
     n_coils = sim_conf.hardware.n_coils

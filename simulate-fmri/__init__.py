@@ -9,8 +9,11 @@ points:
 - engine.py    ArbEPIAcquisitionEngine: the per-shot signal model
 - handlers.py  EllipsoidActivationHandler: a block-design ROI placed in world mm
 - phantom.py   BrainWeb at 3 T, an offline analytic phantom, coil sensitivities
-- simulate.py  scan_info.mat -> <name>.mrd -> recon/<name>_preprocessed.h5
-- analyze.py   reconstruction -> activation z-map, ROC against the true ROI, tSNR
+- export.py    SNAKE's .mrd -> recon/<name>_preprocessed.h5 with a `truth` group
+- simulate.py  scan_info.mat -> all of the above; the command line
+
+A simulation is reconstructed by recon/ and scored by recon/testbed.py like the
+real-data testbed.
 
 The folder name has a hyphen, so it cannot be named in an `import` statement.
 Run the modules with `python -m simulate-fmri.simulate`, and load them from

@@ -9,12 +9,12 @@ SNAKE-fMRI acquire a brain phantom with a block-design BOLD activation along
 exactly that schedule, and writes
 
     <outdir>/<name>.mrd                      SNAKE's raw file
-    <outdir>/recon/<name>_preprocessed.h5    input to recon.rss / recon.sense
-    <outdir>/<name>_truth.h5                 activated region, BOLD time course, ...
+    <outdir>/recon/<name>_preprocessed.h5    input to recon.rss / recon.sense,
+                                             with the ground truth in `truth`
 
 Reconstruct with recon/ as for a real scan, then score the result against the
-ground truth with simulate-fmri/analyze.py. See README.md in this folder for
-what the simulation models and what it does not.
+ground truth with `python -m recon.testbed score`. See README.md in this folder
+for what the simulation models and what it does not.
 """
 
 from __future__ import annotations
@@ -35,7 +35,13 @@ from preprocess import utils as scan_utils
 from .engine import ArbEPIAcquisitionEngine
 from .export import export
 from .handlers import EllipsoidActivationHandler
-from .phantom import brainweb_phantom, centered_fov, ellipsoid_phantom, to_acquisition_grid
+from .phantom import (
+    brainweb_phantom,
+    centered_fov,
+    ellipsoid_phantom,
+    ellipsoid_phantom_roi,
+    to_acquisition_grid,
+)
 from .sampler import ArbEPISampler
 
 T1_ERNST_S = 1.3  # params.py's T1, for scan_info.mat files that predate its 'fa'
@@ -171,6 +177,7 @@ def simulate(
     block_on: float = 10.0,
     block_off: float = 10.0,
     delta_r2s: float = 1000.0,
+    roi: dict | None = None,
     handlers: list | None = None,
     fa_deg: float | None = None,
     frames: int | None = None,
@@ -188,13 +195,18 @@ def simulate(
     block_on, block_off: block design, s. The first block starts at t = 0.
     delta_r2s: sets the activation's peak fractional signal change to
         TE (ms) / delta_r2s, so 1000 gives 3% at TE = 30 ms.
-    handlers: SNAKE handlers to use instead of the default occipital block
-        activation; [] for none.
+    roi: the activated ellipsoid, as EllipsoidActivationHandler's center_mm,
+        semi_axes_mm and euler_angles (world mm). Default: SNAKE's occipital
+        region for BrainWeb (also used for a Phantom passed in), and
+        phantom.ellipsoid_phantom_roi for 'ellipsoid'. The activation is this
+        ellipsoid's gray matter.
+    handlers: SNAKE handlers to use instead of that block activation; [] for
+        none.
     fa_deg, frames: see load_protocol (ignored when scan_info is a Protocol).
     n_workers: worker processes; 0 = half the CPU count.
     seed: for the noise.
 
-    Returns the paths written: 'mrd', 'preprocessed', 'truth'.
+    Returns the paths written: 'mrd' and 'preprocessed'.
     """
     if isinstance(scan_info, Protocol):
         protocol = scan_info
@@ -204,6 +216,8 @@ def simulate(
         makers = {'brainweb': brainweb_phantom, 'ellipsoid': ellipsoid_phantom}
         if phantom not in makers:
             raise ValueError(f'phantom={phantom!r}, expected one of {sorted(makers)} or a Phantom')
+        if phantom == 'ellipsoid' and roi is None:
+            roi = ellipsoid_phantom_roi()
         phantom = makers[phantom]()
     fov = centered_fov(phantom, protocol.shape, protocol.res_mm)
     sim_conf = make_sim_conf(protocol, n_coils, fov, seed)
@@ -213,7 +227,8 @@ def simulate(
     if handlers is None:
         handlers = [
             EllipsoidActivationHandler(
-                block_on=block_on, block_off=block_off, duration=duration, delta_r2s=delta_r2s
+                block_on=block_on, block_off=block_off, duration=duration,
+                delta_r2s=delta_r2s, **(roi or {}),
             )
         ]
     print(
@@ -237,10 +252,11 @@ def simulate(
         handlers=handlers,
         worker_chunk_size=protocol.n_shots,
         n_workers=n_workers,
+        resample_early=False,  # to_acquisition_grid already put it on the grid
     )
-    fn_pre, fn_truth = export(fn_mrd, protocol, outdir, name, snr)
-    print(f'Wrote {fn_mrd}\n      {fn_pre}\n      {fn_truth}')
-    return {'mrd': fn_mrd, 'preprocessed': fn_pre, 'truth': fn_truth}
+    fn_pre = export(fn_mrd, protocol, outdir, name, snr)
+    print(f'Wrote {fn_mrd}\n      {fn_pre}')
+    return {'mrd': fn_mrd, 'preprocessed': fn_pre}
 
 
 def _cli() -> None:
