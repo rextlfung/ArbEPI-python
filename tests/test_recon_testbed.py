@@ -177,3 +177,41 @@ def test_lowband_glm_is_calibrated_for_band_limited_residuals():
 
     assert np.mean(np.abs(t_plain) > 3.29) > 0.05  # badly inflated
     assert np.mean(np.abs(t_lb) > stats.t.ppf(1 - 0.0005, keep - 3)) < 0.005
+
+
+def test_static_periodic_and_measured_testbeds(tmp_path):
+    """amp 0: a static truth (activation metrics dropped); mask_period K cycles
+    the first K masks; source 'measured' puts the fully sampled run's own
+    k-space under each mask."""
+    full, fn_m = _ball_full(tmp_path), _masks(tmp_path)
+    out = str(tmp_path / "recon" / "static_preprocessed.h5")
+    testbed.build_testbed(full, fn_m, out, TR, nt=NT, amp=0, mask_period=4, device=DEVICE,
+                          L_b0=4, nbins_b0=32, cg_iters=20)
+    with h5py.File(out, "r") as f:
+        om = f["omegas"][()]
+        assert f.attrs["testbed_mask_period"] == 4
+    for t in range(NT):
+        np.testing.assert_array_equal(om[..., t], om[..., t % 4])
+    assert not np.array_equal(om[..., 0], om[..., 1])
+    rec = str(tmp_path / "static_truth.h5")
+    _write_recon(rec, np.repeat(_truth_series(out)[..., :1], NT, -1))
+    s = testbed.score(out, rec)
+    assert s["frame_err_max_pct"] < 1e-4 and s["fluct_pct"] < 1e-4
+    assert not any(k.startswith("block") for k in s)
+    testbed.panel(out, rec, str(tmp_path / "p.png"))
+
+    meas = str(tmp_path / "recon" / "meas_preprocessed.h5")
+    with pytest.raises(ValueError, match="amp=0"):
+        testbed.build_testbed(full, fn_m, meas, TR, nt=NT, source="measured")
+    testbed.build_testbed(full, fn_m, meas, TR, nt=NT, amp=0, source="measured", device=DEVICE,
+                          L_b0=4, nbins_b0=32, cg_iters=20)
+    with h5py.File(full, "r") as f:
+        k = f["ksp_epi_zf"][..., 1]
+    with h5py.File(meas, "r") as f:
+        y, om = f["ksp_epi_zf"][()], f["omegas"][()]
+    t = 3
+    sel = np.broadcast_to(om[None, :, :, t], N)
+    resid = y[..., t][sel] - k[sel]
+    # the measured data plus fresh noise of variance 1 - 1/(NF-1) at sampled locations
+    assert 0.3 < np.mean(np.abs(resid) ** 2) < 0.7
+    assert (y[..., t][~sel] == 0).all()

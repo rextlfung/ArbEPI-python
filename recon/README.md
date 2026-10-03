@@ -317,6 +317,20 @@ the cutoff only, with their own degrees of freedom: a temporal penalty leaves
 the residual band-limited, which inflates the plain per-frame t (25-32% of
 null voxels above |t| = 3.29 on `20260930ballfat`, vs 0.1% in the low band).
 
+Build variants: `--amp 0` gives a static truth (every frame the fully sampled
+mean; `score` then drops the activation metrics and reports per-frame error,
+including its maximum, and the panel shows the middle frame instead of the
+t-map). `--mask-period K` cycles the first K masks (frame t gets mask t mod K),
+so the aliasing of anything static repeats with period K and sits on temporal
+frequencies m / (K TR). `--source measured` (needs `--amp 0` and the fully
+sampled run's timing) puts the fully sampled run's measured mean k-space under
+each mask, topped up with fresh noise to unit variance per sample: all of the
+real data's model mismatch, but no frame-to-frame change of object or
+acquisition. On `20260930ballfat` that reproduced 71% of the real 10x run's
+fluctuation variance with per-frame wavelet-TV (2.63% vs 3.13%; model data
+0.78%), and cycling 8 masks moved most of it above 0.15 Hz (0.93% -> 0.14%
+below 0.15 Hz).
+
 ## Performance notes
 
 - K-space is read and gathered one frame at a time, never as a dense
