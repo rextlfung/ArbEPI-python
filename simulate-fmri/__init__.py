@@ -23,6 +23,8 @@ README.md in this folder.
 
 import warnings
 
+import ismrmrd  # noqa: F401 -- importing it resets the warning filters, so it goes first
+
 # xsdata, once per MRD header read (so in every worker and every loader):
 # SNAKE stores its handlers' time courses under waveform ids outside the MRD
 # schema's enumeration. The ids round-trip regardless.

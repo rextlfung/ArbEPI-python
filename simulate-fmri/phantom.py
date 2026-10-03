@@ -26,13 +26,14 @@ from .handlers import ellipsoid_mask
 # name: (T1 ms, T2 ms, T2* ms, proton density, susceptibility ppm), the column
 # order of SNAKE's tissue tables. SNAKE ships 1.5 T and 7 T tables only; these
 # are approximate 3 T values. T1 and T2: Wansapura et al., J Magn Reson Imaging
-# 1999;9:531 (gray 1331/110 ms, white 832/80 ms). T2*: Peters et al., Magn
-# Reson Imaging 2007;25:748 (gray 66 ms, white 53 ms). CSF, density and
-# susceptibility are SNAKE's own. Only T1, T2* and density enter the
-# gradient-echo signal.
+# 1999;9:531 (gray 1331 and 80 ms, white 832 and 110 ms). T2*: gray 66 ms and
+# white 53 ms, the 3 T values of Peters et al., Magn Reson Imaging 2007;25:748,
+# as remembered: that pair was not re-checked against the paper when this
+# table was written. CSF (its 1.5 T table), density and susceptibility are
+# SNAKE's own. Only T1, T2* and density enter the gradient-echo signal.
 TISSUE_PROPS_3T = {
-    'wm': (832.0, 80.0, 53.0, 0.77, -9.05),
-    'gm': (1331.0, 110.0, 66.0, 0.86, -9.05),
+    'wm': (832.0, 110.0, 53.0, 0.77, -9.05),
+    'gm': (1331.0, 80.0, 66.0, 0.86, -9.05),
     'csf': (4000.0, 2000.0, 2000.0, 1.0, -9.05),
 }
 TISSUES = ('wm', 'gm', 'csf')
