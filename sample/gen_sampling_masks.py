@@ -9,11 +9,11 @@ from typing import Optional
 import numpy as np
 
 from params import Params
-from sampling.caipi_sample import caipi_sample
-from sampling.gen_gaussian_pdf import gen_gaussian_pdf
-from sampling.pd_sample import pd_sample
-from sampling.rand_sample import rand_sample
-from sampling.ticaipi_sample import ticaipi_sample
+from sample.caipi_sample import caipi_sample
+from sample.gen_gaussian_pdf import gen_gaussian_pdf
+from sample.pd_sample import pd_sample
+from sample.rand_sample import rand_sample
+from sample.ticaipi_sample import ticaipi_sample
 
 
 def gen_sampling_masks(
@@ -86,7 +86,7 @@ def resolve_omegas(
     """Returns params.custom_omegas when a custom sampling mask was
     configured (params.py's custom_mask_path), else generates one via
     gen_sampling_masks using params.R/sampling_method/seed -- the single
-    place every call site (main.py, tests, plotting/compare_readout_pns.py)
+    place every call site (main.py, tests, plot/compare_readout_pns.py)
     should get omegas from. Calling gen_sampling_masks directly instead
     would break on a custom-mask params (sampling_method is None on that
     path -- see params.py's custom_mask_path field comment).

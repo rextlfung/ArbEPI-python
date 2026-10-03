@@ -13,7 +13,7 @@ import argparse
 import os
 
 from params import load_params
-from sampling.gen_sampling_masks import resolve_omegas
+from sample.gen_sampling_masks import resolve_omegas
 from sequences.ArbEPI import generate_arbepi
 from sequences.deGRE import generate_degre
 from sequences.EPIcal import generate_epical
@@ -51,7 +51,7 @@ def main(export_ge: bool = False, plot: bool = False):
         # Written before GE export (only depends on scan_info.mat/ArbEPI.seq,
         # both already on disk by this point) so they're available even if
         # export_ge fails below.
-        from plotting.plot_last_run import plot_last_run
+        from plot.plot_last_run import plot_last_run
 
         plot_last_run(params)
 

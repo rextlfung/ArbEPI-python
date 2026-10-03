@@ -1,7 +1,7 @@
 """Plot the sampling mask, k-space trajectory, and PSF for the most
 recently generated sequence in output/. Run standalone after main.py via
-`python -m plotting.plot_last_run` (from the repo root -- not
-`python plotting/plot_last_run.py`, which breaks its own package-relative
+`python -m plot.plot_last_run` (from the repo root -- not
+`python plot/plot_last_run.py`, which breaks its own package-relative
 imports), or via `python main.py --plot` (see main.py).
 
 Reconstructs the sampling masks from scan_info.mat (the schedule actually
@@ -15,7 +15,7 @@ import numpy as np
 import pypulseq as pp
 
 from params import Params, load_params
-from plotting.plotting import (
+from plot.plotting import (
     plot_one_tr,
     plot_pns_one_tr,
     plot_psf,

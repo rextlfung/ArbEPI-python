@@ -1,4 +1,4 @@
-"""Unit tests for sampling/external_mask.py's resolve_custom_omegas -- the
+"""Unit tests for sample/external_mask.py's resolve_custom_omegas -- the
 validation/broadcast logic behind params.py's custom_mask_path option (see
 README.md's "Using custom ky-kz-t sampling masks" section). These write
 small v5 .mat fixtures directly (scipy.io.savemat) rather than building a
@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import scipy.io as sio
 
-from sampling.external_mask import resolve_custom_omegas
+from sample.external_mask import resolve_custom_omegas
 
 Ny, Nz, ETL = 8, 6, 4
 

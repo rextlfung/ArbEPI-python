@@ -4,7 +4,7 @@ import pytest
 pytest.importorskip('sigpy')  # preprocess.preprocess imports epi_gridding (sigpy)
 
 from preprocess.preprocess import find_calib_region  # noqa: E402
-from sampling.pd_sample import _calib_mask_rect, _calib_side_frac, pd_sample  # noqa: E402
+from sample.pd_sample import _calib_mask_rect, _calib_side_frac, pd_sample  # noqa: E402
 
 
 def test_pd_masks_give_exactly_the_pd_calibration_rectangle():

@@ -9,7 +9,7 @@ this acquisition, in one file.
 
 GE `.pge` export (write_to_ge.m) and the trailing MATLAB plotting figures
 are intentionally not ported here — see ge/ge_export.py and
-plotting/plotting.py respectively.
+plot/plotting.py respectively.
 """
 
 import copy

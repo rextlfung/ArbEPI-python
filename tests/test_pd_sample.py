@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from sampling.pd_sample import _calib_mask_rect, _calib_side_frac, pd_sample
+from sample.pd_sample import _calib_mask_rect, _calib_side_frac, pd_sample
 
 
 def test_pd_sample_exact_count():
