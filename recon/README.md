@@ -317,6 +317,13 @@ the cutoff only, with their own degrees of freedom: a temporal penalty leaves
 the residual band-limited, which inflates the plain per-frame t (25-32% of
 null voxels above |t| = 3.29 on `20260930ballfat`, vs 0.1% in the low band).
 
+`score` also reads the files [`simulate-fmri/`](../simulate-fmri/README.md)
+writes: a digital brain acquired by SNAKE-fMRI along a `scan_info.mat`
+schedule, with one activation (`block_occipital`) in the same `truth` layout.
+That truth comes from a forward model the recon does not share (T2* decay
+along each echo train, BOLD updated at every excitation), so it is not an
+inverse crime, at the price of a synthetic object and coils and no B0.
+
 ## Performance notes
 
 - K-space is read and gathered one frame at a time, never as a dense

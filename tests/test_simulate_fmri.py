@@ -299,6 +299,8 @@ def test_truth_group_reproduces_the_frames_and_scores_as_a_perfect_recon(tmp_pat
     assert rois.shape == (1, *shape) and rois.sum() > 10
     assert 0.01 < amp < 0.03  # TE / delta_r2s = 3% at full gray matter, less where mixed
     assert np.median(amp_map[rois[0]]) == pytest.approx(amp)
+    # only voxels with signal to take a ratio against: none from the edge of the brain
+    assert x0[rois[0]].min() > 0.5 * np.percentile(x0, 99)
 
     fn_recon = str(tmp_path / 'perfect.h5')
     with h5py.File(fn_recon, 'w') as f:

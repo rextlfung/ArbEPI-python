@@ -77,6 +77,10 @@ remove them. Three things about the `simulate` extra (see `pyproject.toml`):
   `[tool.uv] override-dependencies` narrows it to `mri-nufft[finufft]`. SNAKE
   logs `Cupy not available, using CPU.`; that is expected.
 
+SNAKE also logs `Existing <name>.mrd it will be overwritten` followed by
+`[Errno 2] No such file or directory` whenever the output file does not exist
+yet. That is its writer removing a file that is not there; nothing is wrong.
+
 The BrainWeb phantom is downloaded on first use (about 40 s) and cached in
 `~/.cache/brainweb` and `~/.cache/snake-fmri`. `--phantom ellipsoid` needs no
 download.
@@ -124,6 +128,37 @@ Options of `simulate-fmri.simulate`:
 | `--frames` | all | only the first N frames |
 | `--workers` | half the CPUs | worker processes |
 | `--seed` | 0 | noise seed |
+
+## A first result
+
+The default protocol (2.4 mm, 90 x 90 x 60, R = 10 Poisson-disc, radial
+ordering, ETL 54, volume TR 0.506 s, 119 frames) on BrainWeb with the default
+settings, reconstructed two ways and scored by `recon.testbed score`:
+
+| | CG-SENSE (`--reg none`) | wavelet-TV + temporal high-pass (`--reg wavelet-tv --hp-weight 3`) |
+|---|---|---|
+| frame error, `nrmse_frame_pct` | 43.4 | 4.5 |
+| fluctuation where nothing changes, `fluct_pct` | 37.2 | 0.37 |
+| recovered amplitude, `amp_ratio` (1 = exact) | 0.38 | 0.52 |
+| t-score of the activation, median (`_t`, `_t_lowband`) | 0.13, 0.13 | 17.3, 7.4 |
+| region's mean time course vs truth, `corr` | 0.33 | 0.96 |
+| false positives in the low band | 0.1% | 0.04% |
+| edge sharpness vs truth | 0.26 | 0.93 |
+
+Unregularized, each frame is inverted alone at R = 10 with 16 coils and the
+noise swamps a 2% activation. The regularized reconstruction finds it, at about
+half its true size. These are one simulation's numbers, there to show the
+chain works; they are not a study of either method.
+
+Timing on a 64-core machine with an RTX A6000 shared with another job: the
+simulation takes about 100 s with 16 workers (`--workers 16`), some 60 s of it
+the acquisition and the rest building the phantom and writing the output;
+CG-SENSE 4.5 min; wavelet-TV 5 min. The `.mrd` is 0.9 GB and
+the preprocessed file 0.8 GB.
+
+Noise is seeded (`--seed`), but with more than one worker the shots finish in
+a different order from run to run and SNAKE draws the noise in that order, so
+two noisy runs differ in their noise. Noise-free runs are identical.
 
 ## What is simulated
 
@@ -203,9 +238,10 @@ k-space). `<outdir>/recon/<name>_preprocessed.h5` holds:
 
 The true image of frame t is `x0 * (1 + amp_map * w(t))`. The activation adds
 gray-matter signal on top of whatever tissue a voxel holds, so `amp_map` varies
-with the tissue mix; `roi_masks` keeps the voxels at half its maximum or more,
-and `amp` is their median, which is what `recon.testbed score`'s `amp_ratio`
-divides by.
+with the tissue mix; `roi_masks` keeps the voxels that are at least 90% tissue
+and at half the largest change among those or more (a voxel at the edge of the
+brain has almost no signal to take a ratio against), and `amp` is their median,
+which is what `recon.testbed score`'s `amp_ratio` divides by.
 
 ## What was changed relative to stock SNAKE, and why
 

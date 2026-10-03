@@ -1452,6 +1452,36 @@ the top of the head one voxel clear and loses the inferior end. Tissue outside
 the field of view is discarded (`mode='constant'` in the resampling: SNAKE's
 default `'nearest'` would smear the edge voxels outward), i.e. an ideal slab.
 
+**The truth mask excludes the edge of the brain.** `truth/amp_map` is a ratio
+to `x0`, and `recon.testbed.score` divides the reconstruction by `x0` too. A
+first version took every voxel at half the largest `amp_map` or more as the
+region; on BrainWeb 547 of its 1438 voxels had a tissue fraction near 0
+(ripple of the cubic resampling, where `x0` is ~0 and the ratio reached 1e9),
+and the scorer's `corr` (mean over the region) came out -0.32 for a
+reconstruction whose median t was 10. `export.activation_truth` now draws
+`roi_masks` only from voxels that are at least 90% tissue (`corr` 0.96 on the
+same reconstruction). `amp_map` itself is left exact everywhere, so
+`x0 * (1 + amp_map * w(t))` still reproduces the frames.
+
+**Checked end to end on the default protocol** (2026-10-03; 90 x 90 x 60,
+R = 10 pd, radial, ETL 54, 119 frames; BrainWeb, 16 coils, T2s model,
+`snr=1000`, i.e. gray-matter SNR ~77 fully sampled): about 100 s to simulate
+with 16 workers. Unregularized CG-SENSE reconstructs the right anatomy in the
+right place but with 37% temporal fluctuation, and does not detect the 2%
+activation (median t 0.13); joint wavelet-TV with `--hp-weight 3` gives 4.5%
+frame error, 0.37% fluctuation, median t 17.3 (7.4 in the low band), region
+correlation 0.96 and amplitude ratio 0.52. One run, to show the chain works,
+not a comparison of methods. The exactness of the chain is the tests' job
+(`tests/test_simulate_fmri.py`): noise-free `simple`-model k-space equals
+`recon/operators.py`'s `SENSE` applied to the truth, for odd and even sizes;
+the T2s/simple ratio is the scheduled decay; `noise_var` is the measured noise
+variance; a perfect reconstruction scores `amp_ratio` 1; and the sampling mask
+simulated from a generated `scan_info.mat` is `resolve_omegas`' mask.
+
+**Noisy runs are not bit-reproducible with several workers**: SNAKE draws each
+chunk's noise in the main process, in the order the workers finish. One
+worker, or `snr=inf`, is deterministic (tested for the latter).
+
 **Not modeled, so not tested by a simulation**: B0 (no `b0_map` is written,
 and `--B0`/`--R2star` have nothing to correct), Nyquist ghosting, ramp
 sampling and gradient delays (samples sit on the Cartesian grid, so

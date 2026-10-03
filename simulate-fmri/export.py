@@ -25,8 +25,9 @@ of a simulation the way it scores the real-data testbed:
 so that the true image of frame t is x0 * (1 + amp_map * w(t)). The activation
 is a copy of gray matter added on top of the anatomy, so its fractional size
 amp_map (also saved) varies from voxel to voxel with the tissue mix; roi_masks
-keeps the voxels at half its maximum or more, and amp is their median, which
-makes testbed.score's amp_ratio 1 for a perfect reconstruction. The rest of the
+keeps the voxels that are at least 90% tissue and at half the largest change
+among those or more, and amp is their median, which makes testbed.score's
+amp_ratio 1 for a perfect reconstruction. The rest of the
 group is what a scan would not know either: image_rest (no activation),
 bold_shots and stimulus_shots (per excitation), tissues and brain_mask.
 """
@@ -71,17 +72,23 @@ def noise_variance(image: NDArray, snr: float) -> float | None:
 
 
 def activation_truth(
-    image_rest: NDArray, roi_image: NDArray, bold: NDArray
+    image_rest: NDArray, roi_image: NDArray, bold: NDArray, full: NDArray
 ) -> tuple[NDArray, NDArray, NDArray, NDArray, float]:
     """(x0, waveform, amp_map, roi_mask, amp) of a frame series
     image_rest + bold(t) * roi_image, rewritten as x0 * (1 + amp_map * w(t))
-    with w zero-mean and peak |w| = 1 (see the module docstring)."""
+    with w zero-mean and peak |w| = 1 (see the module docstring).
+
+    full: voxels that are nearly all tissue. roi_mask is drawn from these only:
+    amp_map is a ratio to x0, and at the edge of the brain, where x0 goes to
+    zero, a scorer dividing a reconstruction by x0 gets arbitrary values (on
+    the default protocol 547 such voxels took the region's mean time course
+    from a correlation of 0.96 with the truth to -0.32)."""
     centered = bold - bold.mean()
     peak = np.abs(centered).max()
     waveform = centered / peak
     x0 = image_rest + bold.mean() * roi_image
     amp_map = np.divide(peak * roi_image, x0, out=np.zeros_like(x0), where=x0 > 0)
-    roi_mask = amp_map >= 0.5 * amp_map.max()
+    roi_mask = full & (amp_map >= 0.5 * amp_map[full].max())
     return x0, waveform, amp_map, roi_mask, float(np.median(amp_map[roi_mask]))
 
 
@@ -165,7 +172,7 @@ def export(fn_mrd: str, protocol, outdir: str, name: str, snr: float) -> str:
             per_shot = np.asarray(activations[0].data[:, : n_frames * n_shots], np.float64)
             bold = per_shot[0].reshape(n_frames, n_shots).mean(axis=1)
             x0, waveform, amp_map, roi_mask, amp = activation_truth(
-                image_rest, tissues[is_roi][0], bold
+                image_rest, tissues[is_roi][0], bold, anatomy.sum(axis=0) >= 0.9
             )
             g.create_dataset('x0', data=x0.astype(np.float32))
             g.create_dataset('roi_masks', data=roi_mask[None])

@@ -20,3 +20,10 @@ Run the modules with `python -m simulate-fmri.simulate`, and load them from
 other code with `importlib.import_module('simulate-fmri.simulate')`. See
 README.md in this folder.
 """
+
+import warnings
+
+# xsdata, once per MRD header read (so in every worker and every loader):
+# SNAKE stores its handlers' time courses under waveform ids outside the MRD
+# schema's enumeration. The ids round-trip regardless.
+warnings.filterwarnings('ignore', message='Failed to convert value')
