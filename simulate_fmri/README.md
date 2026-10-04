@@ -45,7 +45,7 @@ all of them, then on a scan.
 | `sampler.py`, `engine.py`, `handlers.py`, `export.py` | The ideal mode's SNAKE sampler, engine and activation handler, and its export |
 | `protocol.py` | `load_protocol()`: the acquisition recorded in `scan_info.mat` |
 | `phantom.py` | BrainWeb at 3 T, an analytic phantom, the head outline and air cavities |
-| `demo.ipynb` | A session simulated, preprocessed, reconstructed and scored |
+| `demo.ipynb` | The ideal mode on the default protocol, reconstructed and scored (a raw-session notebook is not written yet) |
 
 Tests: `tests/test_simulate_fmri_forward.py` (the signal model against a
 brute-force sum), `..._models.py` (field, coils, physiology), `..._session.py`
