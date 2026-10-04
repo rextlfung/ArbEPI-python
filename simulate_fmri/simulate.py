@@ -1,6 +1,6 @@
 """Simulate an fMRI experiment acquired with an ArbEPI sequence.
 
-    python -m simulate-fmri.simulate output/scan_info.mat <outdir>
+    python -m simulate_fmri.simulate output/scan_info.mat <outdir>
 
 reads the acquisition from the scan_info.mat that sequences/ArbEPI.py wrote
 next to ArbEPI.seq (matrix size, field of view, the (ky, kz) location and echo

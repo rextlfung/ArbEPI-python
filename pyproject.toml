@@ -56,10 +56,10 @@ recon = [
     "ipykernel",  # to run recon/demo.ipynb in this venv
     "nbclient",  # to execute notebooks from scripts (nbclient.NotebookClient)
 ]
-# fMRI experiment simulation (simulate-fmri/): SNAKE-fMRI acquisitions driven by
+# fMRI experiment simulation (simulate_fmri/): SNAKE-fMRI acquisitions driven by
 # ArbEPI's own sampling schedules. snake-fmri is pinned to a GitHub commit, not
 # PyPI: the PyPI release (0.2.0) predates the FOVConfig/affine API that
-# simulate-fmri/ and the upstream documentation use. ismrmrd 1.15 made
+# simulate_fmri/ and the upstream documentation use. ismrmrd 1.15 made
 # ismrmrdHeader's experimentalConditions a required argument, which snake's MRD
 # writer does not pass. Installed into its own venv together with `recon`, so
 # a simulated dataset can be reconstructed and scored in one environment:
@@ -70,13 +70,13 @@ simulate = [
     "h5py>=3.10",
     "nibabel>=5.0",
     "matplotlib",
-    "ipykernel",  # to run simulate-fmri/demo.ipynb in this venv
+    "ipykernel",  # to run simulate_fmri/demo.ipynb in this venv
     "nbclient",
 ]
 
 # snake-fmri requires mri-nufft[finufft,cufinufft]; the cufinufft extra pulls
 # cupy-cuda13x and the CUDA 13 toolkit wheels (several GB, Linux/Windows and one
-# CUDA major version only). simulate-fmri/ uses snake's Cartesian engine, which
+# CUDA major version only). simulate_fmri/ uses snake's Cartesian engine, which
 # needs neither, so the requirement is narrowed to the CPU NUFFT backend.
 [tool.uv]
 override-dependencies = ["mri-nufft[finufft]>=1.0"]
@@ -85,7 +85,9 @@ override-dependencies = ["mri-nufft[finufft]>=1.0"]
 py-modules = ["params", "scanners"]
 
 [tool.setuptools.packages.find]
-include = ["sample*", "lib*", "sequences*", "plot*", "ge*", "preprocess*", "recon*"]
+include = [
+    "sample*", "lib*", "sequences*", "plot*", "ge*", "preprocess*", "recon*", "simulate_fmri*",
+]
 
 [tool.ruff]
 line-length = 100

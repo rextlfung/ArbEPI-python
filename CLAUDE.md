@@ -11,7 +11,7 @@ points and global config (`main.py`, `demo.ipynb`, `params.py`,
 `scanners.py`) sit at the repo root, mirroring `../ArbEPI` having `params.m`/`main.m` directly
 at its own root — everything else lives under
 `lib/`/`sequences/`/`sample/`/`plot/`/`ge/` (plus the
-`preprocess/`/`recon/` data-processing stages, `simulate-fmri/`, which
+`preprocess/`/`recon/` data-processing stages, `simulate_fmri/`, which
 simulates scans of these sequences, and `tests/`/`docs/`), matching
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
 for the full layout).
@@ -128,7 +128,7 @@ conversion either way.
 `output/scan_info.mat` -- kxo/kxe (odd/even echo k-space trajectories for
 ghost correction), schedules/parts (the sampling schedule), and a snapshot
 of the scan scalars `preprocess/` needs (plus the flip angle `fa`, which
-only `simulate-fmri/` reads) -- is written via
+only `simulate_fmri/` reads) -- is written via
 `hdf5storage.savemat(..., fmt='7.3')`, matching the original MATLAB code's
 `save(..., '-v7.3')`. **`scipy.io.loadmat`/`savemat` cannot read or write
 v7.3 at all** — always use `hdf5storage.loadmat` (or raw `h5py`) when
@@ -1309,13 +1309,13 @@ own docstring measures. Any future change to that resize convention needs
 re-checking against a real B0-corrected reconstruction, not just the
 grid-alignment unit test.
 
-### `simulate-fmri/` -- simulated fMRI scans acquired with ArbEPI's schedules, on SNAKE-fMRI
+### `simulate_fmri/` -- simulated fMRI scans acquired with ArbEPI's schedules, on SNAKE-fMRI
 
 User-facing documentation (setup, commands, what is and is not modeled, the
-output file) is `simulate-fmri/README.md`, with a worked example in
-`simulate-fmri/demo.ipynb`; this section keeps the design history behind it.
+output file) is `simulate_fmri/README.md`, with a worked example in
+`simulate_fmri/demo.ipynb`; this section keeps the design history behind it.
 
-`simulate(scan_info, outdir, name)` (`simulate-fmri/simulate.py`) reads one
+`simulate(scan_info, outdir, name)` (`simulate_fmri/simulate.py`) reads one
 acquisition from a `scan_info.mat`, has
 [SNAKE-fMRI](https://github.com/mind-inria/snake-fmri) acquire a brain phantom
 with a block-design BOLD activation along exactly that (ky, kz, echo time)
@@ -1328,20 +1328,10 @@ reason: a first plan had one (nilearn GLM + ROC, as SNAKE's own toolkit does),
 dropped when `recon/testbed.py` landed on main mid-way with a scorer already
 calibrated for band-limited residuals.
 
-**The folder name has a hyphen (explicit user request), so it is a package no
-`import` statement can name.** It works anyway, and tests guard that it keeps
-working: `python -m simulate-fmri.simulate` resolves it, other code loads the
-modules with `importlib.import_module('simulate-fmri.simulate')`, the modules
-import each other relatively, and the engine's forkserver workers unpickle the
-sampler/engine classes by the module name `simulate-fmri.engine`
-(`test_worker_processes_give_the_same_kspace`). It is not in
-`[tool.setuptools.packages.find]`; like everything else it runs from the repo
-root.
-
 **How it relates to `recon/testbed.py`.** The testbed builds its truth from a
 real fully sampled scan and synthesizes k-space with the recon's own B0-SENSE
 operator: real object, real coils, real B0, real masks, but an inverse crime by
-construction. `simulate-fmri/` is the other half: a synthetic object and coils
+construction. `simulate_fmri/` is the other half: a synthetic object and coils
 and no B0, but a forward model the recon does not share (T2* decay along each
 echo train, the BOLD signal updated at every excitation rather than once per
 frame). Conclusions should hold on both, then on real data.

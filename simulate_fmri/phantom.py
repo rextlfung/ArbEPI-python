@@ -25,15 +25,22 @@ from .handlers import ellipsoid_mask
 
 # name: (T1 ms, T2 ms, T2* ms, proton density, susceptibility ppm), the column
 # order of SNAKE's tissue tables. SNAKE ships 1.5 T and 7 T tables only; these
-# are approximate 3 T values. T1 and T2: Wansapura et al., J Magn Reson Imaging
-# 1999;9:531 (gray 1331 and 80 ms, white 832 and 110 ms). T2*: gray 66 ms and
-# white 53 ms, the 3 T values of Peters et al., Magn Reson Imaging 2007;25:748,
-# as remembered: that pair was not re-checked against the paper when this
-# table was written. CSF (its 1.5 T table), density and susceptibility are
-# SNAKE's own. Only T1, T2* and density enter the gradient-echo signal.
+# are 3 T values from the literature.
+# - T1 and T2: Wansapura et al., J Magn Reson Imaging 1999;9:531 (gray 1331 and
+#   80 ms, white 832 and 110 ms).
+# - T2*: Peters et al., Proc ISMRM 14 (2006) 926, the conference version of
+#   Magn Reson Imaging 2007;25:748: cortical gray 59.7 ms and white 54.6 ms,
+#   with the signal loss from through-slice dephasing fitted and removed
+#   (47.1 and 44.0 ms without that correction). The corrected values are the
+#   ones to use where the field inhomogeneity is simulated separately.
+#   Other 3 T reports: Wansapura 1999, with no such correction, 41.6-51.8 ms
+#   in gray and 44.7-48.4 ms in white matter; van der Zwaag et al., NeuroImage
+#   2009;47:1425 imply R2* = 18 1/s (55 ms) in active motor cortex.
+# - CSF (its 1.5 T table), density and susceptibility are SNAKE's own.
+# Only T1, T2* and density enter the gradient-echo signal.
 TISSUE_PROPS_3T = {
-    'wm': (832.0, 110.0, 53.0, 0.77, -9.05),
-    'gm': (1331.0, 80.0, 66.0, 0.86, -9.05),
+    'wm': (832.0, 110.0, 54.6, 0.77, -9.05),
+    'gm': (1331.0, 80.0, 59.7, 0.86, -9.05),
     'csf': (4000.0, 2000.0, 2000.0, 1.0, -9.05),
 }
 TISSUES = ('wm', 'gm', 'csf')

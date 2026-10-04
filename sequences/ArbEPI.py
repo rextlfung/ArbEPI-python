@@ -408,7 +408,7 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             'TE_degre': params.TE_degre,
             # 1 = binomial water excitation, 0 = fat-sat + sinc (params.excitation)
             'water_excitation': int(params.excitation == 'water'),
-            # Flip angle, degrees: the steady-state contrast simulate-fmri/
+            # Flip angle, degrees: the steady-state contrast simulate_fmri/
             # gives its phantom (nothing else in scan_info.mat determines it).
             'fa': params.fa,
         },

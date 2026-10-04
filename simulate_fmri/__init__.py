@@ -15,10 +15,7 @@ points:
 A simulation is reconstructed by recon/ and scored by recon/testbed.py like the
 real-data testbed.
 
-The folder name has a hyphen, so it cannot be named in an `import` statement.
-Run the modules with `python -m simulate-fmri.simulate`, and load them from
-other code with `importlib.import_module('simulate-fmri.simulate')`. See
-README.md in this folder.
+Run with `python -m simulate_fmri.simulate`; see README.md in this folder.
 """
 
 import warnings

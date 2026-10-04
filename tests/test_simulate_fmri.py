@@ -1,4 +1,4 @@
-"""simulate-fmri/: SNAKE-fMRI simulations of ArbEPI acquisitions.
+"""simulate_fmri/: SNAKE-fMRI simulations of ArbEPI acquisitions.
 
 Everything here runs on the analytic phantom (no BrainWeb download) at small
 matrix sizes. The tests that matter most are the ones that tie the simulated
@@ -8,7 +8,6 @@ the decay each echo should carry, the noise level the file reports, and
 recon/testbed.py's scorer recovering the truth from a perfect reconstruction.
 """
 
-import importlib
 from dataclasses import replace
 
 import h5py
@@ -23,10 +22,9 @@ pytestmark = [
     pytest.mark.filterwarnings('ignore:.*use of fork.*:DeprecationWarning'),
 ]
 
-simulate = importlib.import_module('simulate-fmri.simulate')
-phantoms = importlib.import_module('simulate-fmri.phantom')
-handlers = importlib.import_module('simulate-fmri.handlers')
-sampler_mod = importlib.import_module('simulate-fmri.sampler')
+from simulate_fmri import handlers, simulate  # noqa: E402
+from simulate_fmri import phantom as phantoms  # noqa: E402
+from simulate_fmri import sampler as sampler_mod  # noqa: E402
 
 RES_MM = 8.0
 ESP_MS = 0.6
@@ -226,8 +224,8 @@ def test_noise_var_attr_is_the_variance_of_the_added_noise(tmp_path):
 
 def test_worker_processes_give_the_same_kspace(tmp_path):
     """The engine's forkserver workers unpickle the sampler/engine classes by
-    module name ('simulate-fmri.engine'), which only works because nothing
-    refers to the hyphenated package through an import statement."""
+    module name ('simulate_fmri.engine'), so they need the repo root on their
+    path and the modules importable outside the main process."""
     protocol = make_protocol((12, 10, 8), etl=8, n_frames=2)
     one = run(tmp_path, protocol, 'one', block_on=0.3, block_off=0.3)['preprocessed']
     two = run(tmp_path, protocol, 'two', block_on=0.3, block_off=0.3, n_workers=2)['preprocessed']

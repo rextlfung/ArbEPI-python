@@ -1,4 +1,4 @@
-# simulate-fmri/ — simulated fMRI experiments acquired with ArbEPI
+# simulate_fmri/ — simulated fMRI experiments acquired with ArbEPI
 
 Simulates an fMRI scan of a brain phantom with a known BOLD activation, acquired
 with exactly the sampling schedule of an ArbEPI sequence, and writes it in the
@@ -7,7 +7,7 @@ format `recon/` reads. Built on [SNAKE-fMRI](https://github.com/mind-inria/snake
 [arXiv:2404.08282](https://arxiv.org/abs/2404.08282)).
 
 ```
-scan_info.mat ──► simulate-fmri ──► <name>.mrd ──► recon/<name>_preprocessed.h5 ──► recon.rss / recon.sense
+scan_info.mat ──► simulate_fmri ──► <name>.mrd ──► recon/<name>_preprocessed.h5 ──► recon.rss / recon.sense
  (sequences/ArbEPI.py)   (SNAKE)                     + truth group                    recon.testbed score
 ```
 
@@ -18,7 +18,7 @@ recovers an activation of known place, size and time course.
 `recon/testbed.py` asks the same kind of question from the other side. Use
 both; they fail differently.
 
-| | `recon/testbed.py` | `simulate-fmri/` |
+| | `recon/testbed.py` | `simulate_fmri/` |
 |---|---|---|
 | Object | a real fully sampled scan (phantom or head) | BrainWeb digital brain, or an analytic phantom |
 | Forward model | the recon's own B0-SENSE operator (an inverse crime by construction) | SNAKE: independent code, T2* decay along each echo train, BOLD updated at every excitation |
@@ -33,7 +33,7 @@ testbed's, so `python -m recon.testbed score` scores both.
 
 | File | What it holds |
 |---|---|
-| `simulate.py` | `simulate()`, `load_protocol()` and the `python -m simulate-fmri.simulate` command line |
+| `simulate.py` | `simulate()`, `load_protocol()` and the `python -m simulate_fmri.simulate` command line |
 | `sampler.py` | `ArbEPISampler`: a SNAKE sampler that plays `scan_info.mat`'s (ky, kz, echo time) schedule |
 | `engine.py` | `ArbEPIAcquisitionEngine`: the per-shot signal model (a subclass of SNAKE's EPI engine) |
 | `handlers.py` | `EllipsoidActivationHandler`: SNAKE's block-design activation, with the region placed in mm |
@@ -43,14 +43,11 @@ testbed's, so `python -m recon.testbed score` scores both.
 
 Tests: `tests/test_simulate_fmri.py`.
 
-The folder name has a hyphen, so Python's `import` statement cannot name it.
-`python -m simulate-fmri.simulate` works; from other code, load the modules with
-`importlib`:
+From Python:
 
 ```python
-import importlib
-simulate = importlib.import_module('simulate-fmri.simulate')
-simulate.simulate('output/scan_info.mat', 'output/sim')
+from simulate_fmri.simulate import simulate
+simulate('output/scan_info.mat', 'output/sim')
 ```
 
 ## Setup
@@ -98,7 +95,7 @@ OUT=output/sim
 $PY main.py
 
 # 2. Simulate it
-$PY -m simulate-fmri.simulate output/scan_info.mat $OUT --name sim
+$PY -m simulate_fmri.simulate output/scan_info.mat $OUT --name sim
 
 # 3. Reconstruct, as for a real scan
 $PY -m recon.rss $OUT sim
@@ -112,7 +109,7 @@ $PY -m recon.testbed score $OUT/recon/sim_preprocessed.h5 \
 Step 1 only needs `scan_info.mat`; any `scan_info.mat` from a past session
 works too, which simulates that session's acquisition.
 
-Options of `simulate-fmri.simulate`:
+Options of `simulate_fmri.simulate`:
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -167,7 +164,7 @@ two noisy runs differ in their noise. Noise-free runs are identical.
 
 ```bash
 UV_PROJECT_ENVIRONMENT=.venv-simulate uv run --extra simulate --extra recon --with nbconvert \
-    jupyter nbconvert --to notebook --execute --inplace simulate-fmri/demo.ipynb
+    jupyter nbconvert --to notebook --execute --inplace simulate_fmri/demo.ipynb
 ```
 
 ## What is simulated
