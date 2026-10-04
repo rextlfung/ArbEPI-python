@@ -2954,6 +2954,31 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   is 1/(Nscales (1 + mu)): keep mu modest there or raise `--niter`. Test:
   `test_hp_penalty_as_a_dual_block_converges_faster_than_as_a_smooth_term`.
 
+- [x] **263. Temporal TV in the joint wavelet-TV solver didn't converge in
+  100 iterations, so its weight barely mattered.** [found 2026-10-04 in the
+  20260930ballfat recon sweep] `--lamb-ttv` 0.04 and 0.16 gave identical
+  images on a static testbed (0.01 differed by 0.02%). Temporal TV was a dual
+  block of PDHG's G; its dual starts at 0 and grows by sigma ||D_t x|| per
+  iteration (sigma = 1/||G||^2 ~ 0.056), and for a near-static image the
+  frame differences are ~1% of an O(1) image, so in 100 iterations the dual
+  never reached the clipping bound lam and every lam above it followed the
+  same iterates. Reproduced on a noisy 16x16x12x40 ball: at 100 iterations lam
+  0.04 / 0.16 gave median fluctuation 0.47% / 0.44% and objective 657.2 /
+  666.5, against 0.33% / 0.017% and 655.3 / 656.1 after 3000. Fixed:
+  `TemporalTVProx`, the prox of lam ||D_t x||_1 (1D TV denoising per voxel by
+  FISTA on its dual, warm-started across outer iterations, 10 inner steps), as
+  FBPD's proximable term (`solvers.pdhg(prox_g=...)`); at 100 iterations it
+  reaches 655.3 / 655.9 and 0.334% / 0.000%. Found while writing it: mirtorch's
+  `Prox.__call__` applies `_apply` to |v| and restores each element's phase,
+  exact only for elementwise proxes (`SectionL1`/`SectionProx` are fine); a
+  coupled prox must override `__call__` (a first version left frame-to-frame
+  phase changes untouched). All temporal-TV results from before this fix
+  describe 100 unconverged iterations. Tests:
+  `test_temporal_tv_prox_solves_1d_tv_denoising_of_complex_series`,
+  `test_temporal_tv_prox_warm_start_improves_over_repeated_calls`,
+  `test_temporal_tv_weight_matters_within_100_iterations` (fails on the
+  dual-block form).
+
 ## Consistency & documentation
 
 - [x] **17.** Resolved: `lib/trap4ge.py`'s docstring no longer claims a

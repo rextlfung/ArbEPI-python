@@ -4,7 +4,7 @@
                        scales (Ong & Lustig 2016). Has a closed-form prox: POGM.
     WaveletTV          L1-wavelet + total variation. No closed-form prox: PDHG.
     SpatioTemporalWaveletTV  WaveletTV on every frame jointly, plus optional
-                       temporal TV. PDHG.
+                       temporal TV (TemporalTVProx, its own prox). PDHG.
     TemporalHighPass   projector onto temporal frequencies above a cutoff, for the
                        smooth penalty (mu/2)||P x||^2 (any solver).
 """
@@ -458,23 +458,60 @@ class PerFrame(LinearMap):
         )
 
 
-class TemporalDiff(LinearMap):
-    """Forward difference along the last (time) axis, non-periodic:
-    (D x)[..., t] = x[..., t+1] - x[..., t], t < Nt-1, flattened. Not periodic,
-    so the first and last frames aren't tied together (a slow drift would
-    otherwise pay for its full first-to-last change at the wrap)."""
+def _tdiff(x: torch.Tensor) -> torch.Tensor:
+    """Forward difference along the last (time) axis, non-periodic: (..., Nt) ->
+    (..., Nt-1). Not periodic, so the first and last frames aren't tied together
+    (a slow drift would otherwise pay for its full first-to-last change)."""
+    return x[..., 1:] - x[..., :-1]
 
-    def __init__(self, img_shape: tuple[int, ...]):
-        self.img_shape = tuple(img_shape)
-        super().__init__(self.img_shape, (math.prod(self.img_shape[:-1]) * (img_shape[-1] - 1),))
 
-    def _apply(self, x):
-        return (x[..., 1:] - x[..., :-1]).reshape(-1)
+def _tdiff_adjoint(u: torch.Tensor) -> torch.Tensor:
+    zero = torch.zeros_like(u[..., :1])
+    return torch.cat([zero, u], -1) - torch.cat([u, zero], -1)
 
-    def _apply_adjoint(self, y):
-        y = y.reshape(self.img_shape[:-1] + (self.img_shape[-1] - 1,))
-        zero = torch.zeros_like(y[..., :1])
-        return torch.cat([zero, y], -1) - torch.cat([y, zero], -1)
+
+class TemporalTVProx(Prox):
+    """prox of alpha lam ||D_t x||_1 (complex modulus of each frame-to-frame
+    difference, summed): 1D TV denoising of every voxel's time series, by FISTA
+    on its dual, min_{|u| <= alpha lam} 0.5 ||v - D_t^H u||^2 (x = v - D_t^H u,
+    step 1/||D_t||^2 = 1/4). The dual is kept between calls and warm-starts the
+    next one, so inside an outer solver a few inner steps (n_inner) suffice.
+
+    Used as FBPD's proximable f rather than as a dual block of G: as a dual
+    block, its dual variable starts at 0 and grows by sigma ||D_t x|| per outer
+    iteration, which for a near-static image is tiny next to lam, so in 100
+    iterations the clipping at lam never engaged and every lam above ~0.04 gave
+    the same image (review item 263).
+
+    Overrides __call__: mirtorch's Prox applies _apply to |v| and restores each
+    element's phase, which is exact only for elementwise proxes; this one
+    couples frames, so it works on the complex values directly."""
+
+    def __init__(self, lam: float, n_inner: int = 10):
+        super().__init__()
+        self.lam, self.n_inner = float(lam), int(n_inner)
+        self._u = None
+
+    def __call__(self, v: torch.Tensor, alpha) -> torch.Tensor:
+        return self._apply(v, alpha)
+
+    def _apply(self, v: torch.Tensor, alpha) -> torch.Tensor:
+        bound = float(alpha) * self.lam
+        u = self._u
+        if u is None or u.shape != v[..., 1:].shape or u.device != v.device:
+            u = torch.zeros_like(v[..., 1:])
+        w, t = u.clone(), 1.0
+        for _ in range(self.n_inner):
+            u_new = w + 0.25 * _tdiff(v - _tdiff_adjoint(w))
+            u_new = u_new * torch.clamp(bound / u_new.abs().clamp_min(1e-30), max=1.0)
+            t_new = (1 + math.sqrt(1 + 4 * t * t)) / 2
+            w = u_new + ((t - 1) / t_new) * (u_new - u)
+            u, t = u_new, t_new
+        self._u = u
+        return v - _tdiff_adjoint(u)
+
+    def cost(self, x: torch.Tensor) -> float:
+        return self.lam * _tdiff(x).abs().sum().item()
 
 
 def dct_matrix(n: int, device=None) -> torch.Tensor:
@@ -552,8 +589,10 @@ class SectionProx(Prox):
 class SpatioTemporalWaveletTV:
     """g(x) = lamb_l1 ||W x_t||_1 + lamb_tv ||D x_t||_1 summed over frames, plus
     lamb_ttv ||D_t x||_1 and (hp_weight/2) ||P x||^2: WaveletTV on every frame of
-    a (Nx,Ny,Nz,Nt) image, jointly, with optional temporal TV (TemporalDiff) and
-    high-pass penalty (TemporalHighPass). G = [W; D; D_t; P].
+    a (Nx,Ny,Nz,Nt) image, jointly, with optional temporal TV and high-pass
+    penalty (TemporalHighPass). G = [W; D; P] with h_prox for the dual blocks;
+    temporal TV is f_prox (TemporalTVProx, None without it), FBPD's proximable
+    term -- see TemporalTVProx for why not a block of G (review item 263).
 
     The high-pass penalty sits here, as a dual block with a closed-form prox,
     rather than in PDHG's smooth term: there its curvature hp_weight would cut
@@ -570,11 +609,7 @@ class SpatioTemporalWaveletTV:
         D = PerFrame(_Flatten(Diffnd(list(sp), dims=[0, 1, 2])), Nt)
         ops, lams, kinds = [W, D], [lamb_l1, lamb_tv], ["l1", "l1"]
         norm2 = 1 + 4 * len(sp)
-        if lamb_ttv > 0:
-            ops.append(TemporalDiff(tuple(img_shape)))
-            lams.append(lamb_ttv)
-            kinds.append("l1")
-            norm2 += 4  # ||D_t||^2 <= 4
+        self.f_prox = TemporalTVProx(lamb_ttv) if lamb_ttv > 0 else None
         if hp is not None and hp_weight > 0:
             ops.append(_Projector(hp, tuple(img_shape)))
             lams.append(hp_weight)
@@ -587,8 +622,9 @@ class SpatioTemporalWaveletTV:
     def cost(self, x: torch.Tensor) -> float:
         Gx = self.G.apply(x)
         p = self.h_prox
-        return sum(
+        c = sum(
             (0.5 * lam * sec.abs().pow(2).sum().item()) if kind == "sq"
             else lam * sec.abs().sum().item()
             for kind, lam, sec in zip(p.kinds, p.lambdas, torch.split(Gx, p.sizes))
         )
+        return c + (self.f_prox.cost(x) if self.f_prox is not None else 0.0)

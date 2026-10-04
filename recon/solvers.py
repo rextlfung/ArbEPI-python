@@ -224,14 +224,16 @@ def pdhg(
     G_norm_squared: float,
     x0: torch.Tensor,
     niter: int = 100,
+    prox_g=None,
 ) -> torch.Tensor:
-    """min_x f(x) + h(G x): the Condat-Vu primal-dual method, i.e. PDHG with a
-    plain gradient step on the smooth term f, via mirtorch's FBPD.
+    """min_x f(x) + g(x) + h(G x): the Condat-Vu primal-dual method, i.e. PDHG
+    with a plain gradient step on the smooth term f, via mirtorch's FBPD.
 
     grad_f: gradient of f, f_L its Lipschitz constant. prox_h: a mirtorch Prox
     for h (FBPD applies it to h's convex conjugate via Moreau's identity).
     G: a mirtorch LinearMap, G_norm_squared an upper bound on ||G||^2 (sets the
-    dual step size)."""
-    solver = FBPD(grad_f, Const(), prox_h, g_L=f_L, G=G, G_norm_squared=G_norm_squared,
-                  max_iter=niter)
+    dual step size). prox_g: a Prox for a proximable g, applied in the primal
+    step (default: g = 0)."""
+    solver = FBPD(grad_f, Const() if prox_g is None else prox_g, prox_h, g_L=f_L, G=G,
+                  G_norm_squared=G_norm_squared, max_iter=niter)
     return solver.run(x0)

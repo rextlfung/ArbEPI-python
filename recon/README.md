@@ -274,9 +274,14 @@ Two optional terms couple the frames; any of them makes the solve joint
   MSLR adds it to the gradient, which cuts POGM's step to
   $1/(N_{scales}(1+\mu))$, so keep $\mu$ modest there or raise `--niter`.
 - **`--lamb-ttv L`** (`wavelet-tv`): $+L\|D_t x\|_1$, temporal TV with a
-  non-periodic difference (`TemporalDiff`), in `SpatioTemporalWaveletTV`.
-  It penalizes frame-to-frame jumps at every frequency, and shrinks the
-  amplitude of real changes too.
+  non-periodic difference, in `SpatioTemporalWaveletTV`. It penalizes
+  frame-to-frame jumps at every frequency, and shrinks the amplitude of real
+  changes too. It enters PDHG as the proximable term (`TemporalTVProx`: 1D TV
+  denoising of each voxel's time series, a warm-started inner FISTA on its
+  dual), not as a dual block of $G$: there its dual grows by
+  $\sigma\|D_t x\|$ per iteration, tiny for a near-static image next to $L$,
+  and in 100 iterations every $L$ above ~0.04 gave the same image (review item
+  263).
 
 With incoherent sampling (a new random mask every frame) the aliasing is
 roughly white in time, so a temporal penalty above the cutoff removes only
