@@ -317,12 +317,16 @@ the cutoff only, with their own degrees of freedom: a temporal penalty leaves
 the residual band-limited, which inflates the plain per-frame t (25-32% of
 null voxels above |t| = 3.29 on `20260930ballfat`, vs 0.1% in the low band).
 
-`score` also reads the files [`simulate_fmri/`](../simulate_fmri/README.md)
-writes: a digital brain acquired by SNAKE-fMRI along a `scan_info.mat`
-schedule, with one activation (`block_occipital`) in the same `truth` layout.
-That truth comes from a forward model the recon does not share (T2* decay
-along each echo train, BOLD updated at every excitation), so it is not an
-inverse crime, at the price of a synthetic object and coils and no B0.
+`score` also reads the truth files [`simulate_fmri/`](../simulate_fmri/README.md)
+writes: a digital brain simulated as raw scanner data along a `scan_info.mat`
+schedule and run through `preprocess/`, with one activation
+(`block_occipital`) in the same `truth` layout
+(`score <datdir>/<name>_truth.h5 <recon>.h5`). That data comes from a forward
+model the recon does not share (spins on a finer grid, a susceptibility-derived
+field, ramp sampling, T2* decay and an R2*-based BOLD change at every sample's
+own time, physiological noise per excitation) and reaches the recon with
+estimated, not true, sensitivity and field maps; the price is a synthetic
+object and coils.
 
 ## Performance notes
 

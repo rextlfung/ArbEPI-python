@@ -70,6 +70,13 @@ work without the SDK. Run everything from the repository root.
                                        and echo times, deGRE echo times
 ```
 
+The four archives can also be simulated ones, written by
+[`simulate_fmri/session.py`](../simulate_fmri/README.md) from a `scan_info.mat`:
+plain HDF5 files holding the readouts in acquisition order, which
+`utils.ArchiveReader` reads with h5py instead of GERecon. Everything else runs
+unchanged, and the simulation's truth file gives each estimate (delay, odd/even
+phase, sensitivity maps, B0) something to be checked against.
+
 ## Quick start
 
 ```bash

@@ -1,86 +1,79 @@
-# simulate_fmri/ — simulated fMRI experiments acquired with ArbEPI
+# simulate_fmri/ — simulated fMRI scans acquired with ArbEPI
 
-Simulates an fMRI scan of a brain phantom with a known BOLD activation, acquired
-with exactly the sampling schedule of an ArbEPI sequence, and writes it in the
-format `recon/` reads. Built on [SNAKE-fMRI](https://github.com/mind-inria/snake-fmri)
-([documentation](https://mind-inria.github.io/snake-fmri/); Comby et al.,
-[arXiv:2404.08282](https://arxiv.org/abs/2404.08282)).
+Simulates an fMRI session of a brain phantom with a known BOLD activation,
+acquired with exactly the sampling schedule of an ArbEPI sequence, and hands it
+to the same `preprocess/` and `recon/` code a real scan goes through. Because
+the truth is known, every stage can be checked against it: the calibrated
+readout delay, the ghost correction, the sensitivity and field maps, and the
+activation in the reconstructed series.
 
 ```
-scan_info.mat ──► simulate_fmri ──► <name>.mrd ──► recon/<name>_preprocessed.h5 ──► recon.rss / recon.sense
- (sequences/ArbEPI.py)   (SNAKE)                     + truth group                    recon.testbed score
+                         ┌─ session.py ─► scanarchives/*.h5 ─► preprocess ─► <name>_preprocessed.h5 ─┐
+scan_info.mat ───────────┤   raw readouts of all four scans                                           ├─► recon.sense ─► recon.testbed score
+ (sequences/ArbEPI.py)   └─ ideal.py ───────────────────────────────────► <name>_preprocessed.h5 ────┘        against <name>_truth.h5
 ```
 
-It answers questions a scan cannot, because the truth is known: how well a
-sampling pattern, echo-train ordering, acceleration factor or reconstruction
-recovers an activation of known place, size and time course.
+There are two levels of fidelity.
 
-`recon/testbed.py` asks the same kind of question from the other side. Use
-both; they fail differently.
-
-| | `recon/testbed.py` | `simulate_fmri/` |
+| | `session.py` (raw data) | `ideal.py` |
 |---|---|---|
-| Object | a real fully sampled scan (phantom or head) | BrainWeb digital brain, or an analytic phantom |
-| Forward model | the recon's own B0-SENSE operator (an inverse crime by construction) | SNAKE: independent code, T2* decay along each echo train, BOLD updated at every excitation |
-| Coils, B0, noise | measured | synthetic coils, no B0, white noise |
-| Activation | 2% in four spheres (block, sinusoids) | SNAKE's BOLD model in occipital gray matter |
-| Needs | two preprocessed scans | a `scan_info.mat` |
+| Writes | raw ADC readouts of the noise scan, EPIcal, deGRE and ArbEPI | k-space on the Cartesian grid, already in recon's format |
+| Then | `preprocess/` runs on it, as on a scan | nothing; `recon/` reads it directly |
+| Readout | ramp-sampled on `kxo`/`kxe`, with a readout delay and odd/even phase | ideal |
+| Field | B0 map from the head's susceptibility; breathing | none |
+| Decay and BOLD | at every sample's own time; BOLD is an R2* change | decay per echo; BOLD is an amplitude change |
+| Coils | 32 loops, sensitivities estimated by ESPIRiT from the simulated deGRE | given to the recon |
+| Noise | thermal with a coil covariance, plus physiological | thermal, white |
+| Object grid | finer than the acquisition (intravoxel dephasing, partial volume) | the acquisition's |
+| Built on | this repo's signal model (`forward.py`); SNAKE's phantom and BOLD regressor | [SNAKE-fMRI](https://github.com/mind-inria/snake-fmri)'s acquisition engine |
+| Use it for | how the whole pipeline behaves on realistic data | isolating sampling, ordering and noise; an exact reference |
 
-A simulation carries its ground truth in a `truth` group laid out like the
-testbed's, so `python -m recon.testbed score` scores both.
+`recon/testbed.py` is a third option: a real object, coils and field, but
+k-space synthesized by the recon's own operator. Conclusions should hold on
+all of them, then on a scan.
 
 ## Layout
 
 | File | What it holds |
 |---|---|
-| `simulate.py` | `simulate()`, `load_protocol()` and the `python -m simulate_fmri.simulate` command line |
-| `sampler.py` | `ArbEPISampler`: a SNAKE sampler that plays `scan_info.mat`'s (ky, kz, echo time) schedule |
-| `engine.py` | `ArbEPIAcquisitionEngine`: the per-shot signal model (a subclass of SNAKE's EPI engine) |
-| `handlers.py` | `EllipsoidActivationHandler`: SNAKE's block-design activation, with the region placed in mm |
-| `phantom.py` | BrainWeb at 3 T, the analytic phantom, field-of-view placement, coil sensitivities |
-| `export.py` | SNAKE's `.mrd` → `recon/<name>_preprocessed.h5` with the `truth` group |
-| `demo.ipynb` | The default protocol, simulated, reconstructed and scored |
+| `session.py` | `simulate_session()`, `SessionConfig`, and `python -m simulate_fmri.session` |
+| `forward.py` | The signal equation: ramp-sampled EPI readouts and the deGRE's k-space from spins on a fine grid |
+| `b0.py` | Field map from the susceptibility of the head (dipole convolution, air cavities, shim) |
+| `coils.py` | Receive array defined in space; coil noise covariance |
+| `physio.py` | Physiological noise: BOLD-like, cardiac, respiratory, drift |
+| `ideal.py` | `simulate()` and `python -m simulate_fmri.ideal`: SNAKE's engine, output in recon's format |
+| `sampler.py`, `engine.py`, `handlers.py`, `export.py` | The ideal mode's SNAKE sampler, engine and activation handler, and its export |
+| `protocol.py` | `load_protocol()`: the acquisition recorded in `scan_info.mat` |
+| `phantom.py` | BrainWeb at 3 T, an analytic phantom, the head outline and air cavities |
+| `demo.ipynb` | A session simulated, preprocessed, reconstructed and scored |
 
-Tests: `tests/test_simulate_fmri.py`.
-
-From Python:
-
-```python
-from simulate_fmri.simulate import simulate
-simulate('output/scan_info.mat', 'output/sim')
-```
+Tests: `tests/test_simulate_fmri_forward.py` (the signal model against a
+brute-force sum), `..._models.py` (field, coils, physiology), `..._session.py`
+(sessions through the real `preprocess()`), `test_simulate_fmri.py` (ideal mode).
 
 ## Setup
 
-One venv holds SNAKE and `recon/`, so a simulation can be reconstructed and
-scored without switching environments:
+One venv holds SNAKE, `preprocess/`'s dependencies and `recon/`, so a session
+can be simulated, preprocessed, reconstructed and scored without switching:
 
 ```bash
-UV_PROJECT_ENVIRONMENT=.venv-simulate uv sync --extra simulate --extra recon --extra test
+UV_PROJECT_ENVIRONMENT=.venv-simulate uv sync --extra simulate --extra preprocessing --extra recon --extra test
 ```
 
-It is separate from `.venv` and `.venv-recon` for the reason `.venv-recon` is:
-`uv sync` is exact, so syncing a shared environment without these extras would
-remove them. Three things about the `simulate` extra (see `pyproject.toml`):
-
 - **snake-fmri is pinned to a GitHub commit.** The PyPI release (0.2.0) predates
-  the `FOVConfig` API that the upstream documentation describes and that places
-  ArbEPI's field of view on the phantom.
-- **`ismrmrd` is held below 1.15.** That release made an `ismrmrdHeader`
-  argument required, which SNAKE's MRD writer does not pass.
-- **cupy is not installed.** SNAKE asks for `mri-nufft[finufft,cufinufft]`, and
-  the `cufinufft` extra brings `cupy-cuda13x` and the CUDA 13 toolkit (several
-  GB, one CUDA version). The Cartesian path used here needs neither, so
-  `[tool.uv] override-dependencies` narrows it to `mri-nufft[finufft]`. SNAKE
-  logs `Cupy not available, using CPU.`; that is expected.
+  the `FOVConfig` API the upstream documentation describes.
+- **`ismrmrd` is held below 1.15**, which made a header argument required that
+  SNAKE's MRD writer does not pass.
+- **cupy is not installed**: `[tool.uv] override-dependencies` narrows SNAKE's
+  `mri-nufft[finufft,cufinufft]` to `mri-nufft[finufft]`. SNAKE logs
+  `Cupy not available, using CPU.`; that is expected.
+- **GERecon is not needed.** `preprocess/` reads simulated archives with h5py
+  (`preprocess.utils.ArchiveReader` recognizes them).
+- **The B0 map needs julia**, as for real data (`preprocess/README.md`).
+- The raw-data simulation uses torch, on the GPU when there is one.
 
-SNAKE also logs `Existing <name>.mrd it will be overwritten` followed by
-`[Errno 2] No such file or directory` whenever the output file does not exist
-yet. That is its writer removing a file that is not there; nothing is wrong.
-
-The BrainWeb phantom is downloaded on first use (about 40 s) and cached in
-`~/.cache/brainweb` and `~/.cache/snake-fmri`. `--phantom ellipsoid` needs no
-download.
+BrainWeb is downloaded on first use (about 40 s) and cached in `~/.cache`.
+`--phantom ellipsoid` needs no download.
 
 ## Quick start
 
@@ -88,194 +81,152 @@ Run everything from the repository root.
 
 ```bash
 export UV_PROJECT_ENVIRONMENT=.venv-simulate
-PY="uv run --extra simulate --extra recon python"
+PY="uv run --extra simulate --extra preprocessing --extra recon python"
 OUT=output/sim
 
-# 1. The sequence: writes output/scan_info.mat (edit params.py to change the protocol)
+# 1. The sequences: writes output/scan_info.mat (edit params.py to change the protocol)
 $PY main.py
 
-# 2. Simulate it
-$PY -m simulate_fmri.simulate output/scan_info.mat $OUT --name sim
+# 2. Simulate the session: raw readouts of all four scans, and the truth
+$PY -m simulate_fmri.session output/scan_info.mat $OUT --name sim
 
-# 3. Reconstruct, as for a real scan
-$PY -m recon.rss $OUT sim
-$PY -m recon.sense $OUT sim --reg wavelet-tv --hp-weight 3 --tag hp3
+# 3. Preprocess and reconstruct, as for a real scan
+$PY -m preprocess.batch_preprocess $OUT sim
+$PY -m recon.sense $OUT sim --reg wavelet-tv --B0 --hp-weight 3 --volume-tr 0.506 --tag hp3
 
 # 4. Score against the truth
-$PY -m recon.testbed score $OUT/recon/sim_preprocessed.h5 \
-    $OUT/recon/sense_wavelet-tv_hp3/sim_recon.h5 --json hp3.json --png hp3.png
+$PY -m recon.testbed score $OUT/sim_truth.h5 \
+    $OUT/recon/sense_wavelet-tv_b0_hp3/sim_recon.h5 --json hp3.json --png hp3.png
 ```
 
-Step 1 only needs `scan_info.mat`; any `scan_info.mat` from a past session
-works too, which simulates that session's acquisition.
+Any `scan_info.mat` works in step 2, including one from a past session, which
+simulates that session's acquisition. The ideal mode replaces steps 2 and 3's
+first line: `$PY -m simulate_fmri.ideal output/scan_info.mat $OUT --name sim`
+writes `$OUT/recon/sim_preprocessed.h5` directly (score against that file
+instead of `sim_truth.h5`).
 
-Options of `simulate_fmri.simulate`:
+Options of `simulate_fmri.session`:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--name` | `sim` | output name; the `<seq>` to give `recon/` |
+| `--name` | `sim` | the `<seq>` of `preprocess/` and `recon/` |
 | `--phantom` | `brainweb` | or `ellipsoid` (analytic, no download) |
-| `--coils`, `--coils-per-ring` | 16, 8 | receive array: rings of coils around z |
-| `--model` | `T2s` | `T2s`: decay along each echo train. `simple`: every sample at TE |
-| `--snr` | 1000 | SNAKE's noise level (see below); `inf` for none |
-| `--block-on`, `--block-off` | 10, 10 | block design, s |
-| `--delta-r2s` | 1000 | peak signal change = TE (ms) / this: 3% at TE = 30 ms |
-| `--no-activation` | | a resting phantom |
-| `--fa` | from `scan_info.mat` | flip angle, degrees |
 | `--frames` | all | only the first N frames |
-| `--workers` | half the CPUs | worker processes |
-| `--seed` | 0 | noise seed |
+| `--coils` | 32 | receive coils, in rings of 8 |
+| `--grid-factor` | 2 | spins per voxel per axis |
+| `--noise` | 1 | thermal noise relative to the calibrated level; 0 = none |
+| `--b0-scale`, `--shim-order` | 1, 1 | field map scale (0 = uniform) and the shim order removed |
+| `--delay` | −0.3 | readout delay, samples |
+| `--oe-phase` | −0.25 −0.32 | odd/even phase at the first and last echo pair, rad |
+| `--physio` | 1 | physiological noise relative to the calibrated level; 0 = none |
+| `--no-activation`, `--delta-r2s`, `--block-on`, `--block-off` | −0.98 1/s, 10 s, 10 s | the activation |
+| `--preprocess` | | run `preprocess.batch_preprocess` afterwards |
+| `--device`, `--seed`, `--fa` | | |
 
-## A first result
+From Python, `simulate_session(scan_info, outdir, name, cfg=SessionConfig(...))`
+takes the same settings and more (`physio=PhysioConfig(...)`, a custom
+`Anatomy`).
 
-The default protocol (2.4 mm, 90 x 90 x 60, R = 10 Poisson-disc, radial
-ordering, ETL 54, volume TR 0.506 s, 119 frames) on BrainWeb with the default
-settings, reconstructed two ways and scored by `recon.testbed score`:
+## What the raw-data simulation models
 
-| | CG-SENSE (`--reg none`) | wavelet-TV + temporal high-pass (`--reg wavelet-tv --hp-weight 3`) |
+Everything about the acquisition comes from `scan_info.mat`: matrix and field
+of view, each echo's (ky, kz) and echo time in every shot of every frame, the
+readout trajectories `kxo`/`kxe`, ADC dwell, flip angles, and the deGRE's
+matrix, echo times and TR.
+
+| | Model | Sized from |
 |---|---|---|
-| frame error, `nrmse_frame_pct` | 43.4 | 4.5 |
-| fluctuation where nothing changes, `fluct_pct` | 37.2 | 0.37 |
-| recovered amplitude, `amp_ratio` (1 = exact) | 0.38 | 0.52 |
-| t-score of the activation, median (`_t`, `_t_lowband`) | 0.13, 0.13 | 17.3, 7.4 |
-| region's mean time course vs truth, `corr` | 0.33 | 0.96 |
-| false positives in the low band | 0.1% | 0.04% |
-| edge sharpness vs truth | 0.26 | 0.93 |
+| **Object** | BrainWeb subject 4's white matter, gray matter and CSF, on a grid `--grid-factor` times finer than the acquisition | T1: Wansapura 1999; T2*: Peters 2006/2007, 59.7 and 54.6 ms (see below) |
+| **Excitation** | spoiled steady state at the per-shot TR and local flip angle; slab profile of 0.9 × the z field of view; water excitation's loss of flip off resonance | `lib/make_excitation_pulse.py`, `lib/make_water_excitation.py` |
+| **B0** | dipole field of the head's susceptibility (tissue −9.05 ppm, air +0.36 ppm) with air cavities for the sinuses, mastoids and ear canals, minus a linear shim | a 3 T head field map: std 45 Hz, −267 to +190 Hz; the model gives 30 Hz, −150 to +310 Hz |
+| **Decay** | exp(−t R2*) per tissue at each ADC sample's own time | same T2* values |
+| **Readout** | ramp-sampled: an exact Fourier sum at `kxo`/`kxe`, shifted by a readout delay; a constant phase on every other echo, drifting along the train | real sessions: delay −0.3 samples, odd/even phase −0.25 to −0.32 rad |
+| **Coils** | 32 loops in four rings around z, unit root-sum-of-squares | — |
+| **Thermal noise** | complex Gaussian per raw sample, with a coil covariance; scales with voxel volume and sampling time | a 3 T 32-channel head deGRE: SNR 115 for a fully sampled volume of the default protocol; covariance from real `W` matrices (std ratio 1.1–1.2, correlations ≤ 0.02) |
+| **Activation** | a change of R2* in the occipital gray matter, block design ⊛ Glover HRF, updated at every excitation | van der Zwaag 2009: −0.98 1/s at 3 T (2.9% at TE 30 ms) |
+| **Physiological noise** | BOLD-like R2* fluctuations (smooth patterns, 1/f below 0.1 Hz), cardiac pulsation (CSF), respiration (signal and field), drift, all per excitation | Bodurka 2007: λ = 0.0128 (gray), 0.0085 (white), 0.021 (CSF); Van de Moortele 2002 for the breathing field |
+| **deGRE** | fully sampled dual-echo 3D GRE at its own matrix, field of view and TR, with the same object, field and coils; leading receive-gain block | `sequences/deGRE.py` |
+| **EPIcal, noise** | blip-free echo trains with the same readout; `ceil(20 Ncoils² / Nfid)` noise readouts | `sequences/EPIcal.py`, `sequences/noise.py` |
 
-Unregularized, each frame is inverted alone at R = 10 with 16 coils and the
-noise swamps a 2% activation (`snr = 1000` is a gray-matter SNR of 60 for a
-fully sampled reconstruction). The regularized reconstruction finds it, at
-about half its true size. These are one simulation's numbers, there to show
-the chain works; they are not a study of either method. `demo.ipynb` repeats
-the regularized run; its numbers differ in the last digits because the noise
-does (see below).
+The signal model (`forward.py`) evaluates each scan from spins on the fine
+grid, so a voxel dephases across its own field gradient and mixes tissues.
+Since an echo train visits k-space at fixed echo times, everything spatial is
+computed once per echo index and each shot is a weighted sum; the cost does not
+grow with the length of the run. The default protocol (119 frames, 32 coils,
+spins on 180 × 180 × 120) takes about 30 s on a GPU.
 
-Timing on a 64-core machine with an RTX A6000 shared with another job: the
-simulation takes about 100 s with 16 workers (`--workers 16`), some 60 s of it
-the acquisition and the rest building the phantom and writing the output;
-CG-SENSE 4.5 min; wavelet-TV 5 min. The `.mrd` is 0.9 GB and
-the preprocessed file 0.8 GB.
+### 3 T T2* values
 
-Noise is seeded (`--seed`), but with more than one worker the shots finish in
-a different order from run to run and SNAKE draws the noise in that order, so
-two noisy runs differ in their noise. Noise-free runs are identical.
+| Source | Gray matter | White matter | Notes |
+|---|---|---|---|
+| Peters et al., Proc ISMRM 14 (2006) 926; Magn Reson Imaging 2007;25:748 | 59.7 ms | 54.6 ms | cortical; through-slice dephasing fitted and removed. Without that correction: 47.1 and 44.0 ms. Caudate 46 ms, putamen 45 ms |
+| Wansapura et al., J Magn Reson Imaging 1999;9:531 | 41.6 (occipital), 51.8 (frontal) ms | 48.4 (occipital), 44.7 (frontal) ms | FLASH, 14 echo times, no dephasing correction |
+| van der Zwaag et al., NeuroImage 2009;47:1425 | 55 ms | | implied by ΔR2*/R2* = 0.054 and ΔR2* = 0.98 1/s in active motor cortex |
 
-`demo.ipynb` keeps its outputs. To refresh them (about 8 minutes, GPU):
+The simulation uses Peters' corrected values (`phantom.TISSUE_PROPS_3T`): the
+field inhomogeneity that shortens an apparent T2* is simulated separately, so
+the uncorrected values would count it twice.
 
-```bash
-UV_PROJECT_ENVIRONMENT=.venv-simulate uv run --extra simulate --extra recon --with nbconvert \
-    jupyter nbconvert --to notebook --execute --inplace simulate_fmri/demo.ipynb
-```
+## What it does not model
 
-## What is simulated
-
-**The acquisition** comes from `scan_info.mat`, nothing else: matrix size and
-field of view, every echo's (ky, kz) location in every shot of every frame, the
-echo times, the volume TR and the flip angle. So the sampling masks, the
-`mask2epi` partitioning and ordering, R, ETL and TE are those of the sequence
-that was generated.
-
-| ArbEPI | SNAKE |
-|---|---|
-| one shot (one excitation, `ETL` echoes) | one repetition: `seq.TR` = volume TR / Nshots |
-| one frame (`Nshots` shots) | one k-space frame |
-| x (readout), y, z (the undersampled plane) | array axes 0, 1, 2 |
-| echo times in `schedules[..., 2]` | each acquisition's `user_float[0]`, read by the engine |
-| flip angle, nominal TE | `seq.FA`, `seq.TE` |
-
-**The object**: BrainWeb subject 4's white matter, gray matter and CSF maps,
-resampled to the acquisition grid, with approximate 3 T relaxation times
-(`phantom.TISSUE_PROPS_3T`). The field of view is centered on the brain and
-tissue outside it is cut off, as an ideal slab excitation would.
-
-**The signal** of each tissue is the spoiled gradient-echo steady state at the
-per-shot TR and flip angle, weighted by T2* decay at each sample's own time:
-`exp(-t / T2*)` with `t` the echo time from the schedule plus the sample's place
-in its readout. The center of k-space is acquired at the nominal TE with radial
-ordering and wherever the ordering puts it otherwise, so ordering changes
-contrast and blurring the way it does on the scanner.
-
-**The activation** is SNAKE's: a copy of gray matter inside an ellipsoid in the
-occipital cortex, weighted by the block design convolved with the Glover HRF and
-scaled to peak at `TE / delta_r2s`. The phantom is updated at every excitation,
-so the BOLD signal changes between the shots of one frame.
-
-**Coils**: rings of `--coils-per-ring` coils around z (sigpy's birdcage model),
-half a field of view apart, so sensitivities vary along both undersampled axes.
-The recon is given these exact maps.
-
-**Noise**: complex white noise on every coil's k-space sample, of variance
-`2 * mean(image^2) / snr`, where `image` is the noise-free magnitude image over
-the whole field of view. `noise_var` in the output is that variance; `recon.sense`
-divides by its square root, as for a whitened scan.
-
-## What is not
-
-- **Off-resonance.** No B0 field, so no distortion, no signal dropout, and
-  nothing for `--B0` or `--R2star` to correct: the output has no `b0_map`.
-  T2* decay *is* simulated and the plain SENSE operator does not model it; that
-  mismatch is real.
-- **Echo-time dependence of BOLD.** SNAKE's activation scales the amplitude of
-  a gray-matter copy, by the same fraction (`TE / delta_r2s`) at every echo. A
-  real BOLD change is a change in R2*, whose effect grows with each sample's
-  echo time. So a simulation shows how an echo-train ordering blurs and weights
-  the image through T2* decay, but not how it changes BOLD sensitivity.
-- **Readout imperfections.** No Nyquist ghost, no ramp sampling, no gradient
-  delays. Samples sit on the Cartesian grid. `preprocess/` has nothing to do and
-  is skipped.
-- **Structured noise.** No physiological noise, drift or motion. (SNAKE has a
-  motion handler; pass it through `simulate(handlers=...)`. It is not tested
-  here.)
-- **Fat and the excitation.** Three tissues, a perfect slab, no fat signal, no
-  off-resonance loss of the water excitation.
-- **Sensitivity estimation.** The recon gets the true maps, not ESPIRiT maps
-  from a calibration scan.
+- **Motion**, including the field's dependence on head position.
+- **Fat.** Three tissues; the scalp and skull give no signal, and there is no
+  chemical shift.
+- **Gradient imperfections beyond a delay**: no eddy currents, no trajectory
+  errors along ky or kz, no concomitant fields.
+- **Flow and inflow**, and T1 recovery between excitations other than the
+  steady state (no approach to it at the start of a run).
+- **B1**: the transmit field is uniform; receive sensitivities have unit
+  root-sum-of-squares, so there is no image shading.
+- **Perturbations beyond first order.** BOLD and physiological fluctuations are
+  linearized (an error of 5 × 10⁻⁴ of the signal for a 3% change), and the
+  evolution during a readout is a second-order Taylor expansion (2% at 300 Hz
+  at the ends of a readout).
+- **The air cavities are not anatomy.** BrainWeb's head model has no air inside
+  it; the cavities are ellipsoids sized to give a realistic field.
 
 ## Output
 
-`<outdir>/<name>.mrd` is SNAKE's own file (phantom, handlers, trajectory,
-k-space). `<outdir>/recon/<name>_preprocessed.h5` holds:
+`simulate_fmri.session` writes a session directory:
 
-| Dataset / attr | Contents |
+| File | Contents |
 |---|---|
-| `ksp_epi_zf` | (Nx, Ny, Nz, Ncoils, Nframes) zero-filled k-space |
-| `omegas`, `echo_times` | (Ny, Nz, Nframes) sampling mask and each sample's time since excitation (s) |
-| `smaps` | (Nx, Ny, Nz, Ncoils) the sensitivities used |
-| attrs `noise_var`, `whitened`, `t_ref_s`, `fov`, `volume_tr` | as `preprocess/` writes them |
-| `truth/x0` | (Nx, Ny, Nz) noise-free magnitude image at TE, averaged over time |
-| `truth/roi_masks`, `truth/waveforms` | (1, Nx, Ny, Nz) activated voxels; (1, Nframes) their time course, zero-mean, peak 1 |
-| `truth` attrs `roi_names`, `amp` | `block_occipital`; the peak fractional signal change |
-| `truth/amp_map` | (Nx, Ny, Nz) the fractional change voxel by voxel |
-| `truth/image_rest`, `tissues`, `brain_mask`, `bold_shots`, `stimulus_shots` | the image without activation, tissue fractions, and the BOLD and stimulus time courses per excitation |
+| `scanarchives/<name>_{noise,cal,epi}.h5`, `gre.h5` | raw readouts `[Nacq, Ncoils, Nfid]` in acquisition order (simulated-archive format, `preprocess/utils.py`) |
+| `seqs/<name>/scan_info.mat` | a copy of the sequence's record |
+| `<name>_truth.h5` | the `truth` group below, and `volume_tr` |
 
-The true image of frame t is `x0 * (1 + amp_map * w(t))`. The activation adds
-gray-matter signal on top of whatever tissue a voxel holds, so `amp_map` varies
-with the tissue mix; `roi_masks` keeps the voxels that are at least 90% tissue
-and at half the largest change among those or more (a voxel at the edge of the
-brain has almost no signal to take a ratio against), and `amp` is their median,
-which is what `recon.testbed score`'s `amp_ratio` divides by.
+| `truth/` | |
+|---|---|
+| `x0` | (Nx, Ny, Nz) noise-free magnitude at the nominal TE, at the acquisition's resolution (the fine-grid image cut to the acquired k-space), time-averaged |
+| `roi_masks`, `waveforms`; attrs `roi_names`, `amp` | the activated voxels, their time course (zero-mean, peak 1) and peak fractional change: `recon/testbed.py`'s layout |
+| `amp_map`, `r2s_change` | the fractional change voxel by voxel; the R2* change per excitation |
+| `b0_map`, `smaps`, `degre/b0_map` | the field each scan can measure (magnetization-weighted) and the coil maps, on the EPI and deGRE grids |
+| `noise_covariance`, `oe_phase`; attrs `delay`, `snr0`, `sigma_raw` | what was injected |
+| `physio/*` | the physiological time courses per excitation |
+| `tissues`, `brain_mask`, `image_rest` | |
 
-## What was changed relative to stock SNAKE, and why
+`simulate_fmri.ideal` writes `<name>.mrd` (SNAKE's file) and
+`recon/<name>_preprocessed.h5` with the same `truth` group inside it.
 
-Everything is done through SNAKE's own extension points (a sampler, an engine
-and a handler subclass); SNAKE itself is not patched.
+## Checked against the real pipeline
 
-- **Sampler.** SNAKE's 3D-EPI sampler acquires full ky lines of one kz plane
-  per shot. `ArbEPISampler` writes the schedule's arbitrary (ky, kz) list, with
-  kx reversed on odd echoes.
-- **Echo timing.** SNAKE's T2* model spaces all samples of a shot one dwell
-  apart and takes TE at the sample nearest k = 0 in the first shot. The engine
-  here uses the sequence's echo times, which the sampler stores per acquisition.
-- **FFT centering.** SNAKE's FFT helper applies its two shifts the other way
-  round from `recon/operators.py`. They agree for even matrix sizes and differ
-  by one sample for odd ones. The engine uses the recon's convention.
-- **Resampling.** SNAKE resamples the phantom at every shot. Without cupy that
-  starts a process pool each time (about 1 s per shot) to copy an array already
-  on the grid. The engine resamples only a phantom that is off the grid.
-- **Activation region.** SNAKE's built-in occipital ellipsoid is defined in
-  voxels of BrainWeb's full grid and lands elsewhere on another field of view.
-  `EllipsoidActivationHandler` places it in mm. It also sets the HRF
-  convolution's `oversampling` to 1 instead of 50: at a 50 ms shot TR, 50 means
-  a 1 ms grid and minutes to hours per regressor, for a 1% difference.
-- **Coils.** SNAKE's birdcage ring goes around the first array axis (x here),
-  which leaves no variation along z, one of the two undersampled axes.
+On the default protocol (2.4 mm, 90 × 90 × 60, R = 10, 119 frames) with
+BrainWeb, `preprocess/` recovered from the simulated raw data:
+
+| | Injected | Recovered by `preprocess/` |
+|---|---|---|
+| Readout delay | −0.30 samples | −0.30 |
+| Odd/even phase, first / middle / last echo pair | −0.250 / −0.285 / −0.320 rad | −0.263 / −0.300 / −0.338 |
+| Noise variance after whitening | — | 0.95 |
+| Coil compression | 32 coils | 19 virtual coils at 99.9% energy |
+| Sensitivity maps | | agreement 0.998 per voxel (median) |
+| B0 map | std 29 Hz, −150 to +310 Hz | correlation 0.95 |
+| R2* (gray, white: 16.8, 18.3 1/s) | | median 15.8 1/s |
+
+The tests do the same on small sessions, plus the exact case: with only the
+object in the data, `preprocess()`'s k-space reconstructs the truth image to
+within 1%.
+
+Running `preprocess/` on a simulated session also found that
+`preprocess/grid_resize.py` places the deGRE maps 1.2 mm from the EPI's frame
+in z, and 0.3 mm in x and y (`docs/review-findings.md` item 263).

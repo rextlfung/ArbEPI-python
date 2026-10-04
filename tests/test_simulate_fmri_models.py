@@ -45,7 +45,8 @@ def test_shim_removes_what_the_scanner_would():
     mask = np.ones(shape, dtype=bool)
     rng = np.random.default_rng(0)
     linear = 3.0 + 0.2 * coords[0] - 0.1 * coords[1] + 0.05 * coords[2]
-    quadratic = 1e-3 * (coords[2] ** 2 - (coords[0] ** 2 + coords[1] ** 2) / 2) + 2e-3 * coords[0] * coords[1]
+    quadratic = (1e-3 * (coords[2] ** 2 - (coords[0] ** 2 + coords[1] ** 2) / 2)
+                 + 2e-3 * coords[0] * coords[1])
     bump = rng.normal(size=shape)
     np.testing.assert_allclose(b0.shim(linear, mask, coords, 1), 0, atol=1e-9)
     assert np.abs(b0.shim(linear + quadratic, mask, coords, 1)).max() > 0.01
@@ -102,7 +103,8 @@ def test_coil_maps_are_functions_of_position_with_unit_rss():
     deGRE and the EPI are simulated on different grids."""
     coarse = [np.arange(-40, 41, 8.0), np.arange(-32, 33, 8.0), np.arange(-24, 25, 8.0)]
     fine = [np.arange(-40, 41, 4.0), np.arange(-32, 33, 4.0), np.arange(-24, 25, 4.0)]
-    sc, sf = coils.coil_maps(coarse, 12, coils_per_ring=4), coils.coil_maps(fine, 12, coils_per_ring=4)
+    sc = coils.coil_maps(coarse, 12, coils_per_ring=4)
+    sf = coils.coil_maps(fine, 12, coils_per_ring=4)
     assert sc.shape == (12, 11, 9, 7) and sc.dtype == np.complex64
     np.testing.assert_allclose((np.abs(sf) ** 2).sum(0), 1, atol=1e-5)
     np.testing.assert_allclose(sc, sf[:, ::2, ::2, ::2], atol=1e-5)
@@ -223,7 +225,8 @@ def test_slab_profile_and_steady_state():
     angles = torch.tensor([0.8 * ernst, ernst, 1.2 * ernst])
     s = steady_state(angles, tr, t1)
     assert s[1] > s[0] and s[1] > s[2]
-    assert float(s[1]) == pytest.approx(np.sqrt((1 - np.exp(-tr / t1)) / (1 + np.exp(-tr / t1))), rel=1e-5)
+    e1 = np.exp(-tr / t1)
+    assert float(s[1]) == pytest.approx(np.sqrt((1 - e1) / (1 + e1)), rel=1e-5)
 
 
 def test_gridding_noise_gain_matches_preprocess_gridding():

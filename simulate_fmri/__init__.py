@@ -1,21 +1,23 @@
-"""fMRI experiments simulated with ArbEPI's own sampling schedules, on SNAKE-fMRI.
+"""fMRI scans simulated with ArbEPI's own sampling schedules.
 
-SNAKE (https://github.com/mind-inria/snake-fmri) supplies the phantom, the
-BOLD activation and noise models, the MRD file and the parallel acquisition
-driver. This package adds the ArbEPI-specific pieces through SNAKE's extension
-points:
+Two levels of fidelity, both starting from the scan_info.mat a sequence wrote:
 
-- sampler.py   ArbEPISampler: plays scan_info.mat's (ky, kz, echo time) schedule
-- engine.py    ArbEPIAcquisitionEngine: the per-shot signal model
-- handlers.py  EllipsoidActivationHandler: a block-design ROI placed in world mm
-- phantom.py   BrainWeb at 3 T, an offline analytic phantom, coil sensitivities
-- export.py    SNAKE's .mrd -> recon/<name>_preprocessed.h5 with a `truth` group
-- simulate.py  scan_info.mat -> all of the above; the command line
+session.py   Raw data of a whole scan session (noise scan, EPIcal, deGRE,
+             ArbEPI) for the real preprocess/ and recon/ to process: field
+             map, ramp sampling, readout delay and odd/even phase, coil noise,
+             physiological noise, BOLD as an R2* change.
+               forward.py   the signal equation, evaluated per echo index
+               b0.py        field map from the head's susceptibility
+               coils.py     receive array and noise covariance
+               physio.py    physiological noise
+ideal.py     SNAKE-fMRI's acquisition engine on the Cartesian grid, written
+             straight to recon's input format: sampling, T2* decay and thermal
+             noise only.
+               sampler.py, engine.py, handlers.py, export.py
 
-A simulation is reconstructed by recon/ and scored by recon/testbed.py like the
-real-data testbed.
-
-Run with `python -m simulate_fmri.simulate`; see README.md in this folder.
+protocol.py reads scan_info.mat; phantom.py holds the BrainWeb and analytic
+phantoms (SNAKE's Phantom). Either mode's output carries its ground truth in
+recon/testbed.py's layout. See README.md in this folder.
 """
 
 import warnings

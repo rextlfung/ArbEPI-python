@@ -1,20 +1,20 @@
-"""Simulate an fMRI experiment acquired with an ArbEPI sequence.
+"""The ideal mode: SNAKE's own engine, and data that needs no preprocessing.
 
-    python -m simulate_fmri.simulate output/scan_info.mat <outdir>
+    python -m simulate_fmri.ideal output/scan_info.mat <outdir>
 
-reads the acquisition from the scan_info.mat that sequences/ArbEPI.py wrote
-next to ArbEPI.seq (matrix size, field of view, the (ky, kz) location and echo
-time of every echo of every shot of every frame, volume TR, flip angle), has
-SNAKE-fMRI acquire a brain phantom with a block-design BOLD activation along
-exactly that schedule, and writes
+has SNAKE-fMRI acquire a brain phantom with a block-design BOLD activation
+along the (ky, kz, echo time) schedule in scan_info.mat, on the Cartesian
+grid, with known coil sensitivities and white noise, and writes
 
     <outdir>/<name>.mrd                      SNAKE's raw file
     <outdir>/recon/<name>_preprocessed.h5    input to recon.rss / recon.sense,
                                              with the ground truth in `truth`
 
-Reconstruct with recon/ as for a real scan, then score the result against the
-ground truth with `python -m recon.testbed score`. See README.md in this folder
-for what the simulation models and what it does not.
+No field map, no ramp sampling, no ghost, no physiological noise: what is left
+is sampling, T2* decay along the echo train, and thermal noise, with a forward
+model that is exactly recon/operators.py's SENSE when the decay is switched
+off. Use it to isolate those, and as the reference the raw-data simulation
+(session.py) reduces to; use session.py for everything else.
 """
 
 from __future__ import annotations

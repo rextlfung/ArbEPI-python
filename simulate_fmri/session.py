@@ -493,3 +493,56 @@ def simulate_session(
     print('Wrote ' + '\n      '.join(paths[k] for k in ('epi', 'cal', 'noise', 'gre', 'scan_info',
                                                          'truth')))
     return paths
+
+
+def _cli() -> None:
+    import argparse
+
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument('scan_info', help='scan_info.mat written by sequences/ArbEPI.py')
+    p.add_argument('outdir', help='session directory to write (the datdir of preprocess/recon)')
+    p.add_argument('--name', default='sim', help='sequence name (the seqname of preprocess/recon)')
+    p.add_argument('--phantom', default='brainweb', choices=('brainweb', 'ellipsoid'))
+    p.add_argument('--frames', type=int, default=None, help='only the first N frames')
+    p.add_argument('--fa', type=float, default=None, help='EPI flip angle, degrees')
+    p.add_argument('--coils', type=int, default=32)
+    p.add_argument('--grid-factor', type=int, default=2, help='spins per voxel per axis')
+    p.add_argument('--noise', type=float, default=1.0,
+                   help='thermal noise relative to the calibrated level; 0 for none')
+    p.add_argument('--b0-scale', type=float, default=1.0, help='field map scale; 0 = uniform')
+    p.add_argument('--shim-order', type=int, default=1, choices=(0, 1, 2))
+    p.add_argument('--delay', type=float, default=-0.3, help='readout delay, samples')
+    p.add_argument('--oe-phase', type=float, nargs=2, default=(-0.25, -0.32),
+                   metavar=('FIRST', 'LAST'), help='odd/even phase along the echo train, rad')
+    p.add_argument('--physio', type=float, default=1.0,
+                   help='physiological noise relative to the calibrated level; 0 for none')
+    p.add_argument('--no-activation', action='store_true')
+    p.add_argument('--delta-r2s', type=float, default=-0.98,
+                   help='peak R2* change on activation, 1/s')
+    p.add_argument('--block-on', type=float, default=10.0, help='stimulus duration, s')
+    p.add_argument('--block-off', type=float, default=10.0, help='rest duration, s')
+    p.add_argument('--seed', type=int, default=0)
+    p.add_argument('--device', default=None, help='default: cuda if available, else cpu')
+    p.add_argument('--preprocess', action='store_true',
+                   help='then run preprocess.batch_preprocess on the session')
+    a = p.parse_args()
+    cfg = SessionConfig(
+        grid_factor=a.grid_factor, n_coils=a.coils, b0_scale=a.b0_scale, shim_order=a.shim_order,
+        delay=a.delay, oe_phase=tuple(a.oe_phase), noise=a.noise,
+        physio=PhysioConfig(scale=a.physio) if a.physio else None,
+        activation=not a.no_activation, delta_r2s=a.delta_r2s, block_on=a.block_on,
+        block_off=a.block_off, seed=a.seed,
+    )
+    simulate_session(a.scan_info, a.outdir, a.name, anatomy=a.phantom, cfg=cfg, frames=a.frames,
+                     fa_deg=a.fa, device=a.device)
+    if a.preprocess:
+        from preprocess.batch_preprocess import batch_preprocess
+        from preprocess.preprocess import PreprocessConfig
+
+        batch_preprocess(PreprocessConfig(datdir=a.outdir, seqnames=[a.name]))
+
+
+if __name__ == '__main__':
+    _cli()

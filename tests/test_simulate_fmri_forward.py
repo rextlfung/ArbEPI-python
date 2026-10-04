@@ -117,7 +117,9 @@ def rel_err(a, b):
     return np.linalg.norm(a - b) / np.linalg.norm(b)
 
 
-@pytest.mark.parametrize('shape, g', [((6, 5, 4), 2), ((5, 4, 3), 1), ((5, 4, 3), 3), ((4, 5, 4), 2)])
+@pytest.mark.parametrize(
+    'shape, g', [((6, 5, 4), 2), ((5, 4, 3), 1), ((5, 4, 3), 3), ((4, 5, 4), 2)]
+)
 def test_ramp_sampled_readouts_match_the_signal_equation(shape, g):
     """Ramp sampling, readout delay, odd/even phase and shift, static field and
     T2* decay at every sample's own time, on odd and even matrices and grid

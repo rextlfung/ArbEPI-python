@@ -445,6 +445,10 @@ def draw(d):
         ('title', 'GE scanner · pge2 interpreter'),
         ('para', 'runs each .pge as a pge2 entry; raw data saved as GE ScanArchives '
                  '(HDF5, read only by the Orchestra SDK)'),
+        ('mono', 'or simulated: simulate_fmri/session.py'),
+        ('para', 'writes the four scans as raw readouts from scan_info.mat alone (a brain '
+                 'phantom with a field map, ramp sampling, readout delay and odd/even phase, '
+                 'coil noise, physiological noise, BOLD), plus a truth file to score against'),
     ])
     d.band(sc_y - 22, sc_y + sc_h + 20, 'scan', 'SCANNER')
 

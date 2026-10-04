@@ -22,8 +22,9 @@ pytestmark = [
     pytest.mark.filterwarnings('ignore:.*use of fork.*:DeprecationWarning'),
 ]
 
-from simulate_fmri import handlers, simulate  # noqa: E402
+from simulate_fmri import handlers, ideal  # noqa: E402
 from simulate_fmri import phantom as phantoms  # noqa: E402
+from simulate_fmri import protocol as protocols  # noqa: E402
 from simulate_fmri import sampler as sampler_mod  # noqa: E402
 
 RES_MM = 8.0
@@ -44,7 +45,7 @@ def make_protocol(shape, etl, n_frames, n_shots=None, seed=0):
     for frame in range(n_frames):
         picks = rng.permutation(ny * nz)[: n_shots * etl].reshape(n_shots, etl)
         schedules[frame, ..., 0], schedules[frame, ..., 1] = np.unravel_index(picks, (ny, nz))
-    return simulate.Protocol(
+    return protocols.Protocol(
         shape=shape,
         fov_mm=tuple(n * RES_MM for n in shape),
         schedules=schedules,
@@ -67,7 +68,7 @@ def phantom_for(shape):
 def run(tmp_path, protocol, name='sim', **kwargs):
     phantom, roi = phantom_for(protocol.shape)
     kwargs = {'n_coils': 4, 'coils_per_ring': 2, 'snr': np.inf, 'n_workers': 1, **kwargs}
-    return simulate.simulate(protocol, str(tmp_path), name, phantom=phantom, roi=roi, **kwargs)
+    return ideal.simulate(protocol, str(tmp_path), name, phantom=phantom, roi=roi, **kwargs)
 
 
 def read(path, *keys):
@@ -93,7 +94,7 @@ def test_sampler_frame_follows_the_schedule_with_alternating_readouts():
     sampler = sampler_mod.ArbEPISampler(
         schedules=protocol.schedules, echo_times_ms=protocol.echo_times_ms
     )
-    sim_conf = simulate.make_sim_conf(protocol, n_coils=1)
+    sim_conf = ideal.make_sim_conf(protocol, n_coils=1)
     for frame in range(3):
         traj = sampler.frame(sim_conf, frame)
         assert traj.shape == (2, 4, 6, 3)
@@ -179,7 +180,7 @@ def test_t2s_model_decays_each_sample_from_its_scheduled_echo_time(tmp_path):
     t2s_ms = float(phantoms.TISSUE_PROPS_3T['gm'][2])
     ksp = {}
     for model in ('simple', 'T2s'):
-        fn = simulate.simulate(
+        fn = ideal.simulate(
             protocol, str(tmp_path), model, phantom=single, n_coils=1, snr=np.inf, n_workers=1,
             model=model, handlers=[],
         )['preprocessed']
@@ -249,7 +250,7 @@ def test_activation_roi_is_the_same_anatomy_on_any_grid():
             make_protocol(shape, etl=shape[1], n_frames=1, n_shots=1),
             fov_mm=tuple(n * res for n in shape),
         )
-        sim_conf = simulate.make_sim_conf(
+        sim_conf = ideal.make_sim_conf(
             protocol, 1, phantoms.place_fov(phantom, shape, (res,) * 3)
         )
         on_grid = phantoms.to_acquisition_grid(phantom, sim_conf)
@@ -335,7 +336,7 @@ def test_simulate_from_generated_scan_info(built_seq_dir, tmp_path):
 
     params = replace(load_params(), Nframes=1, seed=0)
     scan_info = str(built_seq_dir / 'scan_info.mat')
-    protocol = simulate.load_protocol(scan_info)
+    protocol = protocols.load_protocol(scan_info)
     assert protocol.shape == (params.Nx, params.Ny, params.Nz)
     assert (protocol.n_frames, protocol.n_shots, protocol.etl) == (1, params.Nshots, params.ETL)
     np.testing.assert_allclose(protocol.fov_mm, params.fov * 1e3)
@@ -345,7 +346,7 @@ def test_simulate_from_generated_scan_info(built_seq_dir, tmp_path):
     assert protocol.t_ref_s == pytest.approx(nominal_te_s(scan_info, params.ETL))
     assert protocol.acceleration == pytest.approx(params.R, rel=0.01)
 
-    out = simulate.simulate(
+    out = ideal.simulate(
         scan_info, str(tmp_path), phantom='ellipsoid', n_coils=1, model='simple', snr=np.inf,
         n_workers=1, handlers=[],
     )
@@ -368,6 +369,6 @@ def test_load_protocol_without_a_saved_flip_angle_uses_the_ernst_angle(built_seq
     with h5py.File(old, 'r+') as f:
         saved = f['fa'][()].item()
         del f['fa']
-    assert simulate.load_protocol(old).fa_deg == pytest.approx(saved, rel=1e-6)  # T1 = 1.3 s
-    assert simulate.load_protocol(old, fa_deg=20.0).fa_deg == 20.0
-    assert simulate.load_protocol(old, frames=1).n_frames == 1
+    assert protocols.load_protocol(old).fa_deg == pytest.approx(saved, rel=1e-6)  # T1 = 1.3 s
+    assert protocols.load_protocol(old, fa_deg=20.0).fa_deg == 20.0
+    assert protocols.load_protocol(old, frames=1).n_frames == 1
