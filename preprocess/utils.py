@@ -1,6 +1,8 @@
 """I/O and small shared helpers for preprocess/.
 
 - Raw GE ScanArchives: ArchiveReader, read_archive (GERecon, imported lazily)
+- Simulated archives (simulate_fmri/): the same two, plus
+  create_simulated_archive, write_simulated_archive, is_simulated_archive
 - hdf5storage-written v7.3 .mat files: read_mat_array, read_mat
 - scan_info.mat (written by sequences/ArbEPI.py): SeqParams, load_seq_params,
   load_kxoe, load_schedules, nominal_te_s
@@ -27,9 +29,68 @@ import numpy as np
 
 _EXHAUSTED_MARKER = 'No next frame available'
 
+# Simulated archives (simulate_fmri/): a plain HDF5 file holding the readouts
+# in acquisition order, so preprocess() runs on a simulated session without
+# GERecon. Real ScanArchives are HDF5 too, hence the explicit marker.
+SIM_MARKER = 'arbepi_simulated_archive'  # file attribute
+SIM_DATASET = 'readouts'  # [Nacq, Ncoils, Nfid] complex64
+
+
+def is_simulated_archive(filename: str) -> bool:
+    try:
+        with h5py.File(filename, 'r') as f:
+            return bool(f.attrs.get(SIM_MARKER, False)) and SIM_DATASET in f
+    except OSError:
+        return False
+
+
+def create_simulated_archive(
+    filename: str, n_acq: int, n_coils: int, n_fid: int, **attrs
+) -> h5py.File:
+    """A new simulated archive, open for writing, with an all-zero
+    f['readouts'] of shape [n_acq, n_coils, n_fid] to fill in. attrs become
+    file attributes (returned by ArchiveReader.metadata())."""
+    os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
+    f = h5py.File(filename, 'w')
+    f.attrs[SIM_MARKER] = True
+    for k, v in attrs.items():
+        f.attrs[k] = v
+    f.create_dataset(SIM_DATASET, shape=(n_acq, n_coils, n_fid), dtype=np.complex64)
+    return f
+
+
+def write_simulated_archive(filename: str, readouts: np.ndarray, **attrs) -> None:
+    """Write readouts [Nacq, Ncoils, Nfid] as a simulated archive."""
+    with create_simulated_archive(filename, *readouts.shape, **attrs) as f:
+        f[SIM_DATASET][...] = readouts
+
+
+class _SimulatedArchive:
+    """GERecon.Archive's two calls, for a simulated archive. Readouts are read
+    in blocks, so streaming a long EPI run is one HDF5 read per `block`."""
+
+    def __init__(self, filename: str, block: int = 4096):
+        self._file = h5py.File(filename, 'r')
+        self._data = self._file[SIM_DATASET]
+        self._block, self._buffer, self._start, self._next = block, None, 0, 0
+
+    def Metadata(self) -> dict:  # noqa: N802 -- GERecon's name
+        return dict(self._file.attrs)
+
+    def NextFrame(self) -> np.ndarray:  # noqa: N802
+        if self._next >= self._data.shape[0]:
+            raise RuntimeError(_EXHAUSTED_MARKER)
+        if self._buffer is None or self._next >= self._start + len(self._buffer):
+            self._start = self._next
+            self._buffer = self._data[self._start : self._start + self._block]
+        frame = self._buffer[self._next - self._start].T  # [Nfid, Ncoils]
+        self._next += 1
+        return np.ascontiguousarray(frame)
+
 
 class ArchiveReader:
-    """Iterator over the shots of a GE ScanArchive, via GERecon.Archive.
+    """Iterator over the shots of a GE ScanArchive, via GERecon.Archive, or of
+    a simulated archive (see SIM_MARKER above), which needs no GERecon.
 
     GERecon has no reliable "number of shots" field, so this reads until the
     archive reports it is exhausted (a RuntimeError containing
@@ -38,6 +99,9 @@ class ArchiveReader:
     """
 
     def __init__(self, filename: str):
+        if is_simulated_archive(filename):
+            self._archive = _SimulatedArchive(filename)
+            return
         from GERecon import Archive
 
         self._archive = Archive(filename)

@@ -20,17 +20,11 @@ for what the simulation models and what it does not.
 from __future__ import annotations
 
 import argparse
-import math
 import os
-from dataclasses import dataclass
 
 import h5py
-import numpy as np
-from numpy.typing import NDArray
 from snake.core.phantom import Phantom
 from snake.core.simulation import FOVConfig, GreConfig, HardwareConfig, SimConfig
-
-from preprocess import utils as scan_utils
 
 from .engine import ArbEPIAcquisitionEngine
 from .export import export
@@ -42,100 +36,8 @@ from .phantom import (
     place_fov,
     to_acquisition_grid,
 )
+from .protocol import Protocol, load_protocol
 from .sampler import ArbEPISampler
-
-T1_ERNST_S = 1.3  # params.py's T1, for scan_info.mat files that predate its 'fa'
-
-
-@dataclass
-class Protocol:
-    """One ArbEPI acquisition, as scan_info.mat records it."""
-
-    shape: tuple[int, int, int]  # (Nx, Ny, Nz)
-    fov_mm: tuple[float, float, float]
-    schedules: NDArray  # (Nframes, Nshots, ETL, 2) int, 0-based (ky, kz)
-    echo_times_ms: NDArray  # (ETL,) ms since excitation
-    volume_tr_s: float
-    fa_deg: float
-
-    @property
-    def n_frames(self) -> int:
-        return self.schedules.shape[0]
-
-    @property
-    def n_shots(self) -> int:
-        return self.schedules.shape[1]
-
-    @property
-    def etl(self) -> int:
-        return self.schedules.shape[2]
-
-    @property
-    def res_mm(self) -> tuple[float, float, float]:
-        return tuple(f / n for f, n in zip(self.fov_mm, self.shape))
-
-    @property
-    def tr_shot_ms(self) -> float:
-        """Time between excitations."""
-        return self.volume_tr_s * 1e3 / self.n_shots
-
-    @property
-    def echo_spacing_ms(self) -> float:
-        return float(np.diff(self.echo_times_ms).mean()) if self.etl > 1 else 0.0
-
-    @property
-    def te_ms(self) -> float:
-        """The nominal TE: echo-train position ETL/2 - 0.5 (sequences/ArbEPI.py),
-        which for evenly spaced echoes is their mean."""
-        return float(self.echo_times_ms.mean())
-
-    @property
-    def t_ref_s(self) -> float:
-        """preprocess.utils.nominal_te_s: the time of echo (ETL - 1) // 2."""
-        return float(self.echo_times_ms[(self.etl - 1) // 2]) / 1e3
-
-    @property
-    def acceleration(self) -> float:
-        return self.shape[1] * self.shape[2] / (self.n_shots * self.etl)
-
-
-def load_protocol(
-    scan_info: str, fa_deg: float | None = None, frames: int | None = None
-) -> Protocol:
-    """The acquisition in a scan_info.mat.
-
-    fa_deg: overrides the file's flip angle. Files written before the flip
-        angle was recorded get the Ernst angle for T1 = 1.3 s, the rule and
-        value params.py uses.
-    frames: keep only the first `frames` frames.
-    """
-    sp = scan_utils.load_seq_params(scan_info)
-    schedules, echo_times = scan_utils.load_schedules(scan_info)
-    if not np.allclose(echo_times, echo_times[0, 0]):
-        raise ValueError(f'{scan_info}: echo times differ between shots or frames')
-    if frames is not None:
-        schedules = schedules[:frames]
-    n_shots = schedules.shape[1]
-    if fa_deg is None:
-        with h5py.File(scan_info, 'r') as f:
-            saved = f['fa'][()].item() if 'fa' in f else None
-        if saved is not None:
-            fa_deg = float(saved)
-        else:
-            tr_shot_s = sp.volume_tr / n_shots
-            fa_deg = math.degrees(math.acos(math.exp(-tr_shot_s / T1_ERNST_S)))
-            print(
-                f"{scan_info} has no 'fa': using the Ernst angle for T1 = {T1_ERNST_S} s, "
-                f'{fa_deg:.2f} degrees'
-            )
-    return Protocol(
-        shape=(sp.Nx, sp.Ny, sp.Nz),
-        fov_mm=tuple(1e3 * f for f in sp.fov),
-        schedules=schedules,
-        echo_times_ms=echo_times[0, 0] * 1e3,
-        volume_tr_s=sp.volume_tr,
-        fa_deg=fa_deg,
-    )
 
 
 def make_sim_conf(

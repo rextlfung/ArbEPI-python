@@ -408,9 +408,15 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             'TE_degre': params.TE_degre,
             # 1 = binomial water excitation, 0 = fat-sat + sinc (params.excitation)
             'water_excitation': int(params.excitation == 'water'),
-            # Flip angle, degrees: the steady-state contrast simulate_fmri/
-            # gives its phantom (nothing else in scan_info.mat determines it).
+            # For simulate_fmri/, which simulates the raw data of all four
+            # scans from this file alone: the EPI flip angle (degrees) and ADC
+            # dwell (s; the time between the samples of kxo/kxe), and the
+            # deGRE's prescribed TR (s) and flip angle (degrees). The deGRE's
+            # own ADC dwell is added by sequences/deGRE.py ('dwell_degre').
             'fa': params.fa,
+            'adc_dwell': rg.adc.dwell,
+            'TR_degre': params.TR_degre,
+            'alpha_degre': params.alpha_degre,
         },
         fmt='7.3',
     )

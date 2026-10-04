@@ -6,6 +6,8 @@
 - ellipsoid_phantom: the same three tissues as nested ellipsoids, built
   analytically. Needs no download; used by the tests and for quick runs.
 - ellipsoid_phantom_roi: where to put the activation in that phantom.
+- brainweb_anatomy, ellipsoid_anatomy: either phantom with the outline of its
+  head and air cavities, for the field map of the raw-data simulation.
 - place_fov: places an acquisition field of view on a phantom's tissue.
 - to_acquisition_grid: resamples a phantom onto the simulation grid and
   attaches coil sensitivities defined on that grid.
@@ -15,10 +17,13 @@
 from __future__ import annotations
 
 import math
+import os
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
 from snake.core.phantom import Phantom
+from snake.core.phantom.static import SNAKE_CACHE_DIR
 from snake.core.simulation import FOVConfig, HardwareConfig, SimConfig
 
 from .handlers import ellipsoid_mask
@@ -98,6 +103,84 @@ def ellipsoid_phantom(
         props=_props(TISSUES),
         affine=affine,
     )
+
+
+@dataclass
+class Anatomy:
+    """A phantom and what the raw-data simulation needs around it.
+
+    phantom: the tissue maps (wm, gm, csf) on their own grid.
+    head, head_affine: fraction of each voxel that is tissue of any kind
+        (brain, skull, scalp; 0 = air), on a coarser grid, and that grid's
+        voxel-to-world matrix. The susceptibility model (b0.py).
+    cavities: air cavities to carve out of the head.
+    roi: the activated ellipsoid (EllipsoidActivationHandler arguments).
+    """
+
+    phantom: Phantom
+    head: NDArray
+    head_affine: NDArray
+    cavities: tuple = ()
+    roi: dict = field(default_factory=dict)
+
+    @property
+    def head_brain(self) -> NDArray:
+        """Brain mask on the head grid."""
+        from .b0 import resample
+
+        brain = self.phantom.masks.sum(axis=0)
+        return resample(brain, self.phantom.affine, self.head_affine, self.head.shape) > 0.5
+
+
+def brainweb_anatomy(sub_id: int = 4, output_res: float = 1.0) -> Anatomy:
+    """BrainWeb subject `sub_id`: brainweb_phantom plus the outline of the
+    whole head at 2 mm (every tissue class of its 12-class model) and
+    b0.BRAINWEB_CAVITIES."""
+    from brainweb_dl import get_mri
+
+    from .b0 import BRAINWEB_CAVITIES
+    from .handlers import OCCIPITAL_CENTER_MM, OCCIPITAL_EULER_ANGLES, OCCIPITAL_SEMI_AXES_MM
+
+    phantom = brainweb_phantom(sub_id, output_res)
+    cache = os.path.join(os.environ.get('SNAKE_CACHE_DIR', SNAKE_CACHE_DIR),
+                         f'arbepi_head_{sub_id:02d}.npz')
+    if os.path.exists(cache):
+        with np.load(cache) as f:
+            head, affine = f['head'], f['affine']
+    else:
+        classes, affine05 = get_mri(sub_id, contrast='fuzzy', with_affine=True)
+        tissue = np.zeros(classes.T.shape[1:], dtype=np.float32)
+        for c in classes.T[1:]:  # class 0 is background; as SNAKE does, (class, x, y, z)
+            tissue += c
+        f = 4  # 0.5 mm -> 2 mm
+        nx, ny, nz = (n // f * f for n in tissue.shape)
+        head = np.clip(tissue[:nx, :ny, :nz], 0, 1).reshape(
+            nx // f, f, ny // f, f, nz // f, f).mean(axis=(1, 3, 5))
+        affine = np.diag([0.5 * f, 0.5 * f, 0.5 * f, 1.0])
+        affine[:3, 3] = np.asarray(affine05)[:3, 3] + 0.5 * (f - 1) / 2
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        np.savez_compressed(cache, head=head, affine=affine)
+    roi = {'center_mm': OCCIPITAL_CENTER_MM, 'semi_axes_mm': OCCIPITAL_SEMI_AXES_MM,
+           'euler_angles': OCCIPITAL_EULER_ANGLES}
+    return Anatomy(phantom, head, affine, BRAINWEB_CAVITIES, roi)
+
+
+def ellipsoid_anatomy(
+    shape: tuple[int, int, int] = (64, 64, 48), res_mm: float = 3.0
+) -> Anatomy:
+    """ellipsoid_phantom with a head 12% larger than its brain on every axis
+    and one air cavity below the front of the brain."""
+    from .b0 import Cavity
+
+    phantom = ellipsoid_phantom(shape, res_mm)
+    half = np.array(shape) * res_mm / 2
+    head_shape = tuple(int(np.ceil(1.15 * s)) for s in shape)
+    affine = np.diag([res_mm, res_mm, res_mm, 1.0])
+    affine[:3, 3] = -(np.array(head_shape) - 1) / 2 * res_mm
+    head = ellipsoid_mask(head_shape, affine, (0, 0, 0), 0.92 * half).astype(np.float32)
+    cavity = Cavity((0.0, float(0.45 * half[1]), float(-0.86 * half[2])),
+                    tuple(float(v) for v in (0.25, 0.3, 0.12) * half))
+    return Anatomy(phantom, head, affine, (cavity,), ellipsoid_phantom_roi(shape, res_mm))
 
 
 def ellipsoid_phantom_roi(

@@ -4,6 +4,7 @@ import h5py
 import numpy as np
 import pytest
 
+from preprocess import utils
 from preprocess.utils import (
     ift3c,
     load_seq_params,
@@ -155,3 +156,54 @@ def test_rss_echo_images_is_per_echo_root_sum_of_squares():
     np.testing.assert_allclose(
         rss_echo_images(ksp), np.sqrt(np.sum(np.abs(img) ** 2, axis=-1)), atol=1e-10
     )
+
+
+# ---------------------------------------------------------------------------
+# Simulated archives
+# ---------------------------------------------------------------------------
+
+
+def test_simulated_archive_round_trips_through_the_archive_reader(tmp_path):
+    """simulate_fmri/ writes readouts [Nacq, Ncoils, Nfid]; ArchiveReader hands
+    them back one [Nfid, Ncoils] shot at a time, in order, without GERecon."""
+    rng = np.random.default_rng(0)
+    readouts = (rng.normal(size=(11, 3, 5)) + 1j * rng.normal(size=(11, 3, 5))).astype(np.complex64)
+    fn = str(tmp_path / 'sim.h5')
+    utils.write_simulated_archive(fn, readouts, scan='test')
+    assert utils.is_simulated_archive(fn)
+
+    reader = utils.ArchiveReader(fn)
+    assert reader.metadata()['scan'] == 'test'
+    shots = list(reader)
+    assert len(shots) == 11 and shots[0].shape == (5, 3) and shots[0].dtype == np.complex64
+    for i, shot in enumerate(shots):
+        np.testing.assert_array_equal(shot, readouts[i].T)
+    with pytest.raises(StopIteration):
+        reader.next_frame()
+    np.testing.assert_array_equal(utils.read_archive(fn), readouts.transpose(2, 1, 0))
+
+
+def test_simulated_archive_streams_across_block_boundaries(tmp_path):
+    readouts = np.arange(10 * 2 * 3, dtype=np.float32).reshape(10, 2, 3).astype(np.complex64)
+    fn = str(tmp_path / 'sim.h5')
+    with utils.create_simulated_archive(fn, 10, 2, 3) as f:
+        f[utils.SIM_DATASET][3::2] = readouts[3::2]  # filled out of order, as the simulator does
+        f[utils.SIM_DATASET][:3] = readouts[:3]
+        f[utils.SIM_DATASET][4::2] = readouts[4::2]
+    archive = utils._SimulatedArchive(fn, block=4)
+    got = np.stack([archive.NextFrame() for _ in range(10)])
+    np.testing.assert_array_equal(got, readouts.transpose(0, 2, 1))
+    with pytest.raises(RuntimeError, match='No next frame available'):
+        archive.NextFrame()
+
+
+def test_other_hdf5_files_are_not_taken_for_simulated_archives(tmp_path):
+    """A real ScanArchive is HDF5 too: only the marker makes a file simulated."""
+    plain = str(tmp_path / 'plain.h5')
+    with h5py.File(plain, 'w') as f:
+        f['readouts'] = np.zeros((2, 2, 2))
+    assert not utils.is_simulated_archive(plain)
+    assert not utils.is_simulated_archive(str(tmp_path / 'missing.h5'))
+    text = tmp_path / 'not_hdf5.h5'
+    text.write_text('hello')
+    assert not utils.is_simulated_archive(str(text))
