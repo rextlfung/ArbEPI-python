@@ -1508,7 +1508,7 @@ strict xfail until then.
 **Reconstructing that session** (wavelet-TV, `--hp-weight 3`, 100 iterations):
 without `--B0`, 23.8% frame error, 4.9% fluctuation, edge sharpness 0.70, and
 the region's mean time course unrelated to the task (correlation 0.12); with
-`--B0`, 10.9%, 1.2%, 0.90, and the course recovered (correlation 0.79,
+`--B0`, 11.0%, 1.2%, 0.90, and the course recovered (correlation 0.79,
 amplitude ratio 0.64). With the motor region added (2026-10-05) those numbers
 did not move, and the motor region scored: correlation 0.38 without B0 and
 0.72 with it, amplitude ratio 0.56 and 0.51, low-band t 0.5 and 2.5 (plain t
