@@ -1475,19 +1475,27 @@ without `--B0`, 23.8% frame error, 4.9% fluctuation, edge sharpness 0.70, and
 the region's mean time course unrelated to the task (correlation 0.12); with
 `--B0`, 10.9%, 1.2%, 0.90, and the course recovered (correlation 0.79,
 amplitude ratio 0.64). The fluctuation floor is the simulated physiological
-noise, about 0.9% in gray matter at TE 30 ms. **The t-scores of this run do
-not show voxel-wise detection**, and an earlier version of these notes said
-"activation found (median t 5.9)": the scorer's plain GLM also puts 34%
-(no B0) and 37% (B0) of the rest of the brain above |t| = 3.29, because the
-BOLD-like noise (0.01-0.1 Hz, 4 smooth patterns, 0.8% in gray matter) shares
-the band of the task (0.05 Hz) and a white-residual GLM cannot separate three
-blocks from it in 60 s. Checked without any reconstruction: the same GLM on
-random unit mixtures of the session's four `physio/bold_like_*` courses (frame
-means x TE) plus white noise at the reconstruction's out-of-band level (0.26%)
-flags 41%, and 44% with no white noise. In the low band the region's median t is 2.3 against a
-threshold of 4.0, and 0.3% of other voxels pass. Whether the physiological
-model should be re-tuned (more, smaller patterns; less in-band power) is an
-open realism question, not decided. The B0 run took 39-40 min after a 75 min
+noise, about 0.9% in gray matter at TE 30 ms. **Which t-score to read**, since
+two earlier versions of these notes got it wrong (first "activation found
+(median t 5.9)", then "a 60 s run lacks the power, a longer one is needed").
+The scorer's plain GLM assumes white residuals and also puts 34% (no B0) and
+37% (B0) of the rest of the brain above |t| = 3.29. That is the BOLD-like noise
+(0.01-0.1 Hz, 4 smooth patterns, 0.8% in gray matter, around a 0.05 Hz task)
+meeting an uncalibrated test, measured without any reconstruction: the same
+GLM on random unit mixtures of the session's four `physio/bold_like_*`
+courses (frame means x TE) plus 0.26% white noise flags 41%; on fresh
+`physio.band_noise` courses, 35% at 60 s, 21% at 240 s and 24% at 480 s (0-68%
+per session), so run length does not fix it. The low-band scores are the
+calibrated ones (0-3% from noise alone), and there the noise-only model with
+a true 1.5% task gives a median t of about 6 against a threshold of 4.0 at
+60 s (11 at 240 s, 16 at 480 s): a perfect reconstruction of this run would
+detect the activation. The B0 reconstruction reaches 2.3, because it recovers
+0.64 of the amplitude and has 1.2% of in-band fluctuation where the
+physiology accounts for 0.5-0.8% (6.0 x 0.64 x 0.84/1.16 = 2.8). So the
+shortfall is the reconstruction's, which is what the simulation is for.
+Whether the physiological model itself should be re-tuned (more, smaller
+patterns; less power at the task frequency) is an open realism question, not
+decided. The B0 run took 39-40 min after a 75 min
 power iteration (sigma1A = 1.488; the plain operator's is 1.000), the plain
 one 5 min. One session and seed: evidence that the chain works, not a
 comparison of methods.

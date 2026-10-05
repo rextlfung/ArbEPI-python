@@ -138,7 +138,7 @@ matrix, echo times and TR.
 |---|---|---|
 | **Object** | BrainWeb subject 4's white matter, gray matter and CSF, on a grid `--grid-factor` times finer than the acquisition | T1: Wansapura 1999; T2*: Peters 2006/2007, 59.7 and 54.6 ms (see below) |
 | **Excitation** | spoiled steady state at the per-shot TR and local flip angle; slab profile of 0.9 × the z field of view; water excitation's loss of flip off resonance | `lib/make_excitation_pulse.py`, `lib/make_water_excitation.py` |
-| **B0** | dipole field of the head's susceptibility (tissue −9.05 ppm, air +0.36 ppm) with air cavities for the sinuses, mastoids and ear canals, minus a linear shim | a 3 T head field map: std 45 Hz, −267 to +190 Hz; the model gives 28 Hz, −144 to +272 Hz (0.1–99.9 percentiles over the brain, as for the scan) |
+| **B0** | dipole field of the head's susceptibility (tissue −9.05 ppm, air +0.36 ppm) with air cavities for the sinuses, mastoids and ear canals, minus a linear shim | a 3 T head field map: std 45 Hz, −267 to +190 Hz; the model gives 28 Hz, −144 to +272 Hz (0.1–99.9 percentiles over the brain) |
 | **Decay** | exp(−t R2*) per tissue at each ADC sample's own time | same T2* values |
 | **Readout** | ramp-sampled: an exact Fourier sum at `kxo`/`kxe`, shifted by a readout delay; a constant phase on every other echo, drifting along the train | real sessions: delay −0.3 samples, odd/even phase −0.25 to −0.32 rad |
 | **Coils** | 32 loops in four rings around z, unit root-sum-of-squares | — |
@@ -244,18 +244,25 @@ With a head-like field the B0 model decides whether the region's time course
 follows the task at all: correlation 0.12 without it, 0.79 with it, at 0.64 of
 the true 1.5% amplitude.
 
-Voxel by voxel, this 60 s run does not detect the activation, and the t-scores
-should not be read as if it did. The plain GLM that gives the region a median t
-of 5.9 also puts 37% of the rest of the brain above |t| = 3.29. Those are not
-reconstruction errors: the simulated BOLD-like fluctuations (0.01–0.1 Hz, about
-0.8% in gray matter) share the band of the task (0.05 Hz), and a GLM that
-assumes white residuals cannot tell three task blocks from them (the same GLM
-on random mixtures of this session's four BOLD-like time courses plus 0.26%
-white noise, no reconstruction involved, flags 41%). In the low
-band, where the degrees of freedom are counted, the region's median t is 2.3
-against a threshold of 4.0, and 0.3% of other voxels pass. A longer run
-(`params.py`'s `duration`) is what voxel-wise detection needs; `--physio 0`
-removes the fluctuations.
+Which t-score to read. The plain GLM (`_t`, `false_pos_frac_t3.29`) assumes
+white residuals, and the simulated BOLD-like fluctuations (0.01–0.1 Hz, about
+0.8% in gray matter, around a 0.05 Hz task) are not white. That GLM run on
+mixtures of such fluctuations alone, with no reconstruction involved, puts 41%
+of voxels above |t| = 3.29 for this session's four time courses, and over
+fresh sessions 35% at 60 s, 21% at 240 s and 24% at 480 s (anywhere from 0 to
+68% per session: there are only four patterns). So the 34–37% in the table is
+the noise model meeting an uncalibrated test. It is not a reconstruction
+error, a longer run does not remove it, and the region's 5.9 means little.
+
+The low-band scores count the degrees of freedom and are the ones to read.
+There the noise-only model with a true 1.5% task gives a median t of about 6
+against a threshold of 4.0, so a perfect reconstruction of this 60 s run would
+detect the activation voxel by voxel. The B0 reconstruction reaches 2.3: it
+recovers 0.64 of the amplitude and carries 1.2% of in-band fluctuation where
+the physiology accounts for 0.5–0.8%. That gap is what the simulation exposes
+about this reconstruction. (In the same model the low-band t grows as the
+square root of the run: 11 at 240 s, 16 at 480 s. `--physio 0` removes the
+fluctuations.)
 
 For the same reason the fluctuation is not zero for a perfect reconstruction
 here: the physiological noise is about 0.9% of the signal in gray matter at
