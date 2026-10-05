@@ -5,7 +5,8 @@
   times.
 - ellipsoid_phantom: the same three tissues as nested ellipsoids, built
   analytically. Needs no download; used by the tests and for quick runs.
-- ellipsoid_phantom_roi: where to put the activation in that phantom.
+- ellipsoid_phantom_roi, ellipsoid_phantom_rois: where to put activations in
+  that phantom.
 - brainweb_anatomy, ellipsoid_anatomy: either phantom with the outline of its
   head and air cavities, for the field map of the raw-data simulation.
 - place_fov: places an acquisition field of view on a phantom's tissue.
@@ -114,14 +115,15 @@ class Anatomy:
         (brain, skull, scalp; 0 = air), on a coarser grid, and that grid's
         voxel-to-world matrix. The susceptibility model (b0.py).
     cavities: air cavities to carve out of the head.
-    roi: the activated ellipsoid (EllipsoidActivationHandler arguments).
+    rois: the ellipsoids that can be activated, by region name (each one
+        EllipsoidActivationHandler's center_mm, semi_axes_mm, euler_angles).
     """
 
     phantom: Phantom
     head: NDArray
     head_affine: NDArray
     cavities: tuple = ()
-    roi: dict = field(default_factory=dict)
+    rois: dict = field(default_factory=dict)
 
     @property
     def head_brain(self) -> NDArray:
@@ -138,8 +140,8 @@ def brainweb_anatomy(sub_id: int = 4, output_res: float = 1.0) -> Anatomy:
     b0.BRAINWEB_CAVITIES."""
     from brainweb_dl import get_mri
 
+    from . import handlers as h
     from .b0 import BRAINWEB_CAVITIES
-    from .handlers import OCCIPITAL_CENTER_MM, OCCIPITAL_EULER_ANGLES, OCCIPITAL_SEMI_AXES_MM
 
     phantom = brainweb_phantom(sub_id, output_res)
     cache = os.path.join(os.environ.get('SNAKE_CACHE_DIR', SNAKE_CACHE_DIR),
@@ -160,9 +162,14 @@ def brainweb_anatomy(sub_id: int = 4, output_res: float = 1.0) -> Anatomy:
         affine[:3, 3] = np.asarray(affine05)[:3, 3] + 0.5 * (f - 1) / 2
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         np.savez_compressed(cache, head=head, affine=affine)
-    roi = {'center_mm': OCCIPITAL_CENTER_MM, 'semi_axes_mm': OCCIPITAL_SEMI_AXES_MM,
-           'euler_angles': OCCIPITAL_EULER_ANGLES}
-    return Anatomy(phantom, head, affine, BRAINWEB_CAVITIES, roi)
+    rois = {
+        'occipital': {'center_mm': h.OCCIPITAL_CENTER_MM,
+                      'semi_axes_mm': h.OCCIPITAL_SEMI_AXES_MM,
+                      'euler_angles': h.OCCIPITAL_EULER_ANGLES},
+        'motor': {'center_mm': h.MOTOR_CENTER_MM, 'semi_axes_mm': h.MOTOR_SEMI_AXES_MM,
+                  'euler_angles': h.MOTOR_EULER_ANGLES},
+    }
+    return Anatomy(phantom, head, affine, BRAINWEB_CAVITIES, rois)
 
 
 def ellipsoid_anatomy(
@@ -180,7 +187,7 @@ def ellipsoid_anatomy(
     head = ellipsoid_mask(head_shape, affine, (0, 0, 0), 0.92 * half).astype(np.float32)
     cavity = Cavity((0.0, float(0.45 * half[1]), float(-0.86 * half[2])),
                     tuple(float(v) for v in (0.25, 0.3, 0.12) * half))
-    return Anatomy(phantom, head, affine, (cavity,), ellipsoid_phantom_roi(shape, res_mm))
+    return Anatomy(phantom, head, affine, (cavity,), ellipsoid_phantom_rois(shape, res_mm))
 
 
 def ellipsoid_phantom_roi(
@@ -194,6 +201,21 @@ def ellipsoid_phantom_roi(
         'semi_axes_mm': tuple(float(v) for v in (0.40, 0.12, 0.30) * half),
         'euler_angles': (0.0, 0.0, 0.0),
     }
+
+
+def ellipsoid_phantom_rois(
+    shape: tuple[int, int, int] = (64, 64, 48), res_mm: float = 3.0
+) -> dict[str, dict]:
+    """The regions of ellipsoid_phantom(shape, res_mm) by name, as
+    brainweb_anatomy has them: 'occipital' (ellipsoid_phantom_roi) and 'motor',
+    a patch of the gray matter shell up and to one side."""
+    half = np.array(shape) * res_mm / 2
+    motor = {
+        'center_mm': (float(-0.50 * half[0]), 0.0, float(0.50 * half[2])),
+        'semi_axes_mm': tuple(float(v) for v in (0.25, 0.30, 0.25) * half),
+        'euler_angles': (0.0, 0.0, 0.0),
+    }
+    return {'occipital': ellipsoid_phantom_roi(shape, res_mm), 'motor': motor}
 
 
 def place_fov(

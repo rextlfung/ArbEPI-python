@@ -30,13 +30,15 @@ What goes into the data (forward.py has the signal equation):
   level calibrated on a real head scan (THERMAL_NOISE);
 - ramp-sampled readouts on scan_info.mat's kxo/kxe, played with a readout
   delay and an odd/even phase offset that drifts along the echo train;
-- BOLD activation as a change of R2* (so it grows with echo time), and
-  physiological noise (physio.py), both updated at every excitation.
+- BOLD activation as a change of R2* (so it grows with echo time), by default
+  in the visual (occipital) cortex and in one hemisphere's hand motor area,
+  each on its own block timing, and physiological noise (physio.py), all
+  updated at every excitation.
 
 SNAKE-fMRI supplies the phantom (BrainWeb tissue maps, resampling), the
 steady-state contrast and the block-design BOLD regressor. Its acquisition
 engine is not used here: it has no field map (by design, see SNAKE's FAQ), and
-models one Cartesian sample grid. simulate.simulate keeps that engine for the
+models one Cartesian sample grid. ideal.simulate keeps that engine for the
 ideal mode.
 """
 
@@ -88,6 +90,25 @@ THERMAL_NOISE = 0.0125
 FAT_HZ_PER_T = 3.5e-6 * b0_model.GAMMA_BAR_HZ_PER_T  # fat-water shift, for water excitation
 
 
+@dataclass(frozen=True)
+class Activation:
+    """A block-design activation of one region: the gray matter inside the
+    ellipsoid Anatomy.rois[region] ('occipital' and 'motor' on both phantoms).
+    Scored by recon.testbed as 'block_<region>'."""
+
+    region: str = 'occipital'
+    block_on: float = 10.0  # s
+    block_off: float = 10.0
+    onset: float = 0.0  # s, start of the first block
+    # 1/s, peak R2* change (van der Zwaag et al. 2009: motor cortex at 3 T)
+    delta_r2s: float = -0.98
+
+
+# The motor task starts a quarter of a cycle after the visual one, so that the
+# two regressors are nearly orthogonal and each region's scores are its own.
+DEFAULT_ACTIVATIONS = (Activation('occipital'), Activation('motor', onset=5.0))
+
+
 @dataclass
 class SessionConfig:
     """What to put into the simulated session. The defaults describe a
@@ -106,10 +127,8 @@ class SessionConfig:
     noise_gain_spread: float = 0.06
     noise_correlation: float = 0.02
     physio: PhysioConfig | None = field(default_factory=PhysioConfig)  # None = off
-    activation: bool = True
-    delta_r2s: float = -0.98  # 1/s, peak R2* change on activation (van der Zwaag 2009, 3 T)
-    block_on: float = 10.0  # s
-    block_off: float = 10.0
+    activation: bool = True  # False = a resting brain
+    activations: tuple[Activation, ...] = DEFAULT_ACTIVATIONS  # one per region
     slab_tbw: float = 8.0  # sets the width of the slab profile's edges
     readout_order: int = 2  # Taylor order of the evolution during a readout
     seed: int = 0
@@ -315,19 +334,31 @@ def simulate_session(
     t_exc = np.arange(n_exc) * tr_shot
 
     modes: list[Mode] = []
-    act_mode, act_course = None, np.zeros(n_exc)
+    act_modes: list[Mode] = []
     if cfg.activation and 'gm' in scan.labels:
-        inside = ellipsoid_mask(grid.fine_shape, scan.affine, **anatomy.roi)
-        events = block_design(cfg.block_on, cfg.block_off, n_frames * protocol.volume_tr_s)
-        bold = get_bold(protocol.tr_shot_ms, (n_exc + 0.5) * tr_shot, events, 'glover', 1, -24.0,
-                        1.0).ravel()[:n_exc]
-        act_course = cfg.delta_r2s * bold
-        act_mode = Mode(
-            'r2s', torch.as_tensor(inside, dtype=torch.float32, device=device), act_course,
-            torch.tensor([1.0 if lab == 'gm' else 0.0 for lab in scan.labels]),
-            name='activation',
-        )
-        modes.append(act_mode)
+        duration = n_frames * protocol.volume_tr_s
+        gm_only = torch.tensor([1.0 if lab == 'gm' else 0.0 for lab in scan.labels])
+        taken = np.zeros(grid.fine_shape, dtype=bool)
+        for act in cfg.activations:
+            if act.region not in anatomy.rois:
+                raise ValueError(f'no region {act.region!r} in this anatomy; it has '
+                                 f'{sorted(anatomy.rois)}')
+            if not 0 <= act.onset < duration:
+                raise ValueError(f'{act.region}: onset {act.onset} s is outside the '
+                                 f'{duration:.1f} s run')
+            inside = ellipsoid_mask(grid.fine_shape, scan.affine, **anatomy.rois[act.region])
+            if (inside & taken).any():
+                raise ValueError(f'{act.region}: overlaps another activated region '
+                                 '(one activation per region, and regions must be disjoint)')
+            taken |= inside
+            events = block_design(act.block_on, act.block_off, duration, act.onset)
+            bold = get_bold(protocol.tr_shot_ms, (n_exc + 0.5) * tr_shot, events, 'glover', 1,
+                            -24.0, 1.0).ravel()[:n_exc]
+            act_modes.append(Mode(
+                'r2s', torch.as_tensor(inside, dtype=torch.float32, device=device),
+                act.delta_r2s * bold, gm_only, name=f'block_{act.region}',
+            ))
+        modes.extend(act_modes)
     frequency, courses = None, {}
     if cfg.physio is not None and cfg.physio.scale:
         p_modes, frequency, courses = physio(
@@ -427,31 +458,47 @@ def simulate_session(
         if frequency is not None:
             g.create_dataset('physio/frequency_hz', data=frequency)
 
-        if act_mode is not None:
-            # Signal change = gain(r) * drop(t): the fractional gain per unit
-            # decrease of R2* (positive: about TE where the voxel is all
-            # activated gray matter) times the decrease of R2* in each frame.
-            dx = band_limited(act_mode.image(spins, te), grid)  # per unit R2* increase
-            gain = -(x0c.conj() * dx).real / x0_abs.clamp_min(1e-12 * float(x0_abs.max())) ** 2
-            drop = -act_course.reshape(n_frames, n_shots).mean(axis=1)
-            centered = drop - drop.mean()
-            peak = float(np.abs(centered).max()) or 1.0
-            x0 = x0_abs * (1 + drop.mean() * gain)
+        if act_modes:
+            # Signal change = sum over regions of gain_r(r) * drop_r(t): the
+            # fractional gain per unit decrease of R2* (positive: about TE
+            # where the voxel is all activated gray matter) times that region's
+            # decrease of R2* in each frame.
+            denom = x0_abs.clamp_min(1e-12 * float(x0_abs.max())) ** 2
+            gains, drops = [], []
+            for mode in act_modes:
+                dx = band_limited(mode.image(spins, te), grid)  # per unit R2* increase
+                gains.append(-(x0c.conj() * dx).real / denom)
+                drops.append(-mode.course.reshape(n_frames, n_shots).mean(axis=1))
+            rest = 1 + sum(float(drop.mean()) * gain for gain, drop in zip(gains, drops))
+            x0 = x0_abs * rest  # the time average
             # Zero outside the brain: x0 is band-limited, so it is nowhere exactly
             # zero, and out there the ratio is ringing over ringing (it reached
             # 4x the true activation on BrainWeb).
-            amp_map = (peak * gain / (1 + drop.mean() * gain)) * (tissues_acq.sum(0) > 0.5)
-            cut = 0.5 * float(amp_map[full].max()) if full.any() else float('inf')
-            roi_mask = full & (amp_map >= cut)
-            amp = float(amp_map[roi_mask].median()) if roi_mask.any() else 0.0
+            brain = tissues_acq.sum(0) > 0.5
+            amp_map = torch.zeros_like(x0_abs)
+            roi_masks, waveforms, amps = [], [], []
+            for gain, drop in zip(gains, drops):
+                centered = drop - drop.mean()
+                peak = float(np.abs(centered).max()) or 1.0
+                amp_r = peak * gain / rest * brain
+                # half of this region's own largest change: a threshold shared
+                # between regions would drop the weaker one
+                cut = 0.5 * float(amp_r[full].max()) if full.any() else float('inf')
+                mask = full & (amp_r >= cut)
+                amp_map += amp_r
+                roi_masks.append(mask.cpu().numpy())
+                waveforms.append(centered / peak)
+                amps.append(float(amp_r[mask].median()) if mask.any() else 0.0)
+            union = np.any(roi_masks, axis=0)
             g.create_dataset('x0', data=x0.cpu().numpy())
-            g.create_dataset('roi_masks', data=roi_mask.cpu().numpy()[None])
-            g.create_dataset('waveforms', data=(centered / peak)[None])
+            g.create_dataset('roi_masks', data=np.stack(roi_masks))
+            g.create_dataset('waveforms', data=np.stack(waveforms))
             g.create_dataset('amp_map', data=amp_map.cpu().numpy())
-            g.create_dataset('r2s_change', data=act_course)
-            g.attrs['roi_names'] = ['block_occipital']
-            g.attrs['roi_kinds'] = ['block']
-            g.attrs['amp'] = amp
+            g.create_dataset('r2s_change', data=np.stack([mode.course for mode in act_modes]))
+            g.attrs['roi_names'] = [mode.name for mode in act_modes]
+            g.attrs['roi_kinds'] = ['block'] * len(act_modes)
+            g.attrs['amps'] = amps  # per region; recon.testbed.score prefers it to amp
+            g.attrs['amp'] = float(np.median(amp_map.cpu().numpy()[union])) if union.any() else 0.0
         else:
             g.create_dataset('x0', data=x0_abs.cpu().numpy())
             g.create_dataset('roi_masks', data=np.zeros((0, *shape), dtype=bool))
@@ -460,7 +507,7 @@ def simulate_session(
             g.attrs['roi_kinds'] = []
             g.attrs['amp'] = 0.0
 
-    del spins, scan, modes, act_mode
+    del spins, scan, modes, act_modes
     if device.type == 'cuda':
         torch.cuda.empty_cache()
 
@@ -525,6 +572,11 @@ def _cli() -> None:
     p.add_argument('--physio', type=float, default=1.0,
                    help='physiological noise relative to the calibrated level; 0 for none')
     p.add_argument('--no-activation', action='store_true')
+    p.add_argument('--regions', nargs='+', default=['occipital', 'motor'],
+                   help='activated regions (occipital = visual cortex; motor = the hand '
+                        'area of one hemisphere)')
+    p.add_argument('--onsets', type=float, nargs='+', default=None,
+                   help='start of each region\'s first block, s (default: 0, except motor 5)')
     p.add_argument('--delta-r2s', type=float, default=-0.98,
                    help='peak R2* change on activation, 1/s')
     p.add_argument('--block-on', type=float, default=10.0, help='stimulus duration, s')
@@ -534,12 +586,19 @@ def _cli() -> None:
     p.add_argument('--preprocess', action='store_true',
                    help='then run preprocess.batch_preprocess on the session')
     a = p.parse_args()
+    default_onsets = {act.region: act.onset for act in DEFAULT_ACTIVATIONS}
+    onsets = a.onsets or [default_onsets.get(region, 0.0) for region in a.regions]
+    if len(onsets) != len(a.regions):
+        p.error('--onsets needs one value per region')
+    activations = tuple(
+        Activation(region, a.block_on, a.block_off, onset, a.delta_r2s)
+        for region, onset in zip(a.regions, onsets)
+    )
     cfg = SessionConfig(
         grid_factor=a.grid_factor, n_coils=a.coils, b0_scale=a.b0_scale, shim_order=a.shim_order,
         delay=a.delay, oe_phase=tuple(a.oe_phase), noise=a.noise,
         physio=PhysioConfig(scale=a.physio) if a.physio else None,
-        activation=not a.no_activation, delta_r2s=a.delta_r2s, block_on=a.block_on,
-        block_off=a.block_off, seed=a.seed,
+        activation=not a.no_activation, activations=activations, seed=a.seed,
     )
     simulate_session(a.scan_info, a.outdir, a.name, anatomy=a.phantom, cfg=cfg, frames=a.frames,
                      fa_deg=a.fa, device=a.device)

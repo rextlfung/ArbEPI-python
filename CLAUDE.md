@@ -1412,7 +1412,8 @@ BOLD as an amplitude change. In the raw mode SNAKE supplies the phantom
   T2 for gray and white matter were swapped. Wansapura 1999 (verified on
   PubMed): T1 1331/832 ms, T2 80/110 ms, T2* 41.6-51.8 / 44.7-48.4 ms
   uncorrected.
-- *BOLD*: an R2* change of -0.98 1/s (van der Zwaag et al. 2009, 3 T), i.e.
+- *BOLD*: an R2* change of -0.98 1/s (van der Zwaag et al. 2009, 3 T, measured
+  in motor cortex and used for every region), i.e.
   2.9% at TE 30 ms and growing with echo time. This replaces SNAKE's amplitude
   model in the raw mode, so orderings can be compared by BOLD sensitivity too.
 - *Readout*: delay -0.3 samples, odd/even phase -0.25 to -0.32 rad along the
@@ -1454,6 +1455,40 @@ is band-limited there, nowhere exactly zero, and the ratio of two ringing
 tails reached 0.06 against a true activation of 0.015, which is all the demo
 notebook's figure showed.
 
+**Activated regions (2026-10-05, user request: motor and visual cortex).**
+`SessionConfig.activations` is a tuple of `Activation(region, block_on,
+block_off, onset, delta_r2s)`, one linear R2* `Mode` each, over the gray matter
+inside the ellipsoid `Anatomy.rois[region]`; the old single `Anatomy.roi` and
+`SessionConfig.delta_r2s/block_on/block_off` are gone. Defaults: `occipital`
+(SNAKE's ellipsoid, the visual cortex; 614 voxels of the default protocol) and
+`motor`, an ellipsoid of 14 x 12 x 14 mm semi-axes at (-38, -22, 56) mm (204
+voxels, 1.59% median change against the visual region's 1.53%). Choices:
+- *One hemisphere, not both*: a one-handed task, and the other hemisphere's
+  hand area stays a null region. The coordinates are the hand area's usual
+  stereotaxic ones (BrainWeb's models are in that frame; the ellipsoid sits on
+  a sulcus of the lateral convexity near the vertex, 3.9 cm3 of gray matter),
+  not a parcellation, and which hemisphere negative x is was not checked.
+- *The motor blocks lag the visual ones by 5 s* (a quarter of the 20 s cycle;
+  an assumption, `onset=0` makes it one task): the two HRF-convolved time
+  courses then correlate -0.005 over 60 s, so each region's `corr`,
+  `amp_ratio` and `leak` are its own, and cross-talk a temporal regularizer
+  introduces would show.
+- *Names keep the `block_` prefix* (`block_occipital`, `block_motor`):
+  `recon.testbed.score` reports `_t_lowband` only for those.
+- *Per-region truth*: each mask is cut at half of that region's own largest
+  change (a shared threshold would drop the weaker region); `x0` is the time
+  average with every region's mean change in it; `r2s_change` is (regions,
+  excitations).
+- *`recon/testbed.py` changed for this*, backward compatibly: `score` had one
+  `amp` for every ROI, exact for its own built testbeds but not for regions of
+  different tissue mix, so it now prefers a per-ROI `amps` attribute; `panel`
+  (and `score --roi`) can show any ROI, where it hard-coded the first. Its
+  false-positive fractions still use the first ROI's regressor.
+- Regions must be disjoint and there is one activation per region (a
+  `ValueError` otherwise), which keeps the per-region truth a plain sum.
+- *The ideal mode still has one region*: two SNAKE handlers would both add a
+  tissue named `ROI`, and `export.py` reads one.
+
 **What running the real pipeline on simulated data showed (2026-10-04,
 default protocol, BrainWeb).** `preprocess/` recovers what was injected:
 delay -0.30; odd/even phase -0.263/-0.300/-0.338 rad for an injected
@@ -1474,7 +1509,17 @@ strict xfail until then.
 without `--B0`, 23.8% frame error, 4.9% fluctuation, edge sharpness 0.70, and
 the region's mean time course unrelated to the task (correlation 0.12); with
 `--B0`, 10.9%, 1.2%, 0.90, and the course recovered (correlation 0.79,
-amplitude ratio 0.64). The fluctuation floor is the simulated physiological
+amplitude ratio 0.64). With the motor region added (2026-10-05) those numbers
+did not move, and the motor region scored: correlation 0.38 without B0 and
+0.72 with it, amplitude ratio 0.56 and 0.51, low-band t 0.5 and 2.5 (plain t
+1.4 and 6.4), leak ratio 0.12 with B0. The lag between the tasks earns its
+keep here: with B0 each region's mean course correlates with the other
+region's task at -0.10 (visual) and -0.04 (motor), but without B0 the motor
+course correlates -0.42 with the visual task against +0.38 with its own, so
+its 0.38 and its amplitude ratio of 0.56 are not a recovery. A reconstruction of the earlier
+visual-only session scored against the two-region truth gave the motor
+region an amplitude ratio of 0.05, as a region with nothing in it should.
+The fluctuation floor is the simulated physiological
 noise, about 0.9% in gray matter at TE 30 ms. **Which t-score to read**, since
 two earlier versions of these notes got it wrong (first "activation found
 (median t 5.9)", then "a 60 s run lacks the power, a longer one is needed").
@@ -1489,7 +1534,8 @@ per session), so run length does not fix it. The low-band scores are the
 calibrated ones (0-3% from noise alone), and there the noise-only model with
 a true 1.5% task gives a median t of about 6 against a threshold of 4.0 at
 60 s (11 at 240 s, 16 at 480 s): a perfect reconstruction of this run would
-detect the activation. The B0 reconstruction reaches 2.3, because it recovers
+detect the activation. The B0 reconstruction reaches 2.3 (2.5 in the motor
+region, at an amplitude ratio of 0.51), because it recovers
 0.64 of the amplitude and has 1.2% of in-band fluctuation where the
 physiology accounts for 0.5-0.8% (6.0 x 0.64 x 0.84/1.16 = 2.8). So the
 shortfall is the reconstruction's, which is what the simulation is for.

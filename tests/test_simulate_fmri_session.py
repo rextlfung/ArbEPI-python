@@ -157,7 +157,10 @@ def realistic(tmp_path_factory):
     seq = tmp_path_factory.mktemp('real_seq')
     out = tmp_path_factory.mktemp('real')
     scan_info, p = make_scan_info(seq, n_frames=4, n_shots=3, r=8)
-    cfg = small_cfg(delay=-0.3, block_on=0.05, block_off=0.05)
+    cfg = small_cfg(delay=-0.3, activations=(
+        session.Activation('occipital', 0.05, 0.05),
+        session.Activation('motor', 0.05, 0.05, onset=0.6, delta_r2s=-0.6),
+    ))
     paths = session.simulate_session(scan_info, str(out), anatomy=anatomy(), cfg=cfg, device='cpu')
     julia = shutil.which('julia') is not None
     pre = preprocess(PreprocessConfig(datdir=paths['datdir'], seqnames=['sim'],
@@ -227,38 +230,72 @@ def test_estimated_field_map_matches_the_true_one(realistic):
     assert np.median(np.abs(b0_epi - truth_epi)[m]) < 0.5 * truth_epi[m].std()
 
 
-def test_truth_file_scores_with_the_testbed_scorer(realistic, tmp_path):
-    """The truth file follows recon/testbed.py's layout: handing the scorer the
-    true series as a reconstruction gives an exact score."""
+def test_truth_file_has_each_activated_region_in_the_testbed_layout(realistic):
+    """The truth file follows recon/testbed.py's layout, one entry per
+    activated region: its mask, its time course and its amplitude."""
 
-    paths, _, _, _ = realistic
-    x0, amp_map, waves, rois = read(paths['truth'], 'truth/x0', 'truth/amp_map',
-                                    'truth/waveforms', 'truth/roi_masks')
+    paths, _, cfg, _ = realistic
+    x0, amp_map, waves, rois, r2s_change, tissue = read(
+        paths['truth'], 'truth/x0', 'truth/amp_map', 'truth/waveforms', 'truth/roi_masks',
+        'truth/r2s_change', 'truth/tissues')
     with h5py.File(paths['truth'], 'r') as f:
         assert f.attrs['volume_tr'] > 0
-        assert list(f['truth'].attrs['roi_names']) == ['block_occipital']
-        amp = f['truth'].attrs['amp']
-    assert rois.shape == (1, 90, 16, 12) and waves.shape == (1, 4)
-    assert np.median(amp_map[rois[0]]) == pytest.approx(amp, rel=0.02)
-    # Activation lowers R2*, so the signal rises: a positive amplitude, on a
-    # waveform that is high when R2* is low. (A first version had both
-    # negative, and the mask then picked the voxels that were NOT activated.)
-    (r2s_change,) = read(paths['truth'], 'truth/r2s_change')
-    per_frame = r2s_change.reshape(4, -1).mean(axis=1)
-    assert amp > 0 and np.corrcoef(waves[0], -per_frame)[0, 1] > 0.999
-    # its size: at most TE x the swing of R2* (a voxel that is all activated gray matter)
-    with h5py.File(paths['truth'], 'r') as f:
-        te = f['truth'].attrs['TE']
-    swing = np.abs(per_frame - per_frame.mean()).max()
-    assert 0.3 * te * swing < amp <= 1.05 * te * swing
-    # and its place: a small part of the brain, inside the activation ellipsoid
-    (tissue,) = read(paths['truth'], 'truth/tissues')
-    assert 5 < rois.sum() < 0.2 * (tissue.sum(0) > 0.9).sum()
-    assert amp_map[rois[0]].min() >= 0.5 * amp_map[tissue.sum(0) >= 0.9].max() - 1e-9
-    assert np.abs(amp_map[~rois[0] & (tissue.sum(0) >= 0.9)]).max() < amp_map[rois[0]].max()
-    # and nothing outside the brain, where it would be a ratio of two ringing tails
+        attrs = dict(f['truth'].attrs)
+    assert list(attrs['roi_names']) == ['block_occipital', 'block_motor']
+    assert list(attrs['roi_kinds']) == ['block', 'block']
+    amps, te = np.asarray(attrs['amps']), attrs['TE']
+    assert rois.shape == (2, 90, 16, 12) and waves.shape == (2, 4)
+    assert r2s_change.shape == (2, 4 * 3) and amps.shape == (2,)
+    full = tissue.sum(0) >= 0.9
+    assert not (rois[0] & rois[1]).any()
+    assert attrs['amp'] == pytest.approx(np.median(amp_map[rois.any(0)]))
+    for k, act in enumerate(cfg.activations):
+        assert np.median(amp_map[rois[k]]) == pytest.approx(amps[k], rel=0.02)
+        # Activation lowers R2*, so the signal rises: a positive amplitude, on a
+        # waveform that is high when R2* is low. (A first version had both
+        # negative, and the mask then picked the voxels that were NOT activated.)
+        per_frame = r2s_change[k].reshape(4, -1).mean(axis=1)
+        assert amps[k] > 0 and np.corrcoef(waves[k], -per_frame)[0, 1] > 0.999
+        assert np.abs(waves[k]).max() == pytest.approx(1) and abs(waves[k].mean()) < 1e-9
+        # its size: at most TE x the swing of R2* (a voxel that is all activated gray matter)
+        swing = np.abs(per_frame - per_frame.mean()).max()
+        assert 0.3 * te * swing < amps[k] <= 1.05 * te * swing
+        # and its place: a small part of the brain, the largest changes of its own region
+        assert 5 < rois[k].sum() < 0.2 * full.sum()
+        assert amp_map[rois[k]].min() >= 0.5 * amp_map[rois[k]].max() - 1e-9
+    # the regions are where the phantom has them: occipital at the back (low y),
+    # motor up and to one side (low x, high z)
+    centers = [np.argwhere(m).mean(axis=0) / np.array(m.shape) for m in rois]
+    assert centers[0][1] < 0.3 and abs(centers[0][0] - 0.5) < 0.1
+    assert centers[1][0] < 0.4 and centers[1][2] > 0.6
+    # the motor task starts later and was given a smaller R2* change
+    assert np.abs(r2s_change[1]).max() < np.abs(r2s_change[0]).max()
+    assert np.flatnonzero(r2s_change[1])[0] > np.flatnonzero(r2s_change[0])[0]
+    # nothing outside the brain, where it would be a ratio of two ringing tails,
+    # and nothing as large as the activation outside the two regions
     assert not amp_map[tissue.sum(0) <= 0.5].any()
-    assert np.abs(amp_map).max() <= 1.5 * te * swing
+    assert np.abs(amp_map[full & ~rois.any(0)]).max() < amp_map[rois.any(0)].max()
+
+
+def test_activation_regions_are_checked(tmp_path):
+    scan_info, _ = make_scan_info(tmp_path / 'seq', n_frames=1, n_shots=3, r=8)
+
+    def run(*activations):
+        cfg = small_cfg(noise=0.0, physio=None, b0_scale=0.0, activations=activations)
+        return session.simulate_session(scan_info, str(tmp_path / 'out'), anatomy=anatomy(),
+                                        cfg=cfg, device='cpu')
+
+    with pytest.raises(ValueError, match="no region 'cerebellum'"):
+        run(session.Activation('cerebellum'))
+    with pytest.raises(ValueError, match='overlaps'):
+        run(session.Activation('motor'), session.Activation('motor', onset=0.1))
+    with pytest.raises(ValueError, match='outside the'):
+        run(session.Activation('motor', onset=1e3))
+    # one region alone is fine
+    paths = run(session.Activation('motor', 0.05, 0.05))
+    with h5py.File(paths['truth'], 'r') as f:
+        assert list(f['truth'].attrs['roi_names']) == ['block_motor']
+        assert f['truth/roi_masks'].shape[0] == 1 and f['truth/roi_masks'][0].sum() > 5
 
 
 def test_effects_can_be_switched_off(tmp_path):

@@ -36,6 +36,15 @@ OCCIPITAL_CENTER_MM = (2.25, -100.25, 0.25)
 OCCIPITAL_SEMI_AXES_MM = (50.0, 10.0, 25.0)
 OCCIPITAL_EULER_ANGLES = (0.0, 0.0, -5.0)
 
+# The hand area of one hemisphere's primary motor cortex, at its usual place in
+# the stereotaxic frame BrainWeb's models are in: around (-38, -22, 56) mm, on
+# the central sulcus near the vertex. An ellipsoid holding 3.9 cm3 of subject
+# 4's gray matter there, not an anatomical parcellation; which hemisphere the
+# negative x is has not been checked against the phantom.
+MOTOR_CENTER_MM = (-38.0, -22.0, 56.0)
+MOTOR_SEMI_AXES_MM = (14.0, 12.0, 14.0)
+MOTOR_EULER_ANGLES = (0.0, 0.0, 0.0)
+
 
 def ellipsoid_mask(
     shape: tuple[int, int, int],
