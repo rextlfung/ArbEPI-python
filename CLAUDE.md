@@ -1465,6 +1465,28 @@ in z and 0.3 mm in x and y. Left open for the user's decision (it changes
 real-data maps); `test_degre_maps_land_where_the_epi_puts_the_object` is a
 strict xfail until then.
 
+**Reconstructing that session** (wavelet-TV, `--hp-weight 3`, 100 iterations):
+without `--B0`, 23.8% frame error, 4.9% fluctuation, edge sharpness 0.70 and
+the activation lost (median t -0.1); with `--B0`, 10.9%, 1.2%, 0.90, and the
+activation found (median t 5.9, 2.3 in the low band; amplitude ratio 0.64;
+correlation 0.79). The fluctuation floor is the simulated physiological noise,
+about 0.9% in gray matter at TE 30 ms. The B0 run took 39 min after a 75 min
+power iteration (sigma1A = 1.488; the plain operator's is 1.000), the plain
+one 5 min. One session and seed: evidence that the chain works, not a
+comparison of methods.
+
+**A sign error in the first raw-mode truth, and why the test missed it.** BOLD
+is a negative R2* change, and the first `amp_map` and `waveforms` were both
+negative: their product reproduced the frames, but `roi_masks` (voxels at half
+the largest `amp_map` or more) then selected every voxel that was NOT
+activated, and the scorer returned amplitude ratios of -12 and 348. The test
+only asserted `amp > 0` and a non-empty mask, both true by accident (ringing
+of the band-limited map). The truth is now written as gain x drop of R2*,
+positive on activation, and
+`test_truth_file_scores_with_the_testbed_scorer` checks the amplitude's size
+(at most TE x the R2* swing), the waveform's sign against the R2* course, and
+that the mask is a small part of the brain.
+
 **Dependencies.** snake-fmri is pinned to a GitHub commit: PyPI's 0.2.0 has no
 `FOVConfig`, `core/transform.py` or `Phantom.contrast`, and the upstream docs
 describe HEAD. `ismrmrd` < 1.15 (1.15.0 made `ismrmrdHeader`'s

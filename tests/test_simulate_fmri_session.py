@@ -239,8 +239,23 @@ def test_truth_file_scores_with_the_testbed_scorer(realistic, tmp_path):
         assert list(f['truth'].attrs['roi_names']) == ['block_occipital']
         amp = f['truth'].attrs['amp']
     assert rois.shape == (1, 90, 16, 12) and waves.shape == (1, 4)
-    assert rois.sum() > 5 and amp > 0  # activation raises the signal (R2* falls)
     assert np.median(amp_map[rois[0]]) == pytest.approx(amp, rel=0.02)
+    # Activation lowers R2*, so the signal rises: a positive amplitude, on a
+    # waveform that is high when R2* is low. (A first version had both
+    # negative, and the mask then picked the voxels that were NOT activated.)
+    (r2s_change,) = read(paths['truth'], 'truth/r2s_change')
+    per_frame = r2s_change.reshape(4, -1).mean(axis=1)
+    assert amp > 0 and np.corrcoef(waves[0], -per_frame)[0, 1] > 0.999
+    # its size: at most TE x the swing of R2* (a voxel that is all activated gray matter)
+    with h5py.File(paths['truth'], 'r') as f:
+        te = f['truth'].attrs['TE']
+    swing = np.abs(per_frame - per_frame.mean()).max()
+    assert 0.3 * te * swing < amp <= 1.05 * te * swing
+    # and its place: a small part of the brain, inside the activation ellipsoid
+    (tissue,) = read(paths['truth'], 'truth/tissues')
+    assert 5 < rois.sum() < 0.2 * (tissue.sum(0) > 0.9).sum()
+    assert amp_map[rois[0]].min() >= 0.5 * amp_map[tissue.sum(0) >= 0.9].max() - 1e-9
+    assert np.abs(amp_map[~rois[0] & (tissue.sum(0) >= 0.9)]).max() < amp_map[rois[0]].max()
 
 
 def test_effects_can_be_switched_off(tmp_path):

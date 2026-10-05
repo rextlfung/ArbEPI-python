@@ -227,6 +227,31 @@ The tests do the same on small sessions, plus the exact case: with only the
 object in the data, `preprocess()`'s k-space reconstructs the truth image to
 within 1%.
 
+Reconstructing that preprocessed session (`recon.sense --reg wavelet-tv
+--hp-weight 3`, 100 iterations) and scoring it against the truth:
+
+| | without `--B0` | with `--B0` |
+|---|---|---|
+| frame error, `nrmse_frame_pct` | 23.8 | 10.9 |
+| fluctuation outside the activation, `fluct_pct` | 4.9 | 1.2 |
+| edge sharpness vs truth | 0.70 | 0.90 |
+| recovered amplitude, `amp_ratio` (1 = exact) | −0.03 | 0.64 |
+| t-score of the activation, median (`_t`, `_t_lowband`) | −0.1, −0.0 | 5.9, 2.3 |
+| region's mean time course vs truth, `corr` | 0.12 | 0.79 |
+| false positives in the low band | 0.3% | 0.3% |
+
+With a head-like field (±300 Hz) the B0 model decides whether the 1.5%
+activation is found at all. The fluctuation is not zero for a perfect
+reconstruction here: the simulated physiological noise is about 0.9% of the
+signal in gray matter at this TE. One session, one seed; these numbers show the
+chain works and what the simulation is sensitive to, not which method is best.
+
+Times, on a 64-core machine with a shared RTX A6000: 27 s to simulate the
+session, 20 min to preprocess it (ESPIRiT on 32 coils dominates), 5 min to
+reconstruct without B0, and 39 min with it after a 75 min power iteration for
+the B0 operator's norm (pass `--sigma1A` to skip it once known). The archives
+take 1.8 GB.
+
 Running `preprocess/` on a simulated session also found that
 `preprocess/grid_resize.py` places the deGRE maps 1.2 mm from the EPI's frame
 in z, and 0.3 mm in x and y (`docs/review-findings.md` item 263).

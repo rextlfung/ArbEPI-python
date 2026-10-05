@@ -428,13 +428,16 @@ def simulate_session(
             g.create_dataset('physio/frequency_hz', data=frequency)
 
         if act_mode is not None:
-            dx = band_limited(act_mode.image(spins, te), grid)  # per unit R2* change
-            frac = (x0c.conj() * dx).real / x0_abs.clamp_min(1e-12 * float(x0_abs.max())) ** 2
-            per_frame = act_course.reshape(n_frames, n_shots).mean(axis=1)
-            centered = per_frame - per_frame.mean()
+            # Signal change = gain(r) * drop(t): the fractional gain per unit
+            # decrease of R2* (positive: about TE where the voxel is all
+            # activated gray matter) times the decrease of R2* in each frame.
+            dx = band_limited(act_mode.image(spins, te), grid)  # per unit R2* increase
+            gain = -(x0c.conj() * dx).real / x0_abs.clamp_min(1e-12 * float(x0_abs.max())) ** 2
+            drop = -act_course.reshape(n_frames, n_shots).mean(axis=1)
+            centered = drop - drop.mean()
             peak = float(np.abs(centered).max()) or 1.0
-            x0 = x0_abs * (1 + per_frame.mean() * frac)
-            amp_map = (peak * frac / (1 + per_frame.mean() * frac)) * (x0_abs > 0)
+            x0 = x0_abs * (1 + drop.mean() * gain)
+            amp_map = (peak * gain / (1 + drop.mean() * gain)) * (x0_abs > 0)
             cut = 0.5 * float(amp_map[full].max()) if full.any() else float('inf')
             roi_mask = full & (amp_map >= cut)
             amp = float(amp_map[roi_mask].median()) if roi_mask.any() else 0.0
