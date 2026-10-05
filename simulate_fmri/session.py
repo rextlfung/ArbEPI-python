@@ -30,13 +30,14 @@ What goes into the data (forward.py has the signal equation):
   level calibrated on a real head scan (THERMAL_NOISE);
 - ramp-sampled readouts on scan_info.mat's kxo/kxe, played with a readout
   delay and an odd/even phase offset that drifts along the echo train;
-- BOLD activation as a change of R2* (so it grows with echo time), by default
-  in the visual (occipital) cortex and in one hemisphere's hand motor area,
-  each on its own block timing, and physiological noise (physio.py), all
-  updated at every excitation.
+- BOLD activation as a change of R2* (so it grows with echo time): by default
+  a visual-motor block task (task.py), 20 s of flashing checkerboard and
+  two-handed finger tapping then 20 s of rest, driving the visual (occipital)
+  cortex and both hand motor areas, each responding with the canonical HRF
+  after its own delay, at 3% of the signal; and physiological noise
+  (physio.py). All updated at every excitation.
 
-SNAKE-fMRI supplies the phantom (BrainWeb tissue maps, resampling), the
-steady-state contrast and the block-design BOLD regressor. Its acquisition
+SNAKE-fMRI supplies the phantom (BrainWeb tissue maps, resampling). Its acquisition
 engine is not used here: it has no field map (by design, see SNAKE's FAQ), and
 models one Cartesian sample grid. ideal.simulate keeps that engine for the
 ideal mode.
@@ -54,7 +55,6 @@ import numpy as np
 import torch
 from numpy.typing import NDArray
 from scipy.special import erf
-from snake.core.handlers.activations.bold import block_design, get_bold
 from snake.core.phantom import PropTissueEnum
 
 from preprocess.utils import SIM_DATASET, create_simulated_archive, write_simulated_archive
@@ -75,6 +75,7 @@ from .handlers import ellipsoid_mask
 from .phantom import Anatomy, brainweb_anatomy, ellipsoid_anatomy, place_fov
 from .physio import PhysioConfig, physio
 from .protocol import load_protocol
+from .task import MOTOR_DELAY_S, VISUAL_DELAY_S, block_paradigm, bold_response
 
 # Thermal noise: the standard deviation of a raw ADC sample of one coil is
 #   noise * THERMAL_NOISE / (voxel volume [mm^3] * sqrt(N voxels * dwell [s]))
@@ -92,21 +93,40 @@ FAT_HZ_PER_T = 3.5e-6 * b0_model.GAMMA_BAR_HZ_PER_T  # fat-water shift, for wate
 
 @dataclass(frozen=True)
 class Activation:
-    """A block-design activation of one region: the gray matter inside the
-    ellipsoid Anatomy.rois[region] ('occipital' and 'motor' on both phantoms).
-    Scored by recon.testbed as 'block_<region>'."""
+    """One region's response to a block task: the gray matter inside
+    Anatomy.rois[region] ('occipital' and 'motor' on both phantoms) changes its
+    signal by `amplitude` times task.bold_response, the canonical HRF convolved
+    with a paradigm that is +1 during the task and -1 during rest, `delay`
+    seconds late. Scored by recon.testbed as 'block_<region>'.
+
+    amplitude is the response's largest excursion from the time average, as a
+    fraction of the T2*-weighted signal at the nominal TE, in the region's
+    median activated voxel: recon.testbed's `amp`, the peak change of a
+    zero-mean waveform scaled to peak 1 (voxels with less of the activated gray
+    matter in them change less, pure ones more). The signal therefore swings
+    about +-amplitude: 2 x amplitude from trough to peak. It is produced as a
+    change of R2*, which the simulation derives.
+    """
 
     region: str = 'occipital'
-    block_on: float = 10.0  # s
-    block_off: float = 10.0
-    onset: float = 0.0  # s, start of the first block
-    # 1/s, peak R2* change (van der Zwaag et al. 2009: motor cortex at 3 T)
-    delta_r2s: float = -0.98
+    task_s: float = 20.0  # s, duration of each task block
+    rest_s: float = 20.0  # s, rest after each block
+    onset: float = 0.0  # s, start of the first task block
+    delay: float = 0.0  # s, haemodynamic delay on top of the canonical HRF's
+    amplitude: float = 0.03
+    n_cycles: int | None = None  # None = until the run ends
 
 
-# The motor task starts a quarter of a cycle after the visual one, so that the
-# two regressors are nearly orthogonal and each region's scores are its own.
-DEFAULT_ACTIVATIONS = (Activation('occipital'), Activation('motor', onset=5.0))
+# A visual-motor block task: a flashing checkerboard and finger tapping with
+# both hands for 20 s, rest for 20 s. Delays: task.py.
+DEFAULT_ACTIVATIONS = (
+    Activation('occipital', delay=VISUAL_DELAY_S),
+    Activation('motor', delay=MOTOR_DELAY_S),
+)
+
+# A T1-weighted anatomical image to lay activation maps over: a spoiled
+# gradient echo at this TR and flip angle (white matter brightest, CSF dark).
+T1W_TR_S, T1W_FLIP_DEG = 0.020, 25.0
 
 
 @dataclass
@@ -234,6 +254,18 @@ def _build_scan(
     return _Scan(grid, spins, dict(zip(labels, masks)), affine, labels)
 
 
+def t1w_image(scan: _Scan, props: NDArray) -> torch.Tensor:
+    """A T1-weighted image of the scan's tissues on its fine grid: a spoiled
+    gradient echo at T1W_TR_S and T1W_FLIP_DEG, uniform flip, no decay."""
+    flip = torch.tensor(math.radians(T1W_FLIP_DEG))
+    image = 0
+    for i, label in enumerate(scan.labels):
+        weight = float(props[i, PropTissueEnum.rho]) * steady_state(
+            flip, T1W_TR_S, float(props[i, PropTissueEnum.T1]) / 1e3)
+        image = image + float(weight) * scan.tissues[label]
+    return image
+
+
 def _block_average(x: torch.Tensor, g: int) -> torch.Tensor:
     """Mean over each acquisition voxel's g^3 fine voxels (last three axes)."""
     if g == 1:
@@ -333,31 +365,70 @@ def simulate_session(
     spins = scan.spins
     t_exc = np.arange(n_exc) * tr_shot
 
+    # the noise-free image at TE on the acquisition grid, and where the tissue is
+    x0c = band_limited(spins.image(te)[0], grid)
+    x0_abs = x0c.abs()
+    tissues_acq = torch.stack([_block_average(scan.tissues[lab], grid.g) for lab in scan.labels])
+    full = tissues_acq.sum(0) >= 0.9
+    brain = tissues_acq.sum(0) > 0.5
+    denom = x0_abs.clamp_min(1e-12 * float(x0_abs.max())) ** 2
+
+    def gain_of(mode: Mode, spins: Spins) -> torch.Tensor:
+        """Fractional signal change at TE per unit of the mode's course. Zero
+        outside the brain: x0 is band-limited, so it is nowhere exactly zero,
+        and out there the ratio is ringing over ringing (it reached 4x the true
+        activation on BrainWeb)."""
+        return (x0c.conj() * band_limited(mode.image(spins, te), grid)).real / denom * brain
+
     modes: list[Mode] = []
     act_modes: list[Mode] = []
+    act_gains: list[torch.Tensor] = []
+    paradigms, responses, canonicals = [], [], []
+    duration = n_frames * protocol.volume_tr_s
     if cfg.activation and 'gm' in scan.labels:
-        duration = n_frames * protocol.volume_tr_s
         gm_only = torch.tensor([1.0 if lab == 'gm' else 0.0 for lab in scan.labels])
         taken = np.zeros(grid.fine_shape, dtype=bool)
+        t_signal = t_exc + te  # when each excitation's signal is acquired
         for act in cfg.activations:
             if act.region not in anatomy.rois:
                 raise ValueError(f'no region {act.region!r} in this anatomy; it has '
                                  f'{sorted(anatomy.rois)}')
-            if not 0 <= act.onset < duration:
-                raise ValueError(f'{act.region}: onset {act.onset} s is outside the '
+            if act.onset >= duration:  # negative: a block that began before the run
+                raise ValueError(f'{act.region}: onset {act.onset} s is after the '
                                  f'{duration:.1f} s run')
-            inside = ellipsoid_mask(grid.fine_shape, scan.affine, **anatomy.rois[act.region])
+            ellipsoids = anatomy.rois[act.region]
+            ellipsoids = [ellipsoids] if isinstance(ellipsoids, dict) else list(ellipsoids)
+            inside = np.zeros(grid.fine_shape, dtype=bool)
+            for ellipsoid in ellipsoids:
+                inside |= ellipsoid_mask(grid.fine_shape, scan.affine, **ellipsoid)
             if (inside & taken).any():
                 raise ValueError(f'{act.region}: overlaps another activated region '
                                  '(one activation per region, and regions must be disjoint)')
             taken |= inside
-            events = block_design(act.block_on, act.block_off, duration, act.onset)
-            bold = get_bold(protocol.tr_shot_ms, (n_exc + 0.5) * tr_shot, events, 'glover', 1,
-                            -24.0, 1.0).ravel()[:n_exc]
-            act_modes.append(Mode(
-                'r2s', torch.as_tensor(inside, dtype=torch.float32, device=device),
-                act.delta_r2s * bold, gm_only, name=f'block_{act.region}',
-            ))
+            block = (act.task_s, act.rest_s, duration, act.onset)
+            response = bold_response(t_signal, *block, delay=act.delay, n_cycles=act.n_cycles)
+            mode = Mode('r2s', torch.as_tensor(inside, dtype=torch.float32, device=device),
+                        np.zeros(n_exc), gm_only, name=f'block_{act.region}')
+            # R2* change per unit response that gives `amplitude` in the median
+            # activated voxel (the voxels at half the region's largest gain or more)
+            gain = -gain_of(mode, spins)  # per unit DECREASE of R2*: positive
+            if not full.any() or float(gain[full].max()) <= 0:
+                raise ValueError(f'{act.region}: no gray matter of this region in the field of '
+                                 'view')
+            median_gain = float(gain[full & (gain >= 0.5 * float(gain[full].max()))].median())
+            per_frame = response.reshape(n_frames, n_shots).mean(axis=1)
+            excursion = float(np.abs(per_frame - per_frame.mean()).max())
+            excursion = excursion if excursion > 1e-9 else 1.0  # a run with no change in it
+            # relative to the time average, which the response's own mean shifts:
+            # amplitude = k excursion gain / (1 + k mean gain), solved for k
+            scale = act.amplitude / (
+                median_gain * (excursion - act.amplitude * float(per_frame.mean())))
+            mode.course = -scale * response
+            act_modes.append(mode)
+            act_gains.append(gain)
+            paradigms.append(block_paradigm(t_signal, *block, n_cycles=act.n_cycles))
+            responses.append(response)
+            canonicals.append(bold_response(t_signal, *block, n_cycles=act.n_cycles))
         modes.extend(act_modes)
     frequency, courses = None, {}
     if cfg.physio is not None and cfg.physio.scale:
@@ -424,10 +495,6 @@ def simulate_session(
     )
 
     # ---- truth, on the acquisition grid ----
-    x0c = band_limited(spins.image(te)[0], grid)
-    x0_abs = x0c.abs()
-    tissues_acq = torch.stack([_block_average(scan.tissues[lab], grid.g) for lab in scan.labels])
-    full = tissues_acq.sum(0) >= 0.9
     eta = gridding_noise_gain(protocol.kxo, shape[0], fov_m[0])
     brain_signal = float(x0_abs[full].median()) if full.any() else float('nan')
     snr0 = brain_signal / (math.sqrt(eta) * sigma) if sigma else float('inf')
@@ -439,7 +506,7 @@ def simulate_session(
         g = f.create_group('truth')
         g.create_dataset('image_rest', data=x0_abs.cpu().numpy())
         g.create_dataset('tissues', data=tissues_acq.cpu().numpy())
-        g.create_dataset('brain_mask', data=(tissues_acq.sum(0) > 0.5).cpu().numpy())
+        g.create_dataset('brain_mask', data=brain.cpu().numpy())
         g.attrs['tissue_labels'] = list(scan.labels)
         g.create_dataset('b0_map', data=_measured_field(spins, grid.g).cpu().numpy())
         acq_coords = [(np.arange(n) - n // 2) * r for n, r in zip(shape, res_mm)]
@@ -458,29 +525,37 @@ def simulate_session(
         if frequency is not None:
             g.create_dataset('physio/frequency_hz', data=frequency)
 
+        # Every perturbation is a mode: a map of fractional signal change at TE
+        # per unit of its time course. Together they give the true, noise-free
+        # signal of any voxel at any excitation:
+        #   image_rest * (1 + sum_m gain[m] * course[m, e])
+        gains = [-act_gain for act_gain in act_gains]
+        gains += [gain_of(mode, spins) for mode in modes[len(act_modes):]]
+        if modes:
+            m_ = g.create_group('modes')
+            m_.create_dataset('gain', data=torch.stack(gains).cpu().numpy().astype(np.float32),
+                              compression='gzip')
+            m_.create_dataset('course', data=np.stack([m.course for m in modes]))
+            m_.attrs['names'] = [m.name for m in modes]
+        a_ = g.create_group('anat')
+        a_.create_dataset('t1w', data=t1w_image(scan, anatomy.phantom.props).cpu().numpy()
+                          .astype(np.float16), compression='gzip')
+        a_.attrs['factor'] = grid.g  # voxels of this image per acquisition voxel, per axis
+
         if act_modes:
             # Signal change = sum over regions of gain_r(r) * drop_r(t): the
             # fractional gain per unit decrease of R2* (positive: about TE
             # where the voxel is all activated gray matter) times that region's
             # decrease of R2* in each frame.
-            denom = x0_abs.clamp_min(1e-12 * float(x0_abs.max())) ** 2
-            gains, drops = [], []
-            for mode in act_modes:
-                dx = band_limited(mode.image(spins, te), grid)  # per unit R2* increase
-                gains.append(-(x0c.conj() * dx).real / denom)
-                drops.append(-mode.course.reshape(n_frames, n_shots).mean(axis=1))
-            rest = 1 + sum(float(drop.mean()) * gain for gain, drop in zip(gains, drops))
+            drops = [-mode.course.reshape(n_frames, n_shots).mean(axis=1) for mode in act_modes]
+            rest = 1 + sum(float(drop.mean()) * gain for gain, drop in zip(act_gains, drops))
             x0 = x0_abs * rest  # the time average
-            # Zero outside the brain: x0 is band-limited, so it is nowhere exactly
-            # zero, and out there the ratio is ringing over ringing (it reached
-            # 4x the true activation on BrainWeb).
-            brain = tissues_acq.sum(0) > 0.5
             amp_map = torch.zeros_like(x0_abs)
             roi_masks, waveforms, amps = [], [], []
-            for gain, drop in zip(gains, drops):
+            for gain, drop in zip(act_gains, drops):
                 centered = drop - drop.mean()
                 peak = float(np.abs(centered).max()) or 1.0
-                amp_r = peak * gain / rest * brain
+                amp_r = peak * gain / rest
                 # half of this region's own largest change: a threshold shared
                 # between regions would drop the weaker one
                 cut = 0.5 * float(amp_r[full].max()) if full.any() else float('inf')
@@ -498,6 +573,15 @@ def simulate_session(
             g.attrs['roi_names'] = [mode.name for mode in act_modes]
             g.attrs['roi_kinds'] = ['block'] * len(act_modes)
             g.attrs['amps'] = amps  # per region; recon.testbed.score prefers it to amp
+            # the task as specified: per excitation, and (canonical, no regional
+            # delay: what an analysis would model) per frame
+            t_ = g.create_group('task')
+            t_.create_dataset('paradigm', data=np.stack(paradigms))
+            t_.create_dataset('response', data=np.stack(responses))
+            t_.create_dataset('canonical', data=np.stack(canonicals).reshape(
+                len(act_modes), n_frames, n_shots).mean(axis=2))
+            t_.attrs['amplitudes'] = [act.amplitude for act in cfg.activations]
+            t_.attrs['delays'] = [act.delay for act in cfg.activations]
             g.attrs['amp'] = float(np.median(amp_map.cpu().numpy()[union])) if union.any() else 0.0
         else:
             g.create_dataset('x0', data=x0_abs.cpu().numpy())
@@ -573,26 +657,29 @@ def _cli() -> None:
                    help='physiological noise relative to the calibrated level; 0 for none')
     p.add_argument('--no-activation', action='store_true')
     p.add_argument('--regions', nargs='+', default=['occipital', 'motor'],
-                   help='activated regions (occipital = visual cortex; motor = the hand '
-                        'area of one hemisphere)')
-    p.add_argument('--onsets', type=float, nargs='+', default=None,
-                   help='start of each region\'s first block, s (default: 0, except motor 5)')
-    p.add_argument('--delta-r2s', type=float, default=-0.98,
-                   help='peak R2* change on activation, 1/s')
-    p.add_argument('--block-on', type=float, default=10.0, help='stimulus duration, s')
-    p.add_argument('--block-off', type=float, default=10.0, help='rest duration, s')
+                   help='activated regions (occipital = visual cortex; motor = both hand '
+                        'areas)')
+    p.add_argument('--delays', type=float, nargs='+', default=None,
+                   help='haemodynamic delay of each region on top of the canonical HRF, s '
+                        '(default: 0, except motor 0.6)')
+    p.add_argument('--amplitude', type=float, default=0.03,
+                   help='BOLD amplitude: the signal is 1 + amplitude x response, the response '
+                        'running from -1 (rest) to about +1 (task)')
+    p.add_argument('--block-on', type=float, default=20.0, help='task duration, s')
+    p.add_argument('--block-off', type=float, default=20.0, help='rest duration, s')
+    p.add_argument('--onset', type=float, default=0.0, help='start of the first task block, s')
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--device', default=None, help='default: cuda if available, else cpu')
     p.add_argument('--preprocess', action='store_true',
                    help='then run preprocess.batch_preprocess on the session')
     a = p.parse_args()
-    default_onsets = {act.region: act.onset for act in DEFAULT_ACTIVATIONS}
-    onsets = a.onsets or [default_onsets.get(region, 0.0) for region in a.regions]
-    if len(onsets) != len(a.regions):
-        p.error('--onsets needs one value per region')
+    default_delays = {act.region: act.delay for act in DEFAULT_ACTIVATIONS}
+    delays = a.delays or [default_delays.get(region, 0.0) for region in a.regions]
+    if len(delays) != len(a.regions):
+        p.error('--delays needs one value per region')
     activations = tuple(
-        Activation(region, a.block_on, a.block_off, onset, a.delta_r2s)
-        for region, onset in zip(a.regions, onsets)
+        Activation(region, a.block_on, a.block_off, a.onset, delay, a.amplitude)
+        for region, delay in zip(a.regions, delays)
     )
     cfg = SessionConfig(
         grid_factor=a.grid_factor, n_coils=a.coils, b0_scale=a.b0_scale, shim_order=a.shim_order,

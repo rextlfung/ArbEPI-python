@@ -115,8 +115,9 @@ class Anatomy:
         (brain, skull, scalp; 0 = air), on a coarser grid, and that grid's
         voxel-to-world matrix. The susceptibility model (b0.py).
     cavities: air cavities to carve out of the head.
-    rois: the ellipsoids that can be activated, by region name (each one
-        EllipsoidActivationHandler's center_mm, semi_axes_mm, euler_angles).
+    rois: the regions that can be activated, by name: an ellipsoid
+        (EllipsoidActivationHandler's center_mm, semi_axes_mm, euler_angles)
+        or a list of them (a bilateral region).
     """
 
     phantom: Phantom
@@ -166,8 +167,8 @@ def brainweb_anatomy(sub_id: int = 4, output_res: float = 1.0) -> Anatomy:
         'occipital': {'center_mm': h.OCCIPITAL_CENTER_MM,
                       'semi_axes_mm': h.OCCIPITAL_SEMI_AXES_MM,
                       'euler_angles': h.OCCIPITAL_EULER_ANGLES},
-        'motor': {'center_mm': h.MOTOR_CENTER_MM, 'semi_axes_mm': h.MOTOR_SEMI_AXES_MM,
-                  'euler_angles': h.MOTOR_EULER_ANGLES},
+        'motor': [{'center_mm': center, 'semi_axes_mm': h.MOTOR_SEMI_AXES_MM,
+                   'euler_angles': h.MOTOR_EULER_ANGLES} for center in h.MOTOR_CENTERS_MM],
     }
     return Anatomy(phantom, head, affine, BRAINWEB_CAVITIES, rois)
 
@@ -208,13 +209,13 @@ def ellipsoid_phantom_rois(
 ) -> dict[str, dict]:
     """The regions of ellipsoid_phantom(shape, res_mm) by name, as
     brainweb_anatomy has them: 'occipital' (ellipsoid_phantom_roi) and 'motor',
-    a patch of the gray matter shell up and to one side."""
+    a patch of the gray matter shell up and to each side."""
     half = np.array(shape) * res_mm / 2
-    motor = {
-        'center_mm': (float(-0.50 * half[0]), 0.0, float(0.50 * half[2])),
+    motor = [{
+        'center_mm': (float(side * 0.50 * half[0]), 0.0, float(0.50 * half[2])),
         'semi_axes_mm': tuple(float(v) for v in (0.25, 0.30, 0.25) * half),
         'euler_angles': (0.0, 0.0, 0.0),
-    }
+    } for side in (-1, 1)]
     return {'occipital': ellipsoid_phantom_roi(shape, res_mm), 'motor': motor}
 
 

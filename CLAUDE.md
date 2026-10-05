@@ -1412,10 +1412,12 @@ BOLD as an amplitude change. In the raw mode SNAKE supplies the phantom
   T2 for gray and white matter were swapped. Wansapura 1999 (verified on
   PubMed): T1 1331/832 ms, T2 80/110 ms, T2* 41.6-51.8 / 44.7-48.4 ms
   uncorrected.
-- *BOLD*: an R2* change of -0.98 1/s (van der Zwaag et al. 2009, 3 T, measured
-  in motor cortex and used for every region), i.e.
-  2.9% at TE 30 ms and growing with echo time. This replaces SNAKE's amplitude
-  model in the raw mode, so orderings can be compared by BOLD sensitivity too.
+- *BOLD*: an R2* change, so it grows with echo time; this replaces SNAKE's
+  amplitude model in the raw mode, and orderings can be compared by BOLD
+  sensitivity too. Its size is set by the task's `amplitude` (see "The task"
+  below). For scale: van der Zwaag et al. 2009 measured -0.98 1/s between
+  rest and task at 3 T in motor cortex, 2.9% at TE 30 ms, which was the
+  default until the task was specified.
 - *Readout*: delay -0.3 samples, odd/even phase -0.25 to -0.32 rad along the
   train, from the `delay` and `oephase_a` attributes of `20260922xiaokai` and
   `20260930ballfat`.
@@ -1455,39 +1457,107 @@ is band-limited there, nowhere exactly zero, and the ratio of two ringing
 tails reached 0.06 against a true activation of 0.015, which is all the demo
 notebook's figure showed.
 
-**Activated regions (2026-10-05, user request: motor and visual cortex).**
-`SessionConfig.activations` is a tuple of `Activation(region, block_on,
-block_off, onset, delta_r2s)`, one linear R2* `Mode` each, over the gray matter
-inside the ellipsoid `Anatomy.rois[region]`; the old single `Anatomy.roi` and
-`SessionConfig.delta_r2s/block_on/block_off` are gone. Defaults: `occipital`
-(SNAKE's ellipsoid, the visual cortex; 614 voxels of the default protocol) and
-`motor`, an ellipsoid of 14 x 12 x 14 mm semi-axes at (-38, -22, 56) mm (204
-voxels, 1.59% median change against the visual region's 1.53%). Choices:
-- *One hemisphere, not both*: a one-handed task, and the other hemisphere's
-  hand area stays a null region. The coordinates are the hand area's usual
-  stereotaxic ones (BrainWeb's models are in that frame; the ellipsoid sits on
-  a sulcus of the lateral convexity near the vertex, 3.9 cm3 of gray matter),
-  not a parcellation, and which hemisphere negative x is was not checked.
-- *The motor blocks lag the visual ones by 5 s* (a quarter of the 20 s cycle;
-  an assumption, `onset=0` makes it one task): the two HRF-convolved time
-  courses then correlate -0.005 over 60 s, so each region's `corr`,
-  `amp_ratio` and `leak` are its own, and cross-talk a temporal regularizer
-  introduces would show.
+**The task (2026-10-05, user specification).** A visual-motor block task: a
+flashing checkerboard and two-handed finger tapping for 20 s, rest for 20 s,
+8 cycles = 320 s. `SessionConfig.activations` is a tuple of
+`Activation(region, task_s, rest_s, onset, delay, amplitude, n_cycles)`, one
+linear R2* `Mode` each, over the gray matter inside `Anatomy.rois[region]` (an
+ellipsoid, or a list of them for a two-sided region). Defaults: `occipital`
+(SNAKE's ellipsoid, the visual cortex; 609 voxels of the default protocol) and
+`motor` (one 14 x 12 x 14 mm ellipsoid per hemisphere at the hand area's usual
+stereotaxic coordinates, (+-38, -22, 56) mm; 204 + 218 voxels). `task.py` has
+the model, as the user gave it: the paradigm p is +1 on task and -1 at rest,
+the response is w(t) = (h * p)(t - delay) with h SPM's canonical HRF (exact,
+through the HRF's running integral; equal to nilearn's `spm_hrf` to 0.3%), and
+the signal is 1 + amplitude x w. Decisions and what they rest on:
+- *Amplitude is the peak excursion from the time average*, i.e. w is centered
+  and scaled to peak 1 first, which is `recon/testbed.py`'s `amp` convention
+  (and the user's "+1/-1 ... amplitude of 3%"). With 20 s blocks the canonical
+  response does not settle and w overshoots +-1 to +-1.29, so "3% x w" taken
+  literally would peak at 3.9%. As implemented: +-3% at the peaks, about
+  +-2.4% on the plateaus, 6% trough to peak. Whether the user meant 3% between
+  task and rest instead (`amplitude=0.015`) is flagged to them, not settled.
+- *Amplitude is in the image domain*: the R2* change is solved so that the
+  region's median activated voxel (the truth's `roi_masks` voxels) changes by
+  `amplitude` at TE, partial volume and the response's own mean included
+  (`scale = A / (g (P - A m))`; the truth's `amps` equal it to 0.1%). It comes
+  out at -+1.30 1/s, 2.7 times van der Zwaag's 0.98 1/s rest-to-task: the
+  user's 3% is a strong activation, not a typical one.
+- *Delays*: visual 0 s (the canonical HRF's 5.0 s time to peak is what Lin et
+  al., NeuroImage 2013;78:372, measured in visual cortex: 5.0 +- 0.4 s at 3 T
+  with 100 ms sampling, 21 subjects, a visuomotor reaction task), motor 0.6 s
+  (the same study's time-to-half-peak difference, 3.4 vs 2.8 s; its abstract
+  attributes the order to neuronal timing, not vascular differences). Table
+  values came through a summarizing fetch of the PMC page (the page refuses
+  direct download), asked twice with consistent answers; the abstract was read
+  directly. Handwerker 2004 / Aguirre 1998 for between-subject spread (about
+  4 s), Taylor 2018 for 6.1 +- 0.6 s to peak across cortex.
+- *One paradigm drives both regions* now; the earlier default (motor blocks
+  lagging by a quarter cycle, 10 s blocks, one hemisphere) existed for one
+  commit and is gone. Its point (uncorrelated regressors expose cross-talk)
+  still holds if `onset` is used.
 - *Names keep the `block_` prefix* (`block_occipital`, `block_motor`):
   `recon.testbed.score` reports `_t_lowband` only for those.
 - *Per-region truth*: each mask is cut at half of that region's own largest
-  change (a shared threshold would drop the weaker region); `x0` is the time
-  average with every region's mean change in it; `r2s_change` is (regions,
-  excitations).
-- *`recon/testbed.py` changed for this*, backward compatibly: `score` had one
-  `amp` for every ROI, exact for its own built testbeds but not for regions of
-  different tissue mix, so it now prefers a per-ROI `amps` attribute; `panel`
-  (and `score --roi`) can show any ROI, where it hard-coded the first. Its
-  false-positive fractions still use the first ROI's regressor.
+  change; `x0` is the time average with every region's mean change in it;
+  `r2s_change` is (regions, excitations); `task/` holds the paradigm and
+  response per excitation and the canonical (undelayed) response per frame,
+  the regressor an analysis would use.
+- *`recon/testbed.py` changed for multi-region truth*, backward compatibly:
+  `score` prefers a per-ROI `amps` attribute to the single `amp`; `panel` (and
+  `score --roi`) can show any ROI. Its false-positive fractions still use the
+  first ROI's regressor.
 - Regions must be disjoint and there is one activation per region (a
-  `ValueError` otherwise), which keeps the per-region truth a plain sum.
-- *The ideal mode still has one region*: two SNAKE handlers would both add a
-  tissue named `ROI`, and `export.py` reads one.
+  `ValueError` otherwise). A negative `onset` is a block that began before the
+  run. *The ideal mode still has one region.*
+
+**Truth additions for analysis.** `modes/gain` and `modes/course`: every
+perturbation (activations and physiological modes) as a map of fractional
+signal change at TE per unit of its course, so the noise-free signal of any
+voxel at any excitation is `image_rest x (1 + sum gain x course)`
+(`analysis.true_signal`). This is what earlier notes lacked when they could
+only estimate what a perfect reconstruction would score: it gives the true
+series with physiology in it. `anat/t1w`: a spoiled gradient echo (TR 20 ms,
+25 deg) of the tissue maps on the spin grid, to lay activation maps over.
+
+**Is the truth image T2*-weighted (user question, 2026-10-05)?** Yes: per
+tissue it is PD x spoiled steady state at the per-shot TR and flip x
+exp(-TE/T2*), and the truth image's medians in pure-tissue voxels match that to
+three digits (gm : wm : csf = 1 : 1.054 : 0.94-0.96). It looks flat because a
+3D-EPI's per-shot TR (50.6 ms) and flip (15.9 deg) saturate CSF to half of gray
+matter's steady state, which cancels what its long T2* adds; at TE = 0 the same
+sequence gives a T1-weighted image (CSF 0.58 of gray), and at a 2D EPI's TR
+and flip (2 s, 77 deg) CSF is the brightest again (1.05). Not a plotting
+artifact, and not a bug.
+
+**`study.py` and `analysis.py` (2026-10-05, user request: ROC curves and
+test-retest reliability as in https://yonglihe23.github.io/posts/2024/11/fmri-test-retest/).**
+That post describes ROC curves and the mixed-binomial model of Genovese, Noll
+and Eddy (MRM 1997;38:497): from M repetitions, the count R_v of runs in which
+a voxel is classified active is a mixture of two binomials with parameters
+(lambda, p_A, p_I), and with K thresholds the fits share lambda ("dependent
+likelihood"), a mixture of two multinomials over the number of thresholds
+reached. `analysis.fit_mixed_binomial` fits both by EM (closed-form M step;
+voxels grouped by count pattern; several starts; the class with higher levels
+is "active") and is tested on data with known rates. So a study is M
+repetitions: `study.py` simulates, preprocesses and reconstructs them,
+resumably (a `.ok` marker next to each preprocessed file, so a half-written
+one is not taken for done), and `analysis.py` has the GLM (the scorer's
+low-band one: 93 degrees of freedom for 632 frames), the T1w overlay, ROC
+against the truth and the model. Things measured on the way:
+- *The B0 operator needs 16 time segments here, not 32*: forward error against
+  L = 64 is 0.001% at 16, 0.19% at 12, 1.9% at 8, on the default protocol
+  (31 ms echo train, field clipped to about 300 Hz, BT about 10), at half the
+  cost. `study.RECONS` uses `L_b0=16`; `recon.sense`'s default is unchanged.
+- *Aliasing* (`analysis.alias`): the series is sampled at 1.976 Hz, so the
+  1.1 Hz heartbeat lands at 0.876 Hz and its second harmonic at 0.224 Hz, next
+  to breathing (0.25 Hz); a frame also averages over its 0.506 s, |sinc(f T)|:
+  0.56 and 0.10 of those survive. The reconstruction's temporal high-pass
+  penalty acts above 0.15 Hz, on all of them.
+- *"temporal std / truth"* in the scorer's panel (user question) is each
+  voxel's reconstructed temporal standard deviation over its true mean signal:
+  1/tSNR. It does not separate real fluctuation from added noise; the notebook
+  puts the same quantity of the true signal next to it.
 
 **What running the real pipeline on simulated data showed (2026-10-04,
 default protocol, BrainWeb).** `preprocess/` recovers what was injected:

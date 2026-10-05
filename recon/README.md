@@ -320,9 +320,9 @@ null voxels above |t| = 3.29 on `20260930ballfat`, vs 0.1% in the low band).
 
 `score` also reads the truth files [`simulate_fmri/`](../simulate_fmri/README.md)
 writes: a digital brain simulated as raw scanner data along a `scan_info.mat`
-schedule and run through `preprocess/`, with an activation in the visual
-cortex and one in a hand motor area (`block_occipital`, `block_motor`, on
-separate block timings) in the same `truth` layout
+schedule and run through `preprocess/`, with a block task activating the
+visual cortex and both hand motor areas (`block_occipital`, `block_motor`,
+the motor response 0.6 s later) in the same `truth` layout
 (`score <datdir>/<name>_truth.h5 <recon>.h5`). Their regions differ in tissue
 mix, so those files carry one peak change per ROI (`amps`), which `score` uses
 in place of the shared `amp` when it is there. That data comes from a forward

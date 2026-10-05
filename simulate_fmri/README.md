@@ -1,12 +1,16 @@
 # simulate_fmri/ — simulated fMRI scans acquired with ArbEPI
 
 Simulates an fMRI session of a brain phantom with known BOLD activations (by
-default the visual cortex and one hand motor area, on separate block timings),
+default a visual-motor block task: a flashing checkerboard and two-handed
+finger tapping, 20 s on and 20 s off, driving the visual cortex and both hand
+motor areas),
 acquired with exactly the sampling schedule of an ArbEPI sequence, and hands it
 to the same `preprocess/` and `recon/` code a real scan goes through. Because
 the truth is known, every stage can be checked against it: the calibrated
 readout delay, the ghost correction, the sensitivity and field maps, and the
-activation in the reconstructed series.
+activation in the reconstructed series. `study.py` repeats an experiment and
+`analysis.py` analyzes the repetitions the way an fMRI study is analyzed:
+activation maps on the anatomical image, ROC curves, test-retest reliability.
 
 ```
                          ┌─ session.py ─► scanarchives/*.h5 ─► preprocess ─► <name>_preprocessed.h5 ─┐
@@ -23,7 +27,7 @@ There are two levels of fidelity.
 | Readout | ramp-sampled on `kxo`/`kxe`, with a readout delay and odd/even phase | ideal |
 | Field | B0 map from the head's susceptibility; breathing | none |
 | Decay and BOLD | at every sample's own time; BOLD is an R2* change | decay per echo; BOLD is an amplitude change |
-| Activated regions | any number, each with its own block timing; default visual and motor | one (visual) |
+| Activated regions | any number, each with its own haemodynamic delay; default visual and both motor areas | one (visual) |
 | Coils | 32 loops, sensitivities estimated by ESPIRiT from the simulated deGRE | given to the recon |
 | Noise | thermal with a coil covariance, plus physiological | thermal, white |
 | Object grid | finer than the acquisition (intravoxel dephasing, partial volume) | the acquisition's |
@@ -42,14 +46,19 @@ all of them, then on a scan.
 | `forward.py` | The signal equation: ramp-sampled EPI readouts and the deGRE's k-space from spins on a fine grid |
 | `b0.py` | Field map from the susceptibility of the head (dipole convolution, air cavities, shim) |
 | `coils.py` | Receive array defined in space; coil noise covariance |
+| `task.py` | The task: block paradigm, canonical HRF, the BOLD response and its regional delays |
 | `physio.py` | Physiological noise: BOLD-like, cardiac, respiratory, drift |
+| `study.py` | Repetitions of an experiment through `preprocess/` and `recon/`, resumable; `python -m simulate_fmri.study` |
+| `analysis.py` | Activation maps and overlays, ROC curves, the mixed-binomial test-retest model, true signals and aliasing |
 | `ideal.py` | `simulate()` and `python -m simulate_fmri.ideal`: SNAKE's engine, output in recon's format |
 | `sampler.py`, `engine.py`, `handlers.py`, `export.py` | The ideal mode's SNAKE sampler, engine and activation handler, and its export |
 | `protocol.py` | `load_protocol()`: the acquisition recorded in `scan_info.mat` |
 | `phantom.py` | BrainWeb at 3 T, an analytic phantom, the head outline and air cavities |
-| `demo.ipynb` | A session simulated, preprocessed, reconstructed with and without B0, and scored |
+| `demo.ipynb` | The visual-motor study: four 320 s runs simulated, preprocessed and reconstructed; contrast, spectra, activation maps, ROC curves, test-retest reliability |
 
-Tests: `tests/test_simulate_fmri_forward.py` (the signal model against a
+Tests: `tests/test_simulate_fmri_task.py` (the response against a brute-force
+convolution), `..._analysis.py` (ROC, the reliability model on data with known
+rates), `..._study.py`, `tests/test_simulate_fmri_forward.py` (the signal model against a
 brute-force sum), `..._models.py` (field, coils, physiology), `..._session.py`
 (sessions through the real `preprocess()`), `test_simulate_fmri.py` (ideal mode).
 
@@ -121,31 +130,93 @@ Options of `simulate_fmri.session`:
 | `--delay` | −0.3 | readout delay, samples |
 | `--oe-phase` | −0.25 −0.32 | odd/even phase at the first and last echo pair, rad |
 | `--physio` | 1 | physiological noise relative to the calibrated level; 0 = none |
-| `--regions` | `occipital motor` | the activated regions: `occipital` (visual cortex), `motor` (one hemisphere's hand area) |
-| `--onsets` | 0 (motor: 5) | start of each region's first block, s; one value per region |
-| `--no-activation`, `--delta-r2s`, `--block-on`, `--block-off` | −0.98 1/s, 10 s, 10 s | the block design, shared by the regions |
+| `--regions` | `occipital motor` | the activated regions: `occipital` (visual cortex), `motor` (both hand areas) |
+| `--block-on`, `--block-off`, `--onset` | 20 s, 20 s, 0 s | the paradigm: task and rest durations, start of the first task block |
+| `--delays` | 0 (motor: 0.6) | haemodynamic delay of each region on top of the canonical HRF's, s; one value per region |
+| `--amplitude` | 0.03 | BOLD amplitude: the peak change of a region's median voxel, as a fraction of its signal |
+| `--no-activation` | | a resting brain |
 | `--preprocess` | | run `preprocess.batch_preprocess` afterwards |
 | `--device`, `--seed`, `--fa` | | |
 
 From Python, `simulate_session(scan_info, outdir, name, cfg=SessionConfig(...))`
 takes the same settings and more (`physio=PhysioConfig(...)`, a custom
-`Anatomy`). The task is `activations`, one `Activation` per region, each with
-its own block lengths, onset and R2* change:
+`Anatomy`).
+
+### The task
+
+The task is `SessionConfig.activations`, one `Activation` per region:
 
 ```python
 from simulate_fmri.session import Activation, SessionConfig, simulate_session
 
-cfg = SessionConfig(activations=(
-    Activation('occipital'),                        # 10 s on, 10 s off, from t = 0
-    Activation('motor', onset=5.0),                 # the same blocks, 5 s later (the default)
+cfg = SessionConfig(activations=(               # the default
+    Activation('occipital', task_s=20, rest_s=20, onset=0, delay=0.0, amplitude=0.03),
+    Activation('motor',     task_s=20, rest_s=20, onset=0, delay=0.6, amplitude=0.03),
 ))
 ```
 
-By default the motor blocks lag the visual ones by a quarter cycle, which makes
-the two time courses uncorrelated (r = −0.005 over the default 60 s), so a
-region's scores cannot borrow from the other region's task. `onset=0` gives
-one task driving both regions. Regions are ellipsoids of gray matter given in
-mm (`Anatomy.rois`); they must not overlap.
+The paradigm p(t) is +1 during the task and −1 during rest. A region's response
+is the canonical HRF h (SPM's: a gamma density peaking at 5 s minus a sixth of
+one peaking at 15 s, unit area) convolved with it and delayed:
+
+    w(t) = (h * p)(t − delay),      S(t) / mean(S) = 1 + amplitude × ŵ(t)
+
+with ŵ the response minus its time average, scaled to a peak of 1 (the
+convention of `recon/testbed.py`'s `amp`). **`amplitude` is therefore the
+largest excursion of the signal from its mean**: with 0.03 the signal swings
+between −3% and +3%, 6% from trough to peak. A 20 s block is too short for the
+canonical response to settle, so w overshoots ±1 (to ±1.29) and the plateaus
+sit near ±2.4%. For 3% between task and rest, use `amplitude=0.015`. The
+amplitude is that of the region's median activated voxel in the T2*-weighted
+image at the nominal TE; voxels holding less of the activated gray matter
+change less. It is produced as a change of R2*, which the simulation derives
+(∓1.3 1/s here; van der Zwaag et al. 2009 measured 0.98 1/s between rest and
+task at 3 T, so this task is about 2.7 times a typical activation).
+
+Delays, from the literature (`task.py`):
+
+| Region | Delay | Source |
+|---|---|---|
+| visual cortex | 0 s: the canonical HRF peaks at 5.0 s | Lin et al., NeuroImage 2013;78:372 (3 T, 100 ms sampling, 21 subjects, visuomotor reaction task): visual time to peak 5.0 ± 0.4 s, to half peak 2.8 s, onset 1.0 s |
+| motor cortex | 0.6 s | same study: time to half peak 3.4 s, 0.6 s after visual; peak 5.2 to 5.5 s; onset 2.2 s. Most of the lag is neuronal (the reaction time), not vascular |
+
+Differences between people are larger than between regions: about 4 s in time
+to peak and to onset across 20 subjects (Handwerker et al., NeuroImage
+2004;21:1639; Aguirre et al., NeuroImage 1998;8:360), and 6.1 ± 0.6 s to peak
+for 2 s stimuli across cortex (Taylor et al., NeuroImage 2018;173:322). These
+are typical values, not constants.
+
+Regions are ellipsoids of gray matter given in mm (`Anatomy.rois`; a list of
+ellipsoids for a two-sided region). They must not overlap, and there is one
+`Activation` per region. `occipital` is SNAKE's occipital ellipsoid; `motor` is
+one ellipsoid per hemisphere at the hand area's usual stereotaxic coordinates,
+(±38, −22, 56) mm.
+
+### Repeating an experiment
+
+```bash
+$PY -m simulate_fmri.study output/simulate_fmri --duration 320 --runs 4
+```
+
+generates the sequences for a 320 s run, then simulates, preprocesses and
+reconstructs four repetitions (with and without the B0 model) into
+`output/simulate_fmri/run1` … `run4`. Runs differ in their seed only: thermal
+and physiological noise are redrawn; brain, field, coils, sequence and task are
+the same. Every step is skipped when its output exists
+(`study.run_repetitions` from Python). From nothing this takes about 11 hours
+and 120 GB (per 320 s run: 45 s to simulate, about half an hour to preprocess,
+a quarter of an hour to reconstruct without B0, about two hours with it).
+
+`analysis.py` then works on the reconstructions and truth files:
+
+| | |
+|---|---|
+| `t_map`, `t_threshold` | GLM of every voxel on the task regressor, fitted on the temporal frequencies below 0.15 Hz so that its degrees of freedom are the data's |
+| `overlay` | the thresholded map over the truth file's T1-weighted anatomical image |
+| `roc`, `rates`, `truth_classes` | ROC curve against the truth |
+| `levels`, `reliability_map`, `fit_mixed_binomial` | test-retest reliability without the truth: the mixed-binomial model of Genovese, Noll and Eddy (Magn Reson Med 1997;38:497), at one threshold or several with a shared proportion of active voxels, fitted by EM |
+| `true_signal` | the noise-free signal of any voxel at every excitation, from the truth file's modes |
+| `alias`, `frame_average_gain` | where a frequency lands at the volume rate, and how much of it survives a frame |
 
 ## What the raw-data simulation models
 
@@ -163,7 +234,7 @@ matrix, echo times and TR.
 | **Readout** | ramp-sampled: an exact Fourier sum at `kxo`/`kxe`, shifted by a readout delay; a constant phase on every other echo, drifting along the train | real sessions: delay −0.3 samples, odd/even phase −0.25 to −0.32 rad |
 | **Coils** | 32 loops in four rings around z, unit root-sum-of-squares | — |
 | **Thermal noise** | complex Gaussian per raw sample, with a coil covariance; scales with voxel volume and sampling time | a 3 T 32-channel head deGRE: SNR 115 for a fully sampled volume of the default protocol; covariance from real `W` matrices (std ratio 1.1–1.2, correlations ≤ 0.02) |
-| **Activation** | a change of R2* in the gray matter of each activated region, block design ⊛ Glover HRF, updated at every excitation. Visual: SNAKE's occipital ellipsoid (614 voxels of the default protocol). Motor: an ellipsoid at the hand area of one hemisphere, (−38, −22, 56) mm (204 voxels) | van der Zwaag 2009: −0.98 1/s at 3 T, measured in motor cortex (2.9% at TE 30 ms) and used for both regions |
+| **Activation** | a change of R2* in the gray matter of each activated region, following the canonical HRF ⊛ the ±1 block paradigm after the region's delay, updated at every excitation. Visual: SNAKE's occipital ellipsoid (609 voxels of the default protocol). Motor: an ellipsoid at each hemisphere's hand area, (±38, −22, 56) mm (422 voxels) | amplitude as specified (3% peak); delays from Lin 2013 (see The task) |
 | **Physiological noise** | BOLD-like R2* fluctuations (smooth patterns, 1/f below 0.1 Hz), cardiac pulsation (CSF), respiration (signal and field), drift, all per excitation | Bodurka 2007: λ = 0.0128 (gray), 0.0085 (white), 0.021 (CSF); Van de Moortele 2002 for the breathing field |
 | **deGRE** | fully sampled dual-echo 3D GRE at its own matrix, field of view and TR, with the same object, field and coils; leading receive-gain block | `sequences/deGRE.py` |
 | **EPIcal, noise** | blip-free echo trains with the same readout; `ceil(20 Ncoils² / Nfid)` noise readouts | `sequences/EPIcal.py`, `sequences/noise.py` |
@@ -220,6 +291,9 @@ the uncorrected values would count it twice.
 | `x0` | (Nx, Ny, Nz) noise-free magnitude at the nominal TE, at the acquisition's resolution (the fine-grid image cut to the acquired k-space), time-averaged |
 | `roi_masks`, `waveforms`; attrs `roi_names`, `amps`, `amp` | per activated region (`block_occipital`, `block_motor`): its voxels, time course (zero-mean, peak 1) and peak fractional change, in `recon/testbed.py`'s layout. `amp` is the median over all regions |
 | `amp_map`, `r2s_change` | the peak fractional change voxel by voxel (zero outside `brain_mask`); each region's R2* change per excitation, (regions, excitations) |
+| `task/paradigm`, `task/response`, `task/canonical`; attrs `amplitudes`, `delays` | per region: the ±1 paradigm and the response w(t) per excitation; the response without the regional delay per frame, which is the regressor an analysis would use |
+| `modes/gain`, `modes/course`; attr `names` | every perturbation (activations, physiological modes): its map of fractional signal change at TE per unit of its time course, and that course per excitation. The noise-free signal of any voxel at any excitation is `image_rest × (1 + Σ gain × course)` |
+| `anat/t1w`; attr `factor` | a T1-weighted anatomical image (spoiled gradient echo, TR 20 ms, 25°) on the simulation's spin grid, `factor` voxels per acquisition voxel per axis |
 | `b0_map`, `smaps`, `degre/b0_map` | the field each scan can measure (magnetization-weighted) and the coil maps, on the EPI and deGRE grids |
 | `noise_covariance`, `oe_phase`; attrs `delay`, `snr0`, `sigma_raw` | what was injected |
 | `physio/*` | the physiological time courses per excitation |

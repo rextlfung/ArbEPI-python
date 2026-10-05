@@ -157,9 +157,10 @@ def realistic(tmp_path_factory):
     seq = tmp_path_factory.mktemp('real_seq')
     out = tmp_path_factory.mktemp('real')
     scan_info, p = make_scan_info(seq, n_frames=4, n_shots=3, r=8)
+    # blocks that began before this two-second run, so the response moves during it
     cfg = small_cfg(delay=-0.3, activations=(
-        session.Activation('occipital', 0.05, 0.05),
-        session.Activation('motor', 0.05, 0.05, onset=0.6, delta_r2s=-0.6),
+        session.Activation('occipital', 4, 4, onset=-5),
+        session.Activation('motor', 4, 4, onset=-5, delay=0.6, amplitude=0.02),
     ))
     paths = session.simulate_session(scan_info, str(out), anatomy=anatomy(), cfg=cfg, device='cpu')
     julia = shutil.which('julia') is not None
@@ -238,43 +239,88 @@ def test_truth_file_has_each_activated_region_in_the_testbed_layout(realistic):
     x0, amp_map, waves, rois, r2s_change, tissue = read(
         paths['truth'], 'truth/x0', 'truth/amp_map', 'truth/waveforms', 'truth/roi_masks',
         'truth/r2s_change', 'truth/tissues')
+    response, paradigm, canonical = read(
+        paths['truth'], 'truth/task/response', 'truth/task/paradigm', 'truth/task/canonical')
     with h5py.File(paths['truth'], 'r') as f:
         assert f.attrs['volume_tr'] > 0
         attrs = dict(f['truth'].attrs)
+        task_attrs = dict(f['truth/task'].attrs)
     assert list(attrs['roi_names']) == ['block_occipital', 'block_motor']
     assert list(attrs['roi_kinds']) == ['block', 'block']
-    amps, te = np.asarray(attrs['amps']), attrs['TE']
+    amps = np.asarray(attrs['amps'])
     assert rois.shape == (2, 90, 16, 12) and waves.shape == (2, 4)
     assert r2s_change.shape == (2, 4 * 3) and amps.shape == (2,)
+    assert response.shape == paradigm.shape == (2, 4 * 3) and canonical.shape == (2, 4)
+    np.testing.assert_allclose(task_attrs['amplitudes'], [0.03, 0.02])
+    np.testing.assert_allclose(task_attrs['delays'], [0.0, 0.6])
+    assert set(np.unique(paradigm)) <= {-1.0, 1.0}
     full = tissue.sum(0) >= 0.9
     assert not (rois[0] & rois[1]).any()
     assert attrs['amp'] == pytest.approx(np.median(amp_map[rois.any(0)]))
     for k, act in enumerate(cfg.activations):
+        # the amplitude asked for is the peak change of the region's median voxel
+        assert amps[k] == pytest.approx(act.amplitude, rel=0.01)
         assert np.median(amp_map[rois[k]]) == pytest.approx(amps[k], rel=0.02)
-        # Activation lowers R2*, so the signal rises: a positive amplitude, on a
-        # waveform that is high when R2* is low. (A first version had both
-        # negative, and the mask then picked the voxels that were NOT activated.)
-        per_frame = r2s_change[k].reshape(4, -1).mean(axis=1)
-        assert amps[k] > 0 and np.corrcoef(waves[k], -per_frame)[0, 1] > 0.999
-        assert np.abs(waves[k]).max() == pytest.approx(1) and abs(waves[k].mean()) < 1e-9
-        # its size: at most TE x the swing of R2* (a voxel that is all activated gray matter)
-        swing = np.abs(per_frame - per_frame.mean()).max()
-        assert 0.3 * te * swing < amps[k] <= 1.05 * te * swing
-        # and its place: a small part of the brain, the largest changes of its own region
+        # the waveform is the response, per frame, zero-mean and scaled to peak 1;
+        # R2* falls when it rises. (A first version had waveform and amplitude
+        # both negative, and the mask then picked the voxels NOT activated.)
+        per_frame = response[k].reshape(4, -1).mean(axis=1)
+        centered = per_frame - per_frame.mean()
+        np.testing.assert_allclose(waves[k], centered / np.abs(centered).max(), atol=1e-6)
+        assert np.corrcoef(waves[k], -r2s_change[k].reshape(4, -1).mean(axis=1))[0, 1] > 0.9999
+        # its place: a small part of the brain, the largest changes of its own region
         assert 5 < rois[k].sum() < 0.2 * full.sum()
         assert amp_map[rois[k]].min() >= 0.5 * amp_map[rois[k]].max() - 1e-9
+    # the motor cortex responds 0.6 s after the visual cortex, to the same paradigm
+    np.testing.assert_array_equal(paradigm[0], paradigm[1])
+    np.testing.assert_allclose(canonical[0], canonical[1])
+    np.testing.assert_allclose(canonical[0], response[0].reshape(4, -1).mean(axis=1))
+    assert not np.allclose(response[0], response[1], atol=1e-3)
     # the regions are where the phantom has them: occipital at the back (low y),
-    # motor up and to one side (low x, high z)
-    centers = [np.argwhere(m).mean(axis=0) / np.array(m.shape) for m in rois]
-    assert centers[0][1] < 0.3 and abs(centers[0][0] - 0.5) < 0.1
-    assert centers[1][0] < 0.4 and centers[1][2] > 0.6
-    # the motor task starts later and was given a smaller R2* change
-    assert np.abs(r2s_change[1]).max() < np.abs(r2s_change[0]).max()
-    assert np.flatnonzero(r2s_change[1])[0] > np.flatnonzero(r2s_change[0])[0]
+    # motor high up on both sides
+    where = [np.argwhere(m) / np.array(m.shape) for m in rois]
+    assert where[0][:, 1].mean() < 0.3 and abs(where[0][:, 0].mean() - 0.5) < 0.1
+    assert where[1][:, 2].mean() > 0.6
+    assert (where[1][:, 0] < 0.4).any() and (where[1][:, 0] > 0.6).any()
+    assert not ((where[1][:, 0] > 0.45) & (where[1][:, 0] < 0.55)).any()
     # nothing outside the brain, where it would be a ratio of two ringing tails,
     # and nothing as large as the activation outside the two regions
     assert not amp_map[tissue.sum(0) <= 0.5].any()
     assert np.abs(amp_map[full & ~rois.any(0)]).max() < amp_map[rois.any(0)].max()
+
+
+def test_truth_modes_give_the_noise_free_signal_of_every_voxel(realistic):
+    """truth/modes: fractional signal change per unit of each perturbation's
+    time course. The activations' part must be the amp_map x waveform the
+    scorer uses; the anatomical image is on the spins' grid."""
+    paths, _, cfg, _ = realistic
+    gain, course, amp_map, waves, rois, x0, rest = read(
+        paths['truth'], 'truth/modes/gain', 'truth/modes/course', 'truth/amp_map',
+        'truth/waveforms', 'truth/roi_masks', 'truth/x0', 'truth/image_rest')
+    with h5py.File(paths['truth'], 'r') as f:
+        names = [str(n) for n in f['truth/modes'].attrs['names']]
+        t1w = f['truth/anat/t1w'][()]
+        factor = f['truth/anat'].attrs['factor']
+        tissue_labels = [str(n) for n in f['truth'].attrs['tissue_labels']]
+        tissue = f['truth/tissues'][()]
+    assert names[:2] == ['block_occipital', 'block_motor']
+    assert {'cardiac', 'respiration', 'drift', 'bold_like_0'} <= set(names)
+    assert gain.shape == (len(names), 90, 16, 12) and course.shape == (len(names), 12)
+    for k in range(2):
+        change = gain[k][rois[k]][:, None] * course[k].reshape(4, -1).mean(axis=1)[None, :]
+        change = change - change.mean(axis=1, keepdims=True)
+        # gain is relative to image_rest, amp_map to the time average x0
+        change = change * (rest[rois[k]] / x0[rois[k]])[:, None]
+        expected = amp_map[rois[k]][:, None] * waves[k][None, :]
+        # (amp_map sums the regions, so it also holds the other region's ringing here)
+        np.testing.assert_allclose(change, expected, atol=1e-2 * np.abs(expected).max())
+    assert factor == 2 and t1w.shape == (180, 32, 24)
+    # T1-weighted: white matter brighter than gray matter, CSF darkest
+    coarse = t1w.astype(np.float64).reshape(90, 2, 16, 2, 12, 2).mean(axis=(1, 3, 5))
+    wm, gm, csf = (tissue[tissue_labels.index(lab)] for lab in ('wm', 'gm', 'csf'))
+    assert np.median(coarse[wm > 0.95]) > 1.15 * np.median(coarse[gm > 0.95]) > 0
+    most_csf = np.unravel_index(csf.argmax(), csf.shape)  # too coarse a grid for pure CSF
+    assert csf[most_csf] > 0.5 and coarse[most_csf] < np.median(coarse[gm > 0.95])
 
 
 def test_activation_regions_are_checked(tmp_path):
@@ -289,10 +335,10 @@ def test_activation_regions_are_checked(tmp_path):
         run(session.Activation('cerebellum'))
     with pytest.raises(ValueError, match='overlaps'):
         run(session.Activation('motor'), session.Activation('motor', onset=0.1))
-    with pytest.raises(ValueError, match='outside the'):
+    with pytest.raises(ValueError, match='after the'):
         run(session.Activation('motor', onset=1e3))
     # one region alone is fine
-    paths = run(session.Activation('motor', 0.05, 0.05))
+    paths = run(session.Activation('motor', 1, 1))
     with h5py.File(paths['truth'], 'r') as f:
         assert list(f['truth'].attrs['roi_names']) == ['block_motor']
         assert f['truth/roi_masks'].shape[0] == 1 and f['truth/roi_masks'][0].sum() > 5
