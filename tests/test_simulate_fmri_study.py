@@ -84,6 +84,23 @@ def test_repetitions_differ_in_noise_only_and_are_not_redone(tmp_path, monkeypat
     x1, x2 = (analysis.load_series(r['recons']['plain'], t1.brain) for r in runs)
     assert x1.shape == (int(t1.brain.sum()), 6) and not np.allclose(x1, x2)  # ... and new noise
 
+    # a run longer than max_frames is reconstructed in equal pieces and joined
+    assert study._frame_chunks(632, 320) == [range(0, 316), range(316, 632)]
+    assert [len(c) for c in study._frame_chunks(632, study.MAX_FRAMES)] == [158] * 4
+    assert study._frame_chunks(119, study.MAX_FRAMES) == [range(0, 119)]
+    pieces = {'pieces': dict(sigma1A=1.0, niters=3, tag='pieces')}
+    fn = study.reconstruct_run(out, 0, pieces, device='cpu', max_frames=4)['pieces']
+    with h5py.File(fn, 'r') as f:
+        joined = f['X_recon'][()]
+        np.testing.assert_array_equal(f.attrs['frame_chunks'], [[0, 3], [3, 6]])
+    assert joined.shape == (90, 16, 12, 6) and np.abs(joined).min(axis=(0, 1, 2)).shape == (6,)
+    assert all(np.abs(joined[..., i]).max() > 0 for i in range(6))
+    assert os.listdir(os.path.dirname(fn)) == ['task_recon.h5']  # the pieces are gone
+    # each piece is its own joint reconstruction: close to the whole run's, not equal
+    whole = analysis.load_series(runs[0]['recons']['plain'], t1.brain)
+    part = np.abs(joined)[t1.brain]
+    assert 0 < np.linalg.norm(part - whole) < 0.2 * np.linalg.norm(whole)
+
     # nothing is redone: neither the simulation nor preprocess nor recon is called again
     def fail(*a, **k):
         raise AssertionError('redone')

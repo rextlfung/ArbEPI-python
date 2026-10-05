@@ -1549,6 +1549,27 @@ against the truth and the model. Things measured on the way:
   L = 64 is 0.001% at 16, 0.19% at 12, 1.9% at 8, on the default protocol
   (31 ms echo train, field clipped to about 300 Hz, BT about 10), at half the
   cost. `study.RECONS` uses `L_b0=16`; `recon.sense`'s default is unchanged.
+- *A 320 s run does not fit on the GPU, so it is reconstructed in pieces*
+  (`study.MAX_FRAMES = 160`, four pieces of 158 frames, joined into one
+  `X_recon` with a `frame_chunks` attribute). The joint wavelet-TV (PDHG)
+  solver holds about 35 copies of the image series: 632 frames failed at
+  41.6 GB allocated and 316 at 42.6 GB on a 48 GB A6000, with or without B0;
+  158 peak at 38.3 GB. The pieces are independent reconstructions, so there is
+  a seam where two meet: the reconstruction error correlates 0.98 between
+  neighbouring frames within a piece and 0.06-0.36 across a seam, the median
+  voxel's step across it is 4-5 times its usual frame step, and the error is
+  raised over about 3 frames either side (the high-pass penalty's DCT has an
+  edge there). 158 frames is exactly two task cycles, so every seam is at a
+  block onset, at the same task phase in every run: not random, and a candidate
+  for inflating test-retest agreement. The control that clears it: replacing 3
+  frames either side of each seam by interpolation moved run 1's low-band t
+  map by 0.06 rms (correlation 0.9995 with B0, 0.997 without) and left the AUC
+  unchanged. Overlapping pieces and discarding the edges would remove the seams
+  at about 25% more time; not done.
+- *Cost, measured*: per 320 s run 43 s to simulate, 31-37 min to preprocess,
+  about 15 min to reconstruct without B0 and 114 min with it (L = 16), so about
+  11 hours for four runs; 10.5 GB per run plus 8.3 GB of raw archives for the
+  one run that keeps them.
 - *Aliasing* (`analysis.alias`): the series is sampled at 1.976 Hz, so the
   1.1 Hz heartbeat lands at 0.876 Hz and its second harmonic at 0.224 Hz, next
   to breathing (0.25 Hz); a frame also averages over its 0.506 s, |sinc(f T)|:

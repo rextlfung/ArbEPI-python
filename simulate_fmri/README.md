@@ -204,8 +204,21 @@ reconstructs four repetitions (with and without the B0 model) into
 and physiological noise are redrawn; brain, field, coils, sequence and task are
 the same. Every step is skipped when its output exists
 (`study.run_repetitions` from Python). From nothing this takes about 11 hours
-and 120 GB (per 320 s run: 45 s to simulate, about half an hour to preprocess,
-a quarter of an hour to reconstruct without B0, about two hours with it).
+on an RTX A6000 and 50 GB of disk (measured per 320 s run: 43 s to simulate,
+31–37 min to preprocess, a quarter of an hour to reconstruct without B0 and
+1.9 hours with it; 10.5 GB, and 8.3 GB more for the one run whose raw archives
+are kept).
+
+A 320 s run is reconstructed in four pieces of 158 frames (`study.MAX_FRAMES`),
+because the joint wavelet-TV solver keeps about 35 copies of the image series:
+all 632 frames, and 316, ran out of memory on a 48 GB GPU, and 158 frames peak
+at 38 GB. Each piece is its own reconstruction, so the joined series has a seam
+at 80, 160 and 240 s (the output's `frame_chunks` attribute): in a typical
+voxel the step between the two frames is 4–5 times the usual one, and the error
+is larger over about 3 frames either side. With this task every seam is at the
+start of a task block. Replacing 3 frames either side of each seam by
+interpolation changed the task's t map by 0.06 rms (correlation 0.9995) and
+left the ROC curve where it was, so the analysis below keeps those frames.
 
 `analysis.py` then works on the reconstructions and truth files:
 

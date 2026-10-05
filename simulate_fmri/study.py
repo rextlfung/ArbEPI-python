@@ -46,6 +46,12 @@ RECONS = {
 }
 RECON_COMMON = dict(reg='wavelet-tv', hp_weight=3.0, niters=100, tag='hp3')
 
+# The most frames reconstructed jointly. The joint wavelet-TV solver holds some
+# 35 copies of the image series: 632 frames (320 s) of the default protocol ran
+# out of memory on a 48 GB GPU, with or without the B0 model, and so did 316;
+# 158 peak at 38 GB. Pieces meet at a seam: see reconstruct_run.
+MAX_FRAMES = 160
+
 
 def make_scan_info(outdir: str, duration_s: float | None = None) -> str:
     """Generate the ArbEPI and deGRE sequences of params.py for a run of
@@ -120,15 +126,37 @@ def recon_path(outdir: str, k: int, kw: dict) -> str:
     return os.path.join(run_paths(outdir, k)['dir'], 'recon', sub, f'{NAME}_recon.h5')
 
 
+def _frame_chunks(n_frames: int, max_frames: int) -> list[range]:
+    """n_frames in as few equal runs of at most max_frames as possible."""
+    n = -(-n_frames // max_frames)
+    edges = [round(i * n_frames / n) for i in range(n + 1)]
+    return [range(a, b) for a, b in zip(edges[:-1], edges[1:])]
+
+
 def reconstruct_run(outdir: str, k: int, recons: dict[str, dict] | None = None,
-                    device=None) -> dict[str, str]:
+                    device=None, max_frames: int = MAX_FRAMES) -> dict[str, str]:
     """Reconstruct run k with every setting in recons (default RECONS; each on
-    top of RECON_COMMON), unless done. Returns {label: path of the .h5}."""
+    top of RECON_COMMON), unless done. Returns {label: path of the .h5}.
+
+    A run longer than max_frames is reconstructed in equal consecutive pieces
+    (each a joint reconstruction of its frames, with its own temporal
+    penalty), which are then joined into one X_recon (see MAX_FRAMES); its
+    attribute frame_chunks has their [first, last + 1] frames. The pieces
+    are independent reconstructions, so the series has a seam where two meet:
+    on the 320 s run, a step between the two frames 4 to 5 times the usual
+    one in a typical voxel, and a larger error over about 3 frames either
+    side. Interpolating over those frames changed the task's t map by 0.06
+    rms (correlation 0.9995), so the analysis leaves them in."""
     from recon.sense import main as recon_sense
 
     paths = run_paths(outdir, k)
     with h5py.File(paths['truth'], 'r') as f:
         volume_tr = float(f.attrs['volume_tr'])
+        n_frames = f['truth/waveforms'].shape[1] if 'truth/waveforms' in f else None
+    if n_frames is None:
+        with h5py.File(paths['preprocessed'], 'r') as f:
+            n_frames = f['omegas'].shape[-1]
+    chunks = _frame_chunks(n_frames, max_frames)
     done = {}
     for label, kw in (RECONS if recons is None else recons).items():
         out = recon_path(outdir, k, kw)
@@ -136,9 +164,30 @@ def reconstruct_run(outdir: str, k: int, recons: dict[str, dict] | None = None,
             t0 = time.time()
             kw = {**RECON_COMMON, **kw}
             reg = kw.pop('reg')
-            made = recon_sense(paths['dir'], NAME, reg, volume_tr_s=volume_tr,
-                               **({'device': device} if device is not None else {}), **kw)
-            assert os.path.samefile(made + '.h5', out), (made, out)
+            if device is not None:
+                kw['device'] = device
+            if len(chunks) == 1:
+                made = recon_sense(paths['dir'], NAME, reg, volume_tr_s=volume_tr, **kw)
+                assert os.path.samefile(made + '.h5', out), (made, out)
+            else:
+                parts = [recon_sense(paths['dir'], NAME, reg, volume_tr_s=volume_tr,
+                                     frames=list(chunk), **kw) + '.h5' for chunk in chunks]
+                with h5py.File(out + '.part', 'w') as f:
+                    with h5py.File(parts[0], 'r') as src:
+                        shape = src['X_recon'].shape[:3]
+                        attrs = dict(src.attrs)
+                    d = f.create_dataset('X_recon', (*shape, n_frames), dtype='complex64',
+                                         chunks=(*shape, 1))
+                    for chunk, part in zip(chunks, parts):
+                        with h5py.File(part, 'r') as src:
+                            d[..., chunk.start:chunk.stop] = src['X_recon'][()]
+                    f.attrs.update(attrs)
+                    f.attrs['frame_chunks'] = [[c.start, c.stop] for c in chunks]
+                os.replace(out + '.part', out)
+                for part in parts:  # and their .nii.gz / .json
+                    for ext in ('.h5', '.nii.gz', '.json'):
+                        if os.path.exists(part[:-3] + ext):
+                            os.remove(part[:-3] + ext)
             print(f'run {k + 1}, {label}: reconstructed in {(time.time() - t0) / 60:.0f} min')
         done[label] = out
     return done
