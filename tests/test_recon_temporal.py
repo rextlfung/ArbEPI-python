@@ -1,4 +1,4 @@
-"""Temporal regularization in recon/: the temporal operators (TemporalDiff,
+"""Temporal regularization in recon/: the temporal operators (TemporalTVProx,
 PerFrame, TemporalHighPass), the joint wavelet-TV solver, and the quadratic
 high-pass penalty in CG / MSLR."""
 
@@ -12,8 +12,8 @@ pytest.importorskip("mirtorch")
 from recon.operators import build_sense  # noqa: E402
 from recon.regularizers import (  # noqa: E402
     PerFrame,
-    TemporalDiff,
     TemporalHighPass,
+    TemporalTVProx,
     Wavelet3D,
     dct_matrix,
 )
@@ -67,14 +67,41 @@ def _random_masks(Nx, Ny, Nz, Nt, frac, seed, same=False):
     return m.unsqueeze(0).expand(Nx, -1, -1, -1).contiguous()
 
 
-def test_temporal_diff_is_non_periodic_and_adjoint_consistent():
-    D = TemporalDiff((3, 4, 2, 5))
-    x = _crandn(3, 4, 2, 5, seed=1)
-    y = _crandn(D.size_out[0], seed=2)
-    torch.testing.assert_close(_inner(D.apply(x), y), _inner(x, D.adjoint(y)), rtol=1e-4, atol=1e-4)
-    ramp = torch.arange(5.0, device=DEVICE).expand(3, 4, 2, 5).to(torch.complex64)
-    torch.testing.assert_close(D.apply(ramp), torch.ones(D.size_out[0], dtype=torch.complex64,
-                                                         device=DEVICE))  # no wrap term
+def _tv_prox_objective(x, v, b):
+    tv = (x[..., 1:] - x[..., :-1]).abs().sum().item()
+    return 0.5 * (x - v).abs().pow(2).sum().item() + b * tv
+
+
+def test_temporal_tv_prox_solves_1d_tv_denoising_of_complex_series():
+    """Converged, it beats both the input and its time mean on the prox
+    objective; a weight large enough to flatten everything gives the time mean
+    exactly; and it acts on complex values (frame-to-frame phase changes are
+    flattened too), not on magnitudes with each element's phase kept -- the
+    path mirtorch's Prox takes for complex input, exact only for elementwise
+    proxes (review item 263)."""
+    v = _crandn(200, 1, seed=11) + 0.05 * _crandn(200, 30, seed=12)
+    b = 0.1
+    x = TemporalTVProx(1.0, n_inner=3000)(v, b)
+    obj = _tv_prox_objective(x, v, b)
+    mean = v.mean(-1, keepdim=True).expand_as(v)
+    assert obj < _tv_prox_objective(v, v, b) and obj < _tv_prox_objective(mean, v, b)
+    flat = TemporalTVProx(1.0, n_inner=3000)(v, 100.0)
+    torch.testing.assert_close(flat, mean, atol=1e-4, rtol=0)
+    phase = torch.exp(1j * 0.3 * torch.randn(200, 30, device=DEVICE)).to(torch.complex64)
+    w = v.abs() * phase  # same magnitudes, frame-to-frame phase changes
+    flat_w = TemporalTVProx(1.0, n_inner=3000)(w, 100.0)
+    assert (flat_w[..., 1:] - flat_w[..., :-1]).abs().max() < 1e-3
+
+
+def test_temporal_tv_prox_warm_start_improves_over_repeated_calls():
+    v = _crandn(200, 1, seed=13) + 0.05 * _crandn(200, 30, seed=14)
+    b = 0.1
+    exact = _tv_prox_objective(TemporalTVProx(1.0, n_inner=3000)(v, b), v, b)
+    p = TemporalTVProx(1.0, n_inner=10)
+    first = _tv_prox_objective(p(v, b), v, b)
+    for _ in range(20):
+        x = p(v, b)
+    assert _tv_prox_objective(x, v, b) - exact < 0.1 * (first - exact)
 
 
 def test_per_frame_applies_the_3d_operator_to_every_frame_and_is_adjoint_consistent():
@@ -219,3 +246,36 @@ def test_hp_penalty_as_a_dual_block_converges_faster_than_as_a_smooth_term():
     x_dual = pdhg(lambda v: A.adjoint(A.apply(v) - y), 1.0, g_dual.h_prox, g_dual.G,
                   g_dual.G_norm_squared, z, niter=100)
     assert objective(x_dual) < 0.5 * objective(x_smooth)
+
+
+def test_temporal_tv_weight_matters_within_100_iterations(tmp_path):
+    """Review item 263: as a dual block of G, temporal TV's dual grows by sigma
+    ||D_t x|| per iteration -- tiny for a near-static object next to lamb_ttv --
+    so in 100 iterations lamb_ttv 0.04 and 0.16 gave nearly the same frames
+    (median fluctuation 0.47% vs 0.44% here, against 0.33% vs 0.017% after 3000
+    iterations). As its own prox (FBPD's f) the larger weight already gives
+    static frames at 100. Noisy textured ball, a new mask every frame."""
+    rng = np.random.default_rng(0)
+    Nx, Ny, Nz, Nc, Nt = 16, 16, 12, 4, 40
+    g = np.indices((Nx, Ny, Nz)) - (np.array([Nx, Ny, Nz]) / 2)[:, None, None, None]
+    obj = np.linalg.norm(g, axis=0) < 6
+    ball = obj * (1 + 0.3 * rng.normal(size=(Nx, Ny, Nz)))
+    x0 = torch.from_numpy(ball.astype(np.float32)).to(DEVICE).to(torch.complex64)
+    xt = x0[..., None].expand(-1, -1, -1, Nt).contiguous()
+    fn = _write(tmp_path, xt, _smaps(Nc, (Nx, Ny, Nz)), _random_masks(Nx, Ny, Nz, Nt, 0.3, 0))
+    with h5py.File(fn, "a") as f:  # 2% complex noise at the sampled locations
+        k = f["ksp_epi_zf"][()]
+        sampled = k != 0
+        n = rng.normal(size=k.shape) + 1j * rng.normal(size=k.shape)
+        k[sampled] += (0.02 * np.abs(k).max() / np.sqrt(2) * n)[sampled]
+        f["ksp_epi_zf"][...] = k
+    kw = dict(fn_ksp=fn, fn_smaps=fn, reg="wavelet-tv", device=DEVICE, lamb_l1=0.005,
+              lamb_tv=0.005, wave="db2", levels=1, niters=100)
+    mask = torch.from_numpy(obj).to(DEVICE)
+
+    def fluct(lam):
+        m = run_sense(**kw, lamb_ttv=lam).X_recon.abs()
+        return (m.std(-1) / m.mean(-1).clamp_min(1e-6))[mask].median().item()
+
+    weak, strong = fluct(0.04), fluct(0.16)
+    assert strong < 5e-4 and strong < 0.2 * weak

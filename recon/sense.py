@@ -477,7 +477,7 @@ def _solve_wavelet_tv_joint(
     )
     t_start = time.time()
     x0 = torch.zeros(shape, dtype=torch.complex64, device=ksp.device)
-    x = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters)
+    x = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters, prox_g=g.f_prox)
     runtime_s = time.time() - t_start
     dc = 0.5 * (A_n.apply(x) - y_s).norm().item() ** 2
     reg = g.cost(x)  # includes the high-pass penalty
