@@ -1431,7 +1431,8 @@ BOLD as an amplitude change. In the raw mode SNAKE supplies the phantom
   12-class head model has no air inside it (1.7 cm3, at the cut neck), so
   sinuses, mastoids and ear canals are ellipsoids carved out of non-brain
   tissue, and the neck is continued below the volume. With a linear shim the
-  brain's field has a std of 30 Hz and 0.1-99.9 percentiles of -150/+310 Hz;
+  brain's field has a std of 28 Hz and 0.1-99.9 percentiles of -144/+272 Hz
+  (voxel means on the default protocol's grid; extremes -468/+400 Hz);
   the head scan's map has 45 Hz and -267/+190 Hz.
 - *Physiological noise* (`physio.py`): Bodurka et al. 2007's temporal-SNR
   ceilings (lambda 0.0128 gray, 0.0085 white, 0.021 CSF at TE 45 ms) split by
@@ -1447,7 +1448,11 @@ voxel's spins: a plain mean counts the field in the air around the object,
 which no map can measure, and made the correlation with a visibly correct map
 0.58. The activation truth keeps only voxels that are at least 90% tissue
 (`amp_map` is a ratio to `x0`; at the brain's edge the ratio is meaningless
-and 547 such voxels took the scorer's `corr` from 0.96 to -0.32).
+and 547 such voxels took the scorer's `corr` from 0.96 to -0.32). In the raw
+mode `amp_map` is also zero outside `brain_mask` (tissue fraction > 0.5): `x0`
+is band-limited there, nowhere exactly zero, and the ratio of two ringing
+tails reached 0.06 against a true activation of 0.015, which is all the demo
+notebook's figure showed.
 
 **What running the real pipeline on simulated data showed (2026-10-04,
 default protocol, BrainWeb).** `preprocess/` recovers what was injected:
@@ -1466,11 +1471,23 @@ real-data maps); `test_degre_maps_land_where_the_epi_puts_the_object` is a
 strict xfail until then.
 
 **Reconstructing that session** (wavelet-TV, `--hp-weight 3`, 100 iterations):
-without `--B0`, 23.8% frame error, 4.9% fluctuation, edge sharpness 0.70 and
-the activation lost (median t -0.1); with `--B0`, 10.9%, 1.2%, 0.90, and the
-activation found (median t 5.9, 2.3 in the low band; amplitude ratio 0.64;
-correlation 0.79). The fluctuation floor is the simulated physiological noise,
-about 0.9% in gray matter at TE 30 ms. The B0 run took 39 min after a 75 min
+without `--B0`, 23.8% frame error, 4.9% fluctuation, edge sharpness 0.70, and
+the region's mean time course unrelated to the task (correlation 0.12); with
+`--B0`, 10.9%, 1.2%, 0.90, and the course recovered (correlation 0.79,
+amplitude ratio 0.64). The fluctuation floor is the simulated physiological
+noise, about 0.9% in gray matter at TE 30 ms. **The t-scores of this run do
+not show voxel-wise detection**, and an earlier version of these notes said
+"activation found (median t 5.9)": the scorer's plain GLM also puts 34%
+(no B0) and 37% (B0) of the rest of the brain above |t| = 3.29, because the
+BOLD-like noise (0.01-0.1 Hz, 4 smooth patterns, 0.8% in gray matter) shares
+the band of the task (0.05 Hz) and a white-residual GLM cannot separate three
+blocks from it in 60 s. Checked without any reconstruction: the same GLM on
+random unit mixtures of the session's four `physio/bold_like_*` courses (frame
+means x TE) plus white noise at the reconstruction's out-of-band level (0.26%)
+flags 41%, and 44% with no white noise. In the low band the region's median t is 2.3 against a
+threshold of 4.0, and 0.3% of other voxels pass. Whether the physiological
+model should be re-tuned (more, smaller patterns; less in-band power) is an
+open realism question, not decided. The B0 run took 39-40 min after a 75 min
 power iteration (sigma1A = 1.488; the plain operator's is 1.000), the plain
 one 5 min. One session and seed: evidence that the chain works, not a
 comparison of methods.

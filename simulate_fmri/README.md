@@ -45,7 +45,7 @@ all of them, then on a scan.
 | `sampler.py`, `engine.py`, `handlers.py`, `export.py` | The ideal mode's SNAKE sampler, engine and activation handler, and its export |
 | `protocol.py` | `load_protocol()`: the acquisition recorded in `scan_info.mat` |
 | `phantom.py` | BrainWeb at 3 T, an analytic phantom, the head outline and air cavities |
-| `demo.ipynb` | The ideal mode on the default protocol, reconstructed and scored (a raw-session notebook is not written yet) |
+| `demo.ipynb` | A session simulated, preprocessed, reconstructed with and without B0, and scored |
 
 Tests: `tests/test_simulate_fmri_forward.py` (the signal model against a
 brute-force sum), `..._models.py` (field, coils, physiology), `..._session.py`
@@ -138,7 +138,7 @@ matrix, echo times and TR.
 |---|---|---|
 | **Object** | BrainWeb subject 4's white matter, gray matter and CSF, on a grid `--grid-factor` times finer than the acquisition | T1: Wansapura 1999; T2*: Peters 2006/2007, 59.7 and 54.6 ms (see below) |
 | **Excitation** | spoiled steady state at the per-shot TR and local flip angle; slab profile of 0.9 × the z field of view; water excitation's loss of flip off resonance | `lib/make_excitation_pulse.py`, `lib/make_water_excitation.py` |
-| **B0** | dipole field of the head's susceptibility (tissue −9.05 ppm, air +0.36 ppm) with air cavities for the sinuses, mastoids and ear canals, minus a linear shim | a 3 T head field map: std 45 Hz, −267 to +190 Hz; the model gives 30 Hz, −150 to +310 Hz |
+| **B0** | dipole field of the head's susceptibility (tissue −9.05 ppm, air +0.36 ppm) with air cavities for the sinuses, mastoids and ear canals, minus a linear shim | a 3 T head field map: std 45 Hz, −267 to +190 Hz; the model gives 28 Hz, −144 to +272 Hz (0.1–99.9 percentiles over the brain, as for the scan) |
 | **Decay** | exp(−t R2*) per tissue at each ADC sample's own time | same T2* values |
 | **Readout** | ramp-sampled: an exact Fourier sum at `kxo`/`kxe`, shifted by a readout delay; a constant phase on every other echo, drifting along the train | real sessions: delay −0.3 samples, odd/even phase −0.25 to −0.32 rad |
 | **Coils** | 32 loops in four rings around z, unit root-sum-of-squares | — |
@@ -199,7 +199,7 @@ the uncorrected values would count it twice.
 |---|---|
 | `x0` | (Nx, Ny, Nz) noise-free magnitude at the nominal TE, at the acquisition's resolution (the fine-grid image cut to the acquired k-space), time-averaged |
 | `roi_masks`, `waveforms`; attrs `roi_names`, `amp` | the activated voxels, their time course (zero-mean, peak 1) and peak fractional change: `recon/testbed.py`'s layout |
-| `amp_map`, `r2s_change` | the fractional change voxel by voxel; the R2* change per excitation |
+| `amp_map`, `r2s_change` | the fractional change voxel by voxel (zero outside `brain_mask`); the R2* change per excitation |
 | `b0_map`, `smaps`, `degre/b0_map` | the field each scan can measure (magnetization-weighted) and the coil maps, on the EPI and deGRE grids |
 | `noise_covariance`, `oe_phase`; attrs `delay`, `snr0`, `sigma_raw` | what was injected |
 | `physio/*` | the physiological time courses per excitation |
@@ -220,7 +220,7 @@ BrainWeb, `preprocess/` recovered from the simulated raw data:
 | Noise variance after whitening | — | 0.95 |
 | Coil compression | 32 coils | 19 virtual coils at 99.9% energy |
 | Sensitivity maps | | agreement 0.998 per voxel (median) |
-| B0 map | std 29 Hz, −150 to +310 Hz | correlation 0.95 |
+| B0 map | std 28 Hz, −144 to +272 Hz | correlation 0.95 |
 | R2* (gray, white: 16.8, 18.3 1/s) | | median 15.8 1/s |
 
 The tests do the same on small sessions, plus the exact case: with only the
@@ -236,19 +236,35 @@ Reconstructing that preprocessed session (`recon.sense --reg wavelet-tv
 | fluctuation outside the activation, `fluct_pct` | 4.9 | 1.2 |
 | edge sharpness vs truth | 0.70 | 0.90 |
 | recovered amplitude, `amp_ratio` (1 = exact) | −0.03 | 0.64 |
-| t-score of the activation, median (`_t`, `_t_lowband`) | −0.1, −0.0 | 5.9, 2.3 |
 | region's mean time course vs truth, `corr` | 0.12 | 0.79 |
-| false positives in the low band | 0.3% | 0.3% |
+| t-score in the region, median (`_t`, `_t_lowband`) | −0.1, −0.0 | 5.9, 2.3 |
+| voxels elsewhere above threshold (`false_pos_frac_t3.29`, `_lowband`) | 34%, 0.3% | 37%, 0.3% |
 
-With a head-like field (±300 Hz) the B0 model decides whether the 1.5%
-activation is found at all. The fluctuation is not zero for a perfect
-reconstruction here: the simulated physiological noise is about 0.9% of the
-signal in gray matter at this TE. One session, one seed; these numbers show the
-chain works and what the simulation is sensitive to, not which method is best.
+With a head-like field the B0 model decides whether the region's time course
+follows the task at all: correlation 0.12 without it, 0.79 with it, at 0.64 of
+the true 1.5% amplitude.
+
+Voxel by voxel, this 60 s run does not detect the activation, and the t-scores
+should not be read as if it did. The plain GLM that gives the region a median t
+of 5.9 also puts 37% of the rest of the brain above |t| = 3.29. Those are not
+reconstruction errors: the simulated BOLD-like fluctuations (0.01–0.1 Hz, about
+0.8% in gray matter) share the band of the task (0.05 Hz), and a GLM that
+assumes white residuals cannot tell three task blocks from them (the same GLM
+on random mixtures of this session's four BOLD-like time courses plus 0.26%
+white noise, no reconstruction involved, flags 41%). In the low
+band, where the degrees of freedom are counted, the region's median t is 2.3
+against a threshold of 4.0, and 0.3% of other voxels pass. A longer run
+(`params.py`'s `duration`) is what voxel-wise detection needs; `--physio 0`
+removes the fluctuations.
+
+For the same reason the fluctuation is not zero for a perfect reconstruction
+here: the physiological noise is about 0.9% of the signal in gray matter at
+this TE. One session, one seed; these numbers show the chain works and what the
+simulation is sensitive to, not which method is best.
 
 Times, on a 64-core machine with a shared RTX A6000: 27 s to simulate the
-session, 20 min to preprocess it (ESPIRiT on 32 coils dominates), 5 min to
-reconstruct without B0, and 39 min with it after a 75 min power iteration for
+session, 6–20 min to preprocess it, depending on CPU load (ESPIRiT on 32 coils dominates), 3–5 min to
+reconstruct without B0, and 40 min with it after a 75 min power iteration for
 the B0 operator's norm (pass `--sigma1A` to skip it once known). The archives
 take 1.8 GB.
 

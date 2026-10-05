@@ -437,7 +437,10 @@ def simulate_session(
             centered = drop - drop.mean()
             peak = float(np.abs(centered).max()) or 1.0
             x0 = x0_abs * (1 + drop.mean() * gain)
-            amp_map = (peak * gain / (1 + drop.mean() * gain)) * (x0_abs > 0)
+            # Zero outside the brain: x0 is band-limited, so it is nowhere exactly
+            # zero, and out there the ratio is ringing over ringing (it reached
+            # 4x the true activation on BrainWeb).
+            amp_map = (peak * gain / (1 + drop.mean() * gain)) * (tissues_acq.sum(0) > 0.5)
             cut = 0.5 * float(amp_map[full].max()) if full.any() else float('inf')
             roi_mask = full & (amp_map >= cut)
             amp = float(amp_map[roi_mask].median()) if roi_mask.any() else 0.0

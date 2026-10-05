@@ -256,6 +256,9 @@ def test_truth_file_scores_with_the_testbed_scorer(realistic, tmp_path):
     assert 5 < rois.sum() < 0.2 * (tissue.sum(0) > 0.9).sum()
     assert amp_map[rois[0]].min() >= 0.5 * amp_map[tissue.sum(0) >= 0.9].max() - 1e-9
     assert np.abs(amp_map[~rois[0] & (tissue.sum(0) >= 0.9)]).max() < amp_map[rois[0]].max()
+    # and nothing outside the brain, where it would be a ratio of two ringing tails
+    assert not amp_map[tissue.sum(0) <= 0.5].any()
+    assert np.abs(amp_map).max() <= 1.5 * te * swing
 
 
 def test_effects_can_be_switched_off(tmp_path):

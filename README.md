@@ -245,7 +245,7 @@ simulate_fmri/               Simulated scan sessions acquired with ArbEPI's sche
   sampler.py, engine.py,        ideal.py's SNAKE sampler, engine, activation handler and export
     handlers.py, export.py
   protocol.py, phantom.py       scan_info.mat reader; BrainWeb and analytic phantoms
-  demo.ipynb                    The ideal mode simulated, reconstructed and scored
+  demo.ipynb                    A session simulated, preprocessed, reconstructed and scored
 tests/                       Unit tests (pytest)
 docs/review-findings.md      Numbered backlog of code-review findings (open and resolved)
 docs/TODO.md                 Planned work
