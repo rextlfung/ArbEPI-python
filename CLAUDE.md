@@ -1378,9 +1378,9 @@ by the ideal mode). The model:
   signal of a shot is then a weighted sum of terms that depend only on the
   echo index, so everything spatial is computed once per echo index (per coil:
   image at t_e, FFT over (y, z), keep the (ky, kz) that echo visits in the
-  run, exact Fourier sum along x at the ADC's kx). Cost is independent of the
-  run length: the default protocol, 119 frames, 32 coils, 180 x 180 x 120
-  spins, takes 27 s on an RTX A6000. A per-shot kernel inside SNAKE's engine
+  run, exact Fourier sum along x at the ADC's kx). Cost is nearly independent
+  of the run length: the default protocol, 119 frames, 32 coils, 180 x 180 x
+  120 spins, takes 27 s on an RTX A6000, and 632 frames 43 s. A per-shot kernel inside SNAKE's engine
   was considered first and rejected: it costs
   `Nshots_total x Nvox x Ncoils x ETL`. The price of this design: motion
   (which changes the object, not a weight) cannot be a mode.
@@ -1583,7 +1583,8 @@ against the truth and the model. Things measured on the way:
 
 **The four-run study's results (2026-10-05; `demo.ipynb`, tables in the
 README).** Default protocol, 320 s, the 3% visual-motor task, four seeds. The
-runs agree within 10% on every score. With B0: frame error 10.9%, fluctuation
+runs agree within 10% on the scores quoted here (leak ratios and false
+positive fractions vary more). With B0: frame error 10.9%, fluctuation
 1.19%, mean time course vs truth 0.95 (visual) and 0.93 (motor), low-band
 median t 13.1 and 11.8, every one of the 1031 activated voxels above
 |t| > 3.40 in every run, pooled AUC 0.9997, 95% of activated voxels found at a
@@ -1595,19 +1596,29 @@ What was learned, beyond "B0 decides":
   also analyses the first 80 s (one reconstructed piece, 21 degrees of
   freedom). This bears on the open amplitude question (3% peak vs 3% task
   minus rest): the user's answer changes how informative the curves are.
-- *Amplitude ratios below 1 are spatial spread, not attenuation*: with B0 the
-  regions hold 0.71 (visual) and 0.46 (motor) of the true activation
+- *Amplitude ratios below 1 are mostly spatial spread, not attenuation*: with
+  B0 the regions hold 0.71 (visual) and 0.46 (motor) of the true activation
   (coefficient x signal, summed), the regions plus 3 voxels around them 1.10
-  and 0.91. Not investigated further (which regularizer, how it scales with
+  and 0.91 (the motor sum peaks there and falls further out). Not investigated further (which regularizer, how it scales with
   lambda).
-- *The low-band threshold is calibrated away from the regions*: among truly
-  inactive voxels (true change under 5% of the activation's) 0.57% exceed the
-  nominal-0.1% threshold with B0, but that is 24% within 3 voxels of a region
-  (the spread), 0.4% at 3-6 and 0.08-0.17% beyond. The same GLM on the
-  noise-free true series flags 1.7% (26% with the BOLD-like modes removed):
-  that is the band-limited activation's own ringing, real signal that nothing
-  hides, not a miscalibration. So "false positive" needs the distance table
-  next to it, and overlay titles say "nominal".
+- *The low-band threshold away from the regions is right on average and
+  wrong run by run*: among truly inactive voxels (true change under 5% of the
+  activation's) 0.57% exceed the nominal-0.1% threshold with B0. Within 3
+  voxels of a region that is the spread (24%, 89% positive t). At 6 voxels or
+  more the runs give 0.09, 0.03, 0.32 and 0.16%, and the null control (the
+  true series with the activations off, `true_signal(modes=` everything but
+  `block_*`), no reconstruction) gives 0.00, 0.00, 1.45 and 0.06%: the four
+  shared BOLD-like patterns again, as on the 60 s session, so voxels are not
+  independent and a run either passes none or a whole area. A first version of
+  these notes called the true signal's 1.7% (task on) "ringing, not a
+  miscalibration" on the strength of a control that could not tell (removing
+  the BOLD-like modes raises it to 26%, but with no in-band residual anything
+  is significant); the advisor asked for the null, and it shows both: ringing
+  is real (0.5% far from the regions in runs whose null is zero) and the null
+  itself is seed-dependent. So "false positive" needs the distance table and
+  the per-run null next to it, and overlay titles say "nominal". This is
+  another reason the physiological model's shape (four patterns) is an open
+  question for the user.
 - *The mixed-binomial model measures reproducibility, and a systematic error
   is reproducible.* At |t| > 3.40 with B0 it gives lambda 2.80% (truth: 0.74%
   fully activated, 2.83% activated at all), p_A 0.95 (true 1.00), p_I 0.0015

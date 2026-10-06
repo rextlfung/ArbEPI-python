@@ -255,9 +255,9 @@ matrix, echo times and TR.
 The signal model (`forward.py`) evaluates each scan from spins on the fine
 grid, so a voxel dephases across its own field gradient and mixes tissues.
 Since an echo train visits k-space at fixed echo times, everything spatial is
-computed once per echo index and each shot is a weighted sum; the cost does not
-grow with the length of the run. The default protocol (119 frames, 32 coils,
-spins on 180 × 180 × 120) takes about 30 s on a GPU.
+computed once per echo index and each shot is a weighted sum; the cost hardly
+grows with the length of the run. The default protocol (119 frames, 32 coils,
+spins on 180 × 180 × 120) takes about 30 s on a GPU, and 632 frames 43 s.
 
 ### 3 T T2* values
 
@@ -340,7 +340,7 @@ within 1%.
 
 Reconstruction (`recon.sense --reg wavelet-tv --hp-weight 3`, 100 iterations,
 B0 with 16 time segments) scored by `recon.testbed score`; means over the four
-runs, each of which is within 10% of its mean:
+runs, each of which is within 10% of its mean on these rows:
 
 | | without B0 | with B0 |
 |---|---|---|
@@ -377,14 +377,20 @@ What these show:
 - **The amplitude lost inside the regions is next to them.** With B0 (run 1)
   the regions hold 0.71 (visual) and 0.46 (motor) of the true activation, but the
   region together with the voxels within 3 of it holds 1.10 and 0.91: the
-  reconstruction spreads the activation (its resolution) rather than
+  reconstruction mostly spreads the activation (its resolution) rather than
   attenuating it. The motor region is two small patches, with more surface.
-- **The threshold is calibrated away from the regions.** Of the truly inactive
-  voxels, 0.57% are above |t| > 3.40 with B0, against a nominal 0.1%: 24% of
-  those within 3 voxels of a region (the spread above, 89% with positive t),
-  0.4% at 3–6 voxels, and 0.08–0.17% further out. The same GLM on the
-  noise-free true series flags 1.7%: with no thermal noise, the faint ringing
-  of a band-limited activation is itself significant.
+- **What the threshold lets through.** Of the truly inactive voxels, 0.57% are
+  above |t| > 3.40 with B0, against a nominal 0.1%. Next to the regions that
+  is the spread above: 24% of those within 3 voxels of one, 89% with positive
+  t. Away from them the test is about right on average but not run by run:
+  6 voxels or more from a region the four runs give 0.09%, 0.03%, 0.32% and
+  0.16%, and the same GLM on the true series with the task switched off
+  (physiology only, nothing to find) gives 0.00%, 0.00%, 1.45% and 0.06%. The
+  BOLD-like fluctuations are four patterns shared by the whole brain, so when
+  one happens to follow the task, a whole area passes together. With the task
+  on, the noise-free true series also shows the faint ringing of a
+  band-limited activation (0.5% in runs where the null gives none), which
+  thermal noise hides in a reconstruction.
 - **Which t-score.** The scorer's plain GLM (`_t`, `false_pos_frac_t3.29`)
   assumes white residuals and puts 14% (no B0) and 22% (B0) of the rest of the
   brain above |t| = 3.29; on the simulated BOLD-like fluctuations alone it
