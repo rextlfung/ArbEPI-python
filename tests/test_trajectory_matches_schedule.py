@@ -356,6 +356,21 @@ def test_readout_ramps_are_asymmetric():
     assert rg.gro1.shape_dur == pytest.approx(rg.blip_duration / 2)
 
 
+def test_epical_dummy_shots_follow_discard_duration(tmp_path):
+    """EPIcal has no dummy-shot parameter of its own: it plays ADC-off shots
+    for params.discard_duration, and the real shots are unchanged."""
+    p = _small_params(tmp_path, 'water')  # one RF event per shot
+    generate_arbepi(resolve_omegas(p), p, seqname='xcheck')
+
+    def count(seq):
+        blocks = [seq.get_block(i) for i in seq.block_events]
+        return sum(b.rf is not None for b in blocks), sum(b.adc is not None for b in blocks)
+
+    assert count(generate_epical(p, seqname='xcheck_cal')) == (p.Nshots, p.Nshots * p.ETL)
+    warm = replace(p, discard_duration=4.4 * p.TR)  # rounds to the nearest shot
+    assert count(generate_epical(warm, seqname='xcheck_cal')) == (p.Nshots + 4, p.Nshots * p.ETL)
+
+
 @EXCITATIONS
 def test_epical_trajectory_is_centered(tmp_path, excitation):
     """EPIcal zeroes all ky/kz encoding — every echo should read back k~0."""
