@@ -31,7 +31,7 @@ There are two levels of fidelity.
 | Coils | 32 loops, sensitivities estimated by ESPIRiT from the simulated deGRE | given to the recon |
 | Noise | thermal with a coil covariance, plus physiological | thermal, white |
 | Object grid | finer than the acquisition (intravoxel dephasing, partial volume) | the acquisition's |
-| Built on | this repo's signal model (`forward.py`); SNAKE's phantom and BOLD regressor | [SNAKE-fMRI](https://github.com/mind-inria/snake-fmri)'s acquisition engine |
+| Built on | this repo's signal model (`forward.py`) and task model (`task.py`); SNAKE's phantom | [SNAKE-fMRI](https://github.com/mind-inria/snake-fmri)'s acquisition engine |
 | Use it for | how the whole pipeline behaves on realistic data | isolating sampling, ordering and noise; an exact reference |
 
 `recon/testbed.py` is a third option: a real object, coils and field, but

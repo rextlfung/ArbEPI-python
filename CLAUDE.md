@@ -1361,8 +1361,9 @@ adds `dwell_degre` when it patches `TE_degre`. Older files get fallbacks
 **The signal model is this repo's, not SNAKE's (`forward.py`).** SNAKE has no
 field map (its FAQ: by design, too expensive), one Cartesian sample grid, and
 BOLD as an amplitude change. In the raw mode SNAKE supplies the phantom
-(BrainWeb tissue maps, `Phantom.resample`), and the block-design regressor
-(`get_bold`); its engine is used only by the ideal mode. The model:
+(BrainWeb tissue maps, `Phantom.resample`) and nothing else since the task
+model moved to `task.py` (its `get_bold` regressor and its engine are used only
+by the ideal mode). The model:
 
 - *Spins on a finer grid than the acquisition* (`grid_factor`, default 2, same
   field of view): intravoxel dephasing and partial volume come out of the
