@@ -318,81 +318,114 @@ one region (`block_occipital`).
 
 ## Checked against the real pipeline
 
-On the default protocol (2.4 mm, 90 × 90 × 60, R = 10, 119 frames) with
-BrainWeb, `preprocess/` recovered from the simulated raw data:
+The study of `demo.ipynb`: the default protocol (2.4 mm, 90 × 90 × 60, R = 10)
+for 320 s (632 frames), BrainWeb, the visual-motor task at 3%, four
+repetitions, each preprocessed and reconstructed with and without the B0 model.
+
+`preprocess/` recovered from the simulated raw data of run 1:
 
 | | Injected | Recovered by `preprocess/` |
 |---|---|---|
 | Readout delay | −0.30 samples | −0.30 |
-| Odd/even phase, first / middle / last echo pair | −0.250 / −0.285 / −0.320 rad | −0.263 / −0.300 / −0.338 |
-| Noise variance after whitening | — | 0.95 |
+| Odd/even phase, first / last echo pair | −0.250 / −0.320 rad | −0.263 / −0.338 |
+| Noise variance after whitening | — | 0.96 |
 | Coil compression | 32 coils | 19 virtual coils at 99.9% energy |
-| Sensitivity maps | | agreement 0.998 per voxel (median) |
-| B0 map | std 28 Hz, −144 to +272 Hz | correlation 0.95 |
-| R2* (gray, white: 16.8, 18.3 1/s) | | median 15.8 1/s |
+| Sensitivity maps | | agreement 0.998 per brain voxel (median) |
+| B0 map, on the deGRE's grid | std 30 Hz | error 0.3 Hz (median), 3.5 Hz (90th percentile) |
+| R2* in gray, white matter | 16.8, 18.3 1/s | 16.2, 18.2 |
 
 The tests do the same on small sessions, plus the exact case: with only the
 object in the data, `preprocess()`'s k-space reconstructs the truth image to
 within 1%.
 
-Reconstructing that preprocessed session (`recon.sense --reg wavelet-tv
---hp-weight 3`, 100 iterations) and scoring it against the truth:
+Reconstruction (`recon.sense --reg wavelet-tv --hp-weight 3`, 100 iterations,
+B0 with 16 time segments) scored by `recon.testbed score`; means over the four
+runs, each of which is within 10% of its mean:
 
-| | without `--B0` | with `--B0` |
+| | without B0 | with B0 |
 |---|---|---|
-| frame error, `nrmse_frame_pct` | 23.8 | 11.0 |
-| fluctuation outside the activations, `fluct_pct` | 4.9 | 1.2 |
+| frame error, `nrmse_frame_pct` | 23.9 | 10.9 |
+| fluctuation outside the activations, `fluct_pct` | 5.1 | 1.19 |
 | edge sharpness vs truth | 0.70 | 0.90 |
-| **visual** (`block_occipital`): mean time course vs truth, `corr` | 0.12 | 0.79 |
-| recovered amplitude, `amp_ratio` (1 = exact) | −0.03 | 0.64 |
-| t-score, median (`_t`, `_t_lowband`) | −0.1, −0.0 | 5.9, 2.3 |
-| **motor** (`block_motor`): mean time course vs truth, `corr` | 0.38 | 0.72 |
-| recovered amplitude, `amp_ratio` | 0.56 | 0.51 |
-| t-score, median (`_t`, `_t_lowband`) | 1.4, 0.5 | 6.4, 2.5 |
-| voxels elsewhere above threshold, visual regressor (`false_pos_frac_t3.29`, `_lowband`) | 34%, 0.3% | 37%, 0.4% |
+| **visual** (`block_occipital`): mean time course vs truth, `corr` | 0.32 | 0.95 |
+| recovered amplitude, `amp_ratio` (1 = exact) | 0.26 | 0.72 |
+| t-score, median, low band (`_t_lowband`) | 1.2 | 13.1 |
+| **motor** (`block_motor`): mean time course vs truth, `corr` | 0.74 | 0.93 |
+| recovered amplitude, `amp_ratio` | 0.65 | 0.49 |
+| t-score, median, low band | 3.7 | 11.8 |
 
-With a head-like field the B0 model decides whether a region's time course
-follows its task: correlation 0.12 without it and 0.79 with it in the visual
-cortex, 0.38 and 0.72 in the motor area, at 0.64 and 0.51 of the true 1.5–1.6%
-amplitude. The quarter-cycle lag between the two tasks shows what those
-correlations are worth: with B0 each region's course correlates with the other
-region's task at only −0.10 and −0.04, while without B0 the motor course
-correlates with the wrong task (−0.42) as strongly as with its own (0.38), so
-that 0.38 is not a recovery.
+Activation maps (low-band GLM on the canonical regressor, thresholded at
+|t| > 3.40, the value of a nominal p < 0.001 with 93 degrees of freedom) and
+ROC curves against the truth, the four runs pooled:
 
-Which t-score to read. The plain GLM (`_t`, `false_pos_frac_t3.29`) assumes
-white residuals, and the simulated BOLD-like fluctuations (0.01–0.1 Hz, about
-0.8% in gray matter, around a 0.05 Hz task) are not white. That GLM run on
-mixtures of such fluctuations alone, with no reconstruction involved, puts 41%
-of voxels above |t| = 3.29 for this session's four time courses, and over
-fresh sessions 35% at 60 s, 21% at 240 s and 24% at 480 s (anywhere from 0 to
-68% per session: there are only four patterns). So the 34–37% in the table is
-the noise model meeting an uncalibrated test. It is not a reconstruction
-error, a longer run does not remove it, and the regions' 5.9 and 6.4 mean
-little.
+| | without B0 | with B0 |
+|---|---|---|
+| activated voxels above threshold, run 1 (of 1031) | 244 | 1031 |
+| area under the ROC curve | 0.862 | 0.9997 |
+| activated voxels found at a false positive rate of 0.1% | 32% | 95% |
+| the same from the first 80 s of each run | 4.5% (area 0.672) | 85% (area 0.9986) |
 
-The low-band scores count the degrees of freedom and are the ones to read.
-There the noise-only model with a true 1.5% task gives a median t of about 6
-against a threshold of 4.0, so a perfect reconstruction of this 60 s run would
-detect the activation voxel by voxel. The B0 reconstruction reaches 2.3 and
-2.5: it
-recovers 0.64 and 0.51 of the amplitude and carries 1.2% of in-band
-fluctuation where
-the physiology accounts for 0.5–0.8%. That gap is what the simulation exposes
-about this reconstruction. (In the same model the low-band t grows as the
-square root of the run: 11 at 240 s, 16 at 480 s. `--physio 0` removes the
-fluctuations.)
+What these show:
 
-For the same reason the fluctuation is not zero for a perfect reconstruction
-here: the physiological noise is about 0.9% of the signal in gray matter at
-this TE. One session, one seed; these numbers show the chain works and what the
-simulation is sensitive to, not which method is best.
+- **The field model decides.** Without it most of the visual cortex's
+  activation is missing in every run and four times the scan time does not
+  bring it back; with it every activated voxel is found.
+- **A 3% activation over 320 s is at the ceiling** for a reconstruction that
+  models the field, so this experiment separates reconstructions with and
+  without B0 but would not rank two that both have it. The first 80 s, or a
+  smaller `amplitude`, would.
+- **The amplitude lost inside the regions is next to them.** With B0 (run 1)
+  the regions hold 0.71 (visual) and 0.46 (motor) of the true activation, but the
+  region together with the voxels within 3 of it holds 1.10 and 0.91: the
+  reconstruction spreads the activation (its resolution) rather than
+  attenuating it. The motor region is two small patches, with more surface.
+- **The threshold is calibrated away from the regions.** Of the truly inactive
+  voxels, 0.57% are above |t| > 3.40 with B0, against a nominal 0.1%: 24% of
+  those within 3 voxels of a region (the spread above, 89% with positive t),
+  0.4% at 3–6 voxels, and 0.08–0.17% further out. The same GLM on the
+  noise-free true series flags 1.7%: with no thermal noise, the faint ringing
+  of a band-limited activation is itself significant.
+- **Which t-score.** The scorer's plain GLM (`_t`, `false_pos_frac_t3.29`)
+  assumes white residuals and puts 14% (no B0) and 22% (B0) of the rest of the
+  brain above |t| = 3.29; on the simulated BOLD-like fluctuations alone it
+  flags 20–40% at any run length. Read the low-band scores.
+- **The fluctuation floor is physiological.** The true series' temporal
+  standard deviation is 0.71% of the mean (median over the brain, run 1); the
+  reconstruction with B0 has 1.26% (temporal SNR 79).
 
-Times, on a 64-core machine with a shared RTX A6000: 27 s to simulate the
-session, 6–20 min to preprocess it, depending on CPU load (ESPIRiT on 32 coils dominates), 3–5 min to
-reconstruct without B0, and 40 min with it after a 75 min power iteration for
-the B0 operator's norm (pass `--sigma1A` to skip it once known). The archives
-take 1.8 GB.
+Test-retest reliability (the mixed-binomial model fitted to the four runs'
+maps, `analysis.fit_mixed_binomial`), against the truth, at |t| > 3.40:
+
+| | λ (proportion active) | p_A | p_I |
+|---|---|---|---|
+| truth: fully activated voxels / activated at all | 0.74% / 2.83% | | |
+| with B0: model | 2.80% | 0.95 | 0.0015 |
+| with B0: true rates | | 1.00 | 0.0051 |
+| without B0: model | 0.43% | 0.87 | 0.0003 |
+| without B0: true rates | | 0.26 | 0.0004 |
+
+The model measures reproducibility. With B0 its active class is every voxel
+that lights up consistently, the partly activated edges and the 335 inactive
+voxels next to the regions that are above threshold in all four runs
+included, so its p_I is lower than the true one. Without B0 it reports a p_A
+of 0.87 where the truth is 0.26: 705 of the 1031 activated voxels are above
+threshold in no run and are indistinguishable from inactive ones, and the 0.4%
+of voxels this reconstruction does find, it finds every time. A reconstruction
+that misses the same activation in every run looks reliable. With several
+thresholds and a shared λ the estimated ROC points lie below the true curve
+(with B0: 0.81 where the truth is 0.95). The model's assumptions (two kinds of
+voxel, independent runs) do not hold when the errors are systematic.
+
+One brain, one field, one protocol, four noise realizations: these numbers show
+that the chain works and what the simulation is sensitive to. They do not rank
+reconstruction methods.
+
+Times and disk for the study are under "Repeating an experiment". A single
+60 s session of the default protocol (119 frames) takes 27 s to simulate,
+6–20 min to preprocess depending on CPU load (ESPIRiT on 32 coils dominates),
+3–5 min to reconstruct without B0, and 40 min with it at the default 32 time
+segments, after a 75 min power iteration for the B0 operator's norm unless
+`--sigma1A` is passed (it measured 1.488). Its archives take 1.8 GB.
 
 Running `preprocess/` on a simulated session also found that
 `preprocess/grid_resize.py` places the deGRE maps 1.2 mm from the EPI's frame

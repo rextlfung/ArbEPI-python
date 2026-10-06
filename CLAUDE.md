@@ -1567,9 +1567,9 @@ against the truth and the model. Things measured on the way:
   unchanged. Overlapping pieces and discarding the edges would remove the seams
   at about 25% more time; not done.
 - *Cost, measured*: per 320 s run 43 s to simulate, 31-37 min to preprocess,
-  about 15 min to reconstruct without B0 and 114 min with it (L = 16), so about
+  16 min to reconstruct without B0 and 110-119 min with it (L = 16), so about
   11 hours for four runs; 10.5 GB per run plus 8.3 GB of raw archives for the
-  one run that keeps them.
+  one run that keeps them (49 GB in all).
 - *Aliasing* (`analysis.alias`): the series is sampled at 1.976 Hz, so the
   1.1 Hz heartbeat lands at 0.876 Hz and its second harmonic at 0.224 Hz, next
   to breathing (0.25 Hz); a frame also averages over its 0.506 s, |sinc(f T)|:
@@ -1579,6 +1579,51 @@ against the truth and the model. Things measured on the way:
   voxel's reconstructed temporal standard deviation over its true mean signal:
   1/tSNR. It does not separate real fluctuation from added noise; the notebook
   puts the same quantity of the true signal next to it.
+
+**The four-run study's results (2026-10-05; `demo.ipynb`, tables in the
+README).** Default protocol, 320 s, the 3% visual-motor task, four seeds. The
+runs agree within 10% on every score. With B0: frame error 10.9%, fluctuation
+1.19%, mean time course vs truth 0.95 (visual) and 0.93 (motor), low-band
+median t 13.1 and 11.8, every one of the 1031 activated voxels above
+|t| > 3.40 in every run, pooled AUC 0.9997, 95% of activated voxels found at a
+false positive rate of 0.1% (85% from the first 80 s alone). Without B0:
+23.9%, 5.1%, 0.32 and 0.74, t 1.2 and 3.7, AUC 0.862, 32% (4.5% from 80 s).
+What was learned, beyond "B0 decides":
+- *The task is at the ceiling for a B0 reconstruction.* 3% over 320 s cannot
+  rank two reconstructions that both model the field; the notebook therefore
+  also analyses the first 80 s (one reconstructed piece, 21 degrees of
+  freedom). This bears on the open amplitude question (3% peak vs 3% task
+  minus rest): the user's answer changes how informative the curves are.
+- *Amplitude ratios below 1 are spatial spread, not attenuation*: with B0 the
+  regions hold 0.71 (visual) and 0.46 (motor) of the true activation
+  (coefficient x signal, summed), the regions plus 3 voxels around them 1.10
+  and 0.91. Not investigated further (which regularizer, how it scales with
+  lambda).
+- *The low-band threshold is calibrated away from the regions*: among truly
+  inactive voxels (true change under 5% of the activation's) 0.57% exceed the
+  nominal-0.1% threshold with B0, but that is 24% within 3 voxels of a region
+  (the spread), 0.4% at 3-6 and 0.08-0.17% beyond. The same GLM on the
+  noise-free true series flags 1.7% (26% with the BOLD-like modes removed):
+  that is the band-limited activation's own ringing, real signal that nothing
+  hides, not a miscalibration. So "false positive" needs the distance table
+  next to it, and overlay titles say "nominal".
+- *The mixed-binomial model measures reproducibility, and a systematic error
+  is reproducible.* At |t| > 3.40 with B0 it gives lambda 2.80% (truth: 0.74%
+  fully activated, 2.83% activated at all), p_A 0.95 (true 1.00), p_I 0.0015
+  (true 0.0051: 335 inactive voxels next to the regions are above threshold in
+  all four runs and count as active). Without B0 it gives lambda 0.43%, p_A
+  0.87 against a true 0.26: 705 activated voxels are detected in no run and
+  sit with the inactive ones. With nine thresholds and a shared lambda the
+  estimated ROC lies below the true one (B0: 0.81 where the truth is 0.95) and
+  the no-B0 fit settles on a different split (lambda 6.6%). The EM is tested
+  on data that satisfy the model, so this is the model's assumptions meeting
+  systematic errors, which is the notebook's stated conclusion. I did not read
+  Genovese et al. beyond what the blog post reports; the notebook cites the
+  post for the assumptions.
+- *Preprocessing on run 1*: delay -0.30, odd/even -0.263/-0.338 for
+  -0.250/-0.320, noise variance 0.96, 19 virtual coils, maps 0.998, B0 error
+  0.3 Hz median and 3.5 Hz at the 90th percentile on the deGRE grid, R2*
+  16.2/18.2 for 16.8/18.3 1/s.
 
 **What running the real pipeline on simulated data showed (2026-10-04,
 default protocol, BrainWeb).** `preprocess/` recovers what was injected:
@@ -1596,7 +1641,10 @@ in z and 0.3 mm in x and y. Left open for the user's decision (it changes
 real-data maps); `test_degre_maps_land_where_the_epi_puts_the_object` is a
 strict xfail until then.
 
-**Reconstructing that session** (wavelet-TV, `--hp-weight 3`, 100 iterations):
+**Reconstructing that session** (the earlier 60 s session: a 1.5% task, 10 s
+blocks, the motor task lagging the visual one; kept for the cross-talk and
+t-score findings, superseded for the current task by the study above;
+wavelet-TV, `--hp-weight 3`, 100 iterations):
 without `--B0`, 23.8% frame error, 4.9% fluctuation, edge sharpness 0.70, and
 the region's mean time course unrelated to the task (correlation 0.12); with
 `--B0`, 11.0%, 1.2%, 0.90, and the course recovered (correlation 0.79,
