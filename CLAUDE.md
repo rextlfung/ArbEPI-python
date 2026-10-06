@@ -222,7 +222,12 @@ three formerly hand-copied `sys.max_slew = 100 * sys.gamma` derates; the
 trajectory tests use the same factory) but sets all blip scale factors to
 0, so it acquires unencoded lines at k-space center for EPI ghost
 correction. Its `gx_pre` must carry the same `rg.gx_pre_scale` factor as
-ArbEPI's (enforced by `test_arbepi_kxoe_matches_epical`).
+ArbEPI's (enforced by `test_arbepi_kxoe_matches_epical`). Its dummy
+(ADC-off) shots are not a parameter of their own: it plays
+`round(params.discard_duration / params.TR)` of them, the same warm-up
+ArbEPI acquires and discards (`Params.Ndummyshots` was removed
+2026-10-06; it was that same value stored as a field, which went stale
+under `dataclasses.replace(discard_duration=...)`).
 
 **`lib/trap4ge.py`** (ported from `../PulCeq/matlab/trap4ge.m`) rounds every
 gradient's rise/flat/fall times up to `params.crt` via `math.ceil(t / crt -
@@ -654,8 +659,8 @@ no longer called them, for the same reason.
   unused on this path (`sampling_method`/`seed` are set to `None`;
   `epi_trajectory` is still required regardless -- mask2epi still
   partitions whatever mask is given). Critically, this all happens
-  *inside* `load_params()`, before `TR = volume_tr / Nshots`/`fa`/
-  `Ndummyshots` are computed from `Nshots` -- overriding `Nshots` after
+  *inside* `load_params()`, before `TR = volume_tr / Nshots`/`fa` are
+  computed from `Nshots` -- overriding `Nshots` after
   the fact (e.g. via `dataclasses.replace` on an already-built `Params`)
   would leave those downstream-derived fields stale. `sample/
   gen_sampling_masks.py`'s `resolve_omegas(params)` is the single helper

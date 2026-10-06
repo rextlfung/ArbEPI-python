@@ -90,7 +90,11 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
     # n_frames > 1 repeats the real (ADC-on) shots for that many volumes,
     # e.g. as a phase-encode-free time series for readout/hardware
     # stability testing; the default 1 is the usual single calibration pass.
-    for shot in range(-params.Ndummyshots, params.Nshots * n_frames):
+    # Dummy (ADC-off) shots first, for params.discard_duration to the nearest
+    # shot: the same steady-state warm-up ArbEPI plays as its discarded
+    # frames, so the calibration is taken in the state the time series is.
+    n_dummy = round(params.discard_duration / params.TR)
+    for shot in range(-n_dummy, params.Nshots * n_frames):
         is_dummy = shot < 0
         TRID = 1 if is_dummy else 2  # TRID 1 = dummy, TRID 2 = real (see Pulseq on GE manual)
 

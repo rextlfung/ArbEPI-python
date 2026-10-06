@@ -100,7 +100,6 @@ class Params:
 
     discard_duration: float  # s
     Nframes: int
-    Ndummyshots: int
 
     # Noise prescan
     Ncoils: int
@@ -234,7 +233,8 @@ def load_params(output_dir: str = 'output') -> Params:
     T1 = 1.3
 
     # Frames to discard at the start of the scan (steady-state warm-up), s,
-    # and the resulting number of acquired frames. Hoisted up from the
+    # and the resulting number of acquired frames. EPIcal plays dummy shots
+    # for the same duration (sequences/EPIcal.py). Hoisted up from the
     # "ADVANCED / DERIVED PARAMETERS" section below -- unlike Nshots,
     # Nframes depends only on duration/volume_tr/discard_duration, not on
     # R/ETL/the sampling mask -- so a custom mask's own time-frame count
@@ -377,8 +377,6 @@ def load_params(output_dir: str = 'output') -> Params:
 
     TR = volume_tr / Nshots
 
-    Ndummyshots = round(discard_duration / TR)
-
     fa = 180 / math.pi * math.acos(math.exp(-TR / T1))
     rf_dur = 2e-3
     rf_tb = 6
@@ -520,7 +518,6 @@ def load_params(output_dir: str = 'output') -> Params:
         TR=TR,
         discard_duration=discard_duration,
         Nframes=Nframes,
-        Ndummyshots=Ndummyshots,
         fa=fa,
         rf_dur=rf_dur,
         rf_tb=rf_tb,
