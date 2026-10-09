@@ -67,8 +67,14 @@ def _build(name, p, omegas):
     et = hdf5storage.loadmat(os.path.join(outdir, 'scan_info.mat'))['schedules'][0, 0, :, 2]
     te_realized = nominal_te_value(et, p.ETL)
 
+    # te_realized is RF-relative; the gradient arrays _overlay_figure samples
+    # start at the sequence's t = 0 (fat-sat/spoiler lead-in), so anchor the
+    # zoom window at the absolute RF start + te_realized (review item 166).
+    t_excitation0 = float(seq.calculate_kspace()[2][0])
+
     return dict(name=name, params=p, seq=seq, rg=rg, report=report,
-                te_realized=te_realized, te_warned=te_warned)
+                te_realized=te_realized, te_warned=te_warned,
+                t_excitation0=t_excitation0)
 
 
 def _overlay_figure(variants, compare_dir):
@@ -89,7 +95,7 @@ def _overlay_figure(variants, compare_dir):
 
         # gx zoom: ~3 echo spacings around this variant's nominal TE echo.
         D = float(np.round(v['rg'].Tread + v['rg'].blip_duration, 9))
-        t_c = v['te_realized']
+        t_c = v['t_excitation0'] + v['te_realized']
         i0 = max(int((t_c - 1.5 * D) / dt), 0)
         i1 = min(int((t_c + 1.5 * D) / dt), gw.shape[1])
         ax_gx.plot((t_ms[i0:i1] - t_c * 1e3), gw[0, i0:i1] * 1e3,

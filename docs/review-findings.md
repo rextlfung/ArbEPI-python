@@ -1073,6 +1073,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   consumer to skip the first `n_frames_discard` frames, or document
   explicitly that this attr is metadata-only for a human/future consumer
   to act on by hand.
+  Re-verified 2026-10-09: discard frames are NOT trimmed in preprocessing (`ksp_epi_zf`/`omegas`/`echo_times` keep all `Nframes`; `discard_duration` is 0 by default), so the attr was kept. Nothing reads `n_frames_discard`; drop it only once discard frames are trimmed or the attr is deemed unnecessary.
 - [x] **119. `lib/mask2epi.py`'s `mask2epi_radial` crashes with `ETL=1`
   (`.max()` on a zero-size array), while `mask2epi_laminar` handles the
   same input fine.** [measured; citation updated 2026-09-16 against
@@ -1114,7 +1115,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   parametrized `ETL=1` case to `tests/test_mask2epi.py` covering
   `mask2epi_radial`.
   Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
-- [ ] **120. `preprocessing/epi_gridding.py`'s `rampsamp2cart` is a fourth,
+- [x] **120. `preprocessing/epi_gridding.py`'s `rampsamp2cart` is a fourth,
   untracked copy of the FFT-shift-pairing bug items 44/64/91/108 already
   cover elsewhere -- and this copy can cause a real image-domain shift, not
   just an inert phase artifact.** [measured] `rampsamp2cart:53` computes
@@ -1156,6 +1157,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   and parametrize `tests/test_preprocessing_epi_gridding.py` over an odd
   `nx` the way item 44's fix parametrized
   `test_epiphasecorrect_removes_odd_even_mismatch` over `[64, 63]`.
+  Resolved 2026-10-09 (backlog sweep): closed as intended; the fftshift-in/out is kept to match MATLAB's `rampsamp2cart` (see CLAUDE.md's `preprocess/` notes on the odd/even frame).
 - [x] **121. `plot/plotting.py`'s `plot_pns_one_tr` loses gradient
   history before the window start, contradicting its own docstring's claim
   of exact parity with `check_seq_feasibility`'s PNS number for any
@@ -1409,7 +1411,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   calibration region's *shape* changed from ellipse to rectangle in the
   same commit range, which independently introduced a different
   corner-stripping bug under `crop_corner=True` -- see item 196.
-- [ ] **136(a). `sample/pd_sample.py`'s exact-count fill step is
+- [x] **136(a). `sample/pd_sample.py`'s exact-count fill step is
   unguarded against `crop_corner=True`'s ellipse -- now directly confirmed
   reachable via instrumented reproduction, at small (not production-scale)
   grids.** [measured -- upgraded from `[verify]`/unconfirmed 2026-09-17
@@ -1460,6 +1462,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   regression test using the `(30,20), accel=1.5, calib_frac=0.3, seed`-based
   repro above (or the simpler `accel=9, calib_frac=0.05, seed=17` case) as
   a direct, reliable trigger.
+  Resolved 2026-10-09 (backlog sweep): fixed (user decision); the `crop_corner` exact-count fill only draws from `~mask & (rho <= 1)`. Seeded masks changed (~13% of cells on the default protocol); sample counts unchanged.
 - [x] **137. `ge/blocks.py`'s `get_block_type` reads a nonexistent `.trig`
   attribute instead of pypulseq's real `.trigger` dict, so physio-trigger
   blocks are never detected.** [measured] `ge/blocks.py:38-39`:
@@ -1764,7 +1767,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `write_ceq`/`read_pge` round trip (a built `ArbEPI.pge`) and a synthetic
   `n_samples=1` case confirming `_read_arbitrary` now returns a length-1
   tuple, not a bare scalar.
-- [ ] **166. `plot/compare_readout_pns.py`'s `_overlay_figure` centers its
+- [x] **166. `plot/compare_readout_pns.py`'s `_overlay_figure` centers its
   "gx zoom" panel ~8ms (about 7.5 echo spacings) away from the actual
   nominal-TE echo, because it mixes two different time origins.** [measured;
   citation updated 2026-09-19 against `d515cd0` -- `compare_readout_pns.py`'s
@@ -1809,6 +1812,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   absolute RF start time (e.g. `seq.calculate_kspace()[2][0]`) inside
   `_build` and use `t_c = t_excitation0 + te_realized` in
   `_overlay_figure`.
+  Resolved 2026-10-09 (backlog sweep): fixed; `_build` records the absolute RF start (`seq.calculate_kspace()[2][0]`) and `_overlay_figure` centers on `t_excitation0 + te_realized`. Re-ran the script: both variants' gx now cross zero at t = 0.
 - [x] **167.** Superseded, 2026-09-22 against `6921c8c`: `recon/recon_frames.py`
   and `recon/run_rss.py` (the two files this item is entirely about) were
   both deleted outright in the `recon/` 25-modules-to-7 consolidation
@@ -1951,7 +1955,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   CLAUDE.md's "PNS finding history" numbers need refreshing to match --
   out of scope to edit this pass (only `docs/review-findings.md` may be
   modified), flagged here for the next pass that touches it.
-- [ ] **170. `lib/calc_te_tr_delays.py`'s `min_tr` formula omits `gy_spoil`
+- [x] **170. `lib/calc_te_tr_delays.py`'s `min_tr` formula omits `gy_spoil`
   from its pre-excitation (fat-sat crusher) spoiler-block duration term,
   while that block now actually plays `gx_spoil`/`gy_spoil`/`gz_spoil`
   together -- undercounts `min_tr` under anisotropic resolution.**
@@ -2015,6 +2019,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   pp.calc_duration(gy_spoil), pp.calc_duration(gz_spoil))`, and add an
   anisotropic-resolution regression case (could share test infrastructure
   with item 142's suggested anisotropic-`res` test for `make_spoilers.py`).
+  Resolved 2026-10-09 (backlog sweep): fixed; `min_tr`'s fat-sat crusher term now includes `gy_spoil`. Default protocol (water, isotropic) unchanged; with item 142's shared spoiler duration the omission is unreachable anyway.
 - [x] **171. `ge/coppe.py`'s hop-2 SSH-failure fix (commit `3de4d58`) was
   applied to only 1 of 7 ssh/scp invocations in the file, leaving the
   identical silent-failure mode live on every other hop.** [measured code
@@ -2120,7 +2125,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   current batch drivers in `run_recon.py`/`lowres_calib.py` process one
   dataset synchronously, no `ProcessPoolExecutor` anywhere in `recon/`), so
   there is no surviving code path for this finding.
-- [ ] **183. `preprocessing/julia/b0map.jl`'s `romeo_finit` never receives
+- [x] **183. `preprocessing/julia/b0map.jl`'s `romeo_finit` never receives
   the sensitivity maps the module docstring says replace its noisy
   coil-combine fallback -- the ROMEO-unwrapped `finit` is always built from
   the same low-SNR phase-contrast combine, regardless of whether real `smap`
@@ -2155,6 +2160,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `romeo_finit`'s signature and call `coil_combine(images, smap)` when `smap`
   is available (mirroring what the main fit call already does), falling back
   to `coil_combine(images, nothing)` only when no `smap` was loaded.
+  Resolved 2026-10-09 (backlog sweep): closed as intended; `romeo_finit` uses the phase-contrast combine by design (CLAUDE.md, B0 field map paragraph).
 - [x] **184. `recon/mslr.py`'s `img2patches`/`patches2img` silently zero
   out real image voxels whenever `stride_size > patch_size` on an axis --
   unvalidated, and untested in that regime.** [measured; citation updated
@@ -2201,7 +2207,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `stride` to `patch`; either way, add a regression test exercising
   `stride > patch`.
   Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
-- [ ] **196. `sample/pd_sample.py`'s `crop_corner=True` post-crop can
+- [x] **196. `sample/pd_sample.py`'s `crop_corner=True` post-crop can
   strip calibration-region cells at a high enough `calib_frac`, directly
   contradicting the function's own docstring claim that `calib_mask` cells
   are always fully sampled.** [measured; found 2026-09-16 against
@@ -2231,7 +2237,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   leave the inscribed ellipse; add a regression test with a large
   `calib_frac`/low `accel` asserting `mask[calib_mask].all()` under
   `crop_corner=True`.
-- [ ] **197. `lib/readout_from_params.py`'s `find_min_feasible_dwell`
+  Resolved 2026-10-09 (backlog sweep): fixed (user decision); calibration cells are exempt from the ellipse crop (union), keeping the contract that `calib_mask` is fully sampled, rather than clamping `side_frac`.
+- [x] **197. `lib/readout_from_params.py`'s `find_min_feasible_dwell`
   catches a bare `AssertionError`, silently masking unrelated,
   dwell-independent geometry bugs behind a misleading "no feasible dwell"
   error.** [measured; found 2026-09-16 against `de3d535`]
@@ -2256,6 +2263,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   a dedicated exception type for the triangular-lobe/coverage-bump cases,
   or check the relevant condition directly before calling), and let
   unrelated assertions propagate with their real message.
+  Resolved 2026-10-09 (backlog sweep): fixed; `find_min_feasible_dwell` catches only the new `InfeasibleDwellError` (an `AssertionError` subclass) from `lib/make_readout_grads.py`.
 - [x] **199. `recon/lowres_calib.py` (formerly `lowres_calib_recon.py`)/
   `preprocessing/r2star_map.py`/`preprocessing/gre_diagnostics.py` each
   paste an undocumented copy of `_ift3`,
@@ -2453,7 +2461,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `load_smaps()` directly (or the new `_calibrate_and_compress` projection
   helper) instead of its own narrower, non-`Ncoils`-tagged copy.
   Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
-- [ ] **222. `run_b0map.py`/`r2star_map.py` cubic-spline-resize `b0map_hz`/
+- [x] **222. `run_b0map.py`/`r2star_map.py` cubic-spline-resize `b0map_hz`/
   `r2star` onto the EPI grid but never re-apply the resized mask afterward
   -- unlike the identical, already-fixed case in `smaps.py`'s
   `process_smaps`.** [measured; citation updated 2026-09-22 against
@@ -2511,6 +2519,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   this pass). Fix: re-multiply `b0map_hz`/`r2star` by their own resized
   boolean mask after the cubic-spline resize, mirroring
   `process_smaps`'s pattern exactly.
+  Resolved 2026-10-09 (backlog sweep): fixed; `preprocess/r2star.py`'s `resize_r2star_to_epi` resizes R2* and its mask, clips at zero and re-masks.
 - [x] **224. `recon/analysis.py`'s module-level `assert DEVICE == "cuda"`
   breaks import of `recon.run_recon` (and two `recon/operators_b0.py`
   tests) on any CPU-only machine, including one with the full `recon`
@@ -2560,7 +2569,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   CLIs, forwarding it into `estimate_r2star_map_epi_grid` the way
   `lowres_calib.py` already does.
   Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
-- [ ] **232. `recon/analysis.py`'s `validate` subcommand no longer matches
+- [x] **232. `recon/analysis.py`'s `validate` subcommand no longer matches
   the Julia reference numbers it compares against, because it never
   disables `run_recon`'s (now-default) noise normalization.** [measured
   2026-09-23 against `100056a`] `recon/mslr.py:359` defaults
@@ -2584,6 +2593,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   still live in the merged `recon/analysis.py` today. Fix: pass
   `normalize_noise=False` in `validate()`'s call to `run_recon`, or
   rescale the reference dc/reg costs before comparing.
+  Resolved 2026-10-09 (backlog sweep): fixed; `run_sense` has `normalize_noise` and `recon.utils.validate` passes `False`, matching the unscaled Julia reference.
 - [x] **233. `recon/run_recon.py`'s `main_mslr_local` reads `omegas`
   directly from the recon `.h5` file with no fallback for a file written
   before that key existed, unlike its two sibling subcommands in the same
@@ -2670,7 +2680,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   equivalent) before casting, and raise a clear `ValueError` naming the
   offending file/key otherwise.
   Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
-- [ ] **247. `sequences/deGRE.py`'s `te_min` omits `gy_pre`/`gz_pre` from
+- [x] **247. `sequences/deGRE.py`'s `te_min` omits `gy_pre`/`gz_pre` from
   the prephase block's duration, unlike its own `tr_min` a few lines
   below -- the same asymmetry item 36 already fixed for `tr_min` alone.**
   [measured 2026-09-24 against `3ab2854`] `te_min` (`:179-185`) credits
@@ -2696,7 +2706,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   pp.calc_duration(gx_pre)` term to `+ max(pp.calc_duration(gx_pre),
   pp.calc_duration(gy_pre), pp.calc_duration(gz_pre))`, matching
   `tr_min`'s existing pattern, plus a `crt`-varied regression test.
-- [ ] **248. `sample/pd_sample.py`'s Poisson-disc core never marks its
+  Resolved 2026-10-09 (backlog sweep): fixed; `te_min` (and the echo-0 back-off loop) use the longest of `gx_pre`/`gy_pre`/`gz_pre`. The item's `crt=20e-6` example does not reproduce (`gx_pre` is already longest); `crt=12e-6` does (echo 12 us late before). Default `.seq` and saved `TE_degre` unchanged.
+- [x] **248. `sample/pd_sample.py`'s Poisson-disc core never marks its
   own seed point occupied in `mask`, letting later points land inside the
   seed's exclusion radius.** [measured 2026-09-24 against `3ab2854`]
   `_poisson_disc_core_jit` (`:176-184`) sets `pxs[0]`/`pys[0]` to the
@@ -2728,6 +2739,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   there's no regression coverage either way. Fix: add `mask[y0, x0] = 1`
   immediately after the seed's rejection-sampling loop, mirroring how
   every other accepted point is recorded.
+  Resolved 2026-10-09 (backlog sweep): fixed (user decision); the Poisson-disc core now marks its seed point occupied.
 - [x] **251. `preprocessing/calibrate_delay.py` estimated the odd/even
   phase in a different pixel frame than production applies it in (odd Nx
   only).** [measured 2026-09-27 against `4f8bf5f`] The delay sweep
@@ -2973,7 +2985,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   penalty as a gradient term (POGM's prox is the low-rank one), so its step
   is 1/(Nscales (1 + mu)): keep mu modest there or raise `--niter`. Test:
   `test_hp_penalty_as_a_dual_block_converges_faster_than_as_a_smooth_term`.
-- [ ] **263. `preprocess/grid_resize.py` places the deGRE maps on the EPI
+- [x] **263. `preprocess/grid_resize.py` places the deGRE maps on the EPI
   grid up to half an EPI voxel from where the EPI data put the object: 1.2 mm
   in z and 0.3 mm in x and y at the default protocol.** [measured 2026-10-04,
   found by running preprocess on a simulated session, `simulate_fmri/`]
@@ -3005,6 +3017,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   re-preprocess to re-register existing maps. Test (expected to fail until
   then): `test_degre_maps_land_where_the_epi_puts_the_object` in
   `tests/test_simulate_fmri_session.py`.
+  Resolved 2026-10-09 (backlog sweep): fixed (user decision); `resize_to_epi_grid` uses the centered-FFT convention (voxel N // 2 is isocenter on both grids). Synthetic-sphere offset (x, y, z) mm: (+0.35, +0.25, -1.25) -> (+0.05, -0.05, -0.05). `test_degre_maps_land_where_the_epi_puts_the_object` lost its xfail but needs `snake`, so it was not run when fixing.
 
 - [x] **263. Temporal TV in the joint wavelet-TV solver didn't converge in
   100 iterations, so its weight barely mattered.** [found 2026-10-04 in the
@@ -3537,7 +3550,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   duplicating its cache-writing logic fixes both the Nvcoils-check drift
   item 117 already flags and this omission at once.
   Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
-- [ ] **142. `lib/make_spoilers.py` doesn't share one duration across its
+- [x] **142. `lib/make_spoilers.py` doesn't share one duration across its
   x/y/z trapezoids, unlike the structurally-identical
   `lib/make_prephasers.py` (already fixed for exactly this reason -- see
   the dangling-but-real item 28, item 113).** [measured, low severity,
@@ -3572,6 +3585,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   analogous anisotropic-`res` regression test (this could share
   infrastructure with item 170's fix, which needs the same anisotropic-
   resolution scenario for a related `calc_te_tr_delays` bug).
+  Resolved 2026-10-09 (backlog sweep): fixed (user decision): `lib/make_spoilers.py` builds all three channels with one shared duration, set by the channel with the largest area, as `make_prephasers.py` does. Isotropic default `.seq` byte-identical; anisotropic builds change (smaller-area channels play slower).
 - [x] **152.** Resolved: `gre_diagnostics.py`'s module docstring now names
   the actual keys read (`finit_hz`/`b0map_hz_degre`/`mask_degre`) and
   states the dependency on `run_b0map.py`'s post-processing having
@@ -4548,7 +4562,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   the `.h5`/`.json`/`.nii.gz` triplet is written correctly and that a CUDA
   `ReconResult.X_recon` doesn't crash the nifti write.
   Resolved 2026-10-09 (backlog sweep): re-checked against the current tree; already fixed (or covered by tests) by earlier work.
-- [ ] **134. `ge/writeceq.py`'s `write_ceq` (the .pge binary writer) and
+- [x] **134. `ge/writeceq.py`'s `write_ceq` (the .pge binary writer) and
   `ge/read_pge.py`'s `read_pge` (its read-back counterpart) have zero
   pytest coverage anywhere in the repo -- including no regression guard
   for item 126's confirmed-live bug, which lives inside `write_ceq`
@@ -4581,6 +4595,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   item 126's fix once applied (construct a synthetic `Ceq` whose segment
   block count divides `NMAXBLOCKSFORGRADHEATCHECK` evenly, matching that
   item's own repro).
+  Resolved 2026-10-09 (backlog sweep): fixed; `tests/test_ge_writeceq_roundtrip.py` round-trips real and synthetic Ceqs through `write_ceq` -> `read_pge`.
 - [x] **135. `recon/mslr.py`'s entire `fn_b0map` branch in
   `run_recon` -- including the item-93 `sigma1A` auto-measurement and its
   `ValueError` guard -- has zero test coverage.** [measured; citation
@@ -4784,7 +4799,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `build_encoding_operator_b0` test that every frame's
   `.c_phasors`/`.b_by_echo` share `data_ptr()` with frame 0's.
   Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
-- [ ] **164. `recon/operators.py`'s `_check_b_weight_row_sums` --
+- [x] **164. `recon/operators.py`'s `_check_b_weight_row_sums` --
   the detector for a real, documented signal-loss/incoherent-noise bug --
   is never tested actually firing on a bad input.** [measured; citation
   updated 2026-09-22 against `6921c8c` -- `operators_b0.py` merged into
@@ -4811,7 +4826,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   add a test building `build_encoding_operator_b0(..., nbins=20)` (or
   similarly coarse) at a scale reproducing the asymmetric in-object range
   from CLAUDE.md's `nbins` paragraph, asserting `pytest.warns` fires.
-- [ ] **172. The new per-shot spoiler-cycles randomization and
+  Resolved 2026-10-09 (backlog sweep): closed as covered; the toy-map warning test exists and the item's `nbins=20` real-scale case no longer reproduces.
+- [x] **172. The new per-shot spoiler-cycles randomization and
   `gx_residual` net-kx cancellation (`sequences/ArbEPI.py`/`EPIcal.py`,
   commit `7af04d4`) has zero test coverage despite real, non-trivial
   arithmetic.** [measured -- verified correct by hand/script this pass,
@@ -4841,6 +4857,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   is now fixed, so this no longer needs a "modulo" carve-out) for a couple
   of `ETL` parities, and (b) a
   `make_spoilers.py`-level duration/area unit test per item 142.
+  Resolved 2026-10-09 (backlog sweep): fixed; `tests/test_spoiler_kspace.py` checks the k-space position after the spoiler for even and odd ETL (ArbEPI and EPIcal, both excitation modes).
 - [x] **173.** Resolved by `150ff82` and `fd7b106`:
   `tests/test_coppe_transfer.py` runs the real `_TRANSFER_SCRIPT` under bash
   against a fake `scp` (checking the prompts reach stderr, the entry files
@@ -4851,7 +4868,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   throwaway askpass that prints each prompt, including the number to tap.
   The test also guards against `BatchMode=yes` coming back. Item 171 (`-q`
   on the other hops) is separate and still open.
-- [ ] **174. `preprocessing/preprocess.py`'s STEP 3 smaps branch --
+- [x] **174. `preprocessing/preprocess.py`'s STEP 3 smaps branch --
   including the new `smooth_sigma_mm` threading added by `0e4e86e` -- has
   no dedicated test.** [measured, low severity; citation updated
   2026-09-17 against `ad2fdc4` -- write site shifted from `:341` to
@@ -4868,6 +4885,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   the way `tests/test_preprocessing_recon_frames.py` covers `load_smaps`'s
   call sites, or -- better -- fold into whatever eventually resolves item
   117 (calling `load_smaps` directly from STEP 3 would make this moot).
+  Resolved 2026-10-09 (backlog sweep): fixed; `tests/test_preprocess_smaps_stage.py` covers the smaps stage's threading of `smooth_sigma_mm`/`zero_pad_z`.
 - [x] **175. `preprocessing/smaps.py`'s two new Gaussian-smoothing tests
   don't exercise an anisotropic target grid, the one shape of bug the
   physical-mm sigma conversion could plausibly hide.** [measured, low-
@@ -5401,7 +5419,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   setup/output helper could factor out `run_recon.py`'s own three-subcommand
   inner duplication.
   Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
-- [ ] **145. `recon/`'s `_complex_randn` test helper is still duplicated
+- [x] **145. `recon/`'s `_complex_randn` test helper is still duplicated
   verbatim in two test files, despite the `recon/`-side copies
   deduplicating naturally as a side effect of the module consolidation.**
   [measured, low severity; citation updated 2026-09-22 against `6921c8c`
@@ -5442,6 +5460,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `tests/test_recon_b0_correction.py`, the same way
   `test_recon_operators_b0.py` already does, eliminating the one
   unjustified duplicate.
+  Resolved 2026-10-09 (backlog sweep): fixed; `DEVICE` and `complex_randn` live in `tests/_helpers.py` (three copies, not two, were found).
 - [x] **154.** Resolved: dropped `ScannerSpec.psd_rf_wait`/`psd_grd_wait`
   and their per-scanner values/comments (zero readers anywhere in the
   repo, no near-term consumer found in `scanners.py`'s own comments).
@@ -6059,7 +6078,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   map should never be silently reused across reruns), state that
   explicitly in the module or function docstring instead.
   Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
-- [ ] **244. `sequences/ArbEPI.py` and `sequences/EPIcal.py` duplicate a
+- [x] **244. `sequences/ArbEPI.py` and `sequences/EPIcal.py` duplicate a
   near-verbatim ~15-line per-shot spoiler-draw/fat-sat/RF-spoiling
   block.** [measured 2026-09-23 against `100056a`] The sequence (draw
   `cx,cy,cz` via `spoil_rng.uniform(...)`, derive `x_scale`/`y_scale`/
@@ -6074,6 +6093,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   or a new `lib/`-level function) taking `(params, spoil_rng, rf, rg,
   gx_spoil, gy_spoil, gz_spoil, rfsat, trid, rf_count)` and returning the
   updated `rf_count`/scale factors.
+  Resolved 2026-10-09 (backlog sweep): fixed; the spoiler-draw / fat-sat / RF-spoil block now lives in `lib/shot_start.py`, used by ArbEPI and EPIcal. `.seq` output byte-identical for a fixed rng.
 - [x] **245. `sample/pd_sample.py`'s `pd_sample()` re-clamps a value
   `_calib_side_frac` already guarantees is clamped.** [measured 2026-09-23
   against `100056a`] `side_frac = _calib_side_frac(target_samples, nx, ny,

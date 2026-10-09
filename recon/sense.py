@@ -94,6 +94,7 @@ def run_sense(
     mom: str = "fpgm",
     conv_tol: float = 1e-5,
     normalize_operator: bool = True,
+    normalize_noise: bool = True,
     # wavelet-tv
     lamb_l1: float = 0.005,
     lamb_tv: float = 0.005,
@@ -128,7 +129,9 @@ def run_sense(
     Scaling (not undone on the output, which is not quantitative):
     - the k-space is divided by sqrt(noise_var), the post-preprocessing
       thermal-noise variance preprocess() records in fn_ksp; ~1 when
-      whitening works, and skipped for files written before it was recorded.
+      whitening works, and skipped for files written before it was recorded
+      (or with normalize_noise=False, which recon.utils.validate uses to
+      compare against the unnormalized Julia reference).
     - mslr: A is divided by sigma1A (normalize_operator), so A is
       unit-norm like the unitary operator the lambda formula assumes.
 
@@ -227,7 +230,9 @@ def run_sense(
             "  WARNING: this k-space was not noise-whitened (no noise scan); the mslr "
             "lambda weights assume white unit-variance noise"
         )
-    if noise_var is None:
+    if not normalize_noise:
+        print("  normalize_noise=False: k-space left unscaled")
+    elif noise_var is None:
         print(
             "  no 'noise_var' recorded in the k-space file; assuming whitened unit-variance noise"
         )

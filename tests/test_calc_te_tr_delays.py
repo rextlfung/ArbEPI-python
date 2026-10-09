@@ -59,3 +59,36 @@ def test_unachievable_tr_warns_and_falls_back_to_zero_delay(parts):
         _, tr_delay, _, min_tr = _call(parts, min_te + 1e-3, 1e-3)
     assert tr_delay == 0.0
     assert min_tr > 1e-3
+
+
+@pytest.mark.parametrize('excitation', ['fatsat', 'water'])
+def test_min_tr_counts_gy_spoil_in_the_fatsat_crusher_block(excitation):
+    """Item 170: the pre-excitation crusher block plays gx/gy/gz_spoil
+    together, so a gy_spoil longer than gx/gz (anisotropic resolution)
+    lengthens the block (fat-sat only) as well as the post-readout spoiler."""
+    from dataclasses import replace
+
+    import pypulseq as pp
+
+    p = replace(load_params(), excitation=excitation)
+    sys = derated_sys(p)
+    rf, gz_ss, gz_ssr, rfsat = make_excitation_from_params(p, sys)
+    assert (rfsat is None) == (excitation == 'water')
+    rg = make_readout_grads_from_params(2, 2, p)
+    gx_pre, gy_pre, gz_pre = make_prephasers(p.Nx, p.Ny, p.Nz, p.fov, sys, p.crt)
+    gx_s, gy_s, gz_s = make_spoilers(p.res, [p.spoil_cycles_max] * 3, sys, p.crt)
+    gy_long = pp.make_trapezoid(
+        'y', system=sys, area=gy_s.area * 3, duration=pp.calc_duration(gy_s) * 3
+    )
+    extra = pp.calc_duration(gy_long) - pp.calc_duration(gy_s)
+
+    def min_tr(gy):
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            return calc_te_tr_delays(
+                rf, rfsat, gz_ss, gz_ssr, gx_pre, gy_pre, gz_pre, rg.gro, gx_s, gy, gz_s,
+                p.ETL, 1.0, 1.0, sys, echo_offset=rg.echo_offset,
+            )[3]
+
+    expected = extra * (1 if rfsat is None else 2)
+    assert min_tr(gy_long) - min_tr(gy_s) == pytest.approx(expected, abs=1e-9)

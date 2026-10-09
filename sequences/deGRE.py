@@ -192,7 +192,10 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     gx_pre, gy_pre, gz_pre = _make_pre(t_pre)
     # trap4ge rounds each ramp/flat segment up to crt, which can overshoot
     # t_pre by a raster step or two; back off until echo 0 fits.
-    while t_pre > t_pre_min and te_base + pp.calc_duration(gx_pre) > params.TE_degre[0] + 1e-9:
+    def _pre_block_duration():
+        return max(pp.calc_duration(g) for g in (gx_pre, gy_pre, gz_pre))
+
+    while t_pre > t_pre_min and te_base + _pre_block_duration() > params.TE_degre[0] + 1e-9:
         t_pre -= crt
         gx_pre, gy_pre, gz_pre = _make_pre(t_pre)
 
@@ -209,7 +212,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     # TE and TR delays, one pair per echo (TE_degre is a 2-element array --
     # see params.py). te_min doesn't depend on which echo, since both
     # echoes share the same excitation/prephasing timing.
-    te_min = te_base + pp.calc_duration(gx_pre)
+    te_min = te_base + _pre_block_duration()
     raster = sys.grad_raster_time
     # Echo 0 anchors the pair: ceil'd so its realized TE is never earlier
     # than prescribed, same as before. Every later echo's delay is derived

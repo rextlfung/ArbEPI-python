@@ -36,6 +36,8 @@ here.
 
 import numpy as np
 
+from preprocess.grid_resize import resize_to_epi_grid
+
 R2STAR_METHOD = 'log-linear least squares over all echoes (unweighted)'
 
 
@@ -56,3 +58,19 @@ def fit_r2star(
     r2star_map = np.zeros(img_echoes.shape[:-1], dtype=np.float32)
     r2star_map[valid] = np.clip(-slope, 0.0, r2star_max)
     return r2star_map
+
+
+def resize_r2star_to_epi(
+    r2star: np.ndarray, mask: np.ndarray, fov_degre, fov, n_target, zero_pad_z: bool = False
+) -> np.ndarray:
+    """R2* on the EPI grid, zero outside the resized fit mask. The cubic-spline
+    resize blends and rings past the mask edge (its prefilter is global), so a
+    positive overshoot there would survive the clip; the mask, resized with
+    nearest neighbor, removes it (review item 222; same as process_smaps)."""
+    r2 = resize_to_epi_grid(
+        r2star * mask, fov_degre, fov, n_target, order=3, zero_pad_z=zero_pad_z
+    )
+    m = resize_to_epi_grid(
+        mask.astype(np.float64), fov_degre, fov, n_target, order=0, zero_pad_z=zero_pad_z
+    ) > 0.5
+    return (np.clip(r2, 0, None) * m).astype(np.float32)

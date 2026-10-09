@@ -623,7 +623,12 @@ def _cli_benchmark() -> None:
 
 def validate(fn_ksp: str, fn_smaps: str, fn_julia_mat: str) -> bool:
     """Re-run a ../mslr-recon (Julia) reconstruction with its own settings and
-    compare costs, iteration count and image. Returns True if all checks pass."""
+    compare costs, iteration count and image. Returns True if all checks pass.
+
+    The Julia reference was measured on k-space as is, so this runs
+    run_sense with normalize_noise=False (and normalize_operator=False):
+    run_sense's default would divide the k-space by sqrt(noise_var) from
+    fn_ksp, which changes dc_costs/reg_costs (review item 232)."""
     from recon.sense import run_sense  # lazy: sense.py imports this module
 
     ref = read_julia_mat(fn_julia_mat)
@@ -631,6 +636,7 @@ def validate(fn_ksp: str, fn_smaps: str, fn_julia_mat: str) -> bool:
     result = run_sense(
         reg="mslr",
         normalize_operator=False,  # Julia uses A as is
+        normalize_noise=False,  # and the k-space as is
         fn_ksp=fn_ksp,
         fn_smaps=fn_smaps,
         patch_sizes=ref["patch_sizes"],

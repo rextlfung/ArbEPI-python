@@ -30,17 +30,31 @@ def make_spoilers(
     res : [res_x, res_y, res_z], voxel dimensions (m).
     n_cycles_spoil : [n_x, n_y, n_z], cycles of gradient-induced phase
         twist across one voxel, along each axis.
+
+    All three trapezoids share one duration, the minimum that fits the
+    largest-area channel under the hardware slew/amplitude limits.
     """
     tmp = 0.5  # scale factor < 1 to avoid PNS
+    channels = ('x', 'y', 'z')
 
-    spoilers = []
-    for axis, res_ax, n_cyc in zip(('x', 'y', 'z'), res, n_cycles_spoil):
-        area = n_cyc / res_ax
-        spoilers.append(
-            trap4ge(
-                pp.scale_grad(pp.make_trapezoid(axis, system=sys, area=area / tmp), tmp, sys),
-                crt,
-                sys,
-            )
+    # Virtual (pre-scale_grad) area per axis, as in make_prephasers.py.
+    virtual_areas = [n_cyc / res_ax / tmp for res_ax, n_cyc in zip(res, n_cycles_spoil)]
+
+    # One shared duration for all three channels: the shortest that
+    # accommodates the channel with the greatest area requirement. A
+    # pypulseq block lasts as long as its longest gradient anyway, so a
+    # shorter axis would only finish early and idle (while ramping faster,
+    # for more PNS, than it needs to); docs/review-findings.md item 142.
+    duration = max(
+        pp.calc_duration(pp.make_trapezoid(ch, system=sys, area=a))
+        for ch, a in zip(channels, virtual_areas)
+    )
+
+    return tuple(
+        trap4ge(
+            pp.scale_grad(pp.make_trapezoid(ch, system=sys, area=a, duration=duration), tmp, sys),
+            crt,
+            sys,
         )
-    return tuple(spoilers)
+        for ch, a in zip(channels, virtual_areas)
+    )

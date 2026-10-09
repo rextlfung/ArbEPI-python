@@ -8,17 +8,15 @@ usually larger). Each EPI voxel center is mapped to its continuous position
 on the deGRE grid and the volume is interpolated there, which crops and
 resamples in one step, on all three axes.
 
-Voxel convention: FOV/edge-aligned. N voxels tile a FOV centered on
-isocenter edge to edge, so voxel i's center is at (i + 0.5) * FOV/N - FOV/2
--- the same convention scipy.ndimage.zoom(grid_mode=True) uses for a pure
-resize, which this reduces to when the FOVs match. scipy's default
-(grid_mode=False) anchors the first/last voxel centers instead and misplaced
-a linear ramp by 0.27 mm on average (0.63 mm max) at the real 108 -> 240
-resize; this convention gets 0.006 mm (review item 12;
-tests/test_preprocess_grid_resize.py). The crop is exact too: an earlier
-version cropped whole deGRE voxels and then zoomed, which shifted the maps by
-half a voxel whenever the FOV difference wasn't an even number of voxels
-(1.5 mm in z at the 3 mm deGRE default; review item 258). mode='nearest'
+Voxel convention: centered FFT. Voxel i of an N-voxel axis sits at
+(i - N // 2) * FOV/N, i.e. voxel N // 2 is isocenter, which is where
+utils.ift3c (deGRE) and the EPI gridding plus recon's SENSE put it. For odd N
+that is the FOV-centered grid; for even N it is half a voxel off it. An
+earlier version assumed edge-aligned grids (voxel centers at
+(i + 0.5) FOV/N - FOV/2, scipy.ndimage.zoom(grid_mode=True)'s convention),
+which placed maps up to half an EPI voxel from the EPI's object: 1.2 mm in z
+and 0.3 mm in x and y at the default protocol (review item 263). The crop is
+exact, not whole deGRE voxels (item 258). mode='nearest'
 holds the edge value where the target grid extends past the outermost
 source voxel centers.
 """
@@ -60,11 +58,12 @@ def resize_to_epi_grid(
             f'the deGRE must cover the EPI FOV (z only: pass zero_pad_z=True).'
         )
 
-    # Target index j -> source continuous index s = scale * j + offset, from
-    # the voxel centers above: -fov/2 + (j + 0.5) d = -fov_src/2 + (s + 0.5) d_src.
+    # Target index j -> source continuous index s = scale * j + offset. Voxel i
+    # sits at (i - N // 2) d (the centered-FFT convention), so
+    # (j - Ne // 2) d_tgt = (s - Ns // 2) d_src.
     d_src, d_tgt = fov_src / n_src, fov / n_tgt
     scale = d_tgt / d_src
-    offset = (fov_src - fov) / (2 * d_src) + 0.5 * scale - 0.5
+    offset = n_src // 2 - (n_tgt // 2) * scale
     extra = vol.ndim - 3
     matrix = np.concatenate([scale, np.ones(extra)])
     offsets = np.concatenate([offset, np.zeros(extra)])
@@ -78,14 +77,11 @@ def resize_to_epi_grid(
         out = ndimage.affine_transform(vol.astype(np.float64), **kwargs)
 
     if short[2]:
-        Nz = n_tgt[2]
-        z_frac = (fov[2] - fov_src[2]) / fov[2] / 2  # uncovered fraction of the target, per side
-        z_start = int(np.ceil(z_frac * Nz - 1e-9))
-        z_end = int(np.floor(Nz - z_frac * Nz + 1e-9))
-        if z_start >= z_end:
-            raise ValueError(
-                f'resize_to_epi_grid: zero-pad inner target range [{z_start}, {z_end}) is empty.'
-            )
-        out[:, :, :z_start] = 0
-        out[:, :, z_end:] = 0
+        # zero target slices not fully inside the source (edge to edge)
+        s_c = scale[2] * np.arange(n_tgt[2]) + offset[2]
+        covered = ((s_c - 0.5 * scale[2] >= -0.5 - 1e-9)
+                   & (s_c + 0.5 * scale[2] <= n_src[2] - 0.5 + 1e-9))
+        if not covered.any():
+            raise ValueError('resize_to_epi_grid: zero-pad inner target range is empty.')
+        out[:, :, ~covered] = 0
     return out

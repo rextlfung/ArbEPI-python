@@ -8,8 +8,7 @@ torch = pytest.importorskip("torch")
 
 from recon.operators import build_sense  # noqa: E402
 from recon.solvers import cg, pogm_restart  # noqa: E402
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+from tests._helpers import DEVICE, complex_randn  # noqa: E402
 
 
 @pytest.mark.parametrize("mom", ["pgm", "fpgm", "pogm"])
@@ -97,23 +96,16 @@ def test_pogm_restart_rejects_invalid_mom():
         pogm_restart(x0, lambda x: 0.0, lambda x: x, 1.0, mom="bogus")
 
 
-def _complex_randn(*shape, seed):
-    g = torch.Generator(device=DEVICE).manual_seed(seed)
-    real = torch.randn(*shape, generator=g, device=DEVICE)
-    imag = torch.randn(*shape, generator=g, device=DEVICE)
-    return (real + 1j * imag).to(torch.complex64)
-
-
 def test_cg_sense_solve_recovers_exact_image_when_fully_sampled():
     Nx, Ny, Nz, Nc, Nt = 6, 6, 4, 3, 2
 
-    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=0)
+    smaps = complex_randn(Nc, Nx, Ny, Nz, seed=0)
     smaps = smaps / smaps.abs().pow(2).sum(dim=0, keepdim=True).sqrt().clamp_min(1e-6)
 
     omega = torch.ones(Nx, Ny, Nz, Nt, dtype=torch.bool, device=DEVICE)  # fully sampled
     A = build_sense(smaps, omega)
 
-    x_true = _complex_randn(Nx, Ny, Nz, Nt, seed=1)
+    x_true = complex_randn(Nx, Ny, Nz, Nt, seed=1)
     ksp0 = torch.zeros(Nx, Ny, Nz, Nc, Nt, dtype=torch.complex64, device=DEVICE)
     for it in range(Nt):
         y = A.A[it].apply(x_true[..., it])  # (K,Nc)
@@ -133,7 +125,7 @@ def test_cg_sense_solve_recovers_exact_image_when_fully_sampled():
 
 def test_cg_sense_solve_handles_all_zero_kspace():
     Nx, Ny, Nz, Nc, Nt = 4, 4, 4, 2, 1
-    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=2)
+    smaps = complex_randn(Nc, Nx, Ny, Nz, seed=2)
     omega = torch.ones(Nx, Ny, Nz, Nt, dtype=torch.bool, device=DEVICE)
     A = build_sense(smaps, omega)
     K = A.A[0].idx.numel()

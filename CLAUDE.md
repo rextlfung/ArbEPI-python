@@ -627,7 +627,7 @@ no longer called them, for the same reason.
 - **Poisson-disc sampling** (`sample/pd_sample.py`): a local
   reimplementation of `sigpy.mri.poisson`'s algorithm, not a dependency on
   the `sigpy` package — see README's "Differences vs. MATLAB original"
-  section for the three independent bugs found (in both
+  section for the independent bugs found (in both
   `../ArbEPI/lib/pd_sample.m` and real SigPy) that motivated this, and why `numba` (narrowly, for just this one
   function) is still a dependency.
 - **`ge/coppe.py`** SSH-copies a folder of `.pge` files (e.g. `output/*.pge`)
@@ -1315,7 +1315,8 @@ center this change specifically targets) once `precon=:diag` is already in
 place, so it's infrastructure for future/noisier datasets, not something
 this dataset's own results depend on.
 
-**`grid_resize.py`'s edge-aligned voxel convention (the `grid_mode=True`
+**`grid_resize.py`'s voxel convention (centered-FFT since item 263: voxel
+N // 2 is isocenter on both grids; earlier the edge-aligned `grid_mode=True`
 alignment fix, review item 12; since item 258 an exact per-axis coordinate
 map rather than a whole-voxel crop plus `zoom`) is directly load-bearing
 here.**
@@ -1665,12 +1666,13 @@ correlating 0.95; R2* 15.8 1/s for a true 16.8-18.3. With nothing but the
 object in the data, its k-space reconstructs the truth image to 1%
 (`test_preprocess_reconstructs_the_object_from_the_raw_readouts`), which is
 the end-to-end check of archive order, gridding, delay and odd/even
-conventions and k-space centering. It also found review item 263:
-`grid_resize.py` assumes edge-aligned fields of view where a centered FFT puts
-voxel N // 2 at isocenter, so the deGRE maps land 1.2 mm from the EPI's frame
-in z and 0.3 mm in x and y. Left open for the user's decision (it changes
-real-data maps); `test_degre_maps_land_where_the_epi_puts_the_object` is a
-strict xfail until then.
+conventions and k-space centering. It also found review item 263: `grid_resize.py` assumed edge-aligned fields of
+view where a centered FFT puts voxel N // 2 at isocenter, so the deGRE maps
+landed 1.2 mm from the EPI's frame in z and 0.3 mm in x and y. Fixed
+2026-10-09 (user decision): `resize_to_epi_grid` now maps target voxel j to source
+index `Ns//2 + (j - Ne//2) * d_tgt/d_src`, leaving offsets of ~0.05 mm on a
+synthetic sphere; `test_degre_maps_land_where_the_epi_puts_the_object` lost its
+xfail (it needs `snake`, so it was not run in the fixing session).
 
 **Reconstructing that session** (the earlier 60 s session: a 1.5% task, 10 s
 blocks, the motor task lagging the visual one; kept for the cross-talk and

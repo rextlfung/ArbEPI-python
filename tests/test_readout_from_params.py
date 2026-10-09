@@ -4,7 +4,7 @@ import pypulseq as pp
 import pytest
 
 import lib.readout_from_params as rfp
-from lib.make_readout_grads import make_readout_grads
+from lib.make_readout_grads import InfeasibleDwellError, make_readout_grads
 from lib.readout_from_params import (
     ACOUSTIC_MARGIN_US,
     _echo_spacing_in_forbidden_band,
@@ -67,3 +67,30 @@ def test_find_min_feasible_dwell_raises_when_everything_is_forbidden(monkeypatch
     monkeypatch.setitem(rfp._ESP_BANDS_US, coil, [[(0.0, 1e6, 0.0)], [], []])
     with pytest.raises(RuntimeError, match='No feasible ADC dwell'):
         find_min_feasible_dwell(2, 2, p, max_multiple=5)
+
+
+def test_find_min_feasible_dwell_skips_only_dwell_dependent_failures(monkeypatch):
+    """Review item 197: an InfeasibleDwellError (dwell-dependent geometry) moves
+    on to the next dwell; any other AssertionError (dwell-independent, e.g.
+    the blip/raster mismatch) propagates instead of being reported as 'no
+    feasible dwell'."""
+    p = load_params()
+    real = rfp.make_readout_grads
+    calls = []
+
+    def flaky(*a, **k):
+        calls.append(a[4])
+        if len(calls) <= 2:
+            raise InfeasibleDwellError('triangular')
+        return real(*a, **k)
+
+    monkeypatch.setattr(rfp, 'make_readout_grads', flaky)
+    dwell = find_min_feasible_dwell(2, 2, p)
+    assert len(calls) >= 3 and dwell == calls[-1]
+
+    def broken(*a, **k):
+        raise AssertionError('blip_duration must be an even multiple of crt')
+
+    monkeypatch.setattr(rfp, 'make_readout_grads', broken)
+    with pytest.raises(AssertionError, match='even multiple'):
+        find_min_feasible_dwell(2, 2, p)

@@ -28,6 +28,7 @@ from lib.make_prephasers import make_prephasers
 from lib.make_spoilers import make_spoilers
 from lib.mask2epi import mask2epi_laminar, mask2epi_radial, max_blip_steps
 from lib.readout_from_params import derated_sys, make_readout_grads_from_params
+from lib.shot_start import add_fatsat_and_excitation, draw_spoil_scales
 from params import Params
 
 _MASK2EPI = {
@@ -214,40 +215,14 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     for frame in tqdm(range(params.Nframes), desc='Writing frames'):
 
         for shot in range(params.Nshots):
-            # Per-shot random spoiler cycles/voxel, independent per axis,
-            # reused for both this shot's fat-sat crusher (below) and its
-            # post-readout spoiler (after the readout).
-            cx, cy, cz = spoil_rng.uniform(params.spoil_cycles_min, params.spoil_cycles_max, size=3)
-            x_scale = cx / params.spoil_cycles_max
-            y_scale = cy / params.spoil_cycles_max
-            z_scale = cz / params.spoil_cycles_max
-
-            # The first block of each unique section carries the GE TRID label:
-            # the fat-sat block, or the excitation when there is no fat-sat.
-            trid = pp.make_label('TRID', 'SET', 1)
-            if rfsat is not None:
-                seq.add_block(
-                    rfsat if params.fatsat.enabled else pp.make_delay(pp.calc_duration(rfsat)),
-                    trid,
-                )
-                seq.add_block(
-                    pp.scale_grad(gx_spoil, x_scale),
-                    pp.scale_grad(gy_spoil, y_scale),
-                    pp.scale_grad(gz_spoil, z_scale),
-                )
-
-            # RF spoiling (quadratic phase cycling)
-            rf_phase = (0.5 * params.rf_phase_0 * rf_count**2) % 360.0
-            rf.phase_offset = rf_phase / 180 * np.pi
-            rg.adc.phase_offset = rf_phase / 180 * np.pi
-            rf_count += 1
-
-            # Slab-selective excitation + slice-select rephaser
-            if rfsat is None:
-                seq.add_block(rf, gz_ss, trid)
-            else:
-                seq.add_block(rf, gz_ss)
-            seq.add_block(gz_ssr)
+            # Per-shot random spoiler cycles/voxel (scale factors of the
+            # built maximum), reused for both this shot's fat-sat crusher
+            # and its post-readout spoiler (after the readout).
+            x_scale, y_scale, z_scale = draw_spoil_scales(params, spoil_rng)
+            rf_count = add_fatsat_and_excitation(
+                seq, params, rf, rg.adc, gz_ss, gz_ssr, rfsat, gx_spoil, gy_spoil, gz_spoil,
+                (x_scale, y_scale, z_scale), 1, rf_count,
+            )
 
             # TE padding delay
             if params.TE > min_te:
