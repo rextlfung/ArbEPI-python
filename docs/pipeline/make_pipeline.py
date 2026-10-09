@@ -577,8 +577,8 @@ def draw(d):
         ('title', 'Write all output to a single HDF5 file'),
         ('mono', 'write_output() → <seq>_preprocessed.h5'),
         ('para', 'ksp_epi_zf, ksp_calib, smaps, b0_map, r2star_map, omegas, echo_times, W, '
-                 'GCC; attrs noise_var, t_ref_s. The three maps also go to .nii.gz + .json '
-                 'for viewing'),
+                 'GCC; attrs noise_var, t_ref_s, n_frames_discard. The three maps also go to '
+                 '.nii.gz + .json for viewing'),
     ])
     d.arrow(f'M{r_x1} {mid_a} H{r_x1 + 22} V{yc + wh // 2} H{r_x1 + 2}')
     d.label(r_x1 + 30, mid_b + 4, 'ksp_epi_zf', 'start')
@@ -607,12 +607,30 @@ def draw(d):
                  'aliasing kept'),
     ])
     d.label(gx0 + 14, r_y + 22, 'Iterative SENSE (dotted) · sense.py', 'start', 't-section')
+    prep = [
+        ('title', 'Initialize k-space and operator'), ('mono', 'sense.py · run_sense()'),
+        ('para', '1. Frames: all kept, or a subset with --frames. Warm-up frames '
+                 '(n_frames_discard) are recorded in the file, not dropped.'),
+        ('para', '2. Gather y: only the sampled (ky, kz) points of each frame.'),
+        ('para', '3. Noise: y ÷ √noise_var (measured on the noise scan), so the noise has '
+                 'unit variance.'),
+        ('para', '4. Operator: smaps RSS-normalized; with --B0 the field map is clipped to '
+                 'its 0.1–99.9 percentiles.'),
+        ('para', '5. Scale of A (mslr, wavelet-tv): A ÷ σ₁(A), found by power iteration, so '
+                 'step size and λ do not depend on the dataset.'),
+        ('para', '6. Scale of y (wavelet-tv): ÷ its 99th-percentile magnitude, so λ_ℓ1 and '
+                 'λ_TV mean the same on every dataset. Steps 5 and 6 are undone on the output.'),
+    ]
+    prep_h = d.box(ix0, obj_y, iw, None, 'rec', prep)
+    obj_y2 = obj_y + prep_h + 30
+    d.arrow(f'M{obj_cx} {obj_y + prep_h} V{obj_y2 - 2}')
+    d.chip(obj_cx, obj_y + prep_h + 15, 'y, A · unit-noise k-space, scaled operator')
+    obj_y = obj_y2
     obj_h = d.box(ix0, obj_y, iw, None, 'rec', [
         ('title', 'Objective'), ('mono', 'sense.py · run_sense()'),
         ('mathc', r'\hat{x} = \arg\min_x \ \dfrac{1}{2}\,\|Ax - y\|_2^2 + R(x)'),
-        ('para', 'x: one 3D image per frame. y: only the sampled k-space points, scaled to unit '
-                 'noise variance. R(x) is the regularizer. For mslr, A is divided by its largest '
-                 'singular value, and λ defaults to the acceleration factor.'),
+        ('para', 'x: one 3D image per frame. y, A: as initialized above. R(x) is the '
+                 'regularizer; for mslr, λ defaults to the acceleration factor.'),
     ])
     cw = 228  # three columns: A | R | solver
     cg = (iw - 3 * cw) // 2
