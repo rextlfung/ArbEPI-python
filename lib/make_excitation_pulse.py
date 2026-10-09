@@ -65,7 +65,7 @@ def make_excitation_pulse(
     # scratch via pp.make_trapezoid regardless of whether raster-rounding
     # changed anything), so this resync is needed every time, not just when
     # crt actually perturbs the timing -- see this module's own git history/
-    # docs/review-findings.md item 63. rf.delay is fixed at pulse-construction
+    # docs/review-findings.md item 168. rf.delay is fixed at pulse-construction
     # time (effectively max(pre-trap4ge gz.rise_time, sys.rf_dead_time)); if a
     # future crt/RF-timing change ever makes trap4ge's rounded-up
     # gz_ss.rise_time exceed that margin, the subtraction goes negative and

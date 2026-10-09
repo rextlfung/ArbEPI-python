@@ -117,6 +117,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         'x', system=sys, amplitude=params.Nx_degre * deltak[0] / Tread, flat_time=Tread
     )
 
+    # Placeholder ADC, only for its dead_time (independent of delay)
     adc = pp.make_adc(params.Nx_degre, system=sys, duration=Tread, delay=gxtmp.rise_time)
 
     # Extend flat time to split at end of ADC dead time
@@ -128,6 +129,11 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         crt,
         sys,
     )
+
+    # The ADC starts where the *played* (post-trap4ge) gx's flat top does;
+    # gxtmp's rise time only matches it when trap4ge is a no-op, i.e.
+    # crt == grad_raster_time (item 181).
+    adc = pp.make_adc(params.Nx_degre, system=sys, duration=Tread, delay=gx.rise_time)
 
     # Ported literally from GRE.m, which uses deltak[0] (kx spacing, not
     # deltak[2]) for the spoiler area. Kept as a plain trapezoid

@@ -35,8 +35,8 @@ def get_block_type(block: SimpleNamespace) -> BlockType:
     if block.label is not None:
         has_trid = any(lbl.label == 'TRID' for lbl in block.label.values())
 
-    trig = getattr(block, 'trig', None)
-    has_trigger = trig is not None and trig.channel == 'physio1'
+    trig_events = getattr(block, 'trigger', None) or {}
+    has_trigger = any(t.channel == 'physio1' for t in trig_events.values())
 
     return BlockType(no_events, has_trid, has_trigger, pure_delay=no_events)
 

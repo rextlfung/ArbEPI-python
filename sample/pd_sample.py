@@ -256,7 +256,6 @@ def pd_sample(
     accel: float,
     rng: np.random.Generator,
     calib_frac: float = 0.0,
-    dtype: str = 'logical',
     crop_corner: bool = True,
     max_attempts: int = 30,
     tol: float = 0.1,
@@ -290,7 +289,6 @@ def pd_sample(
         rectangle's corners (outside that inscribed ellipse) are still
         forced fully sampled via `calib_mask` directly; they just don't
         drive the taper's own shape.
-    dtype : 'logical', 'double', or 'complex'.
     crop_corner : whether to crop sampling corners (elliptical mask).
     max_attempts : max attempts to generate a point per active point.
     tol : tolerance for the binary-search loop on density.
@@ -316,7 +314,7 @@ def pd_sample(
     # Elliptical taper radius matching the rectangle's per-axis extent --
     # see pd_sample's calib_frac docstring for why the taper stays
     # elliptical rather than switching to the rectangle's own metric.
-    rho_calib = min(max(side_frac, 0.0), 0.999)
+    rho_calib = side_frac  # already in [0, 0.999], see _calib_side_frac
 
     # The exact-count prune/fill step below can only remove non-calibration
     # samples, so if the calibration region alone already exceeds the target
@@ -387,9 +385,4 @@ def pd_sample(
             add_idx = candidates[perm[: min(num_to_add, candidates.size)]]
             mask.flat[add_idx] = True
 
-    if dtype == 'complex':
-        return mask.astype(complex)
-    elif dtype == 'double':
-        return mask.astype(float)
-    else:
-        return mask.astype(bool)
+    return mask.astype(bool)

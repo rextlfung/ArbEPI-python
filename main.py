@@ -56,7 +56,7 @@ def main(export_ge: bool = False, plot: bool = False):
         plot_last_run(params)
 
     if export_ge:
-        from ge.ge_export import check_ge_feasibility, export_to_ge
+        from ge.ge_export import check_all_ge_feasibility, export_to_ge
 
         seq_paths = {
             name: os.path.join(params.output_dir, f'{name}.seq')
@@ -69,9 +69,9 @@ def main(export_ge: bool = False, plot: bool = False):
         # exports have already run. Reuse each loaded Sequence + report in
         # the export pass below instead of re-reading and re-checking --
         # neither is cheap on a large sequence like ArbEPI.seq.
-        checked = {
-            name: check_ge_feasibility(seq_path, params) for name, seq_path in seq_paths.items()
-        }
+        # check_all_ge_feasibility evaluates all four before raising once,
+        # so every infeasible sequence is reported, not just the first.
+        checked = check_all_ge_feasibility(seq_paths, params)
 
         for name, seq_path in seq_paths.items():
             seq, report = checked[name]

@@ -933,7 +933,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   trap branch. Verified: full test suite still passes, including
   `test_seq2ceq.py`'s whole-sequence smoke tests over `ArbEPI.seq`/
   `EPIcal.seq` (the only sequences with 'grad'-type events).
-- [ ] **107. `ge/seq2ceq.py`'s consistency-check and gradient-heating loops
+- [x] **107. `ge/seq2ceq.py`'s consistency-check and gradient-heating loops
   silently skip the sequence's final segment instance whenever it's a
   complete (non-truncated) fit.** [measured] Two of the four
   `nBlocksInSegment`-bounded block-walking loops added by item 98
@@ -979,7 +979,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   re-run `ge/validate_against_matlab.py` against a fresh MATLAB reference
   to confirm the `-1` formula matches `seq2ceq.m`'s own (no MATLAB
   reference available in this environment to check directly).
-- [ ] **108. `preprocessing/calibrate_delay.py`'s inline oephase
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **108. `preprocessing/calibrate_delay.py`'s inline oephase
   computation is a third, unfixed copy of the FFT-shift-convention bug
   item 44 was supposed to have fixed everywhere.** [measured]
   `calibrate_delay.py:93` reads
@@ -1007,7 +1008,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   also removes the duplication (see item 117 for the same "should call the
   shared helper instead of duplicating" pattern elsewhere in
   `preprocess.py`).
-- [ ] **109. `recon/analysis.py`'s `benchmark` subcommand crashes on its own
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **109. `recon/analysis.py`'s `benchmark` subcommand crashes on its own
   documented usage -- stale `Nx`-expanded `echo_times` shape left behind by
   item 90.** [measured; citation updated 2026-09-22 against `6921c8c` --
   `recon/benchmark_b0_cost.py` merged into `recon/analysis.py`'s
@@ -1035,6 +1037,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   very first swept `L` value. Fix: build `echo_times_s` at `(Ny, Nz, Nt)`
   (drop the `Nx` expand), matching `recon/mslr.py`'s/`recon/run_recon.py`'s
   convention.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [ ] **110. `preprocessing/preprocess.py`'s `n_frames_discard` is
   computed and written but has no reader anywhere in the repo.** [verify;
   citation updated 2026-09-22 against `6921c8c` -- the "no reader" file
@@ -1070,7 +1073,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   consumer to skip the first `n_frames_discard` frames, or document
   explicitly that this attr is metadata-only for a human/future consumer
   to act on by hand.
-- [ ] **119. `lib/mask2epi.py`'s `mask2epi_radial` crashes with `ETL=1`
+- [x] **119. `lib/mask2epi.py`'s `mask2epi_radial` crashes with `ETL=1`
   (`.max()` on a zero-size array), while `mask2epi_laminar` handles the
   same input fine.** [measured; citation updated 2026-09-16 against
   `de3d535` -- write site shifted from `:1126-1128` to `:1186-1188`,
@@ -1110,6 +1113,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   ETL <= 1 else _pairwise_weighted_dist(...)[...].max()`, and add a
   parametrized `ETL=1` case to `tests/test_mask2epi.py` covering
   `mask2epi_radial`.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [ ] **120. `preprocessing/epi_gridding.py`'s `rampsamp2cart` is a fourth,
   untracked copy of the FFT-shift-pairing bug items 44/64/91/108 already
   cover elsewhere -- and this copy can cause a real image-domain shift, not
@@ -1205,7 +1209,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   general (a denser schedule/shorter TR would show a real difference) and
   costs nothing extra for `shot_index=0`. Full test suite (154 passed, 17
   skipped) and a fresh `main.py --ge` build unaffected.
-- [ ] **122. `ge/seq2ceq.py`'s two loops item 107 flags also use a
+- [x] **122. `ge/seq2ceq.py`'s two loops item 107 flags also use a
   stricter outer `while` bound than the two already-correct loops, a
   distinct root cause item 107's own proposed fix doesn't address.**
   [verify, not live today] The two already-correct block-walking loops use
@@ -1227,6 +1231,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   bug, and item 107's own stated fix direction would leave it unfixed --
   worth changing both outer bounds to `<=` in the same pass as item 107's
   fix.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [x] **125. `sequences/deGRE.py` excites with the EPI sequence's flip angle
   and RF duration instead of the deGRE-specific values `params.py` computes
   for exactly this purpose and that are never read anywhere.** [measured]
@@ -1285,7 +1290,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `deGRE.seq`. `test_degre_excitation_is_centered`/
   `test_degre_raises_actionable_error_below_minimum_tr` both still pass,
   and the full suite (154 passed, 17 skipped) is unaffected.
-- [ ] **126. `ge/writeceq.py`'s sliding-window gradient/RF heating-check
+- [x] **126. `ge/writeceq.py`'s sliding-window gradient/RF heating-check
   block count undercounts by exactly one segment instance's block count
   whenever a segment's block count evenly divides
   `NMAXBLOCKSFORGRADHEATCHECK` (40000).** [measured] The header field
@@ -1326,6 +1331,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   nBlocksInSegment - 1 > ceq.nMax` form items 107/122 already identify in
   `ge/seq2ceq.py`), and add a regression test with a synthetic `Ceq`
   whose segment size divides 40000 exactly.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [x] **127.** Resolved together with item 149 (the mirror-image bug in
   `plot/plotting.py`'s `plot_one_tr`): added a shared, parity-aware
   `plot.plotting.nominal_te_value(per_echo_values, ETL)` helper
@@ -1333,7 +1339,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   even `ETL`, matching `calc_te_tr_delays.py`'s continuous `ETL/2 - 0.5`
   definition) and wired `compare_readout_pns.py:65`'s `te_realized` to it.
   Unit tests added in `tests/test_plotting.py` covering both parities.
-- [ ] **131. `recon/mslr.py`'s `_reg_weights` computes each scale's
+- [x] **131. `recon/mslr.py`'s `_reg_weights` computes each scale's
   regularization weight from the *declared* patch size, but the same
   file's `img2patches`/`patches2img` (the functions that
   actually consume `patch_sizes[k]`) silently clip each axis to the image
@@ -1380,6 +1386,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `p_k`, and add a test with `patch_sizes` exceeding the image on at
   least one axis, asserting `_reg_weights`'s implied `p_k` matches what
   `patchSVST` actually used.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [x] **132.** Superseded, 2026-09-22 against `6921c8c`: `recon/recon_frames.py`
   (and its `_recon_one_frame`/`recon_frames()` batch loop this item was
   entirely about) was deleted outright, not merged, in the `recon/`
@@ -1453,7 +1460,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   regression test using the `(30,20), accel=1.5, calib_frac=0.3, seed`-based
   repro above (or the simpler `accel=9, calib_frac=0.05, seed=17` case) as
   a direct, reliable trigger.
-- [ ] **137. `ge/blocks.py`'s `get_block_type` reads a nonexistent `.trig`
+- [x] **137. `ge/blocks.py`'s `get_block_type` reads a nonexistent `.trig`
   attribute instead of pypulseq's real `.trigger` dict, so physio-trigger
   blocks are never detected.** [measured] `ge/blocks.py:38-39`:
   ```python
@@ -1496,6 +1503,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `get_block_type`/`get_dynamics`/`seq2ceq` -- the same untested-bug
   pattern item 134 already flags for `write_ceq`/`read_pge`, one level up
   the pipeline.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [x] **138. `sequences/ArbEPI.py`'s post-readout spoiler scaling has a
   quantifiable off-by-one against this repo's 0-based indexing
   convention, already flagged in an inline comment but untracked in this
@@ -1589,7 +1597,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   correction) both pass; the two touched lines were also reflowed to stay
   under ruff's line-length limit (no new lint errors beyond this file's
   pre-existing, unrelated `E501`s at `:119`/`:143`).
-- [ ] **139. `preprocessing/config.py`'s `load_seq_params` reads
+- [x] **139. `preprocessing/config.py`'s `load_seq_params` reads
   `scan_info.mat` via a bare `h5py.File`, not `matio.read_mat`,
   contradicting `matio.py`'s own unconditional stated rule.** [verify,
   not live today; citation updated 2026-09-15 against `b701489` --
@@ -1623,6 +1631,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   outlier, not the rule. Fix: route `load_seq_params` through
   `matio.read_mat`/`read_mat_array` like every other `scan_info.mat`
   reader in this repo.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [x] **146. `lib/make_readout_grads.py`'s POPE readout can hard-crash
   (`AssertionError`) on a legitimate small-readout-FOV/sparse-mask
   combination, with no fallback and no actionable guidance toward the fix.**
@@ -2006,7 +2015,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   pp.calc_duration(gy_spoil), pp.calc_duration(gz_spoil))`, and add an
   anisotropic-resolution regression case (could share test infrastructure
   with item 142's suggested anisotropic-`res` test for `make_spoilers.py`).
-- [ ] **171. `ge/coppe.py`'s hop-2 SSH-failure fix (commit `3de4d58`) was
+- [x] **171. `ge/coppe.py`'s hop-2 SSH-failure fix (commit `3de4d58`) was
   applied to only 1 of 7 ssh/scp invocations in the file, leaving the
   identical silent-failure mode live on every other hop.** [measured code
   state; the underlying failure mode was previously verified live by this
@@ -2049,7 +2058,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   the fix as a whole. Fix direction: drop `-q` from the same five
   remaining call sites (keeping stderr capture, already correct there) the
   same way it was dropped from `_TRANSFER_SCRIPT`.
-- [ ] **181. `sequences/deGRE.py`'s ADC delay is derived from a pre-`trap4ge`
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **181. `sequences/deGRE.py`'s ADC delay is derived from a pre-`trap4ge`
   gradient object, not the one actually played -- if `crt` ever diverges from
   `grad_raster_time`, the readout's first sample lands inside the gx ramp
   instead of on the flat top.** [measured; citation updated 2026-09-19
@@ -2101,6 +2111,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   rise time for `adc.delay`), and add a regression test building
   `generate_degre` at a non-default `crt` (e.g. `20e-6`) asserting
   `adc.delay == gx.delay + gx.rise_time`.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [x] **182.** Superseded, 2026-09-22 against `6921c8c`: `recon/recon_frames.py`
   (the file this item's `use_parfor=True`/`ProcessPoolExecutor.map()`
   eager-drain finding is entirely about) was deleted outright in the
@@ -2144,7 +2155,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `romeo_finit`'s signature and call `coil_combine(images, smap)` when `smap`
   is available (mirroring what the main fit call already does), falling back
   to `coil_combine(images, nothing)` only when no `smap` was loaded.
-- [ ] **184. `recon/mslr.py`'s `img2patches`/`patches2img` silently zero
+- [x] **184. `recon/mslr.py`'s `img2patches`/`patches2img` silently zero
   out real image voxels whenever `stride_size > patch_size` on an axis --
   unvalidated, and untested in that regime.** [measured; citation updated
   2026-09-22 against `6921c8c` -- `recon/lowrank.py` merged into
@@ -2189,6 +2200,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   guard) and raise a clear `ValueError`, or have `_patch_starts` clamp
   `stride` to `patch`; either way, add a regression test exercising
   `stride > patch`.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [ ] **196. `sample/pd_sample.py`'s `crop_corner=True` post-crop can
   strip calibration-region cells at a high enough `calib_frac`, directly
   contradicting the function's own docstring claim that `calib_mask` cells
@@ -2244,7 +2256,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   a dedicated exception type for the triangular-lobe/coverage-bump cases,
   or check the relevant condition directly before calling), and let
   unrelated assertions propagate with their real message.
-- [ ] **199. `recon/lowres_calib.py` (formerly `lowres_calib_recon.py`)/
+- [x] **199. `recon/lowres_calib.py` (formerly `lowres_calib_recon.py`)/
   `preprocessing/r2star_map.py`/`preprocessing/gre_diagnostics.py` each
   paste an undocumented copy of `_ift3`,
   losing the odd-axis complex-value warning its own source carries --
@@ -2326,7 +2338,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   without either coupling to the other's optional-extra dependency set --
   the same cross-package-coupling concern item 200's own note raises for
   its analogous chunked-read duplication.
-- [ ] **205. `preprocessing/preprocess.py`'s STEP 3 never forwards item
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **205. `preprocessing/preprocess.py`'s STEP 3 never forwards item
   203's `zero_pad_z` parameter -- narrowed 2026-09-22, `load_smaps()`'s
   own half of this gap is now fixed.** [measured; **partially resolved by
   commit `5ba6fc5`** ("preprocessing/smaps.py: add zero_pad_z param to
@@ -2390,7 +2403,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   now does -- likely via a new `PreprocessingConfig` field, since
   this is a per-dataset condition a config value can carry the same way
   item 203 chose for `run_b0map`.
-- [ ] **206. `preprocessing/preprocess.py`'s STEP 3 guarantees a wasted
+  Resolved 2026-10-09 (backlog sweep): re-checked against the current tree; already fixed (or covered by tests) by earlier work.
+- [x] **206. `preprocessing/preprocess.py`'s STEP 3 guarantees a wasted
   full ESPIRiT re-run on every fresh pipeline execution today, not just an
   occasional legacy-cache transition -- sharpens items 117/141.** [measured
   by code tracing plus an existing passing test; a live standalone
@@ -2438,6 +2452,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   117/141 already suggest -- have `preprocess.py`'s STEP 3 call
   `load_smaps()` directly (or the new `_calibrate_and_compress` projection
   helper) instead of its own narrower, non-`Ncoils`-tagged copy.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [ ] **222. `run_b0map.py`/`r2star_map.py` cubic-spline-resize `b0map_hz`/
   `r2star` onto the EPI grid but never re-apply the resized mask afterward
   -- unlike the identical, already-fixed case in `smaps.py`'s
@@ -2521,7 +2536,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `_cli_benchmark`'s body (or the `benchmark()` function itself), so
   importing the module and running `sweep`/`validate` on CPU still work.
   Resolved by the 2026-09-25 `recon/` restructure: `recon/analysis.py` is gone, and the assert now sits inside `recon/utils.py`'s `benchmark()` (line ~554), not at module level, so `import recon.utils` works without CUDA.
-- [ ] **231. `recon/run_recon.py`'s `--r2star` path crashes on any dataset
+- [x] **231. `recon/run_recon.py`'s `--r2star` path crashes on any dataset
   whose EPI z-FOV exceeds deGRE's fixed z-FOV, because `main_mslr_ref`/
   `run_cgsense_b0` never thread a `zero_pad_z` parameter through to
   `estimate_r2star_map_epi_grid`, unlike the parallel `recon/lowres_calib.py`
@@ -2544,6 +2559,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `zero_pad_z` parameter to `main_mslr_ref`/`run_cgsense_b0` and their
   CLIs, forwarding it into `estimate_r2star_map_epi_grid` the way
   `lowres_calib.py` already does.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [ ] **232. `recon/analysis.py`'s `validate` subcommand no longer matches
   the Julia reference numbers it compares against, because it never
   disables `run_recon`'s (now-default) noise normalization.** [measured
@@ -2568,7 +2584,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   still live in the merged `recon/analysis.py` today. Fix: pass
   `normalize_noise=False` in `validate()`'s call to `run_recon`, or
   rescale the reference dc/reg costs before comparing.
-- [ ] **233. `recon/run_recon.py`'s `main_mslr_local` reads `omegas`
+- [x] **233. `recon/run_recon.py`'s `main_mslr_local` reads `omegas`
   directly from the recon `.h5` file with no fallback for a file written
   before that key existed, unlike its two sibling subcommands in the same
   module.** [measured 2026-09-23 against `100056a`] `main_mslr_local`
@@ -2584,7 +2600,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `KeyError` on such a file. Fix: route `main_mslr_local` through
   `_load_omega_broadcast` (or `recon.mslr._load_omega`) like the other two
   subcommands, rather than reading the dataset directly.
-- [ ] **234. `preprocessing/preprocess.py`'s STEP 6 checkpoint/resume
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **234. `preprocessing/preprocess.py`'s STEP 6 checkpoint/resume
   logic has no recovery path if interrupted between opening the checkpoint
   file and finishing `ksp_epi_zf`'s pre-allocation -- the next run crashes
   with a raw `KeyError` instead of resuming or erroring clearly.**
@@ -2608,7 +2625,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   calling it), check `'ksp_epi_zf' in mf` and treat a file lacking it the
   same as a missing file (reopen in `'w'` mode and re-pre-allocate), or
   raise a clear `RuntimeError` naming the corrupt-checkpoint scenario.
-- [ ] **235. `main.py`'s `--ge` feasibility pre-check only ever surfaces
+  Resolved 2026-10-09 (backlog sweep): re-checked against the current tree; already fixed (or covered by tests) by earlier work.
+- [x] **235. `main.py`'s `--ge` feasibility pre-check only ever surfaces
   the first infeasible sequence, not all four, despite its own comment
   claiming to check all four up front.** [measured 2026-09-23 against
   `100056a`] The comment at `main.py:65-68` says "Check all four sequences
@@ -2629,7 +2647,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   actually happens. Fix: catch and collect each sequence's exception (or
   call the non-raising `check_seq_feasibility` directly and inspect
   `.ok`), evaluating all four before reporting/raising once.
-- [ ] **236. `sample/external_mask.py`'s `load_external_mask` silently
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **236. `sample/external_mask.py`'s `load_external_mask` silently
   accepts any nonzero value -- including `NaN` -- as a sampled point,
   despite its own docstring's "0/1 array" contract, with no validation.**
   [measured 2026-09-23 against `100056a`] `mask = np.asarray(data[key
@@ -2650,6 +2669,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `np.all((mask_raw == 0) | (mask_raw == 1))` (or an integer-dtype-aware
   equivalent) before casting, and raise a clear `ValueError` naming the
   offending file/key otherwise.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [ ] **247. `sequences/deGRE.py`'s `te_min` omits `gy_pre`/`gz_pre` from
   the prephase block's duration, unlike its own `tr_min` a few lines
   below -- the same asymmetry item 36 already fixed for `tr_min` alone.**
@@ -3212,7 +3232,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   pass) but should be updated to match the next time CLAUDE.md itself is
   touched.
   Resolved 2026-09-28: CLAUDE.md no longer quotes a number; it says `deGRE.seq` is under the 0.3 threshold and points at the "Current baseline" table (0.2556 again at this date).
-- [ ] **112. `recon/analysis.py`'s `sweep` subcommand still describes `L=6`
+- [x] **112. `recon/analysis.py`'s `sweep` subcommand still describes `L=6`
   as "the current production default" and cites a test name item 85
   renamed.** [measured; citation updated 2026-09-22 against `6921c8c` --
   `recon/sweep_time_segments.py` merged into `recon/analysis.py`'s `sweep`
@@ -3243,7 +3263,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   doc/code reference, and survived the later `recon/` file merge unchanged
   -- worth one pass over `recon/analysis.py` to bring its docstring and
   printed marker in line with both.
-- [ ] **113. Dangling `docs/review-findings.md` item-number
+  Resolved 2026-10-09 (backlog sweep): re-checked against the current tree; already fixed (or covered by tests) by earlier work.
+- [x] **113. Dangling `docs/review-findings.md` item-number
   cross-references in source comments: item 28 (and, previously flagged
   but still unresolved, item 12) don't exist in this file.**
   [measured] `lib/make_prephasers.py:10`'s module docstring says "a real,
@@ -3269,6 +3290,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   see git history at <commit>" note) so every source-code citation
   resolves, or replace the four source-code citations with a description
   of the fix in prose instead of a dangling item number.
+  Resolved 2026-10-09 (backlog sweep): `lib/make_prephasers.py`'s dangling cite now points at `tests/test_make_prephasers.py`; `preprocess/grid_resize.py` and `tests/test_preprocess_grid_resize.py` still cite item 12 on purpose.
 - [x] **114. `README.md`'s `--plot` file list is missing `PNS_one_tr.png`.**
   [measured; citation updated 2026-09-17 against `ad2fdc4` -- shifted from
   `README.md:48` to `:57` (Getting Started step 4 now, after the
@@ -3299,7 +3321,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   table the way the surrounding paragraph already does for the `ArbEPI`
   number, so it can't drift out of sync again.
   Resolved 2026-09-28: `ge/check.py`'s docstring no longer quotes current magnitudes (0.2456, or the stale ArbEPI 0.1484); it labels the MATLAB-reproduction numbers historical and points at the "Current baseline" table.
-- [ ] **124. `recon/mslr.py`'s `run_recon` docstring still claims
+- [x] **124. `recon/mslr.py`'s `run_recon` docstring still claims
   `echo_times` gets "broadcast across Nx here," directly contradicting the
   actual post-item-90 implementation in the same file.** [measured;
   citation updated 2026-09-22 against `6921c8c` -- `reconstruct.py` renamed
@@ -3336,6 +3358,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   referenced the old broadcast, but neither touched this specific sentence.
   Fix: reword `reconstruct.py:163-164` to match `_load_echo_times`'s/
   `build_encoding_operator_b0`'s accurate phrasing.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [x] **128.** Superseded, 2026-09-22 against `6921c8c`: `recon/recon_frames.py`
   (the module whose docstring this item quotes) was deleted outright in the
   `recon/` 25-modules-to-7 consolidation. Repo-wide grep confirms
@@ -3344,7 +3367,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   "legacy-format branch is unreachable" claim to correct. (This closure
   doesn't resolve the underlying `smaps.py`/`preprocess.py` cache-format
   documentation gap itself -- see item 117, still open.)
-- [ ] **133. The `<seqname>_gre.h5`/`smaps_<seqname>_sigpy.h5` cache paths
+- [x] **133. The `<seqname>_gre.h5`/`smaps_<seqname>_sigpy.h5` cache paths
   are hand-built with the identical f-string independently in many
   separate files instead of being `SeqPaths` fields, and the count of
   independent call sites keeps growing.** [citations updated 2026-09-22
@@ -3419,7 +3442,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   other five paths are built) and update all 12+ call sites (plus item
   165's `recon/` trio, and item 188's `b0map_cache` sites) to read them
   instead of re-deriving the filename.
-- [ ] **140. `preprocessing/nifti_io.py`'s module docstring caller list is
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **140. `preprocessing/nifti_io.py`'s module docstring caller list is
   stale on three counts now (was two): it names a module that no longer
   calls `save_recon_nifti`, and omits several that do and contradict its
   "always the EPI grid" claim.** [citation updated 2026-09-22 against
@@ -3472,7 +3496,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `recon/`, and add `gre_diagnostics.py` (deGRE-grid GRE-echo images,
   the one caller not on the EPI grid), `save_result.py`,
   `lowres_calib_recon.py`, and `cg_sense_b0.py`.
-- [ ] **141. Addendum to item 117: `preprocess.py`'s STEP 3 never writes
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **141. Addendum to item 117: `preprocess.py`'s STEP 3 never writes
   `smaps_degre`/`emap_degre`, so `smaps.py`'s "legacy cache" backfill
   branch fires on every fresh full-pipeline run, not just an occasional
   older cache.** [measured; citation updated 2026-09-17 against `ad2fdc4`
@@ -3511,6 +3536,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   calling `smaps.load_smaps()` directly from STEP 3 instead of
   duplicating its cache-writing logic fixes both the Nvcoils-check drift
   item 117 already flags and this omission at once.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [ ] **142. `lib/make_spoilers.py` doesn't share one duration across its
   x/y/z trapezoids, unlike the structurally-identical
   `lib/make_prephasers.py` (already fixed for exactly this reason -- see
@@ -3650,7 +3676,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   finding this left behind (a single orphaned `# 4.` with no `1`/`2`/`3`
   anywhere above it, which is arguably a worse inconsistency than the one
   this item originally described, not a fix).
-- [ ] **178. `preprocessing/smaps.py`'s `_masked_gaussian_smooth` uses
+- [x] **178. `preprocessing/smaps.py`'s `_masked_gaussian_smooth` uses
   `scipy.ndimage.gaussian_filter`'s default `mode='reflect'` boundary
   handling, inconsistent with `preprocessing/grid_resize.py`'s documented
   `mode='nearest'` convention for the same pipeline -- confirmed to have
@@ -3677,7 +3703,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   exactly 0 regardless of padding mode. Fix: pass `mode='nearest'`
   explicitly for consistency with `grid_resize.py`'s stated convention, or
   add a one-line comment explaining why reflect is fine here.
-- [ ] **192. `preprocessing/smaps.py`'s `process_smaps` now has a single
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **192. `preprocessing/smaps.py`'s `process_smaps` now has a single
   orphaned `# 4. Normalize` comment with no `1`/`2`/`3` anywhere above it
   -- the successor to item 177, left behind by the same crop/mask redesign
   that closed it.** [measured, very low severity; citation updated
@@ -3705,6 +3732,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   drop the leftover "4." (matching the other four now-unnumbered stage
   comments, which is the simpler fix given how much this function has
   already been restructured) or renumber all five stages consistently.
+  Resolved 2026-10-09 (backlog sweep): re-checked against the current tree; already fixed (or covered by tests) by earlier work.
 - [x] **179. `recon/sweep_time_segments.py`'s module docstring and its own
   printed sweep-table marker both still call `L=6` "the current production
   default," stale since item 82 changed the default to `L=32`.**
@@ -3737,7 +3765,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   own stale-`L=6`-description problem is already tracked under item 112.
   This item's own cited path is now unfindable and there is nothing left
   at it to fix independently.
-- [ ] **180. `recon/analysis.py`'s `validate` subcommand module docstring
+- [x] **180. `recon/analysis.py`'s `validate` subcommand module docstring
   documents
   only the three radial-dataset validation configs, omitting the three
   matching laminar-dataset configs CLAUDE.md documents as validated via
@@ -3766,6 +3794,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   against real MSLR output. Fix: add the three laminar rows (or a pointer
   to CLAUDE.md's fuller six-row table) to
   `recon/analysis.py:97-109`.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [x] **185. CLAUDE.md's "Plotting" paragraph undercounts
   `plot/plot_last_run.py`'s functions -- "four" should be "five" -- and
   has been wrong since the sentence was written.** [measured, low severity]
@@ -3785,7 +3814,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `plot_pns_one_tr` alongside `plot_one_tr` the way the paragraph already
   singles out `plot_one_tr`.
   Resolved 2026-09-28: CLAUDE.md now says five plotting functions, naming `plot_pns_one_tr`.
-- [ ] **188. `<seqname>_b0map.h5`'s cache path is hand-built independently in
+- [x] **188. `<seqname>_b0map.h5`'s cache path is hand-built independently in
   two files -- a third, previously-untracked instance of item 133's already-
   documented pattern.** [measured; citation updated 2026-09-17 against
   `ad2fdc4` -- `run_b0map.py`'s site shifted from `:76` to `:85`;
@@ -3812,7 +3841,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   field to `SeqPaths` alongside the `gre_cache`/`smaps_cache` fields that
   item proposes, computed once in `set_seq_paths`, and update both call
   sites above to read it instead of re-deriving the filename.
-- [ ] **190. `preprocessing/preprocess.py`'s new gzip compression on
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **190. `preprocessing/preprocess.py`'s new gzip compression on
   `ksp_epi_zf` carries no in-code rationale, and the sibling module that
   documents this exact dataset's read performance now silently describes
   data from before the change.** [measured, low-medium severity; citation
@@ -3856,6 +3886,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `read_frames_cropped` docstring noting the dataset is now
   gzip-compressed and that the cited throughput figure predates that
   change.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [x] **191. README.md's Architecture file tree omits `ge/validate_pns.py`
   from its `ge/` subsection, even though CLAUDE.md cites it by name as
   `ge/pns.py`'s MATLAB-validation script.** [measured, low severity]
@@ -3977,7 +4008,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `recon/run_recon.py`'s `cg` subcommand, mentioned plainly in the
   module-mapping list with no unmet forward-reference). `grep -n "see
   below" CLAUDE.md` shows no unresolved case tied to CG-SENSE.
-- [ ] **209. CLAUDE.md's `preprocessing/`/`grid_resize.py` discussion has no
+- [x] **209. CLAUDE.md's `preprocessing/`/`grid_resize.py` discussion has no
   mention of the new `zero_pad_z` resize feature (item 203) at all.**
   [measured; found 2026-09-17 against `ad2fdc4`] A `grep -n "zero_pad\|item
   196\|item 203\|grid_resize" CLAUDE.md` finds only the pre-existing,
@@ -3992,7 +4023,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `grid_resize.py` discussion once item 205 is resolved (documenting both
   the real capability and, if left unfixed, the `load_smaps`/`process_smaps`
   gap item 205 describes).
-- [ ] **214. Four in-repo cross-references to "item 204" in `recon/`
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **214. Four in-repo cross-references to "item 204" in `recon/`
   source comments actually mean item 213 -- item 204 is an unrelated
   `params.py` finding.** [measured; citation updated 2026-09-22 against
   `6921c8c` -- `recon/lowres_calib_recon.py` and `recon/lowres_calib_recon_b0.py`
@@ -4012,6 +4044,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   reader at the wrong finding (item 204 is `params.py`'s stale
   PNS-slew-tuning comment, unrelated to HDF5 reads). Fix: s/item 204/item
   213/ at all four sites.
+  Resolved 2026-10-09 (backlog sweep): re-checked against the current tree; already fixed (or covered by tests) by earlier work.
 - [x] **215.** Resolved, confirmed 2026-09-22 against `6921c8c` -- ironically
   re-resolved by the second (`recon/`-wide) merge: the standalone
   `recon/lowres_calib_recon_b0complex.py` this item was about no longer
@@ -4024,7 +4057,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `tests/test_recon_operators_b0.py:278-280` all correctly attribute the
   flipped-sign file to "the worktree-lowres-calib-recon branch" without
   implying it's absent from this tree. No remaining ambiguity.
-- [ ] **220. `lib/make_excitation_pulse.py`'s new item-168 explanatory
+- [x] **220. `lib/make_excitation_pulse.py`'s new item-168 explanatory
   comment cites the wrong backlog item number for its own claim.**
   [measured; found 2026-09-19 against `d515cd0`, in the fix commit for
   item 168 itself] `lib/make_excitation_pulse.py:41-46` (added by the same
@@ -4051,6 +4084,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   cheap to fix. Fix: change "item 63" to "item 168" at
   `lib/make_excitation_pulse.py:45` (or drop the citation entirely, since
   the surrounding prose already explains the mechanism inline).
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [x] **225. README.md's Architecture file tree for `preprocessing/` omits
   two real modules: `grid_resize.py` and `r2star_map.py`.** [measured]
   `ls preprocessing/*.py` shows 17 files (excluding `__init__.py`);
@@ -4071,7 +4105,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   predates that rewrite by some margin). Fix: add one line each to
   README's `preprocessing/` tree block.
   Resolved by the 2026-09-27 `preprocess/` restructure: README's `preprocess/` tree lists `grid_resize.py` and `r2star.py` (the successor of `r2star_map.py`).
-- [ ] **226. `recon/L1-wavelet_TV_B0_SENSE.py`'s "Formerly
+- [x] **226. `recon/L1-wavelet_TV_B0_SENSE.py`'s "Formerly
   `run_recon_sigpy_b0.py`" docstring section is garbled from a bad
   merge-time search/replace, listing the same filename three times where
   three distinct removed drivers belong, and separately conflates two
@@ -4105,7 +4139,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   this same file). Fix: reword `L1-wavelet_TV_B0_SENSE.py:103-104,107-108`
   to name the real current files/subcommands, and fix `analysis.py:139`'s
   comment.
-- [ ] **227. `preprocessing/epi_gridding.py`'s module docstring overstates
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **227. `preprocessing/epi_gridding.py`'s module docstring overstates
   its own regression test's coverage.** [measured] The docstring (added by
   the `645c9c3` absolute-scale fix) claims the test "measures this exact
   sqrt(nx) gap to 4 significant figures across nx in `{32,64,128,256}`"
@@ -4116,6 +4151,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   docstring overstates coverage or a swept value was dropped when the test
   was finalized. Fix: add `256` to the loop, or correct the docstring's
   claimed range.
+  Resolved 2026-10-09 (backlog sweep): re-checked against the current tree; already fixed (or covered by tests) by earlier work.
 - [x] **228. `pyproject.toml`'s `recon` extra comment cites a file deleted
   by the `recon/` consolidation, and CLAUDE.md's `recon`-extra dependency
   list is now incomplete.** [measured] `pyproject.toml`'s comment on the
@@ -4133,7 +4169,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `pyproject.toml` comment at `recon/L1-wavelet_TV_B0_SENSE.py`, and add
   `sigpy` to CLAUDE.md's recon-extra dependency list.
   Resolved by the 2026-09-25 `recon/` restructure: the `recon` extra no longer lists `sigpy`, so neither the comment nor CLAUDE.md's list refers to the deleted bridge module. The extra's comment was reworded again on 2026-09-28 to point at `recon/README.md`.
-- [ ] **229. Three `preprocessing/` docstrings still cite deleted `recon/`
+- [x] **229. Three `preprocessing/` docstrings still cite deleted `recon/`
   files (`sigpy_recon.py`, `recon_frames.py`) unqualified, as if they
   still exist.** [measured] `recon/sigpy_recon.py` and
   `recon/recon_frames.py` were both deleted outright (not moved) in the
@@ -4154,6 +4190,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   docstrings are the only unqualified survivors repo-wide. Fix: reword all
   three sites to say "the removed `recon/<file>.py`," matching the
   convention every other sibling reference already follows.
+  Resolved 2026-10-09 (backlog sweep): re-checked against the current tree; already fixed (or covered by tests) by earlier work.
 - [x] **237. `params.py`'s `TE = 30e-3` comment claims TE "sits close to
   the minimum achievable" for the default config -- true for the old
   240x240x45 protocol this comment was written for, not the current
@@ -4216,7 +4253,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   explicitly as historical the way several *other* paragraphs in the same
   CLAUDE.md section already do for their own superseded numbers.
   Resolved 2026-09-28: CLAUDE.md's "PNS finding history" and "Investigated and closed" paragraphs now say their numbers come from the 240x240x45, R=9, TE 34.9 ms protocol, note that the current protocol kept the slews without a re-sweep, and point at the "Current baseline" table for today's numbers.
-- [ ] **240. `recon/run_recon.py`'s `_nominal_te_s` docstring says its
+- [x] **240. `recon/run_recon.py`'s `_nominal_te_s` docstring says its
   duplicate lives on an "unmerged worktree branch," but that duplicate has
   been committed to this tree since commit `8e4e11c`.** [measured
   2026-09-23 against `100056a`] `recon/run_recon.py:220-228`'s
@@ -4231,6 +4268,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   (`recon/lowres_calib.py`'s `nominal_te_s`), and consider actually
   deduplicating the two functions -- a small, uncontroversial conciseness
   fix once the reference is correct.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [x] **241. README.md's Demo section caption still says the shown
   default-params run used `R = 9`, but the shipped default has been
   `R = 6` since commit `0b9c25f` (2026-09-15's ABCD-protocol switch).**
@@ -4264,7 +4302,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   fixes item 160 -- the fix should touch these two additional locations
   too, not just the two currently named there.
   Resolved 2026-09-28: both regression tests are renamed `..._at_former_default_dims` and say (240, 45, 9) was the default at the time. New `test_caipi_sample_at_current_default_dims` and `test_ticaipi_sample_does_not_raise_at_current_default_dims` read the dims from `load_params()`, so they follow the shipped default.
-- [ ] **243. `preprocessing/preprocess.py`'s comment justifying
+- [x] **243. `preprocessing/preprocess.py`'s comment justifying
   `ksp_gre_uncompressed`'s explicit `.astype(np.complex64)` cast
   misattributes the reason -- `apply_whitening` never actually promotes
   dtype.** [measured 2026-09-23 against `100056a`: ran this repo's own
@@ -4285,7 +4323,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   in this pipeline. Fix: correct the comment (e.g. "kept complex64 for
   clarity/defensiveness, even though nothing upstream currently promotes
   it") or drop the now-unfounded parenthetical.
-- [ ] **249. `recon/run_recon.py`'s `_cli_mslr_ref` CLI has no `--device`
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **249. `recon/run_recon.py`'s `_cli_mslr_ref` CLI has no `--device`
   flag, unlike its two siblings in the same file, silently pinning
   `mslr-ref` to `cuda`.** [measured 2026-09-24 against `3ab2854`]
   `main_mslr_ref(datdir, name, L_b0=32, nbins_b0=128, device='cuda',
@@ -4309,6 +4348,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   default='cuda')` (and `description=__doc__`) to `_cli_mslr_ref`, and
   thread `device=args.device` into its `main_mslr_ref(...)` call,
   matching `_cli_mslr_local`/`_cli_cg`.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [x] **253. Three copies of `_matlab_round`, two of them different.**
   [measured 2026-09-27 against `4f8bf5f`] `oephase.py`'s handled negative
   values (half away from zero both ways); `grid_resize.py`'s and
@@ -4428,7 +4468,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   with only the small per-frame `pos` index arrays (item 75's fix, 69 MB
   total) being genuinely L-independent -- not "static, L-independent"
   overall.
-- [ ] **115. `plot/` has zero test coverage -- including no regression
+- [x] **115. `plot/` has zero test coverage -- including no regression
   guard for item 96's real, previously-shipped PSF bug.** [measured; citation
   sharpened 2026-09-13 -- one supporting sub-claim went stale, substance
   unchanged] `tests/test_plotting.py` now exists (added for items 127/149,
@@ -4452,6 +4492,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   location for a synthetic all-ones mask, plus basic smoke tests (a
   figure is produced, right title/`frame_idx` handling) for the other
   plotting functions.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [x] **116.** Closed as superseded, no code change needed here. This item
   asked for a `pytest.raises(ValueError)` regression test exercising
   `sample/ticaipi_sample.py:39-46`'s divisibility guard via its own
@@ -4472,7 +4513,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   monkeypatch `balanced_factors` to force a non-dividing pair through,
   which tests the guard's existence but not anything a real caller can
   trigger -- not worth the complexity for defense-in-depth code.
-- [ ] **129. `recon/mslr.py`'s `save_result` function has zero test coverage
+- [x] **129. `recon/mslr.py`'s `save_result` function has zero test coverage
   anywhere in the
   repo, including no regression guard for the exact GPU-tensor-ordering
   bug its own docstring says previously destroyed a completed
@@ -4506,6 +4547,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   tests, using a CUDA tensor when available and CPU otherwise) asserting
   the `.h5`/`.json`/`.nii.gz` triplet is written correctly and that a CUDA
   `ReconResult.X_recon` doesn't crash the nifti write.
+  Resolved 2026-10-09 (backlog sweep): re-checked against the current tree; already fixed (or covered by tests) by earlier work.
 - [ ] **134. `ge/writeceq.py`'s `write_ceq` (the .pge binary writer) and
   `ge/read_pge.py`'s `read_pge` (its read-back counterpart) have zero
   pytest coverage anywhere in the repo -- including no regression guard
@@ -4539,7 +4581,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   item 126's fix once applied (construct a synthetic `Ceq` whose segment
   block count divides `NMAXBLOCKSFORGRADHEATCHECK` evenly, matching that
   item's own repro).
-- [ ] **135. `recon/mslr.py`'s entire `fn_b0map` branch in
+- [x] **135. `recon/mslr.py`'s entire `fn_b0map` branch in
   `run_recon` -- including the item-93 `sigma1A` auto-measurement and its
   `ValueError` guard -- has zero test coverage.** [measured; citation
   updated 2026-09-22 against `6921c8c` -- `reconstruct.py` renamed to
@@ -4586,6 +4628,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   sigma1A=None)` both raises the documented `ValueError` when `fn_b0map`
   is also `None` and successfully auto-measures `sigma1A` and completes
   when `fn_b0map` is set.
+  Resolved 2026-10-09 (backlog sweep): the `fn_b0map` branch is covered by `tests/test_recon_sense.py`; only sigma1A auto-measure with B0 is untested (minor).
 - [x] **143.** Closed 2026-09-10: this item's own stated purpose was
   logging a correction already made in the same pass, as a guard against a
   stale cached copy of the old (wrong) claim misleading a future reader --
@@ -4622,7 +4665,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   figure gets both a table correction and a backlog entry), since a
   reader citing the old sentence from git history would draw the wrong
   conclusion about what `uv sync --extra recon` additionally covers.
-- [ ] **144. `lib/calc_te_tr_delays.py`'s documented warn-not-raise
+- [x] **144. `lib/calc_te_tr_delays.py`'s documented warn-not-raise
   fallback -- a load-bearing design decision CLAUDE.md calls out
   explicitly -- has zero test coverage anywhere in the suite.**
   [measured] CLAUDE.md states: "`calc_te_tr_delays.py` only warns, never
@@ -4659,7 +4702,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `pytest.warns(UserWarning, match=...)` cases for both the TE- and
   TR-unachievable branches, asserting the returned `te_delay`/`tr_delay`
   is `0.0` in each case.
-- [ ] **161. `preprocessing/run_b0map.py`'s item-151 fix (widening the
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **161. `preprocessing/run_b0map.py`'s item-151 fix (widening the
   per-sequence try/except to wrap the whole batch-driver body, not just
   the julia subprocess call) has no regression test, despite the pattern
   now being testable without either Julia or GERecon.** [measured; citation
@@ -4688,7 +4732,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `subprocess.run`/`resize_to_epi_grid`/`load_smaps` the way the repro
   above does and asserts the batch survives a mid-sequence failure and
   prints the expected `ERROR .../Skipping...` message.
-- [ ] **162. `preprocessing/gre_diagnostics.py`'s `ValueError` guard clauses
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **162. `preprocessing/gre_diagnostics.py`'s `ValueError` guard clauses
   and `main()` have no test coverage** [reworded 2026-09-22 against
   `6921c8c` -- the "zero test coverage anywhere" claim is now false:
   `tests/test_preprocessing_ift3.py` exists and imports/tests
@@ -4710,7 +4755,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `run_b0map.py`'s own test fixtures) asserting both `ValueError` guards
   fire on malformed inputs, and that `main()` completes and writes the
   expected PNG/NIfTI files on well-formed ones.
-- [ ] **163. `recon/operators.py`'s frame-shared `c_phasors`/`b_by_echo`
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **163. `recon/operators.py`'s frame-shared `c_phasors`/`b_by_echo`
   tensors -- the fix for a documented real CUDA-OOM bug -- have no
   regression test for the sharing/object-identity property that fix
   depends on.** [measured; citation updated 2026-09-22 against `6921c8c`
@@ -4737,6 +4783,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   as items 129/134/135/161/162. Fix: add an assertion in an existing
   `build_encoding_operator_b0` test that every frame's
   `.c_phasors`/`.b_by_echo` share `data_ptr()` with frame 0's.
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [ ] **164. `recon/operators.py`'s `_check_b_weight_row_sums` --
   the detector for a real, documented signal-loss/incoherent-noise bug --
   is never tested actually firing on a bad input.** [measured; citation
@@ -4821,7 +4868,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   the way `tests/test_preprocessing_recon_frames.py` covers `load_smaps`'s
   call sites, or -- better -- fold into whatever eventually resolves item
   117 (calling `load_smaps` directly from STEP 3 would make this moot).
-- [ ] **175. `preprocessing/smaps.py`'s two new Gaussian-smoothing tests
+- [x] **175. `preprocessing/smaps.py`'s two new Gaussian-smoothing tests
   don't exercise an anisotropic target grid, the one shape of bug the
   physical-mm sigma conversion could plausibly hide.** [measured, low-
   medium severity; citation updated 2026-09-22 against `6921c8c` --
@@ -4859,7 +4906,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   (e.g. asserting the fitted/observed smoothing extent in physical units
   is similar across axes despite differing voxel size, or directly
   asserting `sigma_vox` per-axis via a stub).
-- [ ] **187. `sample/gen_sampling_masks.py`'s `'rand'` sampling method has
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **187. `sample/gen_sampling_masks.py`'s `'rand'` sampling method has
   zero test coverage through its actual dispatch path.** [measured] The
   `'rand'` branch (`gen_sampling_masks.py:70-72`, including the
   `rand_gaussian_sigma = np.array([Ny, Nz]) / 6` default at `:45-47`) wires
@@ -4881,7 +4929,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   analogous to the existing `caipi`/`ticaipi`/`pd` ones (shape, dtype,
   sample count, and that the default `rand_gaussian_sigma=None` path
   doesn't crash).
-- [ ] **189. `preprocessing/smaps.py`'s new `_default_device()` GPU/CPU
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **189. `preprocessing/smaps.py`'s new `_default_device()` GPU/CPU
   auto-selection has zero test coverage.** [measured, low severity;
   citation updated 2026-09-17 against `ad2fdc4` -- shifted by one line to
   `smaps.py:32-46`, substance unchanged]
@@ -4906,7 +4955,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   add tests that monkeypatch `sp.config.cupy_enabled`/a stub `cupy` module
   and assert `_default_device()` returns `sp.cpu_device` when cupy is
   disabled and `sp.Device(0)` when a device is reported present.
-- [ ] **198. `lib/readout_from_params.py`'s new acoustic-resonance-band
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **198. `lib/readout_from_params.py`'s new acoustic-resonance-band
   dwell-avoidance code (`find_min_feasible_dwell`/
   `_echo_spacing_in_forbidden_band`) has zero test coverage despite real
   physical-safety framing.** [measured; found 2026-09-16 against
@@ -4926,7 +4976,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `_ESP_BANDS_US`) where the first feasible dwell's `gro` duration falls
   inside a forbidden band, asserting `find_min_feasible_dwell` returns the
   next dwell instead.
-- [ ] **202. `recon/lowres_calib.py` (all five merged calibration-recon
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **202. `recon/lowres_calib.py` (all five merged calibration-recon
   variants) and `preprocessing/
   r2star_map.py` have zero test coverage.** [measured; citation updated
   2026-09-22 against `6921c8c` -- all five previously-tracked files
@@ -4961,7 +5012,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   would be the highest-value addition. `tests/test_recon_hdf5_chunked_io.py`
   (item 213's own new test file) only covers the shared chunked-read
   helper `recon/lowres_calib.py` calls into, not its own logic.
-- [ ] **210. `preprocessing/smaps.py`'s `process_smaps`'s own `zero_pad_z`
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **210. `preprocessing/smaps.py`'s `process_smaps`'s own `zero_pad_z`
   parameter (item 203) has no direct test.** [measured, low severity;
   found 2026-09-17 against `ad2fdc4`] `tests/test_preprocessing_smaps.py`
   has no test exercising `process_smaps(..., zero_pad_z=True)` directly --
@@ -4980,7 +5032,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   regression of the `run_b0map()` silent-fallback bug item 205 originally
   found. Fix: add such tests, ideally alongside item 205's remaining
   `preprocess.py` fix.
-- [ ] **212. `recon/run_recon.py`'s `run_cgsense_b0` (the orchestration
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **212. `recon/run_recon.py`'s `run_cgsense_b0` (the orchestration
   function, not the tested `cg_sense_solve` solver) has zero test
   coverage, matching the established items 129/135 pattern exactly.**
   [measured; citation updated 2026-09-22 against `6921c8c` --
@@ -5000,7 +5053,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `run_cgsense_b0` itself (small `ksp_epi_zf.h5`/`smaps_...h5`/
   `scan_info.mat`/optional `b0map.h5`), the same style item 135's
   suggested fix proposes for `recon/mslr.py`'s `fn_b0map` branch.
-- [ ] **216. `tests/test_recon_operators_b0.py` builds its `omega` sampling
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **216. `tests/test_recon_operators_b0.py` builds its `omega` sampling
   mask from an unseeded `torch.rand()` in four tests, unlike every other
   random tensor in the file -- genuinely flaky, reproduced directly this
   pass.** [measured; citation updated 2026-09-22 against `6921c8c` -- all
@@ -5043,7 +5097,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   is (e.g. thread a `seed` through a local `torch.Generator`, matching
   `_complex_randn`'s own pattern) at all four sites (`:175`, `:202`,
   `:251`, `:292`).
-- [ ] **230. `preprocessing/smaps.py`'s `load_smaps()` `zero_pad_z`
+  Resolved 2026-10-09 (backlog sweep): re-checked against the current tree; already fixed (or covered by tests) by earlier work.
+- [x] **230. `preprocessing/smaps.py`'s `load_smaps()` `zero_pad_z`
   parameter has zero test coverage.** [measured] Commit `5ba6fc5` gave
   `load_smaps()` a real, behavior-changing `zero_pad_z` parameter (see
   item 205's partial resolution above), but `grep -n zero_pad_z
@@ -5056,6 +5111,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   through `load_smaps()` itself, to lock in commit `5ba6fc5`'s fix and
   catch a future regression of the `run_b0map()` silent-fallback bug item
   205 originally found.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [x] **256. `recon/utils.py`'s `tsnr_report` builds a separate object mask
   for each input, so its numbers aren't comparable across runs.**
   [measured 2026-09-28, `20260924ball`, against `3f3277e`] Each file gets
@@ -5233,7 +5289,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   multiprocessing, not just imports): results match a plain serial
   computation exactly across 5 dispatched frames. Serial
   (`use_parfor=False`) path unchanged.
-- [ ] **117. `preprocessing/preprocess.py`'s STEP 3 duplicates
+- [x] **117. `preprocessing/preprocess.py`'s STEP 3 duplicates
   `smaps.py`'s `load_smaps()` caching logic instead of calling it, and the
   duplicate is already narrower and drifting.** [verify; citation updated
   2026-09-22 against `6921c8c` -- `smooth_sigma_mm` threading citation
@@ -5294,7 +5350,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   (`tests/test_preprocessing_preprocess.py` has zero references to
   `smaps`/`process_smaps`/`estimate_smaps`), so nothing would catch such a
   miss either -- see item 174.
-- [ ] **118. `sample/pd_sample.py`'s `dtype` parameter
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **118. `sample/pd_sample.py`'s `dtype` parameter
   (`'logical'`/`'double'`/`'complex'`) is dead in production and
   untested.** [measured; citation updated 2026-09-21 against `e04d9aa` --
   shifted from `:389-394` to `:390-395`, substance unchanged; citation
@@ -5309,7 +5366,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   used. Either add a couple of parametrized `dtype=` cases to
   `test_pd_sample.py`, or drop the untested branches if nothing is
   expected to ever pass a non-default `dtype`.
-- [ ] **130. The Stage-2 batch-driver "outer" skeleton is duplicated
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
+- [x] **130. The Stage-2 batch-driver "outer" skeleton is duplicated
   across the remaining batch drivers; the "inner" per-recon duplication it
   used to also describe no longer has a home, but a smaller-scoped version
   of the same duplication class re-emerged inside `recon/run_recon.py`
@@ -5342,6 +5400,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   could factor out the 3-file outer skeleton, and a separate shared
   setup/output helper could factor out `run_recon.py`'s own three-subcommand
   inner duplication.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [ ] **145. `recon/`'s `_complex_randn` test helper is still duplicated
   verbatim in two test files, despite the `recon/`-side copies
   deduplicating naturally as a side effect of the module consolidation.**
@@ -5396,7 +5455,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `get_block_type(b).has_trid` for the TRID-presence check instead of a
   duplicated `if b.label is not None:` scan (the value-extraction loop
   itself is unchanged).
-- [ ] **165. `recon/run_recon.py`'s (formerly `run_b0_recon.py`'s)
+- [x] **165. `recon/run_recon.py`'s (formerly `run_b0_recon.py`'s)
   `ArbEPI_epi_zf.h5`/
   `smaps_ArbEPI_sigpy.h5` cache-path construction is duplicated in three
   places within the merged file, plus a fourth, independent inline read.**
@@ -5450,7 +5509,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   filename, and separately fold the `ArbEPI_epi_zf.h5` case into item
   133's fix if `SeqPaths` grows `gre_cache`/`smaps_cache` fields for the
   other two patterns.
-- [ ] **186. `recon/run_recon.py`'s `main_mslr_ref` (formerly
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **186. `recon/run_recon.py`'s `main_mslr_ref` (formerly
   `run_b0_recon.py`) still carries its own independent omega-loading copy
   instead of importing `recon/mslr.py`'s `_load_omega` -- and a *third*,
   independent, no-fallback implementation has now joined the pair.**
@@ -5493,6 +5553,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   removing its own copy -- or, if the torch/numpy return-type difference is
   deliberate, factor out one shared core (read `omegas` + fallback) with a
   thin per-caller wrapper.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [x] **193.** Resolved: `sample/pd_sample.py`'s `_poisson_disc_core_jit`
   drew its single initial active point uniformly over the *whole* grid,
   including the pre-filled calibration region -- a seed landing inside it
@@ -5648,7 +5709,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   RSS and B0-informed CG-SENSE reconstructions of real data, not just
   unit-tested in isolation. 2 new tests total; full suite (149 passed)
   unaffected.
-- [ ] **211. `recon/run_recon.py`'s `run_cgsense_b0` (formerly
+- [x] **211. `recon/run_recon.py`'s `run_cgsense_b0` (formerly
   `cg_sense_b0.py`) duplicates several
   substantial chunks of `recon/mslr.py`'s
   `run_recon` and its own sibling `main_mslr_ref`, rather than reusing
@@ -5701,6 +5762,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `run_cgsense_b0` call; this would resolve items 133/165/186/188's
   `recon/`-side instances in one pass, not just `run_cgsense_b0`'s new
   copies.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [x] **213.** Resolved 2026-09-16: `recon/reconstruct.py`'s `_load_array`
   and `recon/lowres_calib_recon.py`'s `_load_chunked` (see item 200) both
   read the *entire* dense `[Nx, Ny, Nz, Nc, Nt]` zero-filled k-space array
@@ -5774,7 +5836,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   excluding one pre-existing, unrelated sigpy-import collection error in
   `test_preprocessing_run_b0map.py`) all pass; ruff clean on every touched
   file.
-- [ ] **217. `recon/lowres_calib.py`'s B0/B0complex calibration-recon
+- [x] **217. `recon/lowres_calib.py`'s B0/B0complex calibration-recon
   variants re-RSS-normalize smaps on load, which
   `preprocessing/smaps.py`'s `process_smaps` already guarantees -- almost
   certainly an inert no-op in practice, but an undocumented inconsistency
@@ -5825,7 +5887,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   to match `lowres_calib_recon.py`, or adding it to `lowres_calib_recon.py`
   too for defensive consistency with the rest of `recon/`'s established
   convention, with a one-line comment either way explaining the choice.
-- [ ] **218. `recon/lowres_calib.py`'s B0complex driver function
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **218. `recon/lowres_calib.py`'s B0complex driver function
   duplicates essentially all of its B0 sibling
   driver, not just the operator-building helper its own docstring already
   discusses.** [measured; citation updated 2026-09-22 against `6921c8c` --
@@ -5876,7 +5939,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `_build_calib_operator_b0_complex`) and an optional R2*/TE-shift hook,
   with `main()` similarly factored to take just the output-filename suffix
   and `note=` string as the two per-variant knobs.
-- [ ] **219. `recon/mslr.py`'s `run_recon` already implements the
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **219. `recon/mslr.py`'s `run_recon` already implements the
   exact power-iteration sigma1A estimate `main_mslr_local` was
   forced to duplicate, gated behind a restriction whose stated rationale
   doesn't hold.** [measured; citation updated 2026-09-22 against `6921c8c`
@@ -5928,7 +5992,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   file's `estimate_spectral_norm`/`build_encoding_operator` imports and the
   `smaps`/`omega`-loading preamble entirely, since `run_recon` already
   loads both internally.
-- [ ] **221. `recon/lowres_calib.py`'s `temporal_stability`
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **221. `recon/lowres_calib.py`'s `temporal_stability`
   fancy-indexes the same masked array twice instead of reusing the first
   result.** [measured, low severity; citation updated 2026-09-22 against
   `6921c8c` -- `lowres_temporal_stability.py` merged into
@@ -5946,7 +6011,8 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `(13, 13, 9)`), but a redundant full-array boolean-mask gather for no
   reason. Fix: replace `roi_signal = img[mask].mean(axis=0)` with
   `roi_signal = voxels.mean(axis=0)`.
-- [ ] **223. `preprocessing/run_b0map.py`'s `run_b0map()` has no
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
+- [x] **223. `preprocessing/run_b0map.py`'s `run_b0map()` has no
   caching/skip logic for its own primary output, unlike every other
   expensive cacheable artifact in this pipeline.** [measured; citation
   updated 2026-09-22 against `6921c8c` -- line drift only, substance fully
@@ -5992,6 +6058,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   always-recompute is actually the intended design (e.g. because a field
   map should never be silently reused across reruns), state that
   explicitly in the module or function docstring instead.
+  Resolved 2026-10-09 (backlog sweep): moot -- the cited code was removed or rewritten by the later `preprocess/`/`recon/` restructures.
 - [ ] **244. `sequences/ArbEPI.py` and `sequences/EPIcal.py` duplicate a
   near-verbatim ~15-line per-shot spoiler-draw/fat-sat/RF-spoiling
   block.** [measured 2026-09-23 against `100056a`] The sequence (draw
@@ -6007,7 +6074,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   or a new `lib/`-level function) taking `(params, spoil_rng, rf, rg,
   gx_spoil, gy_spoil, gz_spoil, rfsat, trid, rf_count)` and returning the
   updated `rf_count`/scale factors.
-- [ ] **245. `sample/pd_sample.py`'s `pd_sample()` re-clamps a value
+- [x] **245. `sample/pd_sample.py`'s `pd_sample()` re-clamps a value
   `_calib_side_frac` already guarantees is clamped.** [measured 2026-09-23
   against `100056a`] `side_frac = _calib_side_frac(target_samples, nx, ny,
   calib_frac)` ... `rho_calib = min(max(side_frac, 0.0), 0.999)`
@@ -6021,6 +6088,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   drop the re-clamp and use `rho_calib = side_frac` directly (or, if
   belt-and-suspenders is wanted, an `assert` instead of a silent
   re-clamp).
+  Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
 - [x] **246. `preprocessing/config.py`'s `PreprocessingConfig` dataclass
   carries seven fields with zero readers anywhere in the current tree.**
   [resolved 2026-09-27: config.py was removed in the `preprocess/`

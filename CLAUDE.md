@@ -23,7 +23,7 @@ conciseness reviews live in [`docs/review-findings.md`](docs/review-findings.md)
 not here -- it's a worklog, consulted occasionally, not an instruction a
 session needs loaded by default. Numbering in that file is cumulative and
 never reused: a few source files (`preprocess/grid_resize.py`,
-`tests/test_preprocess_grid_resize.py`, `lib/make_prephasers.py`) cite
+`tests/test_preprocess_grid_resize.py`) cite
 specific item numbers in comments, and items cross-reference each other by
 number. Check it before a review pass, and add new findings there in the
 same numbered format.
@@ -883,6 +883,18 @@ the phase-contrast combine's echo 2, `y2 conj(y1)/sos` -- its echo 1 is
 identically real, which a first attempt unwrapped with no effect. HDF5.jl reverses
 axes relative to h5py, so `b0map.jl` permutes on read and write. The julia tests
 skip without `julia` on PATH.
+
+**`zero_pad_z` (`PreprocessConfig.zero_pad_z`, `batch_preprocess.py`'s flag;
+review items 196, 203, 258).** `grid_resize.resize_to_epi_grid` normally raises
+when the EPI z-FOV exceeds the deGRE slab's (the deGRE must cover the EPI FOV).
+With `zero_pad_z=True` it instead zeroes the target slices the source does not
+fully cover (rounded inward: a partly covered slice is zeroed), for an EPI
+resolution whose rounded z-FOV slightly overshoots the slab (e.g. 5.4 mm, 144 mm
+onto 135 mm). x and y still raise. Every resize of a deGRE map must pass the
+flag (`process_smaps`, `b0map.py`'s fit mask and field map, the R2* map), or
+that step still raises (item 205's `run_b0map` bug). The outer slices then
+carry zero sensitivity and no B0/R2* estimate, so the recon sees no object
+there.
 
 **R2* is a placeholder with the current deGRE** (`r2star.py`): its echo spacing
 is set for B0 (2.24 ms vs T2* ~47 ms on `2_6x_2.4mm`; echo ratio 0.953), so the

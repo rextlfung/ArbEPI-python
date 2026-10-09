@@ -20,12 +20,17 @@ from mirtorch.prox import Prox
 
 
 def _reg_weights(
-    patch_sizes: list[tuple[int, int, int]], Nt: int, N_voxels: int, lambda_global: float
+    patch_sizes: list[tuple[int, int, int]], Nt: int, N_voxels: int, lambda_global: float,
+    shape: tuple[int, int, int] | None = None,
 ) -> list[float]:
     """Ong & Lustig eq. 4 times lambda_global: lambda_k = sqrt(p_k) + sqrt(Nt)
-    + sqrt(log(N_voxels*Nt / max(p_k, Nt))), p_k = voxels per patch."""
+    + sqrt(log(N_voxels*Nt / max(p_k, Nt))), p_k = voxels per patch. With
+    `shape` (Nx,Ny,Nz), each patch axis is clipped to the image first, as
+    img2patches/patches2img do, so p_k is the patch actually used."""
     lambdas = []
     for ps in patch_sizes:
+        if shape is not None:
+            ps = tuple(min(p, n) for p, n in zip(ps, shape))
         p_k = math.prod(ps)
         lam = math.sqrt(p_k) + math.sqrt(Nt) + math.sqrt(math.log(N_voxels * Nt / max(p_k, Nt)))
         lambdas.append(lam * lambda_global)
@@ -34,7 +39,14 @@ def _reg_weights(
 
 def _patch_starts(n: int, patch: int, stride: int) -> list[int]:
     nsteps = -(-(n - patch) // stride)  # ceil division
-    return [min(i * stride, n - patch) for i in range(nsteps + 1)]
+    starts = [min(i * stride, n - patch) for i in range(nsteps + 1)]
+    if any(b - a > patch for a, b in zip(starts, starts[1:])):
+        # Voxels between windows would be covered by no patch and come back as
+        # exact zeros from patches2img.
+        raise ValueError(
+            f"stride {stride} > patch {patch} leaves uncovered voxels along an axis of length {n}"
+        )
+    return starts
 
 
 _DEFAULT_SVD_CHUNK_BYTES = 4_000_000_000  # per batched SVD call; see SVST
@@ -255,7 +267,9 @@ class MultiScaleLowRank:
         self.patch_sizes = [tuple(p) for p in patch_sizes]
         self.strides = [tuple(s) for s in strides]
         self.Nscales = len(patch_sizes)
-        self.lambdas = _reg_weights(self.patch_sizes, Nt, Nx * Ny * Nz, lambda_global)
+        self.lambdas = _reg_weights(
+            self.patch_sizes, Nt, Nx * Ny * Nz, lambda_global, shape=(Nx, Ny, Nz)
+        )
         self.synthesis = SumScales(img_shape, self.Nscales)
         self.last_cost = 0.0  # g(X) of the most recent prox output, free from its SVDs
 

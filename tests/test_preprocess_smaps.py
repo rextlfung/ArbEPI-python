@@ -205,3 +205,84 @@ def test_process_smaps_rejects_epi_fov_larger_than_gre():
     except ValueError:
         raised = True
     assert raised
+
+
+def _stub_cupy(monkeypatch, n_devices):
+    import sys
+    import types
+
+    cupy = types.ModuleType('cupy')
+    runtime = types.SimpleNamespace(getDeviceCount=lambda: n_devices)
+    cupy.cuda = types.SimpleNamespace(runtime=runtime)
+    monkeypatch.setitem(sys.modules, 'cupy', cupy)
+
+
+def test_default_device_cpu_when_cupy_disabled(monkeypatch):
+    # Item 189
+    import sigpy as sp
+
+    from preprocess.smaps import _default_device
+
+    monkeypatch.setattr(sp.config, 'cupy_enabled', False)
+    assert _default_device() == sp.cpu_device
+
+
+def test_default_device_cpu_when_cupy_sees_no_gpu(monkeypatch):
+    import sigpy as sp
+
+    from preprocess.smaps import _default_device
+
+    monkeypatch.setattr(sp.config, 'cupy_enabled', True)
+    _stub_cupy(monkeypatch, 0)
+    assert _default_device() == sp.cpu_device
+
+
+def test_default_device_gpu0_when_cupy_sees_a_gpu(monkeypatch):
+    import sigpy as sp
+
+    import preprocess.smaps as smaps_mod
+
+    monkeypatch.setattr(sp.config, 'cupy_enabled', True)
+    _stub_cupy(monkeypatch, 2)
+    # sp.Device(0) needs a real cupy; record the request instead
+    monkeypatch.setattr(sp, 'Device', lambda i: ('gpu', i))
+    assert smaps_mod._default_device() == ('gpu', 0)
+
+
+def test_process_smaps_sigma_vox_follows_per_axis_voxel_size(monkeypatch):
+    # Item 175: sigma_vox = smooth_sigma_mm / voxel size must be per axis on
+    # an anisotropic target grid (coarser z voxels -> smaller z sigma).
+    import preprocess.smaps as smaps_mod
+
+    seen = {}
+
+    def spy(smaps, mask, sigma_vox):
+        seen['sigma'] = np.asarray(sigma_vox)
+        return smaps
+
+    monkeypatch.setattr(smaps_mod, '_masked_gaussian_smooth', spy)
+    fov = (0.12, 0.12, 0.045)
+    n_target = (24, 24, 5)  # voxels 5 x 5 x 9 mm
+    smaps_raw = np.ones((12, 12, 6, 2), dtype=complex)
+    emap = np.ones((12, 12, 6))
+    process_smaps(smaps_raw, emap, fov, fov, n_target, crop=0.5, smooth_sigma_mm=6.0)
+    np.testing.assert_allclose(seen['sigma'], [6 / 5, 6 / 5, 6 / 9])
+
+
+def test_process_smaps_zero_pad_z_zeroes_uncovered_slices_only():
+    # Item 210: target z-FOV (0.12 m) exceeds the source's (0.10 m).
+    smaps_raw = np.ones((10, 10, 10, 2), dtype=complex)
+    emap = np.ones((10, 10, 10))
+    fov_gre = (0.2, 0.2, 0.10)
+    fov = (0.2, 0.2, 0.12)
+    n_target = (10, 10, 12)  # 10 mm z voxels: outer slice each side uncovered
+
+    with pytest.raises(ValueError, match='zero_pad_z'):
+        process_smaps(smaps_raw, emap, fov_gre, fov, n_target, crop=0.5)
+
+    smaps = process_smaps(smaps_raw, emap, fov_gre, fov, n_target, crop=0.5, zero_pad_z=True)
+    assert smaps.shape == (10, 10, 12, 2)
+    np.testing.assert_array_equal(smaps[..., 0, :], 0.0)
+    np.testing.assert_array_equal(smaps[..., -1, :], 0.0)
+    rss = np.sqrt(np.sum(np.abs(smaps[..., 1:-1, :]) ** 2, axis=-1))
+    np.testing.assert_allclose(rss, 1.0, atol=1e-6)

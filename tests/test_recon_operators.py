@@ -622,3 +622,45 @@ def test_segment_fit_covers_frames_that_sample_different_echo_times():
     for it in range(Nt):
         idx = torch.nonzero(omega[..., it].reshape(-1)).squeeze(-1) % (Ny * Nz)
         torch.testing.assert_close(unique_t_ms[pos[it]], times[idx] * 1000, atol=1e-3, rtol=0)
+
+
+def test_build_sense_b0_shares_segment_tensors_across_frames():
+    """Item 163: an earlier version built an independent (L,*N) c_phasors per
+    frame, enough redundancy to OOM a real reconstruction. Every frame must
+    hold the *same* tensors (shared storage), not per-frame copies."""
+    Nx, Ny, Nz, Nc, Nt, L = 5, 6, 4, 2, 3, 3
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=60)
+    b0_map = _complex_randn(Nx, Ny, Nz, seed=61).real * 100
+    omega = torch.ones(Nx, Ny, Nz, Nt, dtype=torch.bool, device=DEVICE)
+    t_y = torch.linspace(0.005, 0.03, Ny, device=DEVICE).reshape(Ny, 1, 1)
+    times = t_y.expand(Ny, Nz, Nt).contiguous()
+
+    A = build_sense_b0(smaps, omega, b0_map, times, L=L, nbins=10)
+    assert len(A.A) == Nt
+    for f in A.A[1:]:
+        assert f.c_phasors.data_ptr() == A.A[0].c_phasors.data_ptr()
+        assert f.b_by_echo.data_ptr() == A.A[0].b_by_echo.data_ptr()
+
+    A2 = build_sense_b0_r2star(
+        smaps, omega, b0_map, times, torch.full((Nx, Ny, Nz), 20.0, device=DEVICE),
+        t_ref_s=0.015, L=L, nbins=10,
+    )
+    for f in A2.A[1:]:
+        assert f.c_phasors.data_ptr() == A2.A[0].c_phasors.data_ptr()
+        assert f.b_by_echo.data_ptr() == A2.A[0].b_by_echo.data_ptr()
+
+
+def test_coarse_nbins_triggers_row_sum_warning():
+    """Item 164: the positive case of _check_b_weight_row_sums. A toy field
+    map with a wide range and few histogram bins gives an ill-conditioned
+    segmentation fit (row sums far from 1). (The negative case at production
+    nbins is test_production_nbins_avoids_row_sum_warning; the
+    _setup_real_scale map does not reproduce the failure even at nbins=20.)"""
+    Nx, Ny, Nz, Nc, L = 5, 6, 4, 2, 3
+    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=60)
+    b0_map = _complex_randn(Nx, Ny, Nz, seed=61).real * 100
+    omega = torch.ones(Nx, Ny, Nz, 1, dtype=torch.bool, device=DEVICE)
+    t_y = torch.linspace(0.005, 0.03, Ny, device=DEVICE).reshape(Ny, 1, 1)
+    times = t_y.expand(Ny, Nz, 1).contiguous()
+    with pytest.warns(UserWarning, match="b_weights row sums"):
+        build_sense_b0(smaps, omega, b0_map, times, L=L, nbins=10)

@@ -46,7 +46,9 @@ def read_frames_cropped(
 ) -> np.ndarray:
     """Read an HDF5 dataset shaped (X, Y, Z, ..., T) one chunk at a time along
     T, optionally cropping each frame to spatial_slices (x, y, z) as it's read.
-    Chunk-by-chunk reads are ~70x faster than a single d[()] on large files."""
+    Chunk-by-chunk reads are ~70x faster than a single d[()] on large files
+    (measured on uncompressed data; preprocess's ksp_epi_zf is now gzip-compressed,
+    so throughput there also includes decompression)."""
     with h5py.File(fn, 'r') as f:
         d = f[key]
         chunked_by_frame = d.chunks is not None and d.chunks[-1] < d.shape[-1]
@@ -547,7 +549,8 @@ def _build_inputs():
         + torch.arange(Nz, device=DEVICE).reshape(1, Nz)
     ) % ETL
     t_yz_s = (distinct_t_ms[yz_idx] / 1000.0)  # (Ny,Nz)
-    echo_times_s = t_yz_s.reshape(1, Ny, Nz, 1).expand(Nx, Ny, Nz, Nt).contiguous()
+    # (Ny,Nz,Nt): build_sense_b0's compact contract, no Nx broadcast.
+    echo_times_s = t_yz_s.reshape(Ny, Nz, 1).expand(Ny, Nz, Nt).contiguous()
 
     return smaps, omega, b0_map, echo_times_s, K
 
