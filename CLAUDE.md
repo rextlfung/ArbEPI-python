@@ -1372,9 +1372,14 @@ runs in the main `.venv` (`uv sync --extra analyze`).
   not `|X_s|`, which rectifies the near-zero-mean dynamic scale. Percent
   change is relative to the summed image's mean for every scale. Scale order is
   the order of `recon.sense --patch`; the file does not record patch sizes.
+- **`compare.py`** analyzes several files with one design and the first
+  file's brain mask, on one threshold (p < 0.001 uncorrected of the first
+  series' dof), so a panel that shows less shows less. Top-n% voxels are
+  selected on the first series by default (same voxels in every line).
+  `analyze_recon(keep_series=True)` keeps the masked series (percent of the
+  summed image's mean) for it.
 - **Not done**: motion regressors (none estimated), per-voxel AR, cluster
-  correction, plots and multi-reconstruction comparison (second PR:
-  `analyze/compare.py`).
+  correction.
 
 ### `simulate_fmri/` -- simulated scan sessions acquired with ArbEPI's schedules
 

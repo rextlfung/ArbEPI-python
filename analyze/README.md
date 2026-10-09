@@ -43,6 +43,25 @@ Outputs in `--out`, per analyzed series `<label>` (`sum`, `scale0`, ...):
 `<name>_summary.json` (design columns, dof, the AR(1) coefficient, the
 FDR-surviving |t| threshold, voxel counts).
 
+## Comparing reconstructions
+
+```
+uv run python -m analyze.compare --recon rss=<a>/rss_recon.h5 mslr=<b>/<seq>_recon.h5 \
+    --scales all --tr 0.506 --onsets ... --duration 20 --out <dir>/compare/
+```
+
+Every file is analyzed with the same design and one brain mask (from the first
+file unless `--mask` is given); `maps.png` shows axial slices of the statistic,
+one row per series (a multi-scale file contributes `<label>` and
+`<label>/scale<i>`), on one threshold (default p < 0.001 uncorrected, from the
+first series' dof). `timecourses.png` has the peak voxel and the mean of the
+top n% of voxels (`--top-percent`, selected on the first series so the lines
+are the same voxels; `--peak-source per_series` selects on each), the task
+blocks shaded, and the power spectrum with the task fundamental marked.
+`summary.txt` is the table: dof, rho, extremes, the effect in the top n%, FDR
+survivors. Python: `analyze.compare.compare_recons`, `plot_maps`,
+`plot_timecourses`, `summary_table`.
+
 ## What it does
 
 | file | contents |
@@ -52,6 +71,7 @@ FDR-surviving |t| threshold, voxel counts).
 | `mask.py` | `brain_mask` (BET), `load_mask` |
 | `io.py` | `read_recon` (sum and per-scale series), `save_stat_nifti` |
 | `run.py`, `__main__.py` | `analyze_recon` and the CLI |
+| `compare.py` | side-by-side maps, time courses, spectra and a summary table for several series |
 
 **Design.** Each condition is its blocks convolved with SPM's canonical HRF
 (exactly, via the HRF's running integral), sampled at frame centers. Nuisance
@@ -88,5 +108,4 @@ what a background/foreground separation predicts.
 ## Not here
 
 Group-level statistics, motion regressors (this pipeline estimates no motion),
-cluster-level correction, and plots (planned: side-by-side maps of several
-reconstructions and their time courses).
+and cluster-level correction.

@@ -242,6 +242,7 @@ analyze/                     Task activation maps from reconstructions (main .ve
   mask.py                       Brain mask: FSL bet if on PATH, else brainextractor
   io.py                         recon .h5 (summed image, per-scale components) in, NIfTI out
   run.py, __main__.py           analyze_recon and `python -m analyze`
+  compare.py                    Several reconstructions or scales: maps, time courses, spectra (`python -m analyze.compare`)
 simulate_fmri/               Simulated scan sessions acquired with ArbEPI's schedules (.venv-simulate, uv sync)
                               -- see simulate_fmri/README.md
   session.py                    Raw readouts of all four scans for preprocess/ to read, plus the truth
