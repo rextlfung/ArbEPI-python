@@ -9,6 +9,8 @@ exists already.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import shutil
 import subprocess
@@ -50,7 +52,8 @@ def bet_python(mean_vol: NDArray, voxel_size_mm, frac: float = 0.5) -> NDArray[n
                           "(uv sync --extra analyze) or FSL's bet on PATH, "
                           "or pass a mask") from e
     be = BrainExtractor(img=_nifti(mean_vol, voxel_size_mm), bt=frac)
-    be.run()
+    with contextlib.redirect_stdout(io.StringIO()):  # it prints every iteration
+        be.run()
     return np.asarray(be.compute_mask()) > 0
 
 
