@@ -18,22 +18,14 @@ pytest.importorskip("mirtorch")
 from recon.operators import build_sense  # noqa: E402
 from recon.sense import run_sense  # noqa: E402
 from recon.utils import load_omega  # noqa: E402
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-
-def _complex_randn(*shape, seed):
-    g = torch.Generator(device=DEVICE).manual_seed(seed)
-    real = torch.randn(*shape, generator=g, device=DEVICE)
-    imag = torch.randn(*shape, generator=g, device=DEVICE)
-    return (real + 1j * imag).to(torch.complex64)
+from tests._helpers import DEVICE, complex_randn  # noqa: E402
 
 
 def _write_synthetic_dataset(tmp_path, Nx, Ny, Nz, Nc, Nt, R, fn_prefix="ksp"):
-    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=0)
+    smaps = complex_randn(Nc, Nx, Ny, Nz, seed=0)
     smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-8)
 
-    x_true = _complex_randn(Nx, Ny, Nz, Nt, seed=1)
+    x_true = complex_randn(Nx, Ny, Nz, Nt, seed=1)
     omega = torch.stack(
         [torch.rand(Nx, Ny, Nz, device=DEVICE) > (1 - 1 / R) for _ in range(Nt)], dim=-1
     )
@@ -77,7 +69,7 @@ def test_load_omega_prefers_omegas_dataset_over_exact_zero_inference(tmp_path):
     load_omega trusts 'omegas' rather than being fooled by the exact
     zero."""
     Nx, Ny, Nz, Nc, Nt = 4, 3, 3, 2, 2
-    ksp_np = _complex_randn(Nx, Ny, Nz, Nc, Nt, seed=0).cpu().numpy()
+    ksp_np = complex_randn(Nx, Ny, Nz, Nc, Nt, seed=0).cpu().numpy()
     omegas_np = torch.zeros(Ny, Nz, Nt, dtype=torch.bool).numpy()
     omegas_np[0, 0, :] = True  # the one sampled location
     ksp_np[:, 0, 0, :, :] = 0.0  # ...whose k-space value happens to be exact zero
@@ -96,7 +88,7 @@ def test_load_omega_falls_back_to_exact_zero_inference_without_omegas(tmp_path):
     """Recon files written before preprocess.py added 'omegas' must still
     work, via the `!= 0` fallback."""
     Nx, Ny, Nz, Nc, Nt = 4, 3, 3, 2, 2
-    ksp_np = _complex_randn(Nx, Ny, Nz, Nc, Nt, seed=1).cpu().numpy()
+    ksp_np = complex_randn(Nx, Ny, Nz, Nc, Nt, seed=1).cpu().numpy()
 
     fn_ksp = tmp_path / "ksp_no_omegas.h5"
     with h5py.File(fn_ksp, "w") as f:
@@ -149,9 +141,9 @@ def test_run_recon_recovers_signal_without_regularization(tmp_path):
     simulate the k-space."""
     Nx, Ny, Nz, Nc, Nt = 10, 10, 6, 4, 4
     torch.manual_seed(42)
-    smaps = _complex_randn(Nc, Nx, Ny, Nz, seed=10)
+    smaps = complex_randn(Nc, Nx, Ny, Nz, seed=10)
     smaps = smaps / (smaps.abs().pow(2).sum(0, keepdim=True).sqrt() + 1e-8)
-    x_true = _complex_randn(Nx, Ny, Nz, Nt, seed=11)
+    x_true = complex_randn(Nx, Ny, Nz, Nt, seed=11)
     omega = torch.stack(
         [torch.rand(Nx, Ny, Nz, device=DEVICE) > 0.3 for _ in range(Nt)], dim=-1
     )
@@ -293,6 +285,10 @@ def test_run_sense_divides_kspace_by_recorded_noise_var(tmp_path):
         f.attrs["noise_var"] = 4.0
     r = run_sense(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg="none", niters=30, device=DEVICE)
     torch.testing.assert_close(r.X_recon, x_true / 2, atol=1e-3, rtol=1e-3)
+    # normalize_noise=False (what recon.utils.validate passes) skips the scaling
+    r = run_sense(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg="none", niters=30, device=DEVICE,
+                  normalize_noise=False)
+    torch.testing.assert_close(r.X_recon, x_true, atol=1e-3, rtol=1e-3)
 
 
 def test_run_sense_mslr_normalizes_operator_by_sigma1(tmp_path):

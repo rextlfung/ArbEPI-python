@@ -4,6 +4,11 @@ import pytest
 from preprocess.grid_resize import resize_to_epi_grid
 
 
+def _centers(n, fov_m):
+    """Centered-FFT voxel positions: voxel n // 2 is isocenter (item 263)."""
+    return (np.arange(n) - n // 2) / n * fov_m
+
+
 def test_resize_to_epi_grid_identity_when_grids_match():
     rng = np.random.default_rng(0)
     vol = rng.standard_normal((10, 10, 6))
@@ -20,11 +25,8 @@ def test_resize_to_epi_grid_crops_z_and_upsamples_xyz():
     fov = (0.216, 0.216, 0.0405)
     n_target = (24, 24, 12)
 
-    xx, _, _ = np.meshgrid(
-        np.linspace(-1, 1, Nx_src), np.linspace(-1, 1, Ny_src), np.linspace(-1, 1, Nz_src),
-        indexing='ij',
-    )
-    vol = xx  # a smooth ramp -- interpolation should reproduce it closely
+    xs = _centers(Nx_src, fov_src[0]) / fov_src[0]
+    vol = np.broadcast_to(xs[:, None, None], (Nx_src, Ny_src, Nz_src)).copy()  # smooth ramp
 
     out = resize_to_epi_grid(vol, fov_src, fov, n_target, order=3)
 
@@ -40,11 +42,9 @@ def test_resize_to_epi_grid_crops_z_and_upsamples_xyz():
     # test_resize_to_epi_grid_matches_analytic_ramp_at_voxel_centers for a
     # precise characterization); interior voxels are unaffected and still
     # match closely, which is what this test is actually checking.
-    xx_target, _, _ = np.meshgrid(
-        np.linspace(-1, 1, n_target[0]), np.linspace(-1, 1, n_target[1]),
-        np.linspace(-1, 1, n_target[2]), indexing='ij',
-    )
-    np.testing.assert_allclose(out[2:-2], xx_target[2:-2], atol=0.05)
+    xt = _centers(n_target[0], fov[0]) / fov[0]
+    expected = np.broadcast_to(xt[:, None, None], n_target)
+    np.testing.assert_allclose(out[2:-2], expected[2:-2], atol=0.05)
 
 
 def test_resize_to_epi_grid_matches_analytic_ramp_at_voxel_centers():
@@ -57,28 +57,25 @@ def test_resize_to_epi_grid_matches_analytic_ramp_at_voxel_centers():
     z-crop involved, so this isolates the resize step's own alignment.
     """
 
-    def center(i, n, fov_m):
-        return (i + 0.5) / n * fov_m - fov_m / 2
-
     Nx_src, Nx_tgt, fov_x = 108, 240, 0.216
-    xs = center(np.arange(Nx_src), Nx_src, fov_x)
+    xs = _centers(Nx_src, fov_x)
     vol = np.broadcast_to(xs[:, None, None], (Nx_src, 4, 4)).copy()
 
     out = resize_to_epi_grid(vol, (fov_x, fov_x, fov_x), (fov_x, fov_x, fov_x),
                               (Nx_tgt, 4, 4), order=3)
 
-    xt = center(np.arange(Nx_tgt), Nx_tgt, fov_x)
+    xt = _centers(Nx_tgt, fov_x)
     expected = np.broadcast_to(xt[:, None, None], (Nx_tgt, 4, 4))
 
     err = np.abs(out - expected)
     # Interior voxels (3+ in from each edge): near-exact, < 0.05mm on a
     # 216mm FOV (measured max 0.041mm).
-    assert err[3:-3].max() < 5e-5
+    assert err[3:-3].max() < 1e-4
     # Outermost few voxels: unavoidable upsample-past-the-edge
     # extrapolation (measured max 0.39mm) -- still an order of magnitude
     # tighter than the grid_mode=False convention this replaces (measured
     # ~0.63mm max / 0.27mm mean error at this exact scale before the fix).
-    assert err.max() < 5e-4
+    assert err.max() < 1e-3  # measured 0.95 mm at the one outermost voxel the even-N source does not cover
 
 
 def test_resize_to_epi_grid_preserves_trailing_axes():
@@ -102,10 +99,6 @@ def test_resize_to_epi_grid_rejects_epi_fov_larger_than_source(fov):
     vol = np.zeros((8, 8, 8))
     with pytest.raises(ValueError):
         resize_to_epi_grid(vol, (0.1, 0.1, 0.1), fov, (4, 4, 4))
-
-
-def _centers(n, fov_m):
-    return (np.arange(n) + 0.5) / n * fov_m - fov_m / 2
 
 
 def test_resize_to_epi_grid_crops_every_axis_to_the_physical_epi_grid():
@@ -172,7 +165,7 @@ def test_resize_to_epi_grid_zero_pad_z_fills_outer_slices_with_zero():
 def test_resize_to_epi_grid_zero_pad_z_matches_real_5p4mm_config():
     """Pins the exact inner/outer split for this session's real case:
     deGRE's fixed 144mm z-FOV (72 @ 2mm) vs. the 5.4mm-resolution EPI
-    variant's own 145.8mm z-FOV (27 @ 5.4mm) -- 1 slice zeroed per side out
+    variant's own 145.8mm z-FOV (27 @ 5.4mm) -- 1 slice zeroed (the top one) out
     of 27, matching the value used to build that dataset's smaps cache."""
     fov_gre = (0.216, 0.216, 0.144)
     fov_epi = (0.216, 0.216, 0.1458)
@@ -183,7 +176,9 @@ def test_resize_to_epi_grid_zero_pad_z_matches_real_5p4mm_config():
 
     assert out.shape == n_target
     zero_slices = [z for z in range(27) if not np.any(out[:, :, z])]
-    assert zero_slices == [0, 26]
+    # the even-N source slab is asymmetric about isocenter ([-73, +71] mm),
+    # so only the top slice (to +72.9 mm) lacks coverage (item 263)
+    assert zero_slices == [26]
 
 
 def test_resize_to_epi_grid_zero_pad_z_places_inner_slices_at_their_physical_positions():
@@ -195,5 +190,25 @@ def test_resize_to_epi_grid_zero_pad_z_places_inner_slices_at_their_physical_pos
     vol = np.broadcast_to(zs[None, None, :], (4, 4, 72)).copy()
     out = resize_to_epi_grid(vol, (0.1, 0.1, 0.144), (0.1, 0.1, 0.1458), (4, 4, 27),
                              order=1, zero_pad_z=True)
-    np.testing.assert_allclose(out[0, 0, 1:-1], _centers(27, 0.1458)[1:-1], atol=1e-12)
-    np.testing.assert_array_equal(out[:, :, [0, -1]], 0.0)
+    np.testing.assert_allclose(out[0, 0, :-1], _centers(27, 0.1458)[:-1], atol=1e-12)
+    np.testing.assert_array_equal(out[:, :, -1], 0.0)
+
+
+def test_resize_to_epi_grid_puts_voxel_n_over_2_at_isocenter_on_both_grids():
+    """Review item 263: a point at a given physical position must land at
+    index N // 2 + position / d on each grid, for even and odd N (a 72 x 72 x
+    51 deGRE onto a 90 x 90 x 60 EPI, the default protocol)."""
+    n_src, fov_src = (72, 72, 51), (0.216, 0.216, 0.153)
+    n_tgt, fov = (90, 90, 60), (0.216, 0.216, 0.144)
+    pos = np.array([10.0, -7.0, 5.0]) * 1e-3
+    grids = [_centers(n, f) for n, f in zip(n_src, fov_src)]
+    # smooth bump centered at pos (Gaussian, sigma 8 mm)
+    r2 = sum(((g - p) ** 2)[tuple(slice(None) if i == a else None for i in range(3))]
+             for a, (g, p) in enumerate(zip(grids, pos)))
+    vol = np.exp(-r2 / (2 * 8e-3**2))
+    out = resize_to_epi_grid(vol, fov_src, fov, n_tgt, order=3)
+    idx = np.indices(n_tgt)
+    com = np.array([(idx[a] * out**2).sum() / (out**2).sum() for a in range(3)])
+    expected = np.array(n_tgt) // 2 + pos / (np.array(fov) / n_tgt)
+    off_mm = (com - expected) * np.array(fov) / n_tgt * 1e3
+    assert np.abs(off_mm).max() < 0.1

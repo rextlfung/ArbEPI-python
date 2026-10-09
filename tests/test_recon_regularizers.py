@@ -180,3 +180,20 @@ def test_section_l1_thresholds_each_section_with_its_own_lambda():
     out = prox(v, 0.5)  # thresholds 0.5 and 1.0
     expected = torch.tensor([2.5, 0.0, 2.0, -1.5, 0.0], device=DEVICE)
     torch.testing.assert_close(out, expected)
+
+
+def test_img2patches_rejects_stride_larger_than_patch_with_gaps():
+    img = _random_img(23, 1, 1, 2, seed=8)
+    with pytest.raises(ValueError):
+        img2patches(img, (3, 1, 1), (10, 1, 1))
+
+
+def test_reg_weights_clip_oversized_patch_to_image():
+    from recon.regularizers import _reg_weights
+
+    shape = (12, 12, 8)
+    clipped = _reg_weights([shape], 5, 12 * 12 * 8, 1.0)
+    over = _reg_weights([(16, 16, 16)], 5, 12 * 12 * 8, 1.0, shape=shape)
+    assert over == clipped
+    reg = MultiScaleLowRank([(16, 16, 16)], [(16, 16, 16)], (*shape, 5))
+    assert reg.lambdas == clipped

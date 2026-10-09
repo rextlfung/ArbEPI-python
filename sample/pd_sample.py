@@ -65,7 +65,18 @@ the default full-scale params:
    exists, but the loop is still capped defensively since the function is
    callable directly.
 
-Even with all four fixes, `_poisson_disc_core`'s point-placement loop
+5. **Seed point marked occupied** (review item 248). The initial active
+   point was a growth center but never written into `mask`, so later
+   points could land inside its exclusion ellipse (163/200 trials on a
+   40x40 grid at radius 2); real sigpy has the same gap.
+
+Also, under `crop_corner=True` the exact-count fill is restricted to the
+inscribed ellipse (item 136(a)) and the calibration rectangle is exempt
+from the ellipse crop (item 196; chosen over clamping `side_frac` to
+1/sqrt(2) because clamping would silently shrink the region below the
+requested `calib_frac` budget share).
+
+Even with all five fixes, `_poisson_disc_core`'s point-placement loop
 itself is a tight, highly sequential (each new point depends on all prior
 ones -- not vectorizable) loop that can run hundreds of thousands of
 iterations for the worst-case radius/seed combinations above; in pure
@@ -182,6 +193,9 @@ def _poisson_disc_core_jit(
         attempts += 1
     pxs[0] = float(x0)
     pys[0] = float(y0)
+    # The seed is a real sample: mark it occupied so later points respect
+    # its exclusion radius (review item 248; upstream sigpy omits this).
+    mask[y0, x0] = 1
     num_actives = 1
 
     while num_actives > 0 and num_actives < nx * ny:
@@ -256,7 +270,6 @@ def pd_sample(
     accel: float,
     rng: np.random.Generator,
     calib_frac: float = 0.0,
-    dtype: str = 'logical',
     crop_corner: bool = True,
     max_attempts: int = 30,
     tol: float = 0.1,
@@ -290,8 +303,11 @@ def pd_sample(
         rectangle's corners (outside that inscribed ellipse) are still
         forced fully sampled via `calib_mask` directly; they just don't
         drive the taper's own shape.
-    dtype : 'logical', 'double', or 'complex'.
     crop_corner : whether to crop sampling corners (elliptical mask).
+        Applies to the Poisson points and the exact-count fill; the
+        calibration rectangle is exempt (its corners may lie outside the
+        ellipse when its side fraction exceeds 1/sqrt(2)) and always
+        fully sampled.
     max_attempts : max attempts to generate a point per active point.
     tol : tolerance for the binary-search loop on density.
     decay : density falloff exponent (1 = linear; > 1 = steeper toward center).
@@ -316,7 +332,7 @@ def pd_sample(
     # Elliptical taper radius matching the rectangle's per-axis extent --
     # see pd_sample's calib_frac docstring for why the taper stays
     # elliptical rather than switching to the rectangle's own metric.
-    rho_calib = min(max(side_frac, 0.0), 0.999)
+    rho_calib = side_frac  # already in [0, 0.999], see _calib_side_frac
 
     # The exact-count prune/fill step below can only remove non-calibration
     # samples, so if the calibration region alone already exceeds the target
@@ -354,7 +370,9 @@ def pd_sample(
         mask = _poisson_disc_core(nx, ny, max_attempts, radius_x, radius_y, calib_mask, seed)
 
         if crop_corner:
-            mask = mask * (rho <= 1)
+            # Calibration cells stay sampled even where the rectangle's
+            # corners leave the inscribed ellipse (review item 196).
+            mask = np.where(calib_mask, mask, mask * (rho <= 1))
 
         num_samples = mask.sum()
         current_accel = total_pixels / num_samples
@@ -381,15 +399,13 @@ def pd_sample(
 
     elif current_samples < target_samples:
         num_to_add = target_samples - current_samples
-        candidates = np.flatnonzero(~mask)
+        # Under crop_corner, fill only inside the inscribed ellipse
+        # (review item 136(a)).
+        fill_ok = ~mask & (rho <= 1) if crop_corner else ~mask
+        candidates = np.flatnonzero(fill_ok)
         if candidates.size > 0:
             perm = rng.permutation(candidates.size)
             add_idx = candidates[perm[: min(num_to_add, candidates.size)]]
             mask.flat[add_idx] = True
 
-    if dtype == 'complex':
-        return mask.astype(complex)
-    elif dtype == 'double':
-        return mask.astype(float)
-    else:
-        return mask.astype(bool)
+    return mask.astype(bool)

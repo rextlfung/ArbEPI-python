@@ -61,7 +61,7 @@ from preprocess.coils import (
 from preprocess.epi_gridding import rampsampepi2cart
 from preprocess.grid_resize import resize_to_epi_grid
 from preprocess.oephase import epiphasecorrect, getoephase
-from preprocess.r2star import R2STAR_METHOD, fit_r2star
+from preprocess.r2star import R2STAR_METHOD, fit_r2star, resize_r2star_to_epi
 from preprocess.utils import load_kxoe, load_schedules, load_seq_params, matlab_round
 
 # ---------------------------------------------------------------------------
@@ -513,6 +513,8 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
                 a = np.asarray(a, dtype=np.float64)
                 print(f'  using the given odd/even phase model {a} instead')
 
+            # gzip level 4: zero-filled k-space compresses ~117x (measured on a real
+            # frame chunk, 231 MB -> 2 MB; a 210 GB file).
             f.create_dataset(
                 'ksp_epi_zf', shape=(Nx, Ny, Nz, Ncoils, Nframes), dtype=np.complex64,
                 chunks=(Nx, Ny, Nz, Ncoils, 1), compression='gzip', compression_opts=4,
@@ -687,10 +689,9 @@ def estimate_maps(
             mask_degre = fit_mask(img_echoes[..., 0], cfg.b0map_mask_thresh, emap_degre, cfg.crop,
                                   cfg.b0map_min_component)
         r2_degre = fit_r2star(img_echoes, te, mask_degre, cfg.r2star_max)
-        r2 = resize_to_epi_grid(
-            r2_degre * mask_degre, fov_degre, fov, n_epi, order=3, zero_pad_z=cfg.zero_pad_z
+        maps['r2star_map'] = resize_r2star_to_epi(
+            r2_degre, mask_degre, fov_degre, fov, n_epi, zero_pad_z=cfg.zero_pad_z
         )
-        maps['r2star_map'] = np.clip(r2, 0, None).astype(np.float32)  # spline overshoot
         maps['degre/r2star_map'] = r2_degre
     return maps
 
@@ -746,6 +747,7 @@ def write_output(
                 f.create_dataset(k, data=c[k][()])
             if 'delay_sweep' in c:  # absent in caches from before delay calibration
                 c.copy('delay_sweep', f)
+        # gzip level 4, as in the cache above (~117x on zero-filled k-space).
         f.create_dataset(
             'ksp_epi_zf', shape=(Nx, Ny, Nz, Nc_out, Nframes), dtype=np.complex64,
             chunks=(Nx, Ny, Nz, Nc_out, 1), compression='gzip', compression_opts=4,

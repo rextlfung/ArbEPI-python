@@ -186,25 +186,30 @@ def load_seq_params(scan_info_path: str) -> SeqParams:
     scan_info.mat. Scalars are stored as (1,1) arrays and 3-vectors as (3,1),
     hence .item()/.ravel(). Snapshots from before the dual-echo deGRE have no
     n_echoes_degre/TE_degre and were single-echo."""
+    required = ['Nx', 'Ny', 'Nz', 'ETL', 'R', 'fov', 'volume_tr', 'discard_duration',
+                'Nx_degre', 'Ny_degre', 'Nz_degre', 'fov_degre']
     with h5py.File(scan_info_path, 'r') as f:
-        def scalar(name):
-            return f[name][()].item()
+        optional = [k for k in ('n_echoes_degre', 'TE_degre') if k in f]
+    d = read_mat(scan_info_path, required + optional)
 
-        def vec3(name):
-            return tuple(f[name][()].ravel().tolist())
+    def scalar(name):
+        return d[name].item()
 
-        return SeqParams(
-            Nx=int(scalar('Nx')), Ny=int(scalar('Ny')), Nz=int(scalar('Nz')),
-            ETL=int(scalar('ETL')), R=scalar('R'),
-            fov=vec3('fov'),
-            volume_tr=scalar('volume_tr'),
-            discard_duration=scalar('discard_duration'),
-            Nx_degre=int(scalar('Nx_degre')), Ny_degre=int(scalar('Ny_degre')),
-            Nz_degre=int(scalar('Nz_degre')),
-            fov_degre=vec3('fov_degre'),
-            n_echoes_degre=int(scalar('n_echoes_degre')) if 'n_echoes_degre' in f else 1,
-            TE_degre=tuple(f['TE_degre'][()].ravel().tolist()) if 'TE_degre' in f else None,
-        )
+    def vec3(name):
+        return tuple(d[name].ravel().tolist())
+
+    return SeqParams(
+        Nx=int(scalar('Nx')), Ny=int(scalar('Ny')), Nz=int(scalar('Nz')),
+        ETL=int(scalar('ETL')), R=scalar('R'),
+        fov=vec3('fov'),
+        volume_tr=scalar('volume_tr'),
+        discard_duration=scalar('discard_duration'),
+        Nx_degre=int(scalar('Nx_degre')), Ny_degre=int(scalar('Ny_degre')),
+        Nz_degre=int(scalar('Nz_degre')),
+        fov_degre=vec3('fov_degre'),
+        n_echoes_degre=int(scalar('n_echoes_degre')) if 'n_echoes_degre' in d else 1,
+        TE_degre=tuple(d['TE_degre'].ravel().tolist()) if 'TE_degre' in d else None,
+    )
 
 
 def load_kxoe(scan_info_path: str) -> tuple[np.ndarray, np.ndarray]:

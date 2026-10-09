@@ -248,7 +248,7 @@ def discover_relay_ip(user: str, relay: str) -> str:
     the scanner) -- reproduces exactly what discover_host_ip would return
     if coppe.py were run locally on relay itself."""
     result = subprocess.run(
-        ['ssh', '-q', f'{user}@{relay}', 'bash', '-s'],
+        ['ssh', f'{user}@{relay}', 'bash', '-s'],
         input=_RELAY_IP_SCRIPT.encode(), capture_output=True, env=_ssh_env(),
     )
     if result.returncode != 0:
@@ -271,7 +271,7 @@ def stage_tarball_on_relay(user: str, relay: str, tar_path: Path) -> str:
     there, reusing relay's already-provisioned hop-2 keys (see
     ge/README.md) rather than needing new ones set up for this host."""
     result = subprocess.run(
-        ['ssh', '-q', f'{user}@{relay}', 'mktemp', '-d'], capture_output=True, env=_ssh_env(),
+        ['ssh', f'{user}@{relay}', 'mktemp', '-d'], capture_output=True, env=_ssh_env(),
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -283,7 +283,7 @@ def stage_tarball_on_relay(user: str, relay: str, tar_path: Path) -> str:
         raise RuntimeError(f'could not create a staging directory on {relay} (empty response)')
 
     scp_result = subprocess.run(
-        ['scp', '-q', str(tar_path), f'{user}@{relay}:{remote_dir}/'],
+        ['scp', str(tar_path), f'{user}@{relay}:{remote_dir}/'],
         capture_output=True, env=_ssh_env(),
     )
     if scp_result.returncode != 0:
@@ -300,7 +300,7 @@ def cleanup_relay_staging(user: str, relay: str, remote_dir: str) -> None:
     never raises, mirroring release_locks's best-effort style."""
     try:
         subprocess.run(
-            ['ssh', '-q', f'{user}@{relay}', 'rm', '-rf', remote_dir],
+            ['ssh', f'{user}@{relay}', 'rm', '-rf', remote_dir],
             capture_output=True, env=_ssh_env(),
         )
     except OSError:
@@ -334,9 +334,9 @@ def build_ssh_prefix(user: str, target: str, relay: str | None = None) -> list[s
     before: the scanner's sdc account trusts a key provisioned on
     epyc/goliath, not on this host or relay."""
     if relay:
-        return ['ssh', '-q', '-J', f'{user}@{relay}', f'{user}@{_JUMP_HOSTS[target]}',
-                'ssh', '-q', _SCANNER_HOST]
-    return ['ssh', '-q', f'{user}@{_JUMP_HOSTS[target]}', 'ssh', '-q', _SCANNER_HOST]
+        return ['ssh', '-J', f'{user}@{relay}', f'{user}@{_JUMP_HOSTS[target]}',
+                'ssh', _SCANNER_HOST]
+    return ['ssh', f'{user}@{_JUMP_HOSTS[target]}', 'ssh', _SCANNER_HOST]
 
 
 def run_remote(

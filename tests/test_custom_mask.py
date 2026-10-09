@@ -97,3 +97,16 @@ def test_sample_count_not_divisible_by_etl_raises(tmp_path):
 
     with pytest.raises(ValueError, match='divisible by ETL'):
         resolve_custom_omegas(str(path), Ny, Nz, Nframes=1, ETL=ETL)
+
+
+@pytest.mark.parametrize('bad', [2, -1, 0.5, np.nan])
+def test_non_binary_mask_is_rejected(tmp_path, bad):
+    from sample.external_mask import load_external_mask
+
+    mask = np.zeros((Ny, Nz))
+    mask[0, 0] = 1
+    mask[1, 1] = bad
+    path = tmp_path / 'm.mat'
+    sio.savemat(str(path), {'samp': mask})
+    with pytest.raises(ValueError, match='0/1'):
+        load_external_mask(str(path), Ny, Nz)

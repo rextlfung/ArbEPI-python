@@ -46,7 +46,9 @@ def read_frames_cropped(
 ) -> np.ndarray:
     """Read an HDF5 dataset shaped (X, Y, Z, ..., T) one chunk at a time along
     T, optionally cropping each frame to spatial_slices (x, y, z) as it's read.
-    Chunk-by-chunk reads are ~70x faster than a single d[()] on large files."""
+    Chunk-by-chunk reads are ~70x faster than a single d[()] on large files
+    (measured on uncompressed data; preprocess's ksp_epi_zf is now gzip-compressed,
+    so throughput there also includes decompression)."""
     with h5py.File(fn, 'r') as f:
         d = f[key]
         chunked_by_frame = d.chunks is not None and d.chunks[-1] < d.shape[-1]
@@ -547,7 +549,8 @@ def _build_inputs():
         + torch.arange(Nz, device=DEVICE).reshape(1, Nz)
     ) % ETL
     t_yz_s = (distinct_t_ms[yz_idx] / 1000.0)  # (Ny,Nz)
-    echo_times_s = t_yz_s.reshape(1, Ny, Nz, 1).expand(Nx, Ny, Nz, Nt).contiguous()
+    # (Ny,Nz,Nt): build_sense_b0's compact contract, no Nx broadcast.
+    echo_times_s = t_yz_s.reshape(Ny, Nz, 1).expand(Ny, Nz, Nt).contiguous()
 
     return smaps, omega, b0_map, echo_times_s, K
 
@@ -620,7 +623,12 @@ def _cli_benchmark() -> None:
 
 def validate(fn_ksp: str, fn_smaps: str, fn_julia_mat: str) -> bool:
     """Re-run a ../mslr-recon (Julia) reconstruction with its own settings and
-    compare costs, iteration count and image. Returns True if all checks pass."""
+    compare costs, iteration count and image. Returns True if all checks pass.
+
+    The Julia reference was measured on k-space as is, so this runs
+    run_sense with normalize_noise=False (and normalize_operator=False):
+    run_sense's default would divide the k-space by sqrt(noise_var) from
+    fn_ksp, which changes dc_costs/reg_costs (review item 232)."""
     from recon.sense import run_sense  # lazy: sense.py imports this module
 
     ref = read_julia_mat(fn_julia_mat)
@@ -628,6 +636,7 @@ def validate(fn_ksp: str, fn_smaps: str, fn_julia_mat: str) -> bool:
     result = run_sense(
         reg="mslr",
         normalize_operator=False,  # Julia uses A as is
+        normalize_noise=False,  # and the k-space as is
         fn_ksp=fn_ksp,
         fn_smaps=fn_smaps,
         patch_sizes=ref["patch_sizes"],

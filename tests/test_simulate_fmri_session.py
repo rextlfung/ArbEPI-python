@@ -376,12 +376,11 @@ def test_frames_truncates_the_copied_scan_info(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason='review item 263: grid_resize assumes edge-aligned FOVs')
 def test_degre_maps_land_where_the_epi_puts_the_object():
     """A sphere at a known position, as the default deGRE sees it, resized to
     the EPI grid the way preprocess resizes its maps: its center should be at
     the index where the EPI's own reconstruction puts that point,
-    N // 2 + position / voxel. It is 0.3 mm off in x and y and 1.2 mm in z."""
+    N // 2 + position / voxel. Review item 263: it used to be 0.3 mm off in x and y and 1.2 mm in z."""
     from scipy import ndimage
 
     from preprocess.grid_resize import resize_to_epi_grid

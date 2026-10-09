@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from preprocess.r2star import fit_r2star
+from preprocess.r2star import fit_r2star, resize_r2star_to_epi
 
 
 def test_two_echo_fit_is_the_two_point_formula():
@@ -35,3 +35,22 @@ def test_masked_nonpositive_and_negative_estimates_become_zero():
 def test_needs_two_echoes():
     with pytest.raises(ValueError):
         fit_r2star(np.ones((2, 2, 2, 1)), np.array([0.003]), np.ones((2, 2, 2), dtype=bool))
+
+
+def test_resized_r2star_is_zero_outside_the_resized_mask():
+    """Review item 222: the cubic resize rings past the mask edge; the result
+    must be exactly zero where the resized mask is."""
+    from preprocess.grid_resize import resize_to_epi_grid
+
+    mask = np.zeros((12, 12, 12), dtype=bool)
+    mask[3:9, 3:9, 3:9] = True
+    r2 = np.where(mask, 30.0, 0.0)
+    fov = (0.12, 0.12, 0.12)
+    n = (24, 24, 24)
+    out = resize_r2star_to_epi(r2, mask, fov, fov, n)
+    m = resize_to_epi_grid(mask.astype(float), fov, fov, n, order=0) > 0.5
+    plain = np.clip(resize_to_epi_grid(r2 * mask, fov, fov, n, order=3), 0, None)
+    assert np.any((plain > 0) & ~m)  # the spline does leak without the re-mask
+    assert np.all(out[~m] == 0)
+    assert out.dtype == np.float32
+    np.testing.assert_allclose(out[m], plain[m], rtol=1e-5)

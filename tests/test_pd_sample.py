@@ -94,3 +94,47 @@ def test_pd_sample_rejects_invalid_accel(accel):
     rng = np.random.default_rng(0)
     with pytest.raises(ValueError):
         pd_sample([20, 20], accel, rng)
+
+
+def test_poisson_core_marks_its_seed_point_occupied():
+    """Review item 248: the seed was a growth center but never written into
+    `mask`, so later points could land inside its exclusion ellipse. With an
+    exclusion radius far larger than the grid no second point can fit, so
+    the result must be exactly the seed (the unfixed core returned an empty
+    mask); a fixed seed stays a seed regardless of its position."""
+    from sample.pd_sample import _poisson_disc_core
+
+    n = 20
+    radius = np.full((n, n), 100.0)
+    calib = np.zeros((n, n))
+    for seed in range(10):
+        m = _poisson_disc_core(n, n, 30, radius, radius, calib, seed)
+        assert m.sum() == 1
+
+
+def test_pd_sample_crop_corner_fill_stays_inside_ellipse():
+    """Review item 136(a): the exact-count fill ignored crop_corner's
+    ellipse. (30, 20), accel 1.5 leaked in ~26% of seeds."""
+    from sample.pd_sample import _rho_grid
+
+    ny, nx = 30, 20
+    outside = _rho_grid(ny, nx) > 1
+    for seed in range(100):
+        mask = pd_sample([ny, nx], 1.5, np.random.default_rng(seed), calib_frac=0.3, crop_corner=True)
+        assert mask.sum() == math.floor(ny * nx / 1.5)
+        assert not mask[outside].any()
+
+
+def test_pd_sample_large_calib_region_survives_crop_corner():
+    """Review item 196: with side_frac > 1/sqrt(2) the calibration
+    rectangle's corners lie outside the ellipse and were cropped away.
+    They are exempt from the crop (the region keeps its requested size)."""
+    ny = nx = 80
+    accel, calib_frac = 1.5, 0.9
+    target = math.floor(ny * nx / accel)
+    side_frac = _calib_side_frac(target, nx, ny, calib_frac)
+    assert side_frac > 1 / math.sqrt(2)
+    calib_mask = _calib_mask_rect(ny, nx, side_frac)
+    mask = pd_sample([ny, nx], accel, np.random.default_rng(0), calib_frac=calib_frac, crop_corner=True)
+    assert mask[calib_mask].all()
+    assert mask.sum() == target

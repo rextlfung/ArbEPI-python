@@ -98,7 +98,7 @@ class Params:
     volume_tr: float  # s
     TR: float  # s
 
-    discard_duration: float  # s
+    discard_duration: float  # s; n_frames_discard * volume_tr by default
     Nframes: int
 
     # Noise prescan
@@ -186,6 +186,12 @@ class Params:
     pd_decay: float
     rand_gaussian_sigma: np.ndarray | None
 
+    @property
+    def n_frames_discard(self) -> int:
+        """Leading warm-up frames, derived from discard_duration so it cannot
+        go stale under dataclasses.replace(discard_duration=...)."""
+        return round(self.discard_duration / self.volume_tr)
+
 
 def load_params(output_dir: str = 'output') -> Params:
     # =================================================================
@@ -232,14 +238,17 @@ def load_params(output_dir: str = 'output') -> Params:
     # Tissue T1, s -- used below to compute the Ernst-angle flip angle.
     T1 = 1.3
 
-    # Frames to discard at the start of the scan (steady-state warm-up), s,
+    # Frames to discard at the start of the scan (steady-state warm-up), the
+    # same warm-up as a duration in s (derived: n_frames_discard * volume_tr),
     # and the resulting number of acquired frames. EPIcal plays dummy shots
-    # for the same duration (sequences/EPIcal.py). Hoisted up from the
+    # for the same duration (sequences/EPIcal.py). Params.n_frames_discard
+    # reads it back (preprocess/ records it as an attribute). Hoisted up from the
     # "ADVANCED / DERIVED PARAMETERS" section below -- unlike Nshots,
     # Nframes depends only on duration/volume_tr/discard_duration, not on
     # R/ETL/the sampling mask -- so a custom mask's own time-frame count
     # (below) can be validated against it immediately.
-    discard_duration = 0
+    n_frames_discard = 0
+    discard_duration = n_frames_discard * volume_tr
     Nframes = round((duration + discard_duration) / volume_tr)
 
     # Echo train length (number of echoes acquired per shot).

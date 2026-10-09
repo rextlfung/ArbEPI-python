@@ -147,11 +147,11 @@ def seq2ceq(seq: pp.Sequence, verbose: bool = False) -> Ceq:
     # Check that block execution throughout the sequence is consistent with
     # the segment definitions
     n = int(trid_rows[0])
-    while n < ceq.nMax:
+    while n <= ceq.nMax:
         seg_id = int(ceq.loop[n - 1, 0])
         assert seg_id >= 1, f'row {n}: block outside any segment instance'
         seg = ceq.segments[seg_id - 1]
-        if n + seg.nBlocksInSegment > ceq.nMax:
+        if n + seg.nBlocksInSegment - 1 > ceq.nMax:
             break
         for j in range(seg.nBlocksInSegment):
             p = int(ceq.loop[n - 1, 1])
@@ -168,11 +168,11 @@ def seq2ceq(seq: pp.Sequence, verbose: bool = False) -> Ceq:
     # blockDuration) -- stale indices from an older loop layout; the intent
     # is the three energy columns (deliberate deviation)
     n = int(trid_rows[0])
-    while n < ceq.nMax:
+    while n <= ceq.nMax:
         seg_id = int(ceq.loop[n - 1, 0])
         assert seg_id >= 1, f'row {n}: block outside any segment instance'
         seg = ceq.segments[seg_id - 1]
-        if n + seg.nBlocksInSegment > ceq.nMax:
+        if n + seg.nBlocksInSegment - 1 > ceq.nMax:
             break  # final segment instance truncated; nothing more to score
         n_first = n
         e_total = 0.0

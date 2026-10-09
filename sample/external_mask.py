@@ -41,7 +41,13 @@ def load_external_mask(path: str, Ny: int, Nz: int, key: str = 'samp') -> np.nda
     if key not in data:
         found = sorted(k for k in data if not k.startswith('__'))
         raise KeyError(f'{path!r} has no variable {key!r}; found {found}')
-    mask = np.asarray(data[key]).astype(bool)
+    raw = np.asarray(data[key])
+    if not np.all((raw == 0) | (raw == 1)):  # False for NaN too
+        raise ValueError(
+            f'{path!r}[{key!r}] must be a 0/1 array; found values other than 0 and 1 '
+            '(non-binary weights, negatives or NaN)'
+        )
+    mask = raw.astype(bool)
     if mask.ndim not in (2, 3) or mask.shape[:2] != (Ny, Nz):
         raise ValueError(
             f'{path!r}[{key!r}] has shape {mask.shape}, expected '

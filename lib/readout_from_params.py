@@ -14,7 +14,7 @@ import copy
 import pypulseq as pp
 
 from ge.acoustics import _ESP_BANDS_US
-from lib.make_readout_grads import ReadoutGrads, make_readout_grads
+from lib.make_readout_grads import InfeasibleDwellError, ReadoutGrads, make_readout_grads
 from params import Params
 
 # Extra clearance (us) enforced on top of the exact coil forbidden-echo-
@@ -120,7 +120,7 @@ def find_min_feasible_dwell(
                 slew_rise=params.ro_slew_rise * gamma,
                 slew_fall=params.ro_slew_fall * gamma,
             )
-        except AssertionError:
+        except InfeasibleDwellError:
             continue
         echo_us = pp.calc_duration(rg.gro) * 1e6
         if _echo_spacing_in_forbidden_band(echo_us, params.spec.ge_coil):

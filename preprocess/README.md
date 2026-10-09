@@ -130,7 +130,7 @@ sample), `whitened`, `coil_compressed`, `Ncoils`, `Nc_out`,
 (odd/even phase, `(ETL//2, 2)`: constant and linear term per echo pair; `(2,)` in
 files written before review item 260),
 `delay` (calibrated readout delay, samples), `t_ref_s` (nominal TE), `TE_degre`, `fov`, `fov_degre`,
-`n_frames_discard`, `r2star_method`, `r2star_n_echoes`, `seqname`.
+`n_frames_discard` (leading warm-up frames; they stay in `ksp_epi_zf`, so a consumer skips them itself), `r2star_method`, `r2star_n_echoes`, `seqname`.
 
 Also written: `<seq>_smaps`, `<seq>_b0_map` and `<seq>_r2star_map` as `.nii.gz` +
 `.json` for viewing (magnitude only; voxel spacing is right but there is no patient

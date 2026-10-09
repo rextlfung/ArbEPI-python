@@ -89,15 +89,23 @@ def write_ceq(
 
         # Number of blocks (rows) to use for the sliding-window gradient/RF
         # heating check -- last complete segment instance within the cap.
-        segment_by_id = {s.ID: s for s in ceq.segments}
-        n = 1
-        while n < min(ceq.nMax, NMAXBLOCKSFORGRADHEATCHECK):
-            seg = segment_by_id[int(ceq.loop[n - 1, 0])]
-            n += seg.nBlocksInSegment
-            if n > NMAXBLOCKSFORGRADHEATCHECK:
-                n -= seg.nBlocksInSegment
-                break
-        _w(fid, 'i', n - 1)
+        _w(fid, 'i', _heat_check_nblocks(ceq))
+
+
+def _heat_check_nblocks(ceq: Ceq) -> int:
+    """Rows covered by the longest run of whole segment instances that fits
+    within NMAXBLOCKSFORGRADHEATCHECK rows. An instance starting at row n
+    ends at n + nBlocksInSegment - 1, so it fits iff that is <= the cap
+    (docs/review-findings.md item 126)."""
+    segment_by_id = {s.ID: s for s in ceq.segments}
+    n = 1
+    while n < min(ceq.nMax, NMAXBLOCKSFORGRADHEATCHECK):
+        seg = segment_by_id[int(ceq.loop[n - 1, 0])]
+        n += seg.nBlocksInSegment
+        if n - 1 > NMAXBLOCKSFORGRADHEATCHECK:
+            n -= seg.nBlocksInSegment
+            break
+    return n - 1
 
 
 def _max_realized_slew(ceq: Ceq) -> float:

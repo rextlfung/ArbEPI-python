@@ -54,6 +54,38 @@ def check_ge_feasibility(seq_path: str, params: Params) -> tuple[pp.Sequence, Fe
     return seq, report
 
 
+def check_all_ge_feasibility(
+    seq_paths: dict[str, str], params: Params
+) -> dict[str, tuple[pp.Sequence, FeasibilityReport]]:
+    """
+    Run `check_ge_feasibility` on every sequence in `seq_paths` (name ->
+    .seq path), collecting failures instead of stopping at the first, so one
+    run reports every infeasible sequence (docs/review-findings.md item 235).
+
+    Returns {name: (seq, report)} when all pass.
+
+    Raises
+    ------
+    RuntimeError
+        After checking all of them, if any failed; the message names every
+        failing sequence and includes each one's summary.
+    """
+    checked = {}
+    failures = []
+    for name, seq_path in seq_paths.items():
+        try:
+            checked[name] = check_ge_feasibility(seq_path, params)
+        except RuntimeError as e:
+            failures.append((name, str(e)))
+    if failures:
+        names = ', '.join(name for name, _ in failures)
+        raise RuntimeError(
+            f'GE feasibility check failed for {len(failures)} of {len(seq_paths)} '
+            f'sequences ({names}):\n\n' + '\n\n'.join(msg for _, msg in failures)
+        )
+    return checked
+
+
 def export_to_ge(
     seq_path: str,
     out_path: str,

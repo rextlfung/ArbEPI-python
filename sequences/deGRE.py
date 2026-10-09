@@ -117,6 +117,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         'x', system=sys, amplitude=params.Nx_degre * deltak[0] / Tread, flat_time=Tread
     )
 
+    # Placeholder ADC, only for its dead_time (independent of delay)
     adc = pp.make_adc(params.Nx_degre, system=sys, duration=Tread, delay=gxtmp.rise_time)
 
     # Extend flat time to split at end of ADC dead time
@@ -128,6 +129,11 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         crt,
         sys,
     )
+
+    # The ADC starts where the *played* (post-trap4ge) gx's flat top does;
+    # gxtmp's rise time only matches it when trap4ge is a no-op, i.e.
+    # crt == grad_raster_time (item 181).
+    adc = pp.make_adc(params.Nx_degre, system=sys, duration=Tread, delay=gx.rise_time)
 
     # Ported literally from GRE.m, which uses deltak[0] (kx spacing, not
     # deltak[2]) for the spoiler area. Kept as a plain trapezoid
@@ -186,7 +192,10 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     gx_pre, gy_pre, gz_pre = _make_pre(t_pre)
     # trap4ge rounds each ramp/flat segment up to crt, which can overshoot
     # t_pre by a raster step or two; back off until echo 0 fits.
-    while t_pre > t_pre_min and te_base + pp.calc_duration(gx_pre) > params.TE_degre[0] + 1e-9:
+    def _pre_block_duration():
+        return max(pp.calc_duration(g) for g in (gx_pre, gy_pre, gz_pre))
+
+    while t_pre > t_pre_min and te_base + _pre_block_duration() > params.TE_degre[0] + 1e-9:
         t_pre -= crt
         gx_pre, gy_pre, gz_pre = _make_pre(t_pre)
 
@@ -203,7 +212,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     # TE and TR delays, one pair per echo (TE_degre is a 2-element array --
     # see params.py). te_min doesn't depend on which echo, since both
     # echoes share the same excitation/prephasing timing.
-    te_min = te_base + pp.calc_duration(gx_pre)
+    te_min = te_base + _pre_block_duration()
     raster = sys.grad_raster_time
     # Echo 0 anchors the pair: ceil'd so its realized TE is never earlier
     # than prescribed, same as before. Every later echo's delay is derived

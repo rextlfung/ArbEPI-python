@@ -431,3 +431,28 @@ def test_degre_raises_actionable_error_below_minimum_tr(tmp_path):
     p = replace(load_params(), TR_degre=1e-6, output_dir=str(tmp_path))
     with pytest.raises(ValueError, match='TR_degre'):
         generate_degre(p, seqname='xcheck_degre')
+
+
+def test_degre_echo_time_includes_longest_prephaser(tmp_path):
+    """Item 247: te_min must credit the prephase block's real duration,
+    max(gx_pre, gy_pre, gz_pre). crt=12us makes trap4ge round gy_pre 12 us
+    longer than gx_pre; crediting gx_pre alone made the realized (exported)
+    TE_degre 12 us earlier than the sequence's actual echo time. Compared
+    here against the kx = 0 crossing read back out of the sequence."""
+    import hdf5storage
+
+    # generate_degre patches the realized pair into an existing scan_info.mat
+    hdf5storage.savemat(str(tmp_path / 'scan_info.mat'), {'TE_degre': np.zeros(2)}, fmt='7.3')
+    p = replace(
+        load_params(), crt=12e-6, TR_degre=9e-3, Ny_degre=2, Nz_degre=2, Ndummy_zloops=0,
+        output_dir=str(tmp_path),
+    )
+    seq = generate_degre(p, seqname='xcheck_degre')
+    te_saved = np.asarray(hdf5storage.loadmat(str(tmp_path / 'scan_info.mat'))['TE_degre']).ravel()
+
+    k_traj_adc, _, t_exc, _, t_adc = seq.calculate_kspace()
+    n = p.Nx_degre  # first readout: iZ=0, iY=0, echo 0
+    kx, t = k_traj_adc[0, :n], np.asarray(t_adc[:n])
+    i = np.where(np.diff(np.sign(kx)) != 0)[0][0]
+    t_zero = t[i] - kx[i] * (t[i + 1] - t[i]) / (kx[i + 1] - kx[i])
+    assert (t_zero - t_exc[0]) == pytest.approx(te_saved[0], abs=5e-6)

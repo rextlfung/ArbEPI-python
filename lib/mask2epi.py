@@ -1183,6 +1183,8 @@ def mask2epi_radial(
         # achieved worst-case step so it can only remove slack that step
         # is blind to, never regress it (see _euclidean_uncross_refine).
         shot_coords = schedule[shot, :, :].astype(float)
+        if ETL <= 1:
+            continue  # a single sample has no steps to uncross (item 119)
         shot_max = _pairwise_weighted_dist(shot_coords, deltak)[
             np.arange(ETL - 1), np.arange(1, ETL)
         ].max()

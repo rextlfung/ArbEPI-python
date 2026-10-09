@@ -56,6 +56,14 @@ import pypulseq as pp
 from lib.trap4ge import trap4ge
 
 
+class InfeasibleDwellError(AssertionError):
+    """The readout geometry has no solution at this ADC dwell (triangular lobe,
+    or the sampled window cannot reach +-kmax), so a larger/smaller dwell may
+    work. Subclasses AssertionError so existing callers still catch it;
+    find_min_feasible_dwell catches only this, not the dwell-independent
+    asserts (blip raster mismatch, slew ordering; review item 197)."""
+
+
 @dataclass
 class ReadoutGrads:
     gro: SimpleNamespace
@@ -255,10 +263,11 @@ def make_readout_grads(
     # Smallest flat top whose area covers Nx*deltak plus the M lost off each
     # end of the ADC window (both parities must reach +-kmax).
     flat = _ceil_to_raster((Nx * deltak[0] + 2 * M - A * (r + d) / 2) / A, crt)
-    assert flat >= 0, (
-        'Readout lobe would be triangular (ramps alone exceed the required '
-        'area) -- unsupported; would need A = sqrt(2*S/(1/slew_rise + 1/slew_fall)).'
-    )
+    if flat < 0:
+        raise InfeasibleDwellError(
+            'Readout lobe would be triangular (ramps alone exceed the required '
+            'area) -- unsupported; would need A = sqrt(2*S/(1/slew_rise + 1/slew_fall)).'
+        )
 
     # The ADC does not span exactly [0, Tread]: Nfid rounds Tread/dwell to a
     # multiple of 4 (either direction), and samples sit at (n + 0.5)*dwell.
@@ -282,7 +291,7 @@ def make_readout_grads(
             break
         flat += crt
     else:
-        raise AssertionError('flat-top coverage bump did not converge')
+        raise InfeasibleDwellError('flat-top coverage bump did not converge')
 
     gro = pp.make_trapezoid(
         'x',

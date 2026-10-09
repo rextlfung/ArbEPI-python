@@ -73,7 +73,12 @@ def _masked_gaussian_smooth(
     """Per-coil Gaussian smoothing normalized by the smoothed mask, so the
     zero background doesn't darken the edge. Real and imaginary parts are
     smoothed separately. The result extends slightly past the mask; callers
-    re-mask."""
+    re-mask.
+
+    gaussian_filter's default mode='reflect' (unlike grid_resize.py's
+    'nearest') has no effect here: the object does not touch the outer
+    edge of the FOV, and where the mask is 0 at the array edge the
+    numerator is 0 whatever the padding."""
     weight = mask.astype(np.float64)
     denom = ndimage.gaussian_filter(weight, sigma_vox)
     denom[denom < 1e-6] = 1

@@ -59,7 +59,8 @@ def calc_te_tr_delays(
     # rfsat None (params.excitation == 'water'): no fat-sat block and no
     # crusher after it.
     fatsat_blocks = 0.0 if rfsat is None else (
-        pp.calc_duration(rfsat) + max(pp.calc_duration(gx_spoil), pp.calc_duration(gz_spoil))
+        pp.calc_duration(rfsat)
+        + max(pp.calc_duration(gx_spoil), pp.calc_duration(gy_spoil), pp.calc_duration(gz_spoil))
     )
     min_tr = (
         fatsat_blocks

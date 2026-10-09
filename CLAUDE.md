@@ -23,7 +23,7 @@ conciseness reviews live in [`docs/review-findings.md`](docs/review-findings.md)
 not here -- it's a worklog, consulted occasionally, not an instruction a
 session needs loaded by default. Numbering in that file is cumulative and
 never reused: a few source files (`preprocess/grid_resize.py`,
-`tests/test_preprocess_grid_resize.py`, `lib/make_prephasers.py`) cite
+`tests/test_preprocess_grid_resize.py`) cite
 specific item numbers in comments, and items cross-reference each other by
 number. Check it before a review pass, and add new findings there in the
 same numbered format.
@@ -229,7 +229,9 @@ ArbEPI's (enforced by `test_arbepi_kxoe_matches_epical`). Its dummy
 `round(params.discard_duration / params.TR)` of them, the same warm-up
 ArbEPI acquires and discards (`Params.Ndummyshots` was removed
 2026-10-06; it was that same value stored as a field, which went stale
-under `dataclasses.replace(discard_duration=...)`).
+under `dataclasses.replace(discard_duration=...)`). Likewise `n_frames_discard`
+is the `params.py` setting (`discard_duration = n_frames_discard * volume_tr`),
+read back by the `Params.n_frames_discard` property, never stored.
 
 **`lib/trap4ge.py`** (ported from `../PulCeq/matlab/trap4ge.m`) rounds every
 gradient's rise/flat/fall times up to `params.crt` via `math.ceil(t / crt -
@@ -627,7 +629,7 @@ no longer called them, for the same reason.
 - **Poisson-disc sampling** (`sample/pd_sample.py`): a local
   reimplementation of `sigpy.mri.poisson`'s algorithm, not a dependency on
   the `sigpy` package — see README's "Differences vs. MATLAB original"
-  section for the three independent bugs found (in both
+  section for the independent bugs found (in both
   `../ArbEPI/lib/pd_sample.m` and real SigPy) that motivated this, and why `numba` (narrowly, for just this one
   function) is still a dependency.
 - **`ge/coppe.py`** SSH-copies a folder of `.pge` files (e.g. `output/*.pge`)
@@ -652,7 +654,7 @@ no longer called them, for the same reason.
   `custom_mask_path` is set, `load_params()` calls
   `resolve_custom_omegas` itself (broadcasting a static 2D mask across
   `Nframes`, or requiring a 3D mask's own frame count to match `Nframes`,
-  computed from `duration`/`volume_tr`/`discard_duration` -- hoisted
+  computed from `duration`/`volume_tr`/`n_frames_discard` -- hoisted
   earlier in `load_params()` than in the non-custom path specifically so
   this comparison can happen before `Nshots`), validates every frame
   carries the same sample count divisible by `ETL` (mask2epi's `Nshots *
@@ -883,6 +885,18 @@ the phase-contrast combine's echo 2, `y2 conj(y1)/sos` -- its echo 1 is
 identically real, which a first attempt unwrapped with no effect. HDF5.jl reverses
 axes relative to h5py, so `b0map.jl` permutes on read and write. The julia tests
 skip without `julia` on PATH.
+
+**`zero_pad_z` (`PreprocessConfig.zero_pad_z`, `batch_preprocess.py`'s flag;
+review items 196, 203, 258).** `grid_resize.resize_to_epi_grid` normally raises
+when the EPI z-FOV exceeds the deGRE slab's (the deGRE must cover the EPI FOV).
+With `zero_pad_z=True` it instead zeroes the target slices the source does not
+fully cover (rounded inward: a partly covered slice is zeroed), for an EPI
+resolution whose rounded z-FOV slightly overshoots the slab (e.g. 5.4 mm, 144 mm
+onto 135 mm). x and y still raise. Every resize of a deGRE map must pass the
+flag (`process_smaps`, `b0map.py`'s fit mask and field map, the R2* map), or
+that step still raises (item 205's `run_b0map` bug). The outer slices then
+carry zero sensitivity and no B0/R2* estimate, so the recon sees no object
+there.
 
 **R2* is a placeholder with the current deGRE** (`r2star.py`): its echo spacing
 is set for B0 (2.24 ms vs T2* ~47 ms on `2_6x_2.4mm`; echo ratio 0.953), so the
@@ -1303,7 +1317,8 @@ center this change specifically targets) once `precon=:diag` is already in
 place, so it's infrastructure for future/noisier datasets, not something
 this dataset's own results depend on.
 
-**`grid_resize.py`'s edge-aligned voxel convention (the `grid_mode=True`
+**`grid_resize.py`'s voxel convention (centered-FFT since item 263: voxel
+N // 2 is isocenter on both grids; earlier the edge-aligned `grid_mode=True`
 alignment fix, review item 12; since item 258 an exact per-axis coordinate
 map rather than a whole-voxel crop plus `zoom`) is directly load-bearing
 here.**
@@ -1653,12 +1668,13 @@ correlating 0.95; R2* 15.8 1/s for a true 16.8-18.3. With nothing but the
 object in the data, its k-space reconstructs the truth image to 1%
 (`test_preprocess_reconstructs_the_object_from_the_raw_readouts`), which is
 the end-to-end check of archive order, gridding, delay and odd/even
-conventions and k-space centering. It also found review item 263:
-`grid_resize.py` assumes edge-aligned fields of view where a centered FFT puts
-voxel N // 2 at isocenter, so the deGRE maps land 1.2 mm from the EPI's frame
-in z and 0.3 mm in x and y. Left open for the user's decision (it changes
-real-data maps); `test_degre_maps_land_where_the_epi_puts_the_object` is a
-strict xfail until then.
+conventions and k-space centering. It also found review item 263: `grid_resize.py` assumed edge-aligned fields of
+view where a centered FFT puts voxel N // 2 at isocenter, so the deGRE maps
+landed 1.2 mm from the EPI's frame in z and 0.3 mm in x and y. Fixed
+2026-10-09 (user decision): `resize_to_epi_grid` now maps target voxel j to source
+index `Ns//2 + (j - Ne//2) * d_tgt/d_src`, leaving offsets of ~0.05 mm on a
+synthetic sphere; `test_degre_maps_land_where_the_epi_puts_the_object` lost its
+xfail (it needs `snake`, so it was not run in the fixing session).
 
 **Reconstructing that session** (the earlier 60 s session: a 1.5% task, 10 s
 blocks, the motor task lagging the visual one; kept for the cross-talk and
