@@ -21,9 +21,10 @@ from dataclasses import dataclass
 import h5py
 import numpy as np
 from numpy.typing import NDArray
-from scipy import stats
 
-from recon.testbed import _dct, _glm
+from analyze import glm
+from analyze.glm import low_band
+from analyze.glm import t_threshold as _t_threshold
 
 # ---------------------------------------------------------------------------
 # loading
@@ -114,17 +115,11 @@ def true_signal(truth: Truth, mask: NDArray, modes: list[str] | None = None,
 # ---------------------------------------------------------------------------
 
 
-def low_band(n_frames: int, tr: float, cutoff_hz: float = 0.15) -> NDArray[np.float64]:
-    """(k, n_frames) orthonormal DCT components up to cutoff_hz."""
-    keep = int((np.arange(n_frames) / (2 * n_frames * tr) <= cutoff_hz).sum())
-    return _dct(n_frames)[:keep]
-
-
 def t_threshold(n_frames: int, tr: float, p: float = 0.001, cutoff_hz: float | None = 0.15,
                 two_sided: bool = True) -> float:
     """The t value of significance p in t_map's GLM (three regressors)."""
     dof = (len(low_band(n_frames, tr, cutoff_hz)) if cutoff_hz else n_frames) - 3
-    return float(stats.t.ppf(1 - (p / 2 if two_sided else p), dof))
+    return _t_threshold(dof, p, two_sided)
 
 
 def t_map(series: NDArray, regressor: NDArray, tr: float,
@@ -133,20 +128,21 @@ def t_map(series: NDArray, regressor: NDArray, tr: float,
     the task regressor (nt,). Returns (beta, t): beta as a fraction of the
     voxel's mean signal per unit of the regressor.
 
-    cutoff_hz: fit on the temporal frequencies up to it only (recon.testbed's
+    cutoff_hz: fit on the temporal frequencies up to it only (analyze.glm's
     low-band GLM). A reconstruction with a temporal penalty, and physiological
     noise, leave residuals that are far from white, so the plain GLM's t
-    (cutoff_hz=None) counts degrees of freedom the data does not have."""
+    (cutoff_hz=None) counts degrees of freedom the data does not have. This is
+    the simulator's calibrated default; analyze/ prewhitens instead."""
     series = np.asarray(series, dtype=np.float64)
     mean = np.maximum(series.mean(axis=1, keepdims=True), 1e-30)
-    basis = low_band(series.shape[1], tr, cutoff_hz) if cutoff_hz else None
-    return _glm(series / mean, np.asarray(regressor, dtype=np.float64), basis)
+    nt = series.shape[1]
+    X = np.stack([np.ones(nt), np.linspace(-1, 1, nt), np.asarray(regressor, dtype=np.float64)], 1)
+    basis = low_band(nt, tr, cutoff_hz) if cutoff_hz else None
+    r = glm.fit_glm(series / mean, X, np.array([0.0, 0.0, 1.0]), ar1=False, basis=basis)
+    return r.beta[:, 2], r.t
 
 
-def to_volume(values: NDArray, mask: NDArray, fill: float = 0.0) -> NDArray:
-    out = np.full(mask.shape, fill, dtype=np.float32)
-    out[mask] = values
-    return out
+to_volume = glm.to_volume
 
 
 # ---------------------------------------------------------------------------

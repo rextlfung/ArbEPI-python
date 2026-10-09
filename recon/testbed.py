@@ -46,6 +46,9 @@ import h5py
 import numpy as np
 from scipy import ndimage
 
+from analyze.design import dct_matrix
+from analyze.glm import fit_glm
+
 ROIS = (  # name, radius (voxels), waveform
     ("block_r3", 3.0, "block"),
     ("block_r1.5", 1.5, "block"),
@@ -203,10 +206,7 @@ def build_testbed(
 
 
 def _dct(nt: int) -> np.ndarray:
-    t = np.arange(nt)
-    C = np.cos(np.pi * t[:, None] * (t[None, :] + 0.5) / nt) * np.sqrt(2.0 / nt)
-    C[0] /= np.sqrt(2.0)
-    return C
+    return dct_matrix(nt)
 
 
 def _glm(s: np.ndarray, w: np.ndarray, basis: np.ndarray | None = None):
@@ -217,18 +217,11 @@ def _glm(s: np.ndarray, w: np.ndarray, basis: np.ndarray | None = None):
     components up to the cutoff, this is the GLM on low-pass-filtered series --
     the fair comparison for recons whose residual is itself band-limited (a
     temporal penalty leaves it smooth, and the plain t assumes independent
-    frames, overstating it by up to sqrt(nt / k))."""
+    frames, overstating it by up to sqrt(nt / k)). The fit is analyze.glm's."""
     nt = s.shape[1]
-    t = np.linspace(-1, 1, nt)
-    X = np.stack([np.ones(nt), t, w], 1)
-    if basis is not None:
-        s, X, nt = s @ basis.T, basis @ X, basis.shape[0]
-    XtXi = np.linalg.inv(X.T @ X)
-    B = s @ X @ XtXi  # (V, 3)
-    res = s - B @ X.T
-    sigma2 = (res**2).sum(1) / (nt - 3)
-    se = np.sqrt(sigma2 * XtXi[2, 2])
-    return B[:, 2], B[:, 2] / np.maximum(se, 1e-30)
+    X = np.stack([np.ones(nt), np.linspace(-1, 1, nt), w], 1)
+    r = fit_glm(s, X, np.array([0.0, 0.0, 1.0]), ar1=False, basis=basis)
+    return r.beta[:, 2], r.t
 
 
 def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,

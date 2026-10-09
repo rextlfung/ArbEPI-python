@@ -49,7 +49,7 @@ all of them, then on a scan.
 | `task.py` | The task: block paradigm, canonical HRF, the BOLD response and its regional delays |
 | `physio.py` | Physiological noise: BOLD-like, cardiac, respiratory, drift |
 | `study.py` | Repetitions of an experiment through `preprocess/` and `recon/`, resumable; `python -m simulate_fmri.study` |
-| `analysis.py` | Activation maps and overlays, ROC curves, the mixed-binomial test-retest model, true signals and aliasing |
+| `analysis.py` | Activation maps and overlays, ROC curves, the mixed-binomial test-retest model, true signals and aliasing. The GLM itself is `analyze/glm.py`'s; `t_map` here is its low-band form, this simulator's calibrated default (`analyze/` prewhitens instead) |
 | `ideal.py` | `simulate()` and `python -m simulate_fmri.ideal`: SNAKE's engine, output in recon's format |
 | `sampler.py`, `engine.py`, `handlers.py`, `export.py` | The ideal mode's SNAKE sampler, engine and activation handler, and its export |
 | `protocol.py` | `load_protocol()`: the acquisition recorded in `scan_info.mat` |

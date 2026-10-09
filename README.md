@@ -18,6 +18,7 @@ Each of the four sequences keeps its own lane from generation through the scanne
 | Preprocess | `.venv-preprocessing` | `.venv-preprocessing/bin/python -m preprocess.batch_preprocess <datdir> <seq> ...` | `<datdir>/recon/<seq>_preprocessed.h5` |
 | RSS | `.venv-recon` (`uv sync`, see [recon/README.md](recon/README.md#setup)) | `UV_PROJECT_ENVIRONMENT=.venv-recon uv run --extra recon python -m recon.rss <datdir> <seq>` | `<datdir>/recon/rss/` |
 | Iterative SENSE | `.venv-recon` | `UV_PROJECT_ENVIRONMENT=.venv-recon uv run --extra recon python -m recon.sense <datdir> <seq> --reg mslr --B0` | `<datdir>/recon/sense_mslr_b0/` |
+| Activation maps | main (`uv sync --extra analyze`, see [analyze/README.md](analyze/README.md)) | `uv run python -m analyze --recon <datdir>/recon/sense_mslr_b0/<seq>_recon.h5 --tr <TR> --onsets ... --duration 20 --scales all --out <dir>` | `<dir>/<seq>_recon_{sum,scaleK}_{t,z,psc}.nii.gz` |
 
 Before preprocessing, put the raw ScanArchives in `<datdir>/scanarchives/` and copy that session's `scan_info.mat` to `<datdir>/seqs/<seq>/` (see [preprocess/README.md](preprocess/README.md)).
 
@@ -235,6 +236,12 @@ recon/                        Image reconstruction (.venv-recon, uv sync), on Py
   utils.py                      I/O, operator norms, tSNR report, one-off L sweep/benchmark and
                                  validation vs. ../mslr-recon (python -m recon.utils ...)
   demo.ipynb                    Every recon type on one real dataset
+analyze/                     Task activation maps from reconstructions (main .venv, `uv sync --extra analyze`) -- see analyze/README.md:
+  design.py                     Task blocks x canonical HRF, DCT drift terms, constant
+  glm.py                        GLM with SPM-style AR(1) prewhitening; t -> z, FDR; low-band GLM
+  mask.py                       Brain mask: FSL bet if on PATH, else brainextractor
+  io.py                         recon .h5 (summed image, per-scale components) in, NIfTI out
+  run.py, __main__.py           analyze_recon and `python -m analyze`
 simulate_fmri/               Simulated scan sessions acquired with ArbEPI's schedules (.venv-simulate, uv sync)
                               -- see simulate_fmri/README.md
   session.py                    Raw readouts of all four scans for preprocess/ to read, plus the truth
