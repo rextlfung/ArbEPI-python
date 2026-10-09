@@ -1476,8 +1476,9 @@ the signal is 1 + amplitude x w. Decisions and what they rest on:
   (and the user's "+1/-1 ... amplitude of 3%"). With 20 s blocks the canonical
   response does not settle and w overshoots +-1 to +-1.29, so "3% x w" taken
   literally would peak at 3.9%. As implemented: +-3% at the peaks, about
-  +-2.4% on the plateaus, 6% trough to peak. Whether the user meant 3% between
-  task and rest instead (`amplitude=0.015`) is flagged to them, not settled.
+  +-2.4% on the plateaus, 6% trough to peak. The user confirmed this reading
+  ("+-3%", 2026-10-09) when asked whether 3% between task and rest
+  (`amplitude=0.015`) was meant instead.
 - *Amplitude is in the image domain*: the R2* change is solved so that the
   region's median activated voxel (the truth's `roi_masks` voxels) changes by
   `amplitude` at TE, partial volume and the response's own mean included
@@ -1594,8 +1595,9 @@ What was learned, beyond "B0 decides":
 - *The task is at the ceiling for a B0 reconstruction.* 3% over 320 s cannot
   rank two reconstructions that both model the field; the notebook therefore
   also analyses the first 80 s (one reconstructed piece, 21 degrees of
-  freedom). This bears on the open amplitude question (3% peak vs 3% task
-  minus rest): the user's answer changes how informative the curves are.
+  freedom). The amplitude stays at +-3% (user, 2026-10-09), so a comparison of
+  reconstructions that both model the field should use the 80 s analysis, a
+  shorter run or a smaller `amplitude`.
 - *Amplitude ratios below 1 are mostly spatial spread, not attenuation*: with
   B0 the regions hold 0.71 (visual) and 0.46 (motor) of the true activation
   (coefficient x signal, summed), the regions plus 3 voxels around them 1.10
