@@ -229,7 +229,9 @@ ArbEPI's (enforced by `test_arbepi_kxoe_matches_epical`). Its dummy
 `round(params.discard_duration / params.TR)` of them, the same warm-up
 ArbEPI acquires and discards (`Params.Ndummyshots` was removed
 2026-10-06; it was that same value stored as a field, which went stale
-under `dataclasses.replace(discard_duration=...)`).
+under `dataclasses.replace(discard_duration=...)`). Likewise `n_frames_discard`
+is the `params.py` setting (`discard_duration = n_frames_discard * volume_tr`),
+read back by the `Params.n_frames_discard` property, never stored.
 
 **`lib/trap4ge.py`** (ported from `../PulCeq/matlab/trap4ge.m`) rounds every
 gradient's rise/flat/fall times up to `params.crt` via `math.ceil(t / crt -
@@ -652,7 +654,7 @@ no longer called them, for the same reason.
   `custom_mask_path` is set, `load_params()` calls
   `resolve_custom_omegas` itself (broadcasting a static 2D mask across
   `Nframes`, or requiring a 3D mask's own frame count to match `Nframes`,
-  computed from `duration`/`volume_tr`/`discard_duration` -- hoisted
+  computed from `duration`/`volume_tr`/`n_frames_discard` -- hoisted
   earlier in `load_params()` than in the non-custom path specifically so
   this comparison can happen before `Nshots`), validates every frame
   carries the same sample count divisible by `ETL` (mask2epi's `Nshots *

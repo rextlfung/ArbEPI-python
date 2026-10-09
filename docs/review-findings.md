@@ -1038,7 +1038,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   (drop the `Nx` expand), matching `recon/mslr.py`'s/`recon/run_recon.py`'s
   convention.
   Resolved 2026-10-09 (backlog sweep): fixed in the current tree, with a regression test where the item called for one.
-- [ ] **110. `preprocessing/preprocess.py`'s `n_frames_discard` is
+- [x] **110. `preprocessing/preprocess.py`'s `n_frames_discard` is
   computed and written but has no reader anywhere in the repo.** [verify;
   citation updated 2026-09-22 against `6921c8c` -- the "no reader" file
   list is stale: `recon_frames.py`/`run_rss.py`/`run_cg_sense.py`/
@@ -1074,6 +1074,7 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   explicitly that this attr is metadata-only for a human/future consumer
   to act on by hand.
   Re-verified 2026-10-09: discard frames are NOT trimmed in preprocessing (`ksp_epi_zf`/`omegas`/`echo_times` keep all `Nframes`; `discard_duration` is 0 by default), so the attr was kept. Nothing reads `n_frames_discard`; drop it only once discard frames are trimmed or the attr is deemed unnecessary.
+  Resolved 2026-10-09 (user decision): `n_frames_discard` is now the `params.py` setting, with `discard_duration = n_frames_discard * volume_tr` derived from it and `Params.n_frames_discard` reading it back. The attr stays in `<seq>_preprocessed.h5` as documented metadata (the warm-up frames remain in `ksp_epi_zf`, so a consumer skips the first `n_frames_discard` itself); README, `preprocess/README.md` and CLAUDE.md say so. `tests/test_params_discard.py` guards the derivation.
 - [x] **119. `lib/mask2epi.py`'s `mask2epi_radial` crashes with `ETL=1`
   (`.max()` on a zero-size array), while `mask2epi_laminar` handles the
   same input fine.** [measured; citation updated 2026-09-16 against
