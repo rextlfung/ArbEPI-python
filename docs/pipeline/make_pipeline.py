@@ -615,26 +615,20 @@ def draw(d):
         ('para', '3. Operator: smaps RSS-normalized; with --B0 the field map is clipped to '
                  'its 0.1–99.9 percentiles.'),
         ('para', '4. Noise: y ÷ √noise_var (measured on the noise scan), so the noise has '
-                 'unit variance. Then, per regularizer:'),
-        ('indent', 'none: nothing more; CG has no λ, so the data scale does not matter'),
-        ('indent', 'mslr: A ÷ σ₁(A); the noise stays unit variance, which is what its λ '
-                   'weights assume'),
-        ('indent', 'wavelet-tv: A ÷ σ₁(A), and y ÷ its 99th-percentile magnitude (per frame; '
-                   'one scale if joint)'),
-        ('para', 'For wavelet-tv the data scale replaces step 4: its λ are relative to the data '
-                 'magnitude, not the noise level. σ₁(A) is found by power iteration; the '
-                 'scalings are undone on the output.'),
+                 'unit variance.'),
+        ('para', '5. Scale of A (mslr, wavelet-tv): A ÷ σ₁(A), found by power iteration, so '
+                 'step size and λ do not depend on the dataset. Undone on the output.'),
     ]
     prep_h = d.box(ix0, obj_y, iw, None, 'rec', prep)
     obj_y2 = obj_y + prep_h + 30
     d.arrow(f'M{obj_cx} {obj_y + prep_h} V{obj_y2 - 2}')
-    d.chip(obj_cx, obj_y + prep_h + 15, 'y, A · initialized per regularizer')
+    d.chip(obj_cx, obj_y + prep_h + 15, 'y (unit-variance noise), A')
     obj_y = obj_y2
     obj_h = d.box(ix0, obj_y, iw, None, 'rec', [
         ('title', 'Objective'), ('mono', 'sense.py · run_sense()'),
         ('mathc', r'\hat{x} = \arg\min_x \ \dfrac{1}{2}\,\|Ax - y\|_2^2 + R(x)'),
-        ('para', 'x: one 3D image per frame. y, A: as initialized above, which depends on '
-                 'R. For mslr, λ defaults to the acceleration factor.'),
+        ('para', 'x: one 3D image per frame. y, A: as initialized above. R(x) is the '
+                 'regularizer; for mslr, λ defaults to the acceleration factor.'),
     ])
     cw = 228  # three columns: A | R | solver
     cg = (iw - 3 * cw) // 2
@@ -671,7 +665,9 @@ def draw(d):
           ('math', r'R(x) = \lambda_{\ell_1}\|Wx\|_1 + \lambda_{TV}\|Dx\|_1'),
           ('para', 'per frame: sparse 3D wavelet coefficients and image gradients')],
          [('title', 'Primal-dual (PDHG)'), ('mono', 'solvers.pdhg'),
-          ('para', 'via mirtorch FBPD; TV has no closed-form prox')]),
+          ('para', 'via mirtorch FBPD; TV has no closed-form prox. First scales y ÷ its '
+                   '99th-percentile magnitude (per frame; one scale if joint), so the default '
+                   'λ mean the same on every dataset; undone on the output')]),
         ([('title', 'Multi-scale low rank (--reg mslr)'), ('mono', 'MultiScaleLowRank'),
           ('math', r'R(x) = \sum_k \lambda_k \sum_b \|P_b(x_k)\|_*'),
           ('math', r'x = \sum_k x_k'),
