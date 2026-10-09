@@ -2953,6 +2953,38 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   penalty as a gradient term (POGM's prox is the low-rank one), so its step
   is 1/(Nscales (1 + mu)): keep mu modest there or raise `--niter`. Test:
   `test_hp_penalty_as_a_dual_block_converges_faster_than_as_a_smooth_term`.
+- [ ] **263. `preprocess/grid_resize.py` places the deGRE maps on the EPI
+  grid up to half an EPI voxel from where the EPI data put the object: 1.2 mm
+  in z and 0.3 mm in x and y at the default protocol.** [measured 2026-10-04,
+  found by running preprocess on a simulated session, `simulate_fmri/`]
+  `resize_to_epi_grid` assumes both fields of view are edge-aligned on
+  isocenter: voxel i centered at (i + 0.5) FOV/N - FOV/2 (items 12, 258). A
+  centered inverse FFT (`utils.ift3c` for the deGRE, the gridding plus
+  `recon/operators.py`'s `SENSE` for the EPI) instead puts voxel N // 2 at
+  isocenter: voxel i at (i - N // 2) FOV/N. The two agree for odd N and
+  differ by half a voxel for even N, so mapping an even EPI grid (90 x 90 x
+  60) from the deGRE is off by 0.5 d_epi when the deGRE's N is odd (z: 51,
+  1.2 mm) and by 0.5 (d_epi - d_degre) when it is even (x, y: 72, 0.3 mm).
+  Measured with a 12 mm sphere at a known position, simulated as a deGRE
+  (`simulate_fmri.forward.gre_kspace`, an exact Fourier sum over spins),
+  reconstructed with `ift3c` and resized: on the deGRE grid its center is at
+  the DFT-convention index to 0.004 voxel and 0.5 voxel from the
+  edge-aligned one; on the EPI grid it is (0.30, 0.29, -1.20) mm from the
+  index at which the EPI reconstructs that point (72 x 72 x 51 deGRE), (0.30,
+  0.29, 0.30) mm with 48 slices, (-0.23, -0.20, -0.20) mm with a 2 mm 108 x
+  108 x 72 deGRE. The same offsets appear end to end: the deGRE image of a
+  simulated session, resized by preprocess, sits (0.20, 0.22, -1.21) mm from
+  the simulation's EPI-grid object. Sensitivity, B0 and R2* maps all go
+  through this resize. Not yet confirmed on scanner data: comparing the
+  resized deGRE with a zero-filled EPI mean on `20260930ballfat` gave -0.6 to
+  +0.7 mm in z depending on the threshold, too coarse to tell; a fully
+  sampled EPI run with a sharp-edged phantom would. Fix: map EPI voxel j to
+  source index (j - N_epi // 2) d_epi / d_degre + N_degre // 2 (one line in
+  `resize_to_epi_grid`; `zero_pad_z`'s slice range and the tests of items 12
+  and 258, which encode the edge-aligned convention, change with it), then
+  re-preprocess to re-register existing maps. Test (expected to fail until
+  then): `test_degre_maps_land_where_the_epi_puts_the_object` in
+  `tests/test_simulate_fmri_session.py`.
 
 - [x] **263. Temporal TV in the joint wavelet-TV solver didn't converge in
   100 iterations, so its weight barely mattered.** [found 2026-10-04 in the

@@ -240,13 +240,16 @@ def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,
         rois, waves = g["roi_masks"][()], g["waveforms"][()]
         names = list(g.attrs["roi_names"])
         amp = float(g.attrs["amp"])
+        # one peak fractional change per ROI when the truth has them (simulated
+        # sessions: regions differ in tissue mix), else the shared one
+        amps = np.broadcast_to(np.asarray(g.attrs.get("amps", amp), float), (len(rois),))
     obj, interior = object_masks(x0, object_thresh)
     with h5py.File(fn_recon, "r") as f:
         X = np.abs(f["X_recon"][()]).astype(np.float64)
     nt = X.shape[-1]
     T = np.repeat(x0[..., None], nt, -1)
-    for m, w in zip(rois, waves):
-        T[m] *= 1 + amp * w[None, :]
+    for m, w, a in zip(rois, waves, amps):
+        T[m] *= 1 + a * w[None, :]
     alpha = (X[obj] * T[obj]).sum() / (X[obj] ** 2).sum()
     M = alpha * X
 
@@ -266,7 +269,7 @@ def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,
     out["fluct_outband_pct"] = 100 * float(np.median(np.sqrt((Rc[:, keep:] ** 2).sum(1) / nt)))
 
     lowband = _dct(nt)[:keep]  # the GLM on low-pass-filtered series (<= cutoff_hz)
-    for name, m, w in zip(names, rois, waves):
+    for name, m, w, a in zip(names, rois, waves, amps):
         s = M[m] / x0[m][:, None]
         beta, tstat = _glm(s, w)
         if name.startswith("block") or name == "sin0.10":  # in-band waveforms
@@ -274,12 +277,12 @@ def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,
         shell = (ndimage.binary_dilation(m, iterations=4)
                  & ~ndimage.binary_dilation(m, iterations=1) & interior & ~(rois.any(0) & ~m))
         beta_shell, _ = _glm(M[shell] / x0[shell][:, None], w)
-        out[f"{name}_amp_ratio"] = float(np.median(beta) / amp)
+        out[f"{name}_amp_ratio"] = float(np.median(beta) / a)
         out[f"{name}_t"] = float(np.median(tstat))
         roi_mean = s.mean(0)
         out[f"{name}_corr"] = (float(np.corrcoef(roi_mean, w)[0, 1])
                                if roi_mean.std() > 1e-12 else 0.0)
-        out[f"{name}_leak_ratio"] = float(np.median(beta_shell) / amp)
+        out[f"{name}_leak_ratio"] = float(np.median(beta_shell) / a)
     _, t_bg = _glm(M[bg] / x0[bg][:, None], waves[0])
     out["false_pos_frac_t3.29"] = float(np.mean(np.abs(t_bg) > 3.29))
     # the same in the low band, against its own t threshold (two-sided p < 0.001)
@@ -296,9 +299,10 @@ def score(fn_testbed: str, fn_recon: str, cutoff_hz: float = 0.15,
     return out
 
 
-def panel(fn_testbed: str, fn_recon: str, fn_png: str, title: str = "") -> None:
-    """Mean image, temporal std (relative) and block-regressor t-map, through
-    the center of block_r3, next to the truth's mean image."""
+def panel(fn_testbed: str, fn_recon: str, fn_png: str, title: str = "", roi: int = 0) -> None:
+    """Mean image, temporal std (relative) and the t-map of ROI `roi`'s
+    regressor, through the center of that ROI (0: block_r3 in a built
+    testbed), next to the truth's mean image."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -316,9 +320,9 @@ def panel(fn_testbed: str, fn_recon: str, fn_png: str, title: str = "") -> None:
     mean = M.mean(-1)
     std = M.std(-1) / np.maximum(x0, 1e-6 * x0.max()) * obj
     _, tmap = _glm((M / np.maximum(x0, 1e-6 * x0.max())[..., None]).reshape(-1, X.shape[-1]),
-                   waves[0])
+                   waves[roi])
     tmap = tmap.reshape(x0.shape) * obj
-    c = np.round(np.argwhere(rois[0]).mean(0)).astype(int)
+    c = np.round(np.argwhere(rois[roi]).mean(0)).astype(int)
     vmax = np.percentile(x0[obj], 99.5)
     rows = [("truth mean", x0, dict(cmap="gray", vmin=0, vmax=vmax)),
             ("recon mean", mean, dict(cmap="gray", vmin=0, vmax=vmax)),
@@ -363,6 +367,8 @@ def _cli() -> None:
     s.add_argument("--json", default=None)
     s.add_argument("--png", default=None)
     s.add_argument("--title", default="")
+    s.add_argument("--roi", type=int, default=0,
+                   help="which ROI the --png panel shows (index into roi_names)")
     a = p.parse_args()
     if a.cmd == "build":
         build_testbed(a.full, a.masks, a.out, a.volume_tr, nt=a.nt, mask_start=a.mask_start,
@@ -374,7 +380,7 @@ def _cli() -> None:
         with open(a.json, "w") as f:
             json.dump(out, f, indent=2)
     if a.png:
-        panel(a.testbed, a.recon, a.png, a.title)
+        panel(a.testbed, a.recon, a.png, a.title, a.roi)
 
 
 if __name__ == "__main__":

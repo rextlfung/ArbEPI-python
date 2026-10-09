@@ -316,11 +316,26 @@ fluctuation in non-activated voxels split into below/above 0.15 Hz, each
 ROI's recovered amplitude (GLM; 1 = exact), t-score and leakage into a
 surrounding shell, the false-positive rate (|t| > 3.29) of the block regressor
 elsewhere, and edge sharpness relative to the truth. `--png` adds a panel
-(truth and recon mean, temporal std, block t-map). The `_t_lowband` and
+(truth and recon mean, temporal std, block t-map) through the first ROI, or
+through ROI `--roi N` with that ROI's regressor. The `_t_lowband` and
 `false_pos_frac_lowband` entries repeat the GLM on the DCT components below
 the cutoff only, with their own degrees of freedom: a temporal penalty leaves
 the residual band-limited, which inflates the plain per-frame t (25-32% of
 null voxels above |t| = 3.29 on `20260930ballfat`, vs 0.1% in the low band).
+
+`score` also reads the truth files [`simulate_fmri/`](../simulate_fmri/README.md)
+writes: a digital brain simulated as raw scanner data along a `scan_info.mat`
+schedule and run through `preprocess/`, with a block task activating the
+visual cortex and both hand motor areas (`block_occipital`, `block_motor`,
+the motor response 0.6 s later) in the same `truth` layout
+(`score <datdir>/<name>_truth.h5 <recon>.h5`). Their regions differ in tissue
+mix, so those files carry one peak change per ROI (`amps`), which `score` uses
+in place of the shared `amp` when it is there. That data comes from a forward
+model the recon does not share (spins on a finer grid, a susceptibility-derived
+field, ramp sampling, T2* decay and an R2*-based BOLD change at every sample's
+own time, physiological noise per excitation) and reaches the recon with
+estimated, not true, sensitivity and field maps; the price is a synthetic
+object and coils.
 
 ## Performance notes
 

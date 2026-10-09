@@ -11,7 +11,8 @@ points and global config (`main.py`, `demo.ipynb`, `params.py`,
 `scanners.py`) sit at the repo root, mirroring `../ArbEPI` having `params.m`/`main.m` directly
 at its own root — everything else lives under
 `lib/`/`sequences/`/`sample/`/`plot/`/`ge/` (plus the
-`preprocess/`/`recon/` data-processing stages, and `tests/`/`docs/`), matching
+`preprocess/`/`recon/` data-processing stages, `simulate_fmri/`, which
+simulates scans of these sequences, and `tests/`/`docs/`), matching
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
 for the full layout).
 
@@ -126,7 +127,8 @@ conversion either way.
 
 `output/scan_info.mat` -- kxo/kxe (odd/even echo k-space trajectories for
 ghost correction), schedules/parts (the sampling schedule), and a snapshot
-of the scan scalars `preprocess/` needs -- is written via
+of the scan scalars `preprocess/` needs (plus `fa`, `adc_dwell`, `TR_degre`,
+`alpha_degre` and `dwell_degre`, which only `simulate_fmri/` reads) -- is written via
 `hdf5storage.savemat(..., fmt='7.3')`, matching the original MATLAB code's
 `save(..., '-v7.3')`. **`scipy.io.loadmat`/`savemat` cannot read or write
 v7.3 at all** — always use `hdf5storage.loadmat` (or raw `h5py`) when
@@ -700,7 +702,10 @@ pip-installable, not committed (proprietary, ~100MB), and ABI-locked to Python
 3.10 / `numpy<2.0.0`, hence the separate `.venv-preprocessing`. It is imported
 only inside `utils.ArchiveReader.__init__`, so the rest of `preprocess/`, its
 tests and `recon/` (which imports `preprocess.utils` from `.venv-recon`) work
-without it. `Archive.NextFrame()`'s exhaustion (`RuntimeError` containing "No
+without it. `ArchiveReader` also reads the simulated archives
+`simulate_fmri/session.py` writes (plain HDF5 with an explicit marker), with
+h5py, so `preprocess()` runs on a simulated session without GERecon -- see the
+`simulate_fmri/` section. `Archive.NextFrame()`'s exhaustion (`RuntimeError` containing "No
 next frame available") becomes `StopIteration`. Tests replace
 `utils.read_archive`/`utils.ArchiveReader` with in-memory fakes
 (`tests/test_preprocess_pipeline.py`), which is why `preprocess.py` calls them
@@ -1311,6 +1316,432 @@ applies to, not just against the deGRE-grid diagnostics `grid_resize.py`'s
 own docstring measures. Any future change to that resize convention needs
 re-checking against a real B0-corrected reconstruction, not just the
 grid-alignment unit test.
+
+### `simulate_fmri/` -- simulated scan sessions acquired with ArbEPI's schedules
+
+User-facing documentation (setup, commands, what is and is not modeled, the
+output files, the literature values) is `simulate_fmri/README.md`, with a
+worked example in `simulate_fmri/demo.ipynb`; this section keeps the design
+history behind it.
+
+Two levels of fidelity, both starting from a `scan_info.mat`:
+
+- **`session.py` (`python -m simulate_fmri.session`)** writes the raw ADC
+  readouts of all four scans (noise, EPIcal, deGRE, ArbEPI) as
+  `<outdir>/scanarchives/*.h5` plus `seqs/<name>/scan_info.mat`, the layout a
+  real session has, so the unmodified `preprocess/` and `recon/` run on it:
+  whitening, the readout-delay sweep, the odd/even fit, ramp gridding, GCC,
+  ESPIRiT, MRIFieldmaps, R2*, then a `--B0` reconstruction. The truth goes to
+  `<outdir>/<name>_truth.h5`.
+- **`ideal.py` (`python -m simulate_fmri.ideal`)** has SNAKE-fMRI's
+  acquisition engine sample the phantom on the Cartesian grid and writes
+  `recon/<name>_preprocessed.h5` directly, truth inside: sampling, T2* decay
+  along the echo train and white noise only. Its forward model is exactly
+  `recon/operators.py`'s `SENSE` when the decay is off, which makes it the
+  reference the raw mode reduces to.
+
+Either truth is a `truth` group in `recon/testbed.py`'s layout, so
+`python -m recon.testbed score <truth file> <recon.h5>` scores both, and the
+real-data testbed, the same way (a first plan had its own nilearn GLM + ROC
+script, dropped when the testbed landed on main mid-way).
+
+**Why the raw mode exists (explicit user request, 2026-10-04: model B0,
+ghosting, ramp sampling, physiological noise, sensitivity-map estimation,
+"as close to the current preprocessing and recon pipeline as possible").** The
+ideal mode bypasses `preprocess/` entirely and hands the recon the true coil
+maps. The only way to be close to the pipeline is to run the pipeline, which
+needs data in the form the scanner delivers it.
+
+**How `preprocess/` reads a simulated session.** `utils.ArchiveReader`
+recognizes a simulated archive (an HDF5 file with the attribute
+`arbepi_simulated_archive` and a dataset `readouts` `[Nacq, Ncoils, Nfid]`)
+and serves it through the same two calls it uses on `GERecon.Archive`; nothing
+else in `preprocess/` knows the difference, and GERecon is not needed. The
+marker is explicit because real ScanArchives are HDF5 too.
+`sequences/ArbEPI.py` now saves what the simulation needs and `scan_info.mat`
+lacked: `fa`, `adc_dwell`, `TR_degre`, `alpha_degre`; `sequences/deGRE.py`
+adds `dwell_degre` when it patches `TE_degre`. Older files get fallbacks
+(`protocol.load_protocol`).
+
+**The signal model is this repo's, not SNAKE's (`forward.py`).** SNAKE has no
+field map (its FAQ: by design, too expensive), one Cartesian sample grid, and
+BOLD as an amplitude change. In the raw mode SNAKE supplies the phantom
+(BrainWeb tissue maps, `Phantom.resample`) and nothing else since the task
+model moved to `task.py` (its `get_bold` regressor and its engine are used only
+by the ideal mode). The model:
+
+- *Spins on a finer grid than the acquisition* (`grid_factor`, default 2, same
+  field of view): intravoxel dephasing and partial volume come out of the
+  model, and the simulation does not share a voxel grid with the recon. The
+  fine grid's voxel centers are offset from the positions a centered FFT
+  assumes by `(g - 1) / (2 g)` voxel for even N (`Grid.fft_offset`), applied
+  as a phase per k location; `test_ramp_sampled_readouts_match_the_signal_equation`
+  covers odd/even N and g against a brute-force sum.
+- *Linear in the perturbations.* BOLD, physiological fluctuations and the
+  breathing field gradient are `Mode`s: a spatial map times one weight per
+  excitation, kept to first order (5e-4 of the signal for a 3% change). The
+  signal of a shot is then a weighted sum of terms that depend only on the
+  echo index, so everything spatial is computed once per echo index (per coil:
+  image at t_e, FFT over (y, z), keep the (ky, kz) that echo visits in the
+  run, exact Fourier sum along x at the ADC's kx). Cost is nearly independent
+  of the run length: the default protocol, 119 frames, 32 coils, 180 x 180 x
+  120 spins, takes 27 s on an RTX A6000, and 632 frames 43 s. A per-shot kernel inside SNAKE's engine
+  was considered first and rejected: it costs
+  `Nshots_total x Nvox x Ncoils x ETL`. The price of this design: motion
+  (which changes the object, not a weight) cannot be a mode.
+- *Each sample at its own time.* T2* decay and B0 phase use the echo time from
+  the schedule plus the sample's time within the readout, relative to where
+  the played trajectory crosses kx = 0 (not the readout's center: POPE is
+  asymmetric). The within-readout part is a Taylor expansion in that time,
+  second order by default (2% at 300 Hz at the ends of a readout;
+  `test_taylor_order_controls_the_within_readout_error`).
+- *Ramp sampling by an exact discrete Fourier sum* at `kxo`/`kxe`, a different
+  algorithm from `preprocess/epi_gridding.py`'s density-compensated NUFFT
+  adjoint, so gridding is tested rather than inverted by construction.
+- *Readout delay in `preprocess.apply_delay`'s own convention*: sample n
+  (1-based) is at `kx0(n - 0.5 - delay)`, so the calibrated delay should equal
+  the injected one, and does (-0.30 for -0.30;
+  `test_readout_delay_follows_preprocess_convention`). The odd/even phase is
+  `oephase.epiphasecorrect`'s model: a constant on every other echo, with a
+  drift along the train, and optionally a linear term (a kx shift).
+- *The deGRE's k steps are those of `sequences/deGRE.py`*, `(i - N/2) dk`:
+  half-integer for an odd N (the default Nz_degre = 51), which a centered FFT
+  turns into a phase ramp. Applied as a ramp on the coil maps; the readout's
+  half-sample offset likewise.
+
+**Sizes come from measurements, and the docstrings say which.**
+- *T2\**: Peters et al., Proc ISMRM 14 (2006) 926 (journal version MRI
+  2007;25:748, whose abstract has no numbers): 59.7 ms cortical gray, 54.6 ms
+  white at 3 T with through-slice dephasing removed (47.1 and 44.0 without).
+  The corrected values are used because the field is simulated separately. A
+  first version had 66/53 ms "from memory" of that paper; it was wrong, and
+  T2 for gray and white matter were swapped. Wansapura 1999 (verified on
+  PubMed): T1 1331/832 ms, T2 80/110 ms, T2* 41.6-51.8 / 44.7-48.4 ms
+  uncorrected.
+- *BOLD*: an R2* change, so it grows with echo time; this replaces SNAKE's
+  amplitude model in the raw mode, and orderings can be compared by BOLD
+  sensitivity too. Its size is set by the task's `amplitude` (see "The task"
+  below). For scale: van der Zwaag et al. 2009 measured -0.98 1/s between
+  rest and task at 3 T in motor cortex, 2.9% at TE 30 ms, which was the
+  default until the task was specified.
+- *Readout*: delay -0.3 samples, odd/even phase -0.25 to -0.32 rad along the
+  train, from the `delay` and `oephase_a` attributes of `20260922xiaokai` and
+  `20260930ballfat`.
+- *Coil noise*: a covariance with per-coil standard deviations within about
+  1.12 of each other and correlations around 0.01, from those sessions' `W`.
+- *Thermal noise* (`session.THERMAL_NOISE`): the standard deviation of a raw
+  sample scales as `1 / (voxel volume x sqrt(N x dwell))`, so the same
+  constant serves the EPI and the deGRE and any protocol. Calibrated on
+  `20260922xiaokai`'s deGRE (its RSS image over its own background: 56 at
+  2 mm), which scales to an SNR of 115 for a fully sampled volume of the
+  default EPI. Good to perhaps 30%; the EPI data of that session could not be
+  used (its 60 sampled locations are the same every frame).
+- *B0* (`b0.py`): dipole convolution of the head's susceptibility. BrainWeb's
+  12-class head model has no air inside it (1.7 cm3, at the cut neck), so
+  sinuses, mastoids and ear canals are ellipsoids carved out of non-brain
+  tissue, and the neck is continued below the volume. With a linear shim the
+  brain's field has a std of 28 Hz and 0.1-99.9 percentiles of -144/+272 Hz
+  (voxel means on the default protocol's grid; extremes -468/+400 Hz);
+  the head scan's map has 45 Hz and -267/+190 Hz.
+- *Physiological noise* (`physio.py`): Bodurka et al. 2007's temporal-SNR
+  ceilings (lambda 0.0128 gray, 0.0085 white, 0.021 CSF at TE 45 ms) split by
+  the Kruger-Glover model into an R2* part and a TE-independent part; the
+  split itself (0.004 TE-independent in tissue) is an assumption. Sampled per
+  excitation, so the shots of one frame disagree, which is the multi-shot
+  failure mode. Breathing shifts the field (Van de Moortele et al. 2002).
+
+**Truth definitions.** `x0` is the fine-grid image at the nominal TE cut to
+the acquired k-space (`forward.band_limited`), i.e. including intravoxel
+dephasing. The field-map truth is the magnetization-weighted mean over each
+voxel's spins: a plain mean counts the field in the air around the object,
+which no map can measure, and made the correlation with a visibly correct map
+0.58. The activation truth keeps only voxels that are at least 90% tissue
+(`amp_map` is a ratio to `x0`; at the brain's edge the ratio is meaningless
+and 547 such voxels took the scorer's `corr` from 0.96 to -0.32). In the raw
+mode `amp_map` is also zero outside `brain_mask` (tissue fraction > 0.5): `x0`
+is band-limited there, nowhere exactly zero, and the ratio of two ringing
+tails reached 0.06 against a true activation of 0.015, which is all the demo
+notebook's figure showed.
+
+**The task (2026-10-05, user specification).** A visual-motor block task: a
+flashing checkerboard and two-handed finger tapping for 20 s, rest for 20 s,
+8 cycles = 320 s. `SessionConfig.activations` is a tuple of
+`Activation(region, task_s, rest_s, onset, delay, amplitude, n_cycles)`, one
+linear R2* `Mode` each, over the gray matter inside `Anatomy.rois[region]` (an
+ellipsoid, or a list of them for a two-sided region). Defaults: `occipital`
+(SNAKE's ellipsoid, the visual cortex; 609 voxels of the default protocol) and
+`motor` (one 14 x 12 x 14 mm ellipsoid per hemisphere at the hand area's usual
+stereotaxic coordinates, (+-38, -22, 56) mm; 204 + 218 voxels). `task.py` has
+the model, as the user gave it: the paradigm p is +1 on task and -1 at rest,
+the response is w(t) = (h * p)(t - delay) with h SPM's canonical HRF (exact,
+through the HRF's running integral; equal to nilearn's `spm_hrf` to 0.3%), and
+the signal is 1 + amplitude x w. Decisions and what they rest on:
+- *Amplitude is the peak excursion from the time average*, i.e. w is centered
+  and scaled to peak 1 first, which is `recon/testbed.py`'s `amp` convention
+  (and the user's "+1/-1 ... amplitude of 3%"). With 20 s blocks the canonical
+  response does not settle and w overshoots +-1 to +-1.29, so "3% x w" taken
+  literally would peak at 3.9%. As implemented: +-3% at the peaks, about
+  +-2.4% on the plateaus, 6% trough to peak. The user confirmed this reading
+  ("+-3%", 2026-10-09) when asked whether 3% between task and rest
+  (`amplitude=0.015`) was meant instead.
+- *Amplitude is in the image domain*: the R2* change is solved so that the
+  region's median activated voxel (the truth's `roi_masks` voxels) changes by
+  `amplitude` at TE, partial volume and the response's own mean included
+  (`scale = A / (g (P - A m))`; the truth's `amps` equal it to 0.1%). It comes
+  out at -+1.30 1/s, 2.7 times van der Zwaag's 0.98 1/s rest-to-task: the
+  user's 3% is a strong activation, not a typical one.
+- *Delays*: visual 0 s (the canonical HRF's 5.0 s time to peak is what Lin et
+  al., NeuroImage 2013;78:372, measured in visual cortex: 5.0 +- 0.4 s at 3 T
+  with 100 ms sampling, 21 subjects, a visuomotor reaction task), motor 0.6 s
+  (the same study's time-to-half-peak difference, 3.4 vs 2.8 s; its abstract
+  attributes the order to neuronal timing, not vascular differences). Table
+  values came through a summarizing fetch of the PMC page (the page refuses
+  direct download), asked twice with consistent answers; the abstract was read
+  directly. Handwerker 2004 / Aguirre 1998 for between-subject spread (about
+  4 s), Taylor 2018 for 6.1 +- 0.6 s to peak across cortex.
+- *One paradigm drives both regions* now; the earlier default (motor blocks
+  lagging by a quarter cycle, 10 s blocks, one hemisphere) existed for one
+  commit and is gone. Its point (uncorrelated regressors expose cross-talk)
+  still holds if `onset` is used.
+- *Names keep the `block_` prefix* (`block_occipital`, `block_motor`):
+  `recon.testbed.score` reports `_t_lowband` only for those.
+- *Per-region truth*: each mask is cut at half of that region's own largest
+  change; `x0` is the time average with every region's mean change in it;
+  `r2s_change` is (regions, excitations); `task/` holds the paradigm and
+  response per excitation and the canonical (undelayed) response per frame,
+  the regressor an analysis would use.
+- *`recon/testbed.py` changed for multi-region truth*, backward compatibly:
+  `score` prefers a per-ROI `amps` attribute to the single `amp`; `panel` (and
+  `score --roi`) can show any ROI. Its false-positive fractions still use the
+  first ROI's regressor.
+- Regions must be disjoint and there is one activation per region (a
+  `ValueError` otherwise). A negative `onset` is a block that began before the
+  run. *The ideal mode still has one region.*
+
+**Truth additions for analysis.** `modes/gain` and `modes/course`: every
+perturbation (activations and physiological modes) as a map of fractional
+signal change at TE per unit of its course, so the noise-free signal of any
+voxel at any excitation is `image_rest x (1 + sum gain x course)`
+(`analysis.true_signal`). This is what earlier notes lacked when they could
+only estimate what a perfect reconstruction would score: it gives the true
+series with physiology in it. `anat/t1w`: a spoiled gradient echo (TR 20 ms,
+25 deg) of the tissue maps on the spin grid, to lay activation maps over.
+
+**Is the truth image T2*-weighted (user question, 2026-10-05)?** Yes: per
+tissue it is PD x spoiled steady state at the per-shot TR and flip x
+exp(-TE/T2*), and the truth image's medians in pure-tissue voxels match that to
+three digits (gm : wm : csf = 1 : 1.054 : 0.94-0.96). It looks flat because a
+3D-EPI's per-shot TR (50.6 ms) and flip (15.9 deg) saturate CSF to half of gray
+matter's steady state, which cancels what its long T2* adds; at TE = 0 the same
+sequence gives a T1-weighted image (CSF 0.58 of gray), and at a 2D EPI's TR
+and flip (2 s, 77 deg) CSF is the brightest again (1.05). Not a plotting
+artifact, and not a bug.
+
+**`study.py` and `analysis.py` (2026-10-05, user request: ROC curves and
+test-retest reliability as in https://yonglihe23.github.io/posts/2024/11/fmri-test-retest/).**
+That post describes ROC curves and the mixed-binomial model of Genovese, Noll
+and Eddy (MRM 1997;38:497): from M repetitions, the count R_v of runs in which
+a voxel is classified active is a mixture of two binomials with parameters
+(lambda, p_A, p_I), and with K thresholds the fits share lambda ("dependent
+likelihood"), a mixture of two multinomials over the number of thresholds
+reached. `analysis.fit_mixed_binomial` fits both by EM (closed-form M step;
+voxels grouped by count pattern; several starts; the class with higher levels
+is "active") and is tested on data with known rates. So a study is M
+repetitions: `study.py` simulates, preprocesses and reconstructs them,
+resumably (a `.ok` marker next to each preprocessed file, so a half-written
+one is not taken for done), and `analysis.py` has the GLM (the scorer's
+low-band one: 93 degrees of freedom for 632 frames), the T1w overlay, ROC
+against the truth and the model. Things measured on the way:
+- *The B0 operator needs 16 time segments here, not 32*: forward error against
+  L = 64 is 0.001% at 16, 0.19% at 12, 1.9% at 8, on the default protocol
+  (31 ms echo train, field clipped to about 300 Hz, BT about 10), at half the
+  cost. `study.RECONS` uses `L_b0=16`; `recon.sense`'s default is unchanged.
+- *A 320 s run does not fit on the GPU, so it is reconstructed in pieces*
+  (`study.MAX_FRAMES = 160`, four pieces of 158 frames, joined into one
+  `X_recon` with a `frame_chunks` attribute). The joint wavelet-TV (PDHG)
+  solver holds about 35 copies of the image series: 632 frames failed at
+  41.6 GB allocated and 316 at 42.6 GB on a 48 GB A6000, with or without B0;
+  158 peak at 38.3 GB. The pieces are independent reconstructions, so there is
+  a seam where two meet: the reconstruction error correlates 0.98 between
+  neighbouring frames within a piece and 0.06-0.36 across a seam, the median
+  voxel's step across it is 4-5 times its usual frame step, and the error is
+  raised over about 3 frames either side (the high-pass penalty's DCT has an
+  edge there). 158 frames is exactly two task cycles, so every seam is at a
+  block onset, at the same task phase in every run: not random, and a candidate
+  for inflating test-retest agreement. The control that clears it: replacing 3
+  frames either side of each seam by interpolation moved run 1's low-band t
+  map by 0.06 rms (correlation 0.9995 with B0, 0.997 without) and left the AUC
+  unchanged. Overlapping pieces and discarding the edges would remove the seams
+  at about 25% more time; not done.
+- *Cost, measured*: per 320 s run 43 s to simulate, 31-37 min to preprocess,
+  16 min to reconstruct without B0 and 110-119 min with it (L = 16), so about
+  11 hours for four runs; 10.5 GB per run plus 8.3 GB of raw archives for the
+  one run that keeps them (49 GB in all).
+- *Aliasing* (`analysis.alias`): the series is sampled at 1.976 Hz, so the
+  1.1 Hz heartbeat lands at 0.876 Hz and its second harmonic at 0.224 Hz, next
+  to breathing (0.25 Hz); a frame also averages over its 0.506 s, |sinc(f T)|:
+  0.56 and 0.10 of those survive. The reconstruction's temporal high-pass
+  penalty acts above 0.15 Hz, on all of them.
+- *"temporal std / truth"* in the scorer's panel (user question) is each
+  voxel's reconstructed temporal standard deviation over its true mean signal:
+  1/tSNR. It does not separate real fluctuation from added noise; the notebook
+  puts the same quantity of the true signal next to it.
+
+**The four-run study's results (2026-10-05; `demo.ipynb`, tables in the
+README).** Default protocol, 320 s, the 3% visual-motor task, four seeds. The
+runs agree within 10% on the scores quoted here (leak ratios and false
+positive fractions vary more). With B0: frame error 10.9%, fluctuation
+1.19%, mean time course vs truth 0.95 (visual) and 0.93 (motor), low-band
+median t 13.1 and 11.8, every one of the 1031 activated voxels above
+|t| > 3.40 in every run, pooled AUC 0.9997, 95% of activated voxels found at a
+false positive rate of 0.1% (85% from the first 80 s alone). Without B0:
+23.9%, 5.1%, 0.32 and 0.74, t 1.2 and 3.7, AUC 0.862, 32% (4.5% from 80 s).
+What was learned, beyond "B0 decides":
+- *The task is at the ceiling for a B0 reconstruction.* 3% over 320 s cannot
+  rank two reconstructions that both model the field; the notebook therefore
+  also analyses the first 80 s (one reconstructed piece, 21 degrees of
+  freedom). The amplitude stays at +-3% (user, 2026-10-09), so a comparison of
+  reconstructions that both model the field should use the 80 s analysis, a
+  shorter run or a smaller `amplitude`.
+- *Amplitude ratios below 1 are mostly spatial spread, not attenuation*: with
+  B0 the regions hold 0.71 (visual) and 0.46 (motor) of the true activation
+  (coefficient x signal, summed), the regions plus 3 voxels around them 1.10
+  and 0.91 (the motor sum peaks there and falls further out). Not investigated further (which regularizer, how it scales with
+  lambda).
+- *The low-band threshold away from the regions is right on average and
+  wrong run by run*: among truly inactive voxels (true change under 5% of the
+  activation's) 0.57% exceed the nominal-0.1% threshold with B0. Within 3
+  voxels of a region that is the spread (24%, 89% positive t). At 6 voxels or
+  more the runs give 0.09, 0.03, 0.32 and 0.16%, and the null control (the
+  true series with the activations off, `true_signal(modes=` everything but
+  `block_*`), no reconstruction) gives 0.00, 0.00, 1.45 and 0.06%: the four
+  shared BOLD-like patterns again, as on the 60 s session, so voxels are not
+  independent and a run either passes none or a whole area. A first version of
+  these notes called the true signal's 1.7% (task on) "ringing, not a
+  miscalibration" on the strength of a control that could not tell (removing
+  the BOLD-like modes raises it to 26%, but with no in-band residual anything
+  is significant); the advisor asked for the null, and it shows both: ringing
+  is real (0.5% far from the regions in runs whose null is zero) and the null
+  itself is seed-dependent. So "false positive" needs the distance table and
+  the per-run null next to it, and overlay titles say "nominal". This is
+  another reason the physiological model's shape (four patterns) is an open
+  question for the user.
+- *The mixed-binomial model measures reproducibility, and a systematic error
+  is reproducible.* At |t| > 3.40 with B0 it gives lambda 2.80% (truth: 0.74%
+  fully activated, 2.83% activated at all), p_A 0.95 (true 1.00), p_I 0.0015
+  (true 0.0051: 335 inactive voxels next to the regions are above threshold in
+  all four runs and count as active). Without B0 it gives lambda 0.43%, p_A
+  0.87 against a true 0.26: 705 activated voxels are detected in no run and
+  sit with the inactive ones. With nine thresholds and a shared lambda the
+  estimated ROC lies below the true one (B0: 0.81 where the truth is 0.95) and
+  the no-B0 fit settles on a different split (lambda 6.6%). The EM is tested
+  on data that satisfy the model, so this is the model's assumptions meeting
+  systematic errors, which is the notebook's stated conclusion. I did not read
+  Genovese et al. beyond what the blog post reports; the notebook cites the
+  post for the assumptions.
+- *Preprocessing on run 1*: delay -0.30, odd/even -0.263/-0.338 for
+  -0.250/-0.320, noise variance 0.96, 19 virtual coils, maps 0.998, B0 error
+  0.3 Hz median and 3.5 Hz at the 90th percentile on the deGRE grid, R2*
+  16.2/18.2 for 16.8/18.3 1/s.
+
+**What running the real pipeline on simulated data showed (2026-10-04,
+default protocol, BrainWeb).** `preprocess/` recovers what was injected:
+delay -0.30; odd/even phase -0.263/-0.300/-0.338 rad for an injected
+-0.250/-0.285/-0.320; noise variance 0.95 after whitening; 32 -> 19 virtual
+coils; ESPIRiT maps agreeing with the true ones to 0.998 per voxel; B0
+correlating 0.95; R2* 15.8 1/s for a true 16.8-18.3. With nothing but the
+object in the data, its k-space reconstructs the truth image to 1%
+(`test_preprocess_reconstructs_the_object_from_the_raw_readouts`), which is
+the end-to-end check of archive order, gridding, delay and odd/even
+conventions and k-space centering. It also found review item 263:
+`grid_resize.py` assumes edge-aligned fields of view where a centered FFT puts
+voxel N // 2 at isocenter, so the deGRE maps land 1.2 mm from the EPI's frame
+in z and 0.3 mm in x and y. Left open for the user's decision (it changes
+real-data maps); `test_degre_maps_land_where_the_epi_puts_the_object` is a
+strict xfail until then.
+
+**Reconstructing that session** (the earlier 60 s session: a 1.5% task, 10 s
+blocks, the motor task lagging the visual one; kept for the cross-talk and
+t-score findings, superseded for the current task by the study above;
+wavelet-TV, `--hp-weight 3`, 100 iterations):
+without `--B0`, 23.8% frame error, 4.9% fluctuation, edge sharpness 0.70, and
+the region's mean time course unrelated to the task (correlation 0.12); with
+`--B0`, 11.0%, 1.2%, 0.90, and the course recovered (correlation 0.79,
+amplitude ratio 0.64). With the motor region added (2026-10-05) those numbers
+did not move, and the motor region scored: correlation 0.38 without B0 and
+0.72 with it, amplitude ratio 0.56 and 0.51, low-band t 0.5 and 2.5 (plain t
+1.4 and 6.4), leak ratio 0.12 with B0. The lag between the tasks earns its
+keep here: with B0 each region's mean course correlates with the other
+region's task at -0.10 (visual) and -0.04 (motor), but without B0 the motor
+course correlates -0.42 with the visual task against +0.38 with its own, so
+its 0.38 and its amplitude ratio of 0.56 are not a recovery. A reconstruction of the earlier
+visual-only session scored against the two-region truth gave the motor
+region an amplitude ratio of 0.05, as a region with nothing in it should.
+The fluctuation floor is the simulated physiological
+noise, about 0.9% in gray matter at TE 30 ms. **Which t-score to read**, since
+two earlier versions of these notes got it wrong (first "activation found
+(median t 5.9)", then "a 60 s run lacks the power, a longer one is needed").
+The scorer's plain GLM assumes white residuals and also puts 34% (no B0) and
+37% (B0) of the rest of the brain above |t| = 3.29. That is the BOLD-like noise
+(0.01-0.1 Hz, 4 smooth patterns, 0.8% in gray matter, around a 0.05 Hz task)
+meeting an uncalibrated test, measured without any reconstruction: the same
+GLM on random unit mixtures of the session's four `physio/bold_like_*`
+courses (frame means x TE) plus 0.26% white noise flags 41%; on fresh
+`physio.band_noise` courses, 35% at 60 s, 21% at 240 s and 24% at 480 s (0-68%
+per session), so run length does not fix it. The low-band scores are the
+calibrated ones (0-3% from noise alone), and there the noise-only model with
+a true 1.5% task gives a median t of about 6 against a threshold of 4.0 at
+60 s (11 at 240 s, 16 at 480 s): a perfect reconstruction of this run would
+detect the activation. The B0 reconstruction reaches 2.3 (2.5 in the motor
+region, at an amplitude ratio of 0.51), because it recovers
+0.64 of the amplitude and has 1.2% of in-band fluctuation where the
+physiology accounts for 0.5-0.8% (6.0 x 0.64 x 0.84/1.16 = 2.8). So the
+shortfall is the reconstruction's, which is what the simulation is for.
+Whether the physiological model itself should be re-tuned (more, smaller
+patterns; less power at the task frequency) is an open realism question, not
+decided. The B0 run took 39-40 min after a 75 min
+power iteration (sigma1A = 1.488; the plain operator's is 1.000), the plain
+one 5 min. One session and seed: evidence that the chain works, not a
+comparison of methods.
+
+**A sign error in the first raw-mode truth, and why the test missed it.** BOLD
+is a negative R2* change, and the first `amp_map` and `waveforms` were both
+negative: their product reproduced the frames, but `roi_masks` (voxels at half
+the largest `amp_map` or more) then selected every voxel that was NOT
+activated, and the scorer returned amplitude ratios of -12 and 348. The test
+only asserted `amp > 0` and a non-empty mask, both true by accident (ringing
+of the band-limited map). The truth is now written as gain x drop of R2*,
+positive on activation, and
+`test_truth_file_scores_with_the_testbed_scorer` checks the amplitude's size
+(at most TE x the R2* swing), the waveform's sign against the R2* course, and
+that the mask is a small part of the brain.
+
+**Dependencies.** snake-fmri is pinned to a GitHub commit: PyPI's 0.2.0 has no
+`FOVConfig`, `core/transform.py` or `Phantom.contrast`, and the upstream docs
+describe HEAD. `ismrmrd` < 1.15 (1.15.0 made `ismrmrdHeader`'s
+`experimentalConditions` required; SNAKE calls it bare, and importing it also
+resets Python's warning filters, which is why `simulate_fmri/__init__.py`
+imports it before installing its own). `[tool.uv] override-dependencies`
+narrows SNAKE's `mri-nufft[finufft,cufinufft]` to drop `cupy-cuda13x`.
+`.venv-simulate` takes the `simulate`, `preprocessing` and `recon` extras;
+sigpy 0.1.27 runs on numpy 2.4 / Python 3.13, and all of
+`tests/test_preprocess_*` pass there.
+
+**Ideal mode: what was changed relative to stock SNAKE.** Its engine is a
+subclass (`engine.ArbEPIAcquisitionEngine`) because without cupy SNAKE spends
+1-2 s per shot starting a 64-process pool to resample a phantom already on the
+grid; it also takes T2* decay from the schedule's echo times and uses the
+recon's FFT centering (SNAKE's differs by one sample for odd N). SNAKE's
+activation ROI is placed in voxels of BrainWeb's full grid, so
+`handlers.EllipsoidActivationHandler` places it in mm (identical, Dice 1.0, on
+the native grid), with `oversampling=1` (SNAKE's 50 makes one regressor take
+minutes at a 50 ms shot TR). One SNAKE repetition is one ArbEPI shot. Noisy
+runs with several workers are not bit-reproducible (SNAKE draws noise in the
+order workers finish).
+
+**Not modeled**: motion; fat and chemical shift; eddy currents and trajectory
+errors along ky/kz; flow; the approach to steady state; B1 (uniform transmit,
+unit-RSS receive, so no shading).
 
 See `README.md` for the getting-started walkthrough and the full
 `Getting started` / `GE export` usage examples.

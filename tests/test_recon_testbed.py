@@ -124,6 +124,45 @@ def test_scoring_the_truth_gives_perfect_scores_even_rescaled(built):
     assert np.isclose(s["edge_sharpness_ratio"], 1, atol=1e-4)
 
 
+def test_scoring_uses_per_roi_amplitudes_when_the_truth_has_them(built, tmp_path):
+    """A truth file may give each ROI its own peak change ('amps'; simulated
+    sessions do, their regions differ in tissue mix). The truth series then
+    scores exactly for every ROI, which it would not against the shared amp."""
+    import shutil
+
+    _, fn = built
+    fn2 = str(tmp_path / "amps.h5")
+    shutil.copy(fn, fn2)
+    with h5py.File(fn2, "r+") as f:
+        g = f["truth"]
+        x0, rois, waves = g["x0"][()], g["roi_masks"][()], g["waveforms"][()]
+        amps = g.attrs["amp"] * np.linspace(0.5, 1.5, len(rois))
+        g.attrs["amps"] = amps
+    X = np.repeat(x0[..., None], NT, -1)
+    for m, w, a in zip(rois, waves, amps):
+        X[m] *= 1 + a * w[None, :]
+    rec = str(tmp_path / "recon.h5")
+    _write_recon(rec, X)
+    s = testbed.score(fn2, rec)
+    assert s["nrmse_frame_pct"] < 1e-4
+    for name, _, _ in testbed.ROIS:
+        assert np.isclose(s[f"{name}_amp_ratio"], 1, atol=1e-4)
+    # and against the file without them, the same series is off by those factors
+    s = testbed.score(fn, rec)
+    ratios = [s[f"{name}_amp_ratio"] for name, _, _ in testbed.ROIS]
+    np.testing.assert_allclose(ratios, np.linspace(0.5, 1.5, len(rois)), atol=1e-3)
+
+
+def test_panel_can_show_any_roi(built, tmp_path):
+    tmp, fn = built
+    rec = str(tmp_path / "recon.h5")
+    _write_recon(rec, _truth_series(fn))
+    for roi in (0, 1):
+        png = tmp_path / f"panel{roi}.png"
+        testbed.panel(fn, rec, str(png), roi=roi)
+        assert png.stat().st_size > 10_000
+
+
 def test_scoring_detects_noise_attenuation_and_blur(built):
     tmp, fn = built
     T = _truth_series(fn)

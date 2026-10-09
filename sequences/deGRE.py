@@ -299,8 +299,9 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     seq.set_definition('Name', seqname)
     seq.write(os.path.join(params.output_dir, f'{seqname}.seq'))
 
-    # Patch scan_info.mat's TE_degre with the realized pair (te_realized),
-    # not the prescribed params.TE_degre sequences/ArbEPI.py wrote --
+    # Patch scan_info.mat: add this sequence's ADC dwell (simulate_fmri/ scales
+    # the deGRE's noise by it), and replace TE_degre with the realized pair
+    # (te_realized), not the prescribed params.TE_degre sequences/ArbEPI.py wrote --
     # b0map.jl divides the echo phase difference by this value to get Hz,
     # so exporting the prescribed pair carries the ΔTE rounding error this
     # function otherwise fixes (see docs/review-findings.md item 62).
@@ -312,7 +313,9 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     # yet, since generate_degre() itself still needs nothing from it.
     fn_scan_info = os.path.join(params.output_dir, 'scan_info.mat')
     if os.path.exists(fn_scan_info):
-        hdf5storage.savemat(fn_scan_info, {'TE_degre': te_realized}, fmt='7.3')
+        hdf5storage.savemat(
+            fn_scan_info, {'TE_degre': te_realized, 'dwell_degre': dwell_degre}, fmt='7.3'
+        )
     else:
         print(
             f"  '{fn_scan_info}' not found -- run generate_arbepi first if you need "

@@ -21,7 +21,6 @@ from sequences.deGRE import generate_degre
 from sequences.EPIcal import generate_epical
 from sequences.noise import generate_noise
 
-
 EXCITATIONS = pytest.mark.parametrize('excitation', ['fatsat', 'water'])
 
 
