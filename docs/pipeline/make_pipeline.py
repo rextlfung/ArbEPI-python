@@ -725,7 +725,7 @@ def draw(d):
                  'brainextractor, on the temporal mean. Fit: SPM-style AR(1) prewhitening with '
                  'one coefficient pooled over voxels; contrast t, z at the same tail '
                  'probability, FDR. The summed image and each mslr scale are analyzed '
-                 'separately.'),
+                 'separately. compare.py draws several reconstructions side by side.'),
     ])
     out2_y = ana_y + ana_h + 26
     d.arrow(f'M470 {ana_y + ana_h} V{out2_y - 2}')

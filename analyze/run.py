@@ -27,18 +27,24 @@ class Maps:
     t_fdr: float  # |t| surviving FDR at q (inf if none)
     n_fdr: int
     n_voxels: int
+    brain: NDArray | None = None  # (Nx, Ny, Nz) bool: the voxels fitted
+    underlay: NDArray | None = None  # (Nx, Ny, Nz) mean |X_recon|, for display
+    series_psc: NDArray | None = None  # (V, nt) percent change from the mean (keep_series)
 
 
 def analyze_recon(path: str, params: ExperimentParams, scales: tuple = ("sum",),
                   brain: NDArray | str = "auto", out_dir: str | None = None,
                   ar1: bool = True, q: float = 0.05, tag: str | None = None,
-                  voxel_size_mm=None, bet_frac: float = 0.5) -> dict[str, Maps]:
+                  voxel_size_mm=None, bet_frac: float = 0.5,
+                  keep_series: bool = False) -> dict[str, Maps]:
     """Fit the GLM to a reconstruction file and (with out_dir) write NIfTIs.
 
     brain: a boolean (Nx, Ny, Nz) mask, a NIfTI path, or a method for
     analyze.mask.brain_mask ('auto', 'fsl', 'python', 'threshold'); computed
     from the summed image's temporal mean and shared by every scale.
-    ar1: SPM-style AR(1) prewhitening (False: ordinary least squares)."""
+    ar1: SPM-style AR(1) prewhitening (False: ordinary least squares).
+    keep_series: also keep each masked series, in percent of the summed image's
+    mean signal, on Maps.series_psc (for analyze.compare)."""
     rec = read_recon(path, scales=scales, n_discard=params.n_discard, voxel_size_mm=voxel_size_mm)
     shape = rec.mean_signal.shape
     nt = next(iter(rec.series.values())).shape[-1]
@@ -75,7 +81,11 @@ def analyze_recon(path: str, params: ExperimentParams, scales: tuple = ("sum",),
         t_fdr = float(np.abs(r.t[surv]).min()) if surv.any() else float("inf")
         m = Maps(label=label, t=glm.to_volume(r.t, brain), z=glm.to_volume(r.z, brain),
                  psc=glm.to_volume(100 * r.contrast_beta / base, brain), dof=r.dof, rho=r.rho,
-                 t_fdr=t_fdr, n_fdr=int(surv.sum()), n_voxels=int(brain.sum()))
+                 t_fdr=t_fdr, n_fdr=int(surv.sum()), n_voxels=int(brain.sum()),
+                 brain=brain, underlay=rec.mean_signal)
+        if keep_series:
+            m.series_psc = (100 * (Y - Y.mean(axis=1, keepdims=True))
+                            / base[:, None]).astype(np.float32)
         out[label] = m
         summary["scales"][label] = dict(dof=m.dof, rho=m.rho, t_fdr=m.t_fdr, n_fdr=m.n_fdr,
                                         t_p001=glm.t_threshold(m.dof, 0.001),

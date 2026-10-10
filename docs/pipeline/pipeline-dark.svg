@@ -393,7 +393,7 @@
 <text x="71" y="3225" class="t-mono">analyze/ · python -m analyze</text>
 <text x="71" y="3243" class="t-text">Design: task blocks convolved with the canonical HRF, plus DCT drift terms (periods &gt; 128 s) and a constant. Brain mask: FSL bet if on PATH, else brainextractor, on the</text>
 <text x="71" y="3259" class="t-text">temporal mean. Fit: SPM-style AR(1) prewhitening with one coefficient pooled over voxels; contrast t, z at the same tail probability, FDR. The summed image and each mslr</text>
-<text x="71" y="3275" class="t-text">scale are analyzed separately.</text>
+<text x="71" y="3275" class="t-text">scale are analyzed separately. compare.py draws several reconstructions side by side.</text>
 <path d="M470 3289 V3313" class="flow" marker-end="url(#ah)"/>
 <rect x="55" y="3315" width="1030" height="60" rx="12" class="chip "/>
 <text x="69" y="3337" class="t-mono-b">&lt;out&gt;/</text>
