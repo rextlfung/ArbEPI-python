@@ -41,6 +41,7 @@ THEMES = {
         'scan-band': '#f2ece2', 'scan': '#8d5f22',
         'pre-band': '#e4f1ea', 'pre': '#2a7250',
         'rec-band': '#eee8f6', 'rec': '#664a9c',
+        'ana-band': '#f6e9ec', 'ana': '#a13a55',
         'hand': '#bb4a24', 'hand-bg': '#fbe9e1',
     },
     'dark': {
@@ -50,6 +51,7 @@ THEMES = {
         'scan-band': '#282116', 'scan': '#d7a864',
         'pre-band': '#13281e', 'pre': '#78c8a0',
         'rec-band': '#221b33', 'rec': '#b7a0e8',
+        'ana-band': '#33181f', 'ana': '#ee94a8',
         'hand': '#f0906b', 'hand-bg': '#3a2119',
     },
 }
@@ -63,12 +65,15 @@ STYLE = f"""
 .band {{ stroke: none; }}
 .band.seq {{ fill: var(--seq-band); }} .band.scan {{ fill: var(--scan-band); }}
 .band.pre {{ fill: var(--pre-band); }} .band.rec {{ fill: var(--rec-band); }}
+.band.ana {{ fill: var(--ana-band); }}
 .rail {{ font: 600 11px {SANS}; letter-spacing: .12em; }}
 .rail.seq {{ fill: var(--seq); }} .rail.scan {{ fill: var(--scan); }}
 .rail.pre {{ fill: var(--pre); }} .rail.rec {{ fill: var(--rec); }}
+.rail.ana {{ fill: var(--ana); }}
 .box {{ fill: var(--box); stroke-width: 1.5; }}
 .box.seq {{ stroke: var(--seq); }} .box.scan {{ stroke: var(--scan); }}
 .box.pre {{ stroke: var(--pre); }} .box.rec {{ stroke: var(--rec); }}
+.box.ana {{ stroke: var(--ana); }}
 .box.plain {{ stroke: var(--line); }}
 .box.key {{ stroke-width: 2.5; }}
 .box.dashed {{ stroke-dasharray: 5 4; }}
@@ -145,7 +150,9 @@ ARIA = (
     'from EPIcal, regrids, corrects and scatters the ArbEPI data, and derives coil compression, '
     'sensitivity maps, B0 and R2* from the deGRE before compressing the k-space, extracting the '
     'calibration region and writing one preprocessed file. Reconstruction is root-sum-of-squares '
-    'or iterative SENSE with optional B0 and R2* models. scan_info.mat bypasses the scanner and '
+    'or iterative SENSE with optional B0 and R2* models. Analysis fits a GLM with the task '
+    'regressors and drift terms to the reconstructed series, with AR(1) prewhitening, and writes '
+    't, z and percent-change maps. scan_info.mat bypasses the scanner and '
     'carries the sampling schedule to preprocessing.'
 )
 
@@ -703,7 +710,33 @@ def draw(d):
     ])
     rec_y1 = out_y + out_h + 20
     d.band(rec_y0, rec_y1, 'rec', 'RECON · uv (.venv-recon)')
-    return rec_y1 + 12
+
+    # ---- analysis: GLM activation maps of the reconstructed series ----
+    ana_y0 = rec_y1 + 50
+    ana_y = ana_y0 + 14
+    d.line(f'M470 {out_y + out_h} V{ana_y - 2}')
+    d.arrow(f'M470 {ana_y - 14} V{ana_y - 2}')
+    d.chip(470, rec_y1 + 25, 'sense_<reg>/<seq>_recon.h5 · X_recon, X (one component per scale)')
+    ana_h = d.box(55, ana_y, 1030, None, 'ana', [
+        ('title', 'Activation maps: GLM t- and z-scores'),
+        ('mono', 'analyze/ · python -m analyze'),
+        ('para', 'Design: task blocks convolved with the canonical HRF, plus DCT drift terms '
+                 '(periods > 128 s) and a constant. Brain mask: FSL bet if on PATH, else '
+                 'brainextractor, on the temporal mean. Fit: SPM-style AR(1) prewhitening with '
+                 'one coefficient pooled over voxels; contrast t, z at the same tail '
+                 'probability, FDR. The summed image and each mslr scale are analyzed '
+                 'separately.'),
+    ])
+    out2_y = ana_y + ana_h + 26
+    d.arrow(f'M470 {ana_y + ana_h} V{out2_y - 2}')
+    d.tag(55, out2_y, 1030, 60, [
+        ('mono-b', '<out>/'),
+        ('mono-s', '<name>_{sum|scale0|scale1...}_{t,z,psc}.nii.gz · <name>_mask.nii.gz · '
+                   '<name>_summary.json'),
+    ])
+    ana_y1 = out2_y + 60 + 20
+    d.band(ana_y0, ana_y1, 'ana', 'ANALYZE · uv (.venv)')
+    return ana_y1 + 12
 
 
 def render(theme):

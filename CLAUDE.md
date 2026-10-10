@@ -1332,6 +1332,50 @@ own docstring measures. Any future change to that resize convention needs
 re-checking against a real B0-corrected reconstruction, not just the
 grid-alignment unit test.
 
+### `analyze/` -- task activation maps (GLM t- and z-scores) from reconstructions
+
+User-facing documentation is `analyze/README.md`; this section keeps the
+design decisions. Added 2026-10-09 (user request: maps on real data, as in
+`../fmri-analysis`, the Julia successor to `fmri-analysis-matlab`), as its own
+package rather than in `simulate_fmri/`, whose `analysis.py` had the only GLM
+and was a misnomer for real data. Its data flow is `recon/`'s
+`<name>_recon.h5` -> `<name>_<scale>_{t,z,psc}.nii.gz`; it needs no torch and
+runs in the main `.venv` (`uv sync --extra analyze`).
+
+- **One GLM, one HRF, one DCT.** `analyze/glm.py`'s `fit_glm`,
+  `analyze/design.py`'s `canonical_hrf`/`hrf_integral`/`dct_matrix` are the
+  single copies; `recon/testbed.py`'s `_glm`/`_dct` and
+  `simulate_fmri/task.py`/`analysis.py` call them. `analysis.t_map` stays as a
+  wrapper only because its *default* differs (low-band 0.15 Hz, the
+  simulator's calibrated null); `analyze/` does not low-pass the data
+  (explicit user decision: the low-band GLM is preprocessing that "may raise
+  eyebrows").
+- **AR(1) prewhitening, SPM style, not full SPM.** One coefficient pooled over
+  voxels (pooled lag-1 autocorrelation of unit-variance GLS residuals,
+  iterated), exact Prais-Winsten whitening, dof = nt - rank. SPM12 fits AR(1)
+  plus white noise by ReML; FSL FILM is per-voxel. Calibration is tested on
+  synthetic AR(1) noise (`tests/test_analyze_glm.py`), not on these
+  reconstructions: whether AR(1) is adequate for a regularized recon's
+  residuals is the open question `simulate_fmri/` raised (its plain GLM
+  flagged 34-37% of non-task brain), so check `rho` and a null region before
+  trusting thresholds on a new reconstruction.
+- **DCT drift terms are on by default** (128 s, SPM's high-pass), constant and
+  linear trend only with `drift_cutoff_s=None`. Run length matters: a run
+  under ~64 s gets no drift terms.
+- **Brain mask**: FSL `bet` if on PATH, else `brainextractor` (pure-Python
+  BET, Python >= 3.11, so its extra is marker-gated: the 3.10
+  `.venv-preprocessing` still resolves). A phantom needs `--mask threshold` or a
+  file. Not checked against FSL's output on real data.
+- **Per-scale maps** (user request, to test a global/local low-rank
+  background/foreground separation): a component of `--reg mslr` is analyzed
+  as `Re(X_s conj(phi))`, phi the phase of the summed image's temporal mean,
+  not `|X_s|`, which rectifies the near-zero-mean dynamic scale. Percent
+  change is relative to the summed image's mean for every scale. Scale order is
+  the order of `recon.sense --patch`; the file does not record patch sizes.
+- **Not done**: motion regressors (none estimated), per-voxel AR, cluster
+  correction, plots and multi-reconstruction comparison (second PR:
+  `analyze/compare.py`).
+
 ### `simulate_fmri/` -- simulated scan sessions acquired with ArbEPI's schedules
 
 User-facing documentation (setup, commands, what is and is not modeled, the

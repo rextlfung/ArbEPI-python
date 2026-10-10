@@ -32,26 +32,14 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.stats import gamma
+
+from analyze.design import canonical_hrf, hrf_integral  # noqa: F401 (canonical_hrf re-exported)
 
 VISUAL_DELAY_S = 0.0
 MOTOR_DELAY_S = 0.6
 
-_PEAK_SHAPE, _UNDERSHOOT_SHAPE, _UNDERSHOOT_RATIO = 6.0, 16.0, 1 / 6
-_AREA = 1 - _UNDERSHOOT_RATIO
-
-
-def canonical_hrf(t: NDArray) -> NDArray[np.float64]:
-    """SPM's canonical HRF at times t (s after a brief event), unit area."""
-    t = np.asarray(t, dtype=np.float64)
-    h = gamma.pdf(t, _PEAK_SHAPE) - _UNDERSHOOT_RATIO * gamma.pdf(t, _UNDERSHOOT_SHAPE)
-    return h / _AREA
-
-
-def _hrf_integral(t: NDArray) -> NDArray[np.float64]:
-    """Integral of canonical_hrf from 0 to t (0 for t <= 0, 1 as t grows)."""
-    t = np.maximum(np.asarray(t, dtype=np.float64), 0.0)
-    return (gamma.cdf(t, _PEAK_SHAPE) - _UNDERSHOOT_RATIO * gamma.cdf(t, _UNDERSHOOT_SHAPE)) / _AREA
+# The HRF and its integral live in analyze/design.py, shared with the analysis.
+_hrf_integral = hrf_integral
 
 
 def block_starts(task_s: float, rest_s: float, duration: float, onset: float = 0.0,

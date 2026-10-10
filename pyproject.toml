@@ -56,6 +56,16 @@ recon = [
     "ipykernel",  # to run recon/demo.ipynb in this venv
     "nbclient",  # to execute notebooks from scripts (nbclient.NotebookClient)
 ]
+# Activation maps from reconstructions (analyze/): GLM t/z-scores on recon/'s
+# output. Plain numpy/scipy plus h5py and nibabel for I/O; brainextractor is a
+# pure-Python BET for the brain mask (FSL's own `bet` is used instead when it is
+# on PATH). No torch, so it runs in the main .venv.
+analyze = [
+    "h5py>=3.10",
+    "nibabel>=5.0",
+    "scipy>=1.10",
+    "brainextractor>=0.3; python_version >= '3.11'",  # needs 3.11+
+]
 # Simulated scan sessions (simulate_fmri/). snake-fmri is pinned to a GitHub
 # commit, not PyPI: the PyPI release (0.2.0) predates the FOVConfig/affine API
 # that simulate_fmri/ and the upstream documentation use. ismrmrd 1.15 made

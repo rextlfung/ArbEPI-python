@@ -1,16 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 3173" width="1100" height="3173" role="img" aria-label="ArbEPI workflow: scanner specs and scan parameters feed sampling-mask generation (bypassed when a custom mask is given) and trajectory computation, which produce four Pulseq sequences (deGRE, noise, EPIcal, ArbEPI); these are exported to GE .pge files and run on the scanner. Preprocessing whitens with the noise scan, estimates the readout delay and odd/even mismatch from EPIcal, regrids, corrects and scatters the ArbEPI data, and derives coil compression, sensitivity maps, B0 and R2* from the deGRE before compressing the k-space, extracting the calibration region and writing one preprocessed file. Reconstruction is root-sum-of-squares or iterative SENSE with optional B0 and R2* models. scan_info.mat bypasses the scanner and carries the sampling schedule to preprocessing.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 3447" width="1100" height="3447" role="img" aria-label="ArbEPI workflow: scanner specs and scan parameters feed sampling-mask generation (bypassed when a custom mask is given) and trajectory computation, which produce four Pulseq sequences (deGRE, noise, EPIcal, ArbEPI); these are exported to GE .pge files and run on the scanner. Preprocessing whitens with the noise scan, estimates the readout delay and odd/even mismatch from EPIcal, regrids, corrects and scatters the ArbEPI data, and derives coil compression, sensitivity maps, B0 and R2* from the deGRE before compressing the k-space, extracting the calibration region and writing one preprocessed file. Reconstruction is root-sum-of-squares or iterative SENSE with optional B0 and R2* models. Analysis fits a GLM with the task regressors and drift terms to the reconstructed series, with AR(1) prewhitening, and writes t, z and percent-change maps. scan_info.mat bypasses the scanner and carries the sampling schedule to preprocessing.">
 <title>ArbEPI pipeline</title>
-<style>svg { --bg: #10141a; --fg: #e3e7ed; --muted: #9ba5b3; --line: #b4bdc9; --box: #19202a; --chip: #232b37; --seq-band: #15213a; --seq: #8cb2ee; --scan-band: #282116; --scan: #d7a864; --pre-band: #13281e; --pre: #78c8a0; --rec-band: #221b33; --rec: #b7a0e8; --hand: #f0906b; --hand-bg: #3a2119; }
+<style>svg { --bg: #10141a; --fg: #e3e7ed; --muted: #9ba5b3; --line: #b4bdc9; --box: #19202a; --chip: #232b37; --seq-band: #15213a; --seq: #8cb2ee; --scan-band: #282116; --scan: #d7a864; --pre-band: #13281e; --pre: #78c8a0; --rec-band: #221b33; --rec: #b7a0e8; --ana-band: #33181f; --ana: #ee94a8; --hand: #f0906b; --hand-bg: #3a2119; }
 .bg { fill: var(--bg); }
 .band { stroke: none; }
 .band.seq { fill: var(--seq-band); } .band.scan { fill: var(--scan-band); }
 .band.pre { fill: var(--pre-band); } .band.rec { fill: var(--rec-band); }
+.band.ana { fill: var(--ana-band); }
 .rail { font: 600 11px Helvetica, Arial, "Liberation Sans", sans-serif; letter-spacing: .12em; }
 .rail.seq { fill: var(--seq); } .rail.scan { fill: var(--scan); }
 .rail.pre { fill: var(--pre); } .rail.rec { fill: var(--rec); }
+.rail.ana { fill: var(--ana); }
 .box { fill: var(--box); stroke-width: 1.5; }
 .box.seq { stroke: var(--seq); } .box.scan { stroke: var(--scan); }
 .box.pre { stroke: var(--pre); } .box.rec { stroke: var(--rec); }
+.box.ana { stroke: var(--ana); }
 .box.plain { stroke: var(--line); }
 .box.key { stroke-width: 2.5; }
 .box.dashed { stroke-dasharray: 5 4; }
@@ -44,7 +47,7 @@
 <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
 <marker id="ah-hand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-hand"/></marker>
 </defs>
-<rect width="1100" height="3173" rx="12" class="bg"/>
+<rect width="1100" height="3447" rx="12" class="bg"/>
 <rect x="20" y="11" width="26" height="16" rx="4" class="box plain"/>
 <text x="54" y="24" text-anchor="start" class="t-legend">processing step</text>
 <rect x="170" y="11" width="26" height="16" rx="8" class="chip"/>
@@ -62,6 +65,8 @@
 <text x="30" y="1502.0" transform="rotate(-90 30 1502.0)" text-anchor="middle" class="rail pre">PREPROCESS · .venv-preprocessing</text>
 <rect x="0" y="2004" width="1100" height="1117" rx="10" class="band rec"/>
 <text x="30" y="2562.5" transform="rotate(-90 30 2562.5)" text-anchor="middle" class="rail rec">RECON · uv (.venv-recon)</text>
+<rect x="0" y="3171" width="1100" height="224" rx="10" class="band ana"/>
+<text x="30" y="3283.0" transform="rotate(-90 30 3283.0)" text-anchor="middle" class="rail ana">ANALYZE · uv (.venv)</text>
 <rect x="60" y="28" width="270" height="88" rx="6" class="box seq"/>
 <text x="76" y="50" class="t-title">Scanner specs</text>
 <text x="76" y="68" class="t-mono">scanners.py</text>
@@ -381,6 +386,18 @@
 <text x="69" y="3055" class="t-mono-s">rss/&lt;seq&gt;_recon.nii.gz + .json</text>
 <text x="69" y="3071" class="t-mono-s">sense_&lt;reg&gt;[_b0 | _b0r2star]/&lt;seq&gt;_recon.h5 + .nii.gz + .json</text>
 <text x="69" y="3087" class="t-text">.nii.gz: magnitude image for viewing · .json: every setting, acceleration factor, σ1(A), runtime · .h5: complex image and per-iteration solver traces</text>
+<path d="M470 3101 V3183" class="flow"/>
+<path d="M470 3171 V3183" class="flow" marker-end="url(#ah)"/>
+<rect x="55" y="3185" width="1030" height="104" rx="6" class="box ana"/>
+<text x="71" y="3207" class="t-title">Activation maps: GLM t- and z-scores</text>
+<text x="71" y="3225" class="t-mono">analyze/ · python -m analyze</text>
+<text x="71" y="3243" class="t-text">Design: task blocks convolved with the canonical HRF, plus DCT drift terms (periods &gt; 128 s) and a constant. Brain mask: FSL bet if on PATH, else brainextractor, on the</text>
+<text x="71" y="3259" class="t-text">temporal mean. Fit: SPM-style AR(1) prewhitening with one coefficient pooled over voxels; contrast t, z at the same tail probability, FDR. The summed image and each mslr</text>
+<text x="71" y="3275" class="t-text">scale are analyzed separately.</text>
+<path d="M470 3289 V3313" class="flow" marker-end="url(#ah)"/>
+<rect x="55" y="3315" width="1030" height="60" rx="12" class="chip "/>
+<text x="69" y="3337" class="t-mono-b">&lt;out&gt;/</text>
+<text x="69" y="3353" class="t-mono-s">&lt;name&gt;_{sum|scale0|scale1...}_{t,z,psc}.nii.gz · &lt;name&gt;_mask.nii.gz · &lt;name&gt;_summary.json</text>
 <rect x="517.0" y="133" width="166" height="22" rx="11" class="chip "/>
 <text x="600" y="148" text-anchor="middle" class="t-chip">Params (+ sys, spec)</text>
 <rect x="474.0" y="277" width="252" height="22" rx="11" class="chip "/>
@@ -417,5 +434,7 @@
 <text x="470" y="1983" text-anchor="middle" class="t-chip">&lt;seq&gt;_preprocessed.h5 · ksp_epi_zf, smaps, b0_map, r2star_map, echo_times</text>
 <rect x="330.5" y="2224" width="209" height="22" rx="11" class="chip "/>
 <text x="435" y="2239" text-anchor="middle" class="t-chip">y (unit-variance noise), A</text>
+<rect x="225.0" y="3135" width="490" height="22" rx="11" class="chip "/>
+<text x="470" y="3150" text-anchor="middle" class="t-chip">sense_&lt;reg&gt;/&lt;seq&gt;_recon.h5 · X_recon, X (one component per scale)</text>
 </g>
 </svg>
