@@ -6,3 +6,7 @@ __pycache__/
 .venv/
 .DS_Store
 .claude/scheduled_tasks.lock
+
+docs/_build/
+docs/_notebooks/
+docs/api/generated/

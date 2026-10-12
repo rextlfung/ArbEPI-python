@@ -39,6 +39,40 @@ docs/pipeline/make_pipeline.py`) in the same commit.
 `.py`/`.jl` files, not a diagram that has drifted from what the code does, so
 check the picture itself too.
 
+## Documentation site
+
+The Read the Docs site is Sphinx + MyST + furo, configured by
+`.readthedocs.yaml` (root) and `docs/conf.py`; build with `uv run --extra docs
+sphinx-build -b html docs docs/_build/html`. The prose is the repo's own
+Markdown, not copies: a page in `docs/` holds marker lines
+(`<!-- readme: path -->` for a whole file, `<!-- section: path :: Heading ::
+level -->` for one section, matched by heading prefix; see
+`docs/readme_pages.py`), and a `source-read` hook swaps in that text,
+rewriting links to the page that now holds the target heading, other repo
+paths to GitHub, and the `<picture>` diagram to light/dark images. So
+renaming a heading that a marker names breaks the build with "no heading
+starting ..."; keep the markers in step. The per-package READMEs are the
+guides, the root README is split into pages by `## ` section
+(`generate`, `custom_masks`, `mask2epi`, `ge_export`, `background`), and the
+**design notes** (`docs/design_*.md`) are the `###` sections of this file
+that hold design history (Data flow, Index convention, `.mat` format, Key
+design decisions, GE export, the `preprocess/`/`recon/`/`analyze/`/
+`simulate_fmri/` sections, B0 correction); the instruction sections above
+(commit conventions, commands, this one) are not published. A new `###`
+section here is not published until a design page names it. The reconstruction
+cost functions (LaTeX) live in `recon/README.md`'s "The optimization
+problem", so GitHub and the site render the same text. `start_here.md` and
+`glossary.md` are the only hand-written pages; update them when a stage, a
+venv or a term changes. The API reference is `autosummary :recursive:` over
+the packages listed in `docs/api/index.md`, so new modules appear on their
+own; docs builds mock only what cannot be installed
+(`autodoc_mock_imports`: torch, GERecon, sigpy, SNAKE, h5py, ...), never
+`numba`, which would turn `pd_sample`'s jitted functions into Mocks. A new
+import that is not in the core dependencies and not installable on Read the
+Docs belongs in that list. `review-findings.md` and `TODO.md` are worklogs
+and are excluded. Docstring RST warnings from free-form docstrings are
+expected; do not turn on `-W`.
+
 ## Commit conventions
 
 Do not commit as Claude: no `Co-Authored-By: Claude ...` trailer and no
