@@ -192,7 +192,7 @@ lib/
   shot_start.py              Per-shot spoiler draws + fat-sat/excitation block shared by ArbEPI and EPIcal
   (RF/gradient helpers, TE/TR delay calculation)
 sequences/                  ArbEPI, EPIcal, deGRE, noise sequence assembly
-  mGRE.py                       multi-echo monopolar GRE prototype (B0 + R2* + coil maps); not in main.py yet
+  meGRE.py                       multi-echo monopolar GRE prototype (B0 + R2* + coil maps); not in main.py yet
 plot/
   plotting.py                Diagnostic plots (mask/PSF/trajectory/single-TR/PNS)
   plot_last_run.py           Drives plotting.py against the most recent output/ run

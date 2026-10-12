@@ -1,4 +1,4 @@
-"""mGRE: 3D spoiled multi-echo GRE, monopolar readouts (PROTOTYPE).
+"""meGRE: 3D spoiled multi-echo GRE, monopolar readouts (PROTOTYPE).
 
 A multi-echo successor to sequences/deGRE.py for the three maps the
 reconstruction needs from the calibration scan, in priority order: B0
@@ -20,8 +20,12 @@ Differences from deGRE.py:
     n / f_fat. The spacing is long compared with a 90-sample readout, so the
     readout is stretched to fill `read_frac` of it (low receive bandwidth,
     low gradient amplitude, low PNS) instead of running at deGRE's 4 us dwell.
-  - Matrix/FOV are arguments (2.4 mm, 216 x 216 x 144 mm by default), not
-    `params.fov_degre`.
+  - Resolution and FOV default to the EPI's (`params.res`, `params.fov`:
+    2.4 mm, 216 x 216 x 144 mm in the current protocol), not
+    `params.fov_degre`, so the maps land on the EPI grid with no resize.
+  - 8 echoes by default (last TE 17.9 ms, 115 s): thermal-noise precision
+    saturates early (`precision_estimate`), and scan time is set by the last
+    TE, not the echo count -- see CLAUDE.md for the numbers behind it.
 
 Everything else (slab-selective sinc, Ernst flip for the realized TR, RF
 spoiling, dummy shots, the iZ = 0 receive-gain block, TRID labels, prephaser
@@ -29,7 +33,7 @@ stretching) is deGRE.py's. The ADC order is echo-fastest, then iY, then iZ,
 the layout `preprocess.preprocess`'s `unflatten_gre_echoes` already reads for
 any `n_echoes_degre`.
 
-`python -m sequences.mGRE --echoes 8 12 16 --pns` prints the timing/PNS table.
+`python -m sequences.meGRE --echoes 6 8 12 --pns` prints the timing/PNS/precision table.
 """
 
 import argparse
@@ -52,8 +56,8 @@ T2STAR_S = 47e-3
 
 
 @dataclass
-class MGREDesign:
-    """Everything `generate_mgre` assembles, plus the numbers worth reporting."""
+class MEGREDesign:
+    """Everything `generate_megre` assembles, plus the numbers worth reporting."""
 
     n_echoes: int
     N: tuple[int, int, int]
@@ -78,21 +82,24 @@ def _spoiler_cycles_area(Nx: int, dkx: float, cycles: float) -> float:
     return Nx * dkx * cycles
 
 
-def design_mgre(
+def design_megre(
     params: Params,
     *,
-    res=(2.4e-3, 2.4e-3, 2.4e-3),
-    fov=(0.216, 0.216, 0.144),
-    n_echoes: int = 12,
+    res=None,
+    fov=None,
+    n_echoes: int = 8,
     echo_spacing: float | None = None,
     read_frac: float = 0.5,
     n_cycles_spoil: float = 4,
     spoil_slew: float = 70.0,
     n_dummy_zloops: int = 2,
     TR: float | None = None,
-) -> MGREDesign:
+) -> MEGREDesign:
     """Build every gradient/RF/ADC object and the timing. `echo_spacing`
-    defaults to 1/f_fat; `TR` defaults to the minimum."""
+    defaults to 1/f_fat; `TR` defaults to the minimum; `res`/`fov` default
+    to the EPI's."""
+    res = tuple(params.res if res is None else res)
+    fov = tuple(params.fov if fov is None else fov)
     N = tuple(int(round(f / r)) for f, r in zip(fov, res))
     for f, r, n in zip(fov, res, N):
         if abs(n * r - f) > 1e-9:
@@ -237,7 +244,7 @@ def design_mgre(
         gy_rew=gy_rew, gz_rew=gz_rew, delay_te=delay_te, delay_tr=delay_tr,
         n_dummy_zloops=n_dummy_zloops,
     )
-    return MGREDesign(
+    return MEGREDesign(
         n_echoes=n_echoes, N=N, fov=tuple(fov), dwell=dwell, t_read=t_read,
         echo_spacing=T_esp, TE=TE, TR=tr_real, flip_deg=flip, n_shots=n_shots,
         g_read_mT_m=g_read / sys.gamma * 1e3, sys=sys, blocks=blocks,
@@ -253,19 +260,19 @@ def iter_encodes(N, n_dummy_zloops):
             yield iZ, iY
 
 
-def generate_mgre(
+def generate_megre(
     params: Params,
     *,
-    seqname: str = 'mGRE',
+    seqname: str = 'meGRE',
     encodes=None,
     write: bool = True,
     verbose: bool = True,
     **design_kwargs,
-) -> tuple[pp.Sequence, MGREDesign]:
+) -> tuple[pp.Sequence, MEGREDesign]:
     """Assemble (and by default write) the sequence. `encodes` replaces the
     full (iZ, iY) loop with an explicit list -- used to build a short
     worst-case snippet for the PNS check."""
-    d = design_mgre(params, **design_kwargs)
+    d = design_megre(params, **design_kwargs)
     b = d.blocks
     _, Ny, Nz = d.N
     pe1 = (np.arange(Ny) - Ny / 2) / Ny * 2
@@ -275,7 +282,7 @@ def generate_mgre(
     if encodes is None:
         encodes = list(iter_encodes(d.N, b['n_dummy_zloops']))
     rf_count = 1
-    it = tqdm(encodes, desc='mGRE shots') if verbose else encodes
+    it = tqdm(encodes, desc='meGRE shots') if verbose else encodes
     for iZ, iY in it:
         dummy = iZ < 0
         y = pe1[iY] if iZ > 0 else 0.0
@@ -318,29 +325,46 @@ def worst_case_encodes(N, n_dummy_zloops=2):
     return [e for e in one + corners for _ in range(3)]  # repeated: PNS has memory
 
 
-def precision_table(designs, t2star=T2STAR_S, t1=1.3):
-    """Relative Cramer-Rao standard deviations of R2* and of the off-resonance
-    frequency per design, same voxel, same coil: noise sigma ~ 1/sqrt(t_read),
-    signal at TE = 0 ~ the Ernst steady state, ~ sqrt(TR / 2 T1). Magnitude
-    mono-exponential, unit-normalised to the first design."""
-    rows = []
-    for d in designs:
-        te = d.TE
-        s0 = math.sqrt((1 - math.exp(-d.TR / t1)) / (1 + math.exp(-d.TR / t1)))
-        sig = s0 * np.exp(-te / t2star) * math.sqrt(d.t_read)  # signal / noise per echo
-        # R2*: Fisher information of [ln S0, R2*] for S_n = S0 exp(-R TE_n)
-        J = np.array([[np.sum(sig**2), -np.sum(sig**2 * te)],
-                      [-np.sum(sig**2 * te), np.sum(sig**2 * te**2)]])
-        sd_r2 = math.sqrt(np.linalg.inv(J)[1, 1])
-        # frequency (Hz): phase = phi0 + 2 pi f TE, sigma_phase = 1/sig
-        w = sig**2
-        var_f = 1 / ((2 * np.pi) ** 2 * (np.sum(w * te**2) - np.sum(w * te) ** 2 / np.sum(w)))
-        rows.append((d.n_echoes, sd_r2, math.sqrt(var_f)))
-    base = rows[0]
-    return [(n, r / base[1], f / base[2]) for n, r, f in rows]
+# SNR calibration shared with simulate_fmri/session.py's THERMAL_NOISE (read
+# there for the derivation): a fully sampled volume of the default EPI
+# protocol has an image SNR of about 115 at TE 30 ms on a 3 T, 32-channel head
+# session. Good to perhaps 30%.
+EPI_SNR_REF = 115.0
+EPI_TE_REF = 30e-3
 
 
-def snr_vs_degre(d: MGREDesign, params: Params, t1: float = 1.3) -> float:
+def precision_estimate(
+    d: MEGREDesign, params: Params, snr_scale: float = 1.0, t2star: float = T2STAR_S, t1=1.3
+) -> tuple[float, float, float]:
+    """(SNR at TE = 0, sd of R2* in 1/s, sd of the off-resonance frequency in
+    Hz) per voxel from thermal noise alone (Cramer-Rao bound of a
+    mono-exponential magnitude / linear-phase fit over this design's echoes).
+    SNR scales from the EPI calibration as sqrt(dwell) x the Ernst steady
+    state, at equal voxel volume and matrix. `snr_scale` < 1 for low-
+    sensitivity regions. A bound, not a prediction: it ignores intravoxel
+    dephasing, non-exponential decay and physiological noise."""
+    from lib.readout_from_params import find_min_feasible_dwell
+
+    def s_ss(tr, flip_deg):
+        a, e1 = math.radians(flip_deg), math.exp(-tr / t1)
+        return math.sin(a) * (1 - e1) / (1 - math.cos(a) * e1)
+
+    # blip steps >= 2 in any undersampled mask; a step of 1 would give 6 us
+    dwell_epi = find_min_feasible_dwell(2, 2, params)
+    snr0_epi = EPI_SNR_REF / math.exp(-EPI_TE_REF / t2star)
+    snr0 = (
+        snr0_epi * math.sqrt(d.dwell / dwell_epi)
+        * s_ss(d.TR, d.flip_deg) / s_ss(params.TR, params.fa) * snr_scale
+    )
+    te = d.TE
+    w = (snr0 * np.exp(-te / t2star)) ** 2  # per-echo SNR squared
+    sw, swt, swt2 = w.sum(), (w * te).sum(), (w * te**2).sum()
+    sd_r2star = math.sqrt(sw / (sw * swt2 - swt**2))  # Fisher information of [ln S0, R2*]
+    sd_hz = 1 / (2 * math.pi * math.sqrt(swt2 - swt**2 / sw))  # phase = phi0 + 2 pi f TE
+    return snr0, sd_r2star, sd_hz
+
+
+def snr_vs_degre(d: MEGREDesign, params: Params, t1: float = 1.3) -> float:
     """Echo-1 image SNR of this design over params' current deGRE (same coil,
     one average): voxel volume x sqrt(readout time x Ny x Nz) x the Ernst
     steady state, sqrt(TR / 2 T1) for TR << T1. Ignores T2* decay before TE1
@@ -357,7 +381,7 @@ def snr_vs_degre(d: MGREDesign, params: Params, t1: float = 1.3) -> float:
     return new / old
 
 
-def _summarize(d: MGREDesign, rep=None, snr=None) -> str:
+def _summarize(d: MEGREDesign, rep=None, snr=None, prec=None) -> str:
     s = (
         f'{d.n_echoes:3d} echoes  TE {d.TE[0] * 1e3:5.2f}..{d.TE[-1] * 1e3:6.2f} ms  '
         f'TR {d.TR * 1e3:6.2f} ms  flip {d.flip_deg:5.2f}  dwell {d.dwell * 1e6:4.0f} us '
@@ -366,6 +390,8 @@ def _summarize(d: MGREDesign, rep=None, snr=None) -> str:
     )
     if snr is not None:
         s += f'  SNR(TE1) {snr:4.2f}x deGRE'
+    if prec is not None:
+        s += f'  sd R2* {prec[1]:4.2f}/s  sd B0 {prec[2]:4.2f} Hz'
     if rep is not None:
         s += f'  PNS {rep.peak_pns_percent:5.1f}%  acoustics {rep.acoustics_max_in_band:.3f}'
     return s
@@ -373,7 +399,7 @@ def _summarize(d: MGREDesign, rep=None, snr=None) -> str:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('--echoes', type=int, nargs='+', default=[8, 12, 16, 20, 24])
+    ap.add_argument('--echoes', type=int, nargs='+', default=[6, 8, 12, 16, 20])
     ap.add_argument('--read-frac', type=float, default=0.5)
     ap.add_argument('--spoil-cycles', type=float, default=4)
     ap.add_argument('--spoil-slew', type=float, default=70.0)
@@ -385,26 +411,21 @@ def main():
     params = load_params()
     kw = dict(read_frac=args.read_frac, n_cycles_spoil=args.spoil_cycles,
               spoil_slew=args.spoil_slew, n_dummy_zloops=args.dummy_zloops)
-    designs = []
     for n in args.echoes:
         rep = None
+        d = design_megre(params, n_echoes=n, **kw)
         if args.pns:
             from ge.check import check_seq_feasibility
 
-            d0 = design_mgre(params, n_echoes=n, **kw)
-            snippet, _ = generate_mgre(
+            snippet, _ = generate_megre(
                 params, write=False, verbose=False, n_echoes=n,
-                encodes=worst_case_encodes(d0.N, args.dummy_zloops), **kw,
+                encodes=worst_case_encodes(d.N, args.dummy_zloops), **kw,
             )
             rep = check_seq_feasibility(snippet, params.spec, pns_wt=tuple(params.PNSwt))
-        d = design_mgre(params, n_echoes=n, **kw)
-        designs.append(d)
-        print(_summarize(d, rep, snr_vs_degre(d, params)))
-    print('\nrelative Cramer-Rao std (first row = 1.0), same for R2* and B0:  n_echoes   std')
-    for n, r, f in precision_table(designs):
-        print(f'{n:70d}   {r:6.3f}')
+        print(_summarize(d, rep, snr_vs_degre(d, params), precision_estimate(d, params)))
+    print('(precision: thermal-noise bound at the calibrated SNR, see precision_estimate)')
     if args.build:
-        seq, d = generate_mgre(params, n_echoes=args.echoes[0], **kw)
+        seq, d = generate_megre(params, n_echoes=args.echoes[0], **kw)
         print(f'built: {len(seq.block_events)} blocks, duration {seq.duration()[0]:.1f} s')
 
 

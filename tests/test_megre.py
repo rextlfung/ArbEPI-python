@@ -1,4 +1,4 @@
-"""mGRE (sequences/mGRE.py): what the assembled sequence encodes, read back
+"""meGRE (sequences/meGRE.py): what the assembled sequence encodes, read back
 out of the Pulseq object rather than from the design numbers."""
 
 import warnings
@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from params import load_params
-from sequences.mGRE import design_mgre, generate_mgre, iter_encodes
+from sequences.meGRE import design_megre, generate_megre, iter_encodes
 
 # 7.2 mm voxels over the real 216 x 216 x 144 mm FOV: 30 x 30 x 20, small
 # enough to build and read back in a few seconds.
@@ -16,10 +16,10 @@ KW = dict(res=(7.2e-3,) * 3, fov=(0.216, 0.216, 0.144), n_echoes=6, n_dummy_zloo
 
 @pytest.fixture(scope='module')
 def built(tmp_path_factory):
-    p = load_params(output_dir=str(tmp_path_factory.mktemp('mgre')))
+    p = load_params(output_dir=str(tmp_path_factory.mktemp("megre")))
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        seq, d = generate_mgre(p, verbose=False, **KW)
+        seq, d = generate_megre(p, verbose=False, **KW)
     return p, seq, d
 
 
@@ -71,10 +71,13 @@ def test_every_echo_sees_the_same_kx_and_the_shots_phase_encode(built):
             assert k[2, s, 0, 0] == pytest.approx((iZ - 1 - nz / 2) * dk[2], abs=1e-3 * dk[2])
 
 
-def test_default_protocol_fits_five_minutes_at_twenty_echoes():
+def test_default_matches_the_epi_grid_and_fits_five_minutes():
     p = load_params()
-    d = design_mgre(p, n_echoes=20)
-    assert d.N == (90, 90, 60)
-    assert d.scan_time < 300
+    d = design_megre(p)
+    assert d.N == (p.Nx, p.Ny, p.Nz) == (90, 90, 60)
+    assert tuple(d.fov) == pytest.approx(tuple(p.fov))
+    assert d.n_echoes == 8
+    assert d.scan_time < 150
     assert d.TE[0] == pytest.approx(1 / p.fat_offres_freq, abs=8e-6)
     assert np.diff(d.TE) == pytest.approx(1 / p.fat_offres_freq, abs=3e-6)
+    assert design_megre(p, n_echoes=20).scan_time < 300
