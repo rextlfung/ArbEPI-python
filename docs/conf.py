@@ -7,8 +7,6 @@ reference is generated from docstrings by autosummary. Build:
     uv run --extra docs sphinx-build -b html docs docs/_build/html
 """
 
-import posixpath
-import re
 import shutil
 import sys
 from pathlib import Path
@@ -16,6 +14,7 @@ from pathlib import Path
 DOCS = Path(__file__).resolve().parent
 ROOT = DOCS.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(DOCS))  # readme_pages.py
 
 project = "ArbEPI-python"
 author = "Rex Fung"
@@ -79,59 +78,21 @@ autodoc_mock_imports = [
     "cupy",
 ]
 
-# -- README pages ------------------------------------------------------------
-# docs/<page>.md holds one line, `<!-- readme: <path from repo root> -->`, and
-# the source-read hook below swaps in that file's text. {include} would resolve
-# the READMEs' relative links against docs/ instead of the README's directory.
-GITHUB = "https://github.com/rextlfung/ArbEPI-python/blob/main/"
-README_PAGES = {
-    "README.md": "overview",
-    **{f"{d}/README.md": d for d in ("ge", "preprocess", "recon", "analyze", "simulate_fmri")},
-}
-_MARKER = re.compile(r"^<!-- readme: (\S+) -->")
-_PICTURE = re.compile(r"<picture>.*?</picture>", re.S)
-_ALT = re.compile(r'<img alt="([^"]*)"')
-_LINK = re.compile(r"\[([^\]]*)\]\(([^)\s]+)\)")
+# -- Pages pulled from the repo's Markdown -------------------------------------
+# Wrapper pages in docs/ name the READMEs / CLAUDE.md sections they show; see
+# readme_pages.py. The prose is therefore never a second copy.
+from readme_pages import Pages  # noqa: E402
+
+_pages = Pages(ROOT, DOCS)
 
 
-def _link_fixer(readme_dir):
-    def fix(m):
-        text, target = m.groups()
-        if re.match(r"[a-z]+:", target) or target.startswith("#"):
-            return m.group(0)
-        path, _, frag = target.partition("#")
-        frag = f"#{frag}" if frag else ""
-        full = posixpath.normpath(posixpath.join(readme_dir, path))
-        if full in README_PAGES:  # another README: its page
-            return f"[{text}]({README_PAGES[full]}.md{frag})"
-        if full.startswith(".."):  # sibling checkout (../ArbEPI): nothing to link
-            return text
-        return f"[{text}]({GITHUB}{full}{frag})"
-
-    return fix
-
-
-def _expand_readme(app, docname, source):
-    m = _MARKER.match(source[0])
-    if not m:
-        return
-    rel = m.group(1)
-    text = (ROOT / rel).read_text()
-
-    def picture(p):
-        alt = _ALT.search(p.group(0))
-        alt = alt.group(1) if alt else "pipeline"
-        return "\n".join(
-            f"```{{image}} pipeline/pipeline-{mode}.svg\n:alt: {alt}\n:class: only-{mode}\n```"
-            for mode in ("light", "dark")
-        )
-
-    text = _PICTURE.sub(picture, text)
-    source[0] = _LINK.sub(_link_fixer(posixpath.dirname(rel)), text)
+def _expand(app, docname, source):
+    source[0] = _pages.expand(source[0], docname)
 
 
 def setup(app):
-    app.connect("source-read", _expand_readme)
+    app.connect("source-read", _expand)
+
 
 
 # Annotations such as `h5py.Dataset | h5py.Group` or `torch.device | None` are

@@ -135,6 +135,144 @@ returns the result in memory instead of saving it (see `demo.ipynb`).
 Image intensities are **not quantitative**: the data and operator scalings
 described below are not undone.
 
+## The optimization problem
+
+Every iterative method here solves one problem,
+
+$$
+\hat{x} \;=\; \arg\min_{x}\; \underbrace{\tfrac12\,\|A x - y\|_2^2}_{f(x)\ \text{data fidelity}} \;+\; \underbrace{g(x)}_{\text{regularizer}},
+$$
+
+where $x \in \mathbb{C}^{N_x \times N_y \times N_z \times N_t}$ is the image time
+series, $y$ the acquired multi-coil k-space at the sampled locations, and $A$
+the encoding operator. The three pieces are chosen independently: the
+operator $A$ ([below](#encoding-operators-operatorspy)), the regularizer
+$g$ (`--reg`), and the temporal terms that may be added to $g$.
+
+### Data fidelity and the encoding operator
+
+Frame $t$ is acquired at its own sampling set $\Omega_t$ (a new mask every
+frame), so $A$ is block diagonal, $A = \operatorname{blkdiag}(A_1, \dots, A_{N_t})$,
+and $f(x) = \tfrac12 \sum_t \|A_t x_t - y_t\|_2^2$. For the plain SENSE
+operator, coil $c$ at k-space location $k \in \Omega_t$ is
+
+$$
+(A_t x_t)[k, c] \;=\; \sum_{r} s_c(r)\, x_t(r)\, e^{-i 2\pi\, k \cdot r},
+$$
+
+with $s_c$ the coil sensitivity maps. With the field map $\Delta f(r)$ and
+R2\* map $R_2^*(r)$, sample $k$ is acquired at time $\tau_k$ (its echo time
+from `schedules`) and carries
+
+$$
+(A_t x_t)[k, c] \;=\; \sum_{r} s_c(r)\, x_t(r)\,
+e^{\psi(r)\,(\tau_k - t_{\mathrm{ref}})}\, e^{-i 2\pi\, k \cdot r},
+\qquad
+\psi(r) = i\,2\pi\,\Delta f(r) - R_2^*(r),
+$$
+
+(phase only when $R_2^* \equiv 0$). Evaluating the exponential per sample is
+as expensive as a non-uniform FFT, so it is approximated by **time
+segmentation**: $e^{\psi(r)(\tau - t_{\mathrm{ref}})} \approx \sum_{l=1}^{L}
+b_l(\tau)\, e^{\psi(r)(t_l - t_{\mathrm{ref}})}$, which turns $A_t$ into $L$
+ordinary SENSE transforms of phased images, combined per sample with weights
+$b_l$ (see [Encoding operators](#encoding-operators-operatorspy)).
+
+### The regularizers $g$
+
+| `--reg` | Cost $g$ | Solver |
+|---|---|---|
+| `none` | $0$ | CG |
+| `mslr` | $\displaystyle\sum_{k=1}^{K} \lambda_k \sum_{b} \big\|P_b(X_k)\big\|_*$, with $x = \sum_k X_k$ | POGM / FPGM / PGM |
+| `wavelet-tv` | $\displaystyle\sum_{t} \big(\lambda_{\ell_1}\|W x_t\|_1 + \lambda_{TV}\|D x_t\|_1\big)$ | PDHG |
+
+**No regularizer.** $\hat{x} = \arg\min_x \tfrac12\|Ax-y\|^2$, the
+least-squares (CG-SENSE) solution, found from the normal equations
+$A^H A\, x = A^H y$.
+
+**Multi-scale low rank** (Ong & Lustig). The unknown becomes $K$ components
+$X_1, \dots, X_K$, one per patch size, that sum to the image, so the problem is
+
+$$
+\min_{X_1,\dots,X_K}\;
+\tfrac12\Big\|A\Big(\sum_{k} X_k\Big) - y\Big\|_2^2
+\;+\; \sum_{k=1}^{K} \lambda_k \sum_{b \in \mathcal{B}_k} \big\|P_b(X_k)\big\|_* .
+$$
+
+$P_b$ extracts patch $b$ of scale $k$ as a (voxels in patch) $\times$ $N_t$
+matrix, and $\|\cdot\|_*$ is its nuclear norm (the sum of singular values).
+One small patch gives a locally low-rank prior; a whole-volume patch a
+globally low-rank one. The weights, with $p_k$ voxels per patch and $N_{\mathrm{vox}}$
+voxels per frame, are
+
+$$
+\lambda_k = \lambda_{\mathrm{global}}
+\Big(\sqrt{p_k} + \sqrt{N_t} + \sqrt{\log\!\big(N_{\mathrm{vox}} N_t / \max(p_k, N_t)\big)}\Big),
+$$
+
+the expected spectral norm of a $p_k \times N_t$ matrix of unit-variance
+Gaussian noise ([scaling below](#scaling-so-that-λ-means-what-the-paper-says)).
+
+**Wavelet + total variation.** Each frame is regularized with an $\ell_1$
+penalty on orthogonal 3D wavelet coefficients $W x_t$ and an anisotropic total
+variation $\|Dx_t\|_1 = \sum_{d \in \{x,y,z\}} \|D_d x_t\|_1$, with $D_d$
+the periodic finite difference along axis $d$:
+
+$$
+\min_{x}\;\tfrac12\|Ax-y\|_2^2
++ \sum_t \Big(\lambda_{\ell_1}\|W x_t\|_1 + \lambda_{TV}\|D x_t\|_1\Big).
+$$
+
+### Temporal terms (optional, any `--reg`)
+
+These couple the frames, so the problem is solved for all of them at once.
+
+$$
+g(x) \;\leftarrow\; g(x)
+\;+\; \underbrace{\tfrac{\mu}{2}\,\|P x\|_2^2}_{\texttt{--hp-weight}}
+\;+\; \underbrace{\lambda_{TT}\,\|D_t x\|_1}_{\texttt{--lamb-ttv}\ (\text{wavelet-tv})}
+$$
+
+- **Temporal high-pass**: $P$ is the orthogonal projector onto temporal
+  frequencies above the cutoff (`--hp-cutoff`, 0.15 Hz) in the DCT-II basis,
+  $P = C^{T}\operatorname{diag}(\mathbb{1}[f_j > f_c])\,C$ with $f_j = j / (2 N_t\,\mathrm{TR})$.
+  The penalty is exactly zero for content at or below the cutoff, so it cannot
+  bias a BOLD-band signal.
+- **Temporal TV**: $D_t$ is the non-periodic difference along time,
+  $(D_t x)_t = x_{t+1} - x_t$, summed over voxels.
+
+### Scaling
+
+The weights $\lambda_k$ assume unit-variance noise and a unit-norm operator, so
+before solving, `run_sense` replaces
+
+$$
+y \leftarrow y / \sigma_n,
+\qquad
+A \leftarrow A / \sigma_1(A),
+$$
+
+with $\sigma_n^2$ the measured noise variance (`noise_var`) and
+$\sigma_1(A)$ the spectral norm from power iteration. Both are applied for
+`mslr`; the wavelet-TV solve normalizes $A$ the same way and each frame's data by
+its 99th-percentile magnitude. Neither is undone on the output (this is not
+quantitative imaging).
+
+### Solvers
+
+- **Proximal gradient (POGM / FPGM / PGM)** for `mslr`:
+  $x^{+} = \operatorname{prox}_{g/L}\!\big(x - \tfrac1L \nabla f(x)\big)$ with
+  momentum (and gradient restart), $L = \sigma_1(A)^2$. The prox of the
+  nuclear norm is singular-value soft-thresholding,
+  $\operatorname{prox}_{\beta\|\cdot\|_*}(M) = U \max(\Sigma - \beta, 0) V^H$.
+- **Primal-dual (PDHG / Condat-Vu)** for `wavelet-tv`: the problem is written
+  $\min_x f(x) + h(Gx)$ with $G = [W;\, D;\, P]$, since the sum of a wavelet
+  $\ell_1$ and a TV term has no closed-form prox, but each block does
+  (soft-thresholding; a closed-form shrinkage for the quadratic $P$ block).
+  Temporal TV is the proximable term, a 1D TV denoising per voxel.
+- **CG** for `none`, on $A^H A x = A^H y$ (with $+\mu P$ added when
+  `--hp-weight` is set).
+
 ## Encoding operators (`operators.py`)
 
 Each operator maps one frame's image (Nx, Ny, Nz) to k-space at that frame's
