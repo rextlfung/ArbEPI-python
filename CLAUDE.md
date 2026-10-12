@@ -39,6 +39,27 @@ docs/pipeline/make_pipeline.py`) in the same commit.
 `.py`/`.jl` files, not a diagram that has drifted from what the code does, so
 check the picture itself too.
 
+## Documentation site
+
+The Read the Docs site is Sphinx + MyST + furo, configured by
+`.readthedocs.yaml` (root) and `docs/conf.py`; build with `uv run --extra docs
+sphinx-build -b html docs docs/_build/html`. The prose is the READMEs
+themselves, not copies: `docs/{overview,ge,preprocess,recon,analyze,
+simulate_fmri}.md` each hold one `<!-- readme: path -->` line, and a
+`source-read` hook in `conf.py` swaps in that README, rewriting links
+between READMEs to site pages, other repo paths to GitHub, and the
+`<picture>` diagram to light/dark images. A new README needs an entry in
+`README_PAGES`, a wrapper page and a toctree line in `docs/index.md`. The API
+reference is `autosummary :recursive:` over the packages listed in
+`docs/api/index.md`, so new modules appear on their own; docs builds mock
+only what cannot be installed (`autodoc_mock_imports`: torch, GERecon, sigpy,
+SNAKE, h5py, ...), never `numba`, which would turn `pd_sample`'s jitted
+functions into Mocks. A new import that is not in the core
+dependencies and not installable on Read the Docs belongs in that list.
+`review-findings.md` and `TODO.md` are worklogs and are excluded;
+`CLAUDE.md` itself is not published. Docstring RST warnings from free-form
+docstrings are expected; do not turn on `-W`.
+
 ## Commit conventions
 
 Do not commit as Claude: no `Co-Authored-By: Claude ...` trailer and no

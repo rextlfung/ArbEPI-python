@@ -84,6 +84,17 @@ simulate = [
     "nbclient",
 ]
 
+# Documentation site (docs/, built by Read the Docs; see .readthedocs.yaml).
+# Installed together with the core dependencies, so pypulseq/numba import for
+# real; docs/conf.py mocks only what a docs build cannot install (torch,
+# GERecon, sigpy, snake, ...).
+docs = [
+    "sphinx>=7.3",
+    "furo>=2024.8.6",
+    "myst-nb>=1.1",
+    "sphinx-copybutton>=0.5",
+]
+
 # snake-fmri requires mri-nufft[finufft,cufinufft]; the cufinufft extra pulls
 # cupy-cuda13x and the CUDA 13 toolkit wheels (several GB, Linux/Windows and one
 # CUDA major version only). simulate_fmri/ uses snake's phantom and Cartesian
