@@ -130,7 +130,15 @@ returns the result in memory instead of saving it (see `demo.ipynb`).
 - `.h5` — the complex image `X_recon`, the per-scale components `X`
   (low rank only), the sampling mask `omega`, and the per-iteration traces
   `dc_costs` (for CG: relative residuals), `reg_costs`, `restarts`,
-  `rel_changes`.
+  `rel_changes` (POGM), and under `trace/` the diagnostics of the other
+  solvers: PDHG (`--reg wavelet-tv`) `iter`, `dc_cost`, `reg_cost` every
+  `--trace-every` iterations (default 5; each evaluation costs one forward
+  operator and one regularizer pass, about 6% of a run at 5) and `rel_change`
+  (primal change per iteration), with a leading frame axis for the per-frame
+  solver; CG `rel_residual`. The `.json` records `n_iters` (iterations run) and,
+  where there is a stopping rule (POGM, CG), `converged`. PDHG always runs its
+  `--niter` iterations, so read its trace for convergence: the primal objective
+  is not monotone in a primal-dual method, only its trend is meaningful.
 
 Image intensities are **not quantitative**: the data and operator scalings
 described below are not undone.

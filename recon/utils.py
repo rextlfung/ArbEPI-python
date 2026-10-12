@@ -177,6 +177,8 @@ def save_result(
         f.create_dataset("reg_costs", data=np.asarray(result.reg_costs))
         f.create_dataset("restarts", data=np.asarray(result.restarts, dtype=bool))
         f.create_dataset("rel_changes", data=np.asarray(result.rel_changes))
+        for k, v in result.trace.items():  # PDHG / CG diagnostics, see ReconResult.trace
+            f.create_dataset(f"trace/{k}", data=np.asarray(v))
         f.attrs["R"] = result.R
         f.attrs["sigma1A"] = result.sigma1A
         f.attrs["L"] = result.L
@@ -192,7 +194,7 @@ def save_result(
         L=result.L,
         lambdas=result.lambdas,
         runtime_s=result.runtime_s,
-        n_iters=len(result.dc_costs) - 1,
+        n_iters=result.meta.get("iterations_run", len(result.dc_costs) - 1),
         final_dc_cost=result.dc_costs[-1],
         final_reg_cost=result.reg_costs[-1] if result.reg_costs else None,
         **result.meta,
