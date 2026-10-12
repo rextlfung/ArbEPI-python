@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 import h5py
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from recon.operators import build_sense, build_sense_b0, build_sense_b0_r2star
 from recon.regularizers import (
@@ -292,7 +293,8 @@ def _solve_cg(
         mu = hp_weight * sigma1A**2  # A is not normalized here; scale mu to match
         reg_normal = lambda x: mu * hp.apply(x)  # noqa: E731
     t_start = time.time()
-    X, residuals = cg(A, ksp, shape, num_iter=niters, tol=tol, reg_normal=reg_normal)
+    X, residuals = cg(A, ksp, shape, num_iter=niters, tol=tol, reg_normal=reg_normal,
+                     progress=True)
     runtime_s = time.time() - t_start
     print(
         f"Done in {runtime_s:.1f} s ({len(residuals) - 1} iterations, final relative residual "
@@ -372,7 +374,8 @@ def _solve_mslr(
     )
     t_start = time.time()
     X, _ = pogm_restart(
-        X0, dc_cost, dc_grad, L, mom=mom, niter=niters, g_prox=g.prox, fun=logger, conv_tol=conv_tol
+        X0, dc_cost, dc_grad, L, mom=mom, niter=niters, g_prox=g.prox, fun=logger, conv_tol=conv_tol,
+        progress=True,
     )
     runtime_s = time.time() - t_start
     X_recon = S.apply(X)
@@ -430,11 +433,12 @@ def _solve_wavelet_tv(
             return A_t.adjoint(A_t.apply(x) - y_s)
 
         x0 = torch.zeros(Nx, Ny, Nz, dtype=torch.complex64, device=ksp.device)
-        x = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters)
+        x = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters,
+                 progress=f"frame {it + 1}/{Nt}")
         dc_costs.append(0.5 * (A_t.apply(x) - y_s).norm().item() ** 2)
         reg_costs.append(g.cost(x))
         X[..., it] = x / scale / sigma1A
-        print(f"  frame {it + 1}/{Nt} done in {time.time() - t_frame:.1f}s")
+        tqdm.write(f"  frame {it + 1}/{Nt} done in {time.time() - t_frame:.1f}s")
     runtime_s = time.time() - t_start
     print(f"Wall-clock: {runtime_s:.1f}s ({runtime_s / Nt:.1f}s/frame)")
     return ReconResult(
@@ -482,7 +486,8 @@ def _solve_wavelet_tv_joint(
     )
     t_start = time.time()
     x0 = torch.zeros(shape, dtype=torch.complex64, device=ksp.device)
-    x = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters, prox_g=g.f_prox)
+    x = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters, prox_g=g.f_prox,
+             progress=True)
     runtime_s = time.time() - t_start
     dc = 0.5 * (A_n.apply(x) - y_s).norm().item() ** 2
     reg = g.cost(x)  # includes the high-pass penalty

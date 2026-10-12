@@ -12,6 +12,7 @@ from typing import Callable, Literal
 import torch
 from mirtorch.alg import FBPD
 from mirtorch.prox import Const
+from tqdm import tqdm
 
 Momentum = Literal["pgm", "fpgm", "pogm"]
 Restart = Literal["none", "gr", "fr"]
@@ -21,6 +22,15 @@ _EPS = torch.finfo(torch.float32).eps
 def _gr_restart(fgrad: torch.Tensor, ynew_yold: torch.Tensor, restart_cutoff: float) -> bool:
     inner = -torch.vdot(fgrad.reshape(-1), ynew_yold.reshape(-1)).real.item()
     return inner <= restart_cutoff * fgrad.norm().item() * ynew_yold.norm().item()
+
+
+def _bar(progress: bool | str, total: int, default_desc: str):
+    """A tqdm bar over `total` iterations, or None when progress is off. A str
+    `progress` is the label; leave=False so per-frame solves don't stack bars."""
+    if not progress:
+        return None
+    desc = progress if isinstance(progress, str) else default_desc
+    return tqdm(total=total, desc=desc, unit="it", leave=False)
 
 
 def pogm_restart(
@@ -39,6 +49,7 @@ def pogm_restart(
     fun: Callable = lambda it, xk, yk, is_restart, fcostnew, rel_change: None,
     conv_tol: float = 0.0,
     conv_min_iter: int = 10,
+    progress: bool | str = False,
 ):
     """Minimize f(x) + g(x) by PGM, FPGM or POGM (Kim & Fessler) with restart.
 
@@ -47,7 +58,9 @@ def pogm_restart(
     (gradient), "fr" (function value) or "none". Stops early once the relative
     change of the iterate falls below conv_tol (0 disables this).
     fun(iter, xk, yk, is_restart, fcost, rel_change) is called every iteration,
-    iter 0 being the start. Returns (x, list of fun's return values)."""
+    iter 0 being the start. progress: show a tqdm bar over iterations with the
+    cost and relative change (a str is the bar's label). Returns (x, list of
+    fun's return values)."""
     if mom not in ("pgm", "fpgm", "pogm"):
         raise ValueError(f"mom={mom}")
     if restart not in ("none", "gr", "fr"):
@@ -81,6 +94,7 @@ def pogm_restart(
     Fgrad = torch.zeros_like(x0)
     Fgradold = torch.zeros_like(x0) if mom == "pogm" else x0
 
+    bar = _bar(progress, niter, "POGM" if mom == "pogm" else mom.upper())
     for it in range(1, niter + 1):
         alpha = (2.0 / (L + mu)) if (mom == "pgm" and mu != 0) else (1.0 / L)
 
@@ -159,6 +173,10 @@ def pogm_restart(
             last_restart_iter = it
             adaptive_cmi = max(1, adaptive_cmi - 1)
 
+        if bar is not None:
+            bar.update(1)
+            bar.set_postfix(cost=f"{Fcostnew:.4g}", dx=f"{rel_change:.2e}")
+
         if conv_tol > 0 and it >= last_restart_iter + adaptive_cmi and rel_change < conv_tol:
             out[it] = fun(it, xnew, ynew, is_restart, Fcostnew, rel_change)
             niter_actual = it
@@ -169,6 +187,8 @@ def pogm_restart(
         if mom != "pgm" and mu == 0:
             told = tnew
 
+    if bar is not None:
+        bar.close()
     result = xnew if mom == "pogm" else ynew
     return result, out[: niter_actual + 1]
 
@@ -176,6 +196,7 @@ def pogm_restart(
 def cg(
     A, ksp: torch.Tensor, shape: tuple[int, int, int, int], num_iter: int = 20,
     tol: float = 1e-6, reg_normal: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    progress: bool | str = False,
 ) -> tuple[torch.Tensor, list[float]]:
     """Conjugate gradient on (A^H A + Q) x = A^H ksp, starting from 0, where Q is
     reg_normal (a symmetric positive semidefinite map, e.g. mu P for a quadratic
@@ -183,7 +204,8 @@ def cg(
 
     A: an operator from recon/operators.py. ksp: (K,Nc,Nt). shape: (Nx,Ny,Nz,Nt).
     Returns (X, residuals), residuals[i] = ||r_i|| / ||r_0|| (residuals[0] = 1);
-    stops early once below tol.
+    stops early once below tol. progress: show a tqdm bar with the relative
+    residual (a str is the bar's label).
     """
     B = A.adjoint(ksp)  # (Nx,Ny,Nz,Nt)
     X = torch.zeros_like(B)
@@ -196,6 +218,7 @@ def cg(
     if rs0 == 0:
         return X, residuals
 
+    bar = _bar(progress, num_iter, "CG")
     for _ in range(num_iter):
         AP = A.apply(P)
         AHAP = A.adjoint(AP)
@@ -207,12 +230,17 @@ def cg(
         rsnew = torch.sum(torch.abs(R) ** 2).item()
         rel_res = (rsnew / rs0) ** 0.5
         residuals.append(rel_res)
+        if bar is not None:
+            bar.update(1)
+            bar.set_postfix(res=f"{rel_res:.2e}")
         if rel_res < tol:
             break
         beta = rsnew / rsold
         P = R + beta * P
         rsold = rsnew
 
+    if bar is not None:
+        bar.close()
     return X, residuals
 
 
@@ -225,6 +253,7 @@ def pdhg(
     x0: torch.Tensor,
     niter: int = 100,
     prox_g=None,
+    progress: bool | str = False,
 ) -> torch.Tensor:
     """min_x f(x) + g(x) + h(G x): the Condat-Vu primal-dual method, i.e. PDHG
     with a plain gradient step on the smooth term f, via mirtorch's FBPD.
@@ -233,7 +262,19 @@ def pdhg(
     for h (FBPD applies it to h's convex conjugate via Moreau's identity).
     G: a mirtorch LinearMap, G_norm_squared an upper bound on ||G||^2 (sets the
     dual step size). prox_g: a Prox for a proximable g, applied in the primal
-    step (default: g = 0)."""
+    step (default: g = 0). progress: show a tqdm bar over iterations (a str is
+    the bar's label); FBPD calls eval_func once per iteration, which is the tick."""
+    bar = _bar(progress, niter, "PDHG")
+
+    def tick(_x):
+        bar.update(1)
+
     solver = FBPD(grad_f, Const() if prox_g is None else prox_g, prox_h, g_L=f_L, G=G,
-                  G_norm_squared=G_norm_squared, max_iter=niter)
-    return solver.run(x0)
+                  G_norm_squared=G_norm_squared, max_iter=niter,
+                  eval_func=None if bar is None else tick)
+    try:
+        out = solver.run(x0)
+    finally:
+        if bar is not None:
+            bar.close()
+    return out if bar is None else out[0]
