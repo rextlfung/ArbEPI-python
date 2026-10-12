@@ -76,8 +76,25 @@ def test_default_matches_the_epi_grid_and_fits_five_minutes():
     d = design_megre(p)
     assert d.N == (p.Nx, p.Ny, p.Nz) == (90, 90, 60)
     assert tuple(d.fov) == pytest.approx(tuple(p.fov))
-    assert d.n_echoes == 8
-    assert d.scan_time < 150
+    assert d.n_echoes == 20
+    assert d.scan_time < 300
     assert d.TE[0] == pytest.approx(1 / p.fat_offres_freq, abs=8e-6)
     assert np.diff(d.TE) == pytest.approx(1 / p.fat_offres_freq, abs=3e-6)
-    assert design_megre(p, n_echoes=20).scan_time < 300
+
+
+def test_scan_info_is_patched_with_this_scans_geometry(tmp_path):
+    import hdf5storage
+
+    p = load_params(output_dir=str(tmp_path))
+    fn = tmp_path / 'scan_info.mat'
+    hdf5storage.savemat(str(fn), {'Nx_degre': 72, 'keep_me': 7}, fmt='7.3')
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        _, d = generate_megre(p, verbose=False, write=True, encodes=[(0, 0)], **KW)
+    out = hdf5storage.loadmat(str(fn))
+    assert int(out['keep_me']) == 7  # untouched
+    assert int(out['Nx_degre']) == d.N[0]
+    assert int(out['n_echoes_degre']) == KW['n_echoes']
+    np.testing.assert_allclose(np.ravel(out['TE_degre']), d.TE)
+    np.testing.assert_allclose(np.ravel(out['fov_degre']), d.fov)
+    assert float(out['dwell_degre']) == pytest.approx(d.dwell)

@@ -335,3 +335,13 @@ def test_degre_with_a_larger_xy_fov_than_the_epi(dataset):
     assert smaps.shape[:3] == (NX, NY, NZ) and np.all(np.isfinite(smaps))
     ref, _ = _reference(dataset, W, GCC, delay)
     assert _rel(ksp, ref) < 1e-5
+
+
+def test_gre_n_echoes_uses_the_first_k_echoes_and_rejects_more_than_acquired(dataset):
+    out = preprocess(_cfg(dataset, gre_n_echoes=2), SEQ, a=A_FIXED)
+    with h5py.File(out, 'r') as f:
+        assert f.attrs['gre_n_echoes_used'] == 2
+        assert f.attrs['r2star_n_echoes'] == 2
+        assert f['degre/img_echoes'].shape[-1] == 2  # QA volume keeps every acquired echo
+    with pytest.raises(ValueError, match='gre_n_echoes=3'):
+        preprocess(_cfg(dataset, gre_n_echoes=3), SEQ, a=A_FIXED)

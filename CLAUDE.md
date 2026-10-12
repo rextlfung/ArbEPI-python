@@ -112,9 +112,17 @@ prephasers stretch to fill echo 0's TE padding rather than using a fixed
 duration -- free, since TE is fixed, and it lowers PNS (85.5% -> 79.2%
 at `slew_degre=175`).
 
-`sequences/meGRE.py` is a **prototype, not wired into `main.py`/`params.py`**
-(2026-10-11, user request after a collaborator's question: a monopolar
-multi-echo 3D GRE giving B0, R2\* and coil maps in well under 5 min). Its
+`sequences/meGRE.py` is a **prototype, selected with `main.py --gre megre`**
+(default stays `degre`; not in `params.py`; 2026-10-11, user request after a
+collaborator's question: a monopolar multi-echo 3D GRE giving B0, R2\* and
+coil maps within 5 min). It defaults to **20 echoes (267 s)** for the first
+human scan, whose purpose is to measure how many echoes are really needed:
+`PreprocessConfig.gre_n_echoes` / `batch_preprocess --gre-n-echoes K` fits
+B0 and R2\* from only the first K echoes (use one `--outdir` per K; the
+`degre/img_echoes` QA volume keeps all of them). It patches `scan_info.mat`'s
+`*_degre` keys (geometry, realized TE/TR/flip, dwell, `n_echoes_degre`) the
+way deGRE patches `TE_degre`, so `preprocess/` reads it unchanged; output is
+`meGRE.seq`/`.pge`. Its
 resolution and FOV default to the EPI's (`params.res`/`params.fov`: 2.4 mm,
 216 x 216 x 144 mm), so the maps need no resize. One excitation reads out
 `n_echoes` flyback-monopolar lobes at TE_n = n / f_fat (2.236 ms, the 4 us
@@ -124,27 +132,28 @@ dwell, 926 Hz/px, 9 mT/m) instead of deGRE's 4 us. Timing (GE_MR750, PNSwt
 [0.8, 1.0, 0.7], whole sequence, `python -m sequences.meGRE --echoes ...
 --pns`): TR = 2.236 x n + 2.4 ms and scan time = 5670 shots x TR (2 dummy
 z-loops and the iZ = 0 gain-cal block included), so it is the *last TE*, not
-the echo count, that costs time: 6 echoes 90 s, **8: 115 s (the default)**,
-12: 166 s, 16: 217 s, 20: 267 s, 24: 318 s. Peak PNS is 51.8% at any echo
+the echo count, that costs time: 6 echoes 90 s, 8: 115 s,
+12: 166 s, 16: 217 s, 20: 267 s (the default), 24: 318 s. Peak PNS is 51.8% at any echo
 count with the spoiler at 70 T/m/s; at `slew_degre`=175 the x spoiler ramp is
 the peak (84%), as in deGRE, and the readout train alone is 42%.
-**How many echoes (user question, "do we need 20?"): no.** Thermal-noise
+**How many echoes (user question, "do we need 20?"): fewer would do in
+thermal-noise terms, but 20 is acquired to find out on real data.** Thermal-noise
 Cramer-Rao bound per voxel (`precision_estimate`, SNR scaled from
 `simulate_fmri/session.py`'s THERMAL_NOISE calibration, good to ~30%; T2\*
 47 ms): sd of R2\* 0.60/s at 6 echoes, 0.36 at 8, 0.18 at 12, 0.08 at 20;
 B0 0.1 Hz at 6 echoes -- twice that at half the SNR. Echo-1 SNR is 2.3x the
-current 3 mm deGRE's at 8 echoes. So 20 echoes buys precision nobody
-needs; what more late echoes would still buy is *coverage*: the EPI's echo
+current 3 mm deGRE's at 8 echoes. So late echoes buy no precision
+that is needed; what they would still buy is *coverage*: the EPI's echo
 times span ~15-46 ms, and 8 echoes reach 17.9 ms, so R2\* at the EPI's TE is an
 extrapolation that assumes mono-exponential decay (intravoxel dephasing near
 the sinuses violates it) -- 12-14 echoes (166-191 s) reach the EPI's nominal
 30 ms if real data show that matters. Its ADC layout (gain-cal block of Ny x
 n_echoes readouts, then echo-fastest, iY, iZ) is what
 `preprocess.unflatten_gre_echoes` already reads, and `r2star.fit_r2star`
-already fits every echo. Not done: `n_echoes_degre`/`TE_degre`/`dwell_degre`
-in `scan_info.mat`, `params.py` fields, `.pge` export (`seq2ceq` runs inside
-the feasibility check; `writeceq` was not tried), B0 unwrapping/R2\* on real
-data. `tests/test_megre.py` reads the trajectory and echo times back out of
+fits every echo. Not done: `params.py` fields (the geometry is a
+`generate_megre` argument defaulting to the EPI's), validation of the
+B0/R2\* maps from a real 20-echo scan, and `simulate_fmri/` has not been run
+on a meGRE scan_info. `tests/test_megre.py` reads the trajectory and echo times back out of
 the assembled sequence.
 
 ### Index convention — read this before touching lib/mask2epi.py or the sequence files

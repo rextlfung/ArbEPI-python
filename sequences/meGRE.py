@@ -23,9 +23,14 @@ Differences from deGRE.py:
   - Resolution and FOV default to the EPI's (`params.res`, `params.fov`:
     2.4 mm, 216 x 216 x 144 mm in the current protocol), not
     `params.fov_degre`, so the maps land on the EPI grid with no resize.
-  - 8 echoes by default (last TE 17.9 ms, 115 s): thermal-noise precision
-    saturates early (`precision_estimate`), and scan time is set by the last
-    TE, not the echo count -- see CLAUDE.md for the numbers behind it.
+  - 20 echoes by default (last TE 44.7 ms, 267 s) for the first human scan,
+    to measure how many echoes are really needed: thermal-noise precision
+    saturates by ~8 (`precision_estimate`), so the scan acquires the maximum
+    that fits in 5 min and preprocessing's `gre_n_echoes` analyses the first K.
+    Scan time is set by the last TE, not the echo count.
+  - `generate_megre` patches `scan_info.mat` (when present) with this scan's
+    geometry, echo times and flip -- Nx/Ny/Nz/fov/n_echoes/TE/TR/alpha/dwell_degre --
+    so `preprocess/` reads it exactly as it reads a deGRE (main.py --gre megre).
 
 Everything else (slab-selective sinc, Ernst flip for the realized TR, RF
 spoiling, dummy shots, the iZ = 0 receive-gain block, TRID labels, prephaser
@@ -42,6 +47,7 @@ import math
 import os
 from dataclasses import dataclass
 
+import hdf5storage
 import numpy as np
 import pypulseq as pp
 from tqdm import tqdm
@@ -87,7 +93,7 @@ def design_megre(
     *,
     res=None,
     fov=None,
-    n_echoes: int = 8,
+    n_echoes: int = 20,
     echo_spacing: float | None = None,
     read_frac: float = 0.5,
     n_cycles_spoil: float = 4,
@@ -313,7 +319,29 @@ def generate_megre(
     if write:
         os.makedirs(params.output_dir, exist_ok=True)
         seq.write(os.path.join(params.output_dir, f'{seqname}.seq'))
+        _patch_scan_info(params, d)
     return seq, d
+
+
+def _patch_scan_info(params: Params, d: MEGREDesign) -> None:
+    """Overwrite scan_info.mat's *_degre keys with this scan's (the realized
+    TE/TR/flip, not the prescribed ones). Like sequences/deGRE.py, skipped
+    (not an error) when generate_arbepi has not created the file yet.
+    hdf5storage.savemat updates just these keys in place."""
+    fn = os.path.join(params.output_dir, 'scan_info.mat')
+    if not os.path.exists(fn):
+        print(f"  '{fn}' not found -- run generate_arbepi first if preprocess/ needs it.")
+        return
+    hdf5storage.savemat(
+        fn,
+        {
+            'Nx_degre': d.N[0], 'Ny_degre': d.N[1], 'Nz_degre': d.N[2],
+            'fov_degre': np.asarray(d.fov), 'n_echoes_degre': d.n_echoes,
+            'TE_degre': d.TE, 'TR_degre': d.TR, 'alpha_degre': d.flip_deg,
+            'dwell_degre': d.dwell,
+        },
+        fmt='7.3',
+    )
 
 
 def worst_case_encodes(N, n_dummy_zloops=2):
