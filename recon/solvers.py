@@ -9,6 +9,7 @@
 import math
 from typing import Callable, Literal
 
+import numpy as np
 import torch
 from mirtorch.alg import FBPD
 from mirtorch.prox import Const
@@ -225,7 +226,9 @@ def pdhg(
     x0: torch.Tensor,
     niter: int = 100,
     prox_g=None,
-) -> torch.Tensor:
+    trace_fun: Callable[[torch.Tensor], dict[str, float]] | None = None,
+    trace_every: int = 1,
+) -> torch.Tensor | tuple[torch.Tensor, dict[str, np.ndarray]]:
     """min_x f(x) + g(x) + h(G x): the Condat-Vu primal-dual method, i.e. PDHG
     with a plain gradient step on the smooth term f, via mirtorch's FBPD.
 
@@ -233,7 +236,35 @@ def pdhg(
     for h (FBPD applies it to h's convex conjugate via Moreau's identity).
     G: a mirtorch LinearMap, G_norm_squared an upper bound on ||G||^2 (sets the
     dual step size). prox_g: a Prox for a proximable g, applied in the primal
-    step (default: g = 0)."""
+    step (default: g = 0).
+
+    trace_fun: x -> {name: float}, evaluated every `trace_every` iterations (and
+    at the last). With it, returns (x, trace): trace['iter'] the 1-based
+    iterations traced, trace[name] the values there, and trace['rel_change'] the
+    relative primal change ||x_k - x_(k-1)|| / ||x_k|| at every iteration. A
+    primal-dual method has no monotone cost: the primal objective can rise
+    between iterations, so read the trend, not single steps."""
     solver = FBPD(grad_f, Const() if prox_g is None else prox_g, prox_h, g_L=f_L, G=G,
                   G_norm_squared=G_norm_squared, max_iter=niter)
-    return solver.run(x0)
+    if trace_fun is None:
+        return solver.run(x0)
+    prev = x0.clone()
+    it, rel, iters, vals = 0, [], [], []
+
+    def eval_func(x):
+        nonlocal it
+        it += 1
+        n = torch.linalg.vector_norm(x).item()
+        rel.append(torch.linalg.vector_norm(x - prev).item() / max(n, 1e-30))
+        prev.copy_(x)
+        if it % trace_every == 0 or it == niter:
+            iters.append(it)
+            vals.append(trace_fun(x))
+        return 0.0
+
+    solver.eval_func = eval_func
+    x, _ = solver.run(x0)
+    trace = {"iter": np.asarray(iters), "rel_change": np.asarray(rel)}
+    for k in (vals[0] if vals else {}):
+        trace[k] = np.asarray([v[k] for v in vals])
+    return x, trace
