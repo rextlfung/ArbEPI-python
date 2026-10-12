@@ -9,6 +9,7 @@
 import math
 from typing import Callable, Literal
 
+import numpy as np
 import torch
 from mirtorch.alg import FBPD
 from mirtorch.prox import Const
@@ -253,8 +254,10 @@ def pdhg(
     x0: torch.Tensor,
     niter: int = 100,
     prox_g=None,
+    trace_fun: Callable[[torch.Tensor], dict[str, float]] | None = None,
+    trace_every: int = 1,
     progress: bool | str = False,
-) -> torch.Tensor:
+) -> torch.Tensor | tuple[torch.Tensor, dict[str, np.ndarray]]:
     """min_x f(x) + g(x) + h(G x): the Condat-Vu primal-dual method, i.e. PDHG
     with a plain gradient step on the smooth term f, via mirtorch's FBPD.
 
@@ -263,18 +266,46 @@ def pdhg(
     G: a mirtorch LinearMap, G_norm_squared an upper bound on ||G||^2 (sets the
     dual step size). prox_g: a Prox for a proximable g, applied in the primal
     step (default: g = 0). progress: show a tqdm bar over iterations (a str is
-    the bar's label); FBPD calls eval_func once per iteration, which is the tick."""
-    bar = _bar(progress, niter, "PDHG")
+    the bar's label).
 
-    def tick(_x):
-        bar.update(1)
-
+    trace_fun: x -> {name: float}, evaluated every `trace_every` iterations (and
+    at the last). With it, returns (x, trace): trace['iter'] the 1-based
+    iterations traced, trace[name] the values there, and trace['rel_change'] the
+    relative primal change ||x_k - x_(k-1)|| / ||x_k|| at every iteration. A
+    primal-dual method has no monotone cost: the primal objective can rise
+    between iterations, so read the trend, not single steps."""
     solver = FBPD(grad_f, Const() if prox_g is None else prox_g, prox_h, g_L=f_L, G=G,
-                  G_norm_squared=G_norm_squared, max_iter=niter,
-                  eval_func=None if bar is None else tick)
+                  G_norm_squared=G_norm_squared, max_iter=niter)
+    bar = _bar(progress, niter, "PDHG")
+    if trace_fun is None and bar is None:
+        return solver.run(x0)
+    prev = x0.clone() if trace_fun is not None else None
+    it, rel, iters, vals = 0, [], [], []
+
+    def eval_func(x):
+        # FBPD calls this once per iteration: the bar's tick and the trace point.
+        nonlocal it
+        it += 1
+        if bar is not None:
+            bar.update(1)
+        if trace_fun is not None:
+            n = torch.linalg.vector_norm(x).item()
+            rel.append(torch.linalg.vector_norm(x - prev).item() / max(n, 1e-30))
+            prev.copy_(x)
+            if it % trace_every == 0 or it == niter:
+                iters.append(it)
+                vals.append(trace_fun(x))
+        return 0.0
+
+    solver.eval_func = eval_func
     try:
-        out = solver.run(x0)
+        x, _ = solver.run(x0)
     finally:
         if bar is not None:
             bar.close()
-    return out if bar is None else out[0]
+    if trace_fun is None:
+        return x
+    trace = {"iter": np.asarray(iters), "rel_change": np.asarray(rel)}
+    for k in (vals[0] if vals else {}):
+        trace[k] = np.asarray([v[k] for v in vals])
+    return x, trace

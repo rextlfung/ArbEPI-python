@@ -8,6 +8,8 @@ for that), just confirmation the full pipeline (operators + mslr + solvers
 """
 
 
+import json
+
 import h5py
 import numpy as np
 import pytest
@@ -238,6 +240,30 @@ def test_run_sense_wavelet_tv_handles_undersampled_multiframe_data(tmp_path):
                   niters=50, device=DEVICE, frames=[1])
     assert r.X_recon.shape == (16, 16, 4, 1)
     assert torch.isfinite(r.X_recon.abs()).all()
+
+
+def test_wavelet_tv_solvers_record_a_per_iteration_trace(tmp_path):
+    """Both PDHG solvers return the cost every `trace_every` iterations (and at the last) and
+    the relative change at every one; save_result writes them under trace/ and n_iters is the
+    iterations run, not the length of the cost list."""
+    from recon.utils import save_result
+
+    _, fn_ksp, fn_smaps = _phantom_setup(tmp_path, undersample=True, Nt=2)
+    kw = dict(fn_ksp=fn_ksp, fn_smaps=fn_smaps, reg="wavelet-tv", lamb_l1=1e-4, lamb_tv=1e-4,
+              niters=12, device=DEVICE, trace_every=5)
+    per_frame = run_sense(**kw)
+    joint = run_sense(joint=True, **kw)
+    assert per_frame.trace["iter"].tolist() == [5, 10, 12]
+    assert per_frame.trace["dc_cost"].shape == (2, 3)
+    assert per_frame.trace["rel_change"].shape == (2, 12)
+    assert joint.trace["iter"].tolist() == [5, 10, 12]
+    assert joint.trace["dc_cost"].shape == (3,) and joint.trace["rel_change"].shape == (12,)
+    assert np.isfinite(joint.trace["reg_cost"]).all() and joint.meta["data_scale"] > 0
+    np.testing.assert_allclose(joint.trace["dc_cost"][-1], joint.dc_costs[-1], rtol=1e-4)
+    save_result(str(tmp_path / "out"), joint, (1.0, 1.0, 1.0))
+    with h5py.File(tmp_path / "out.h5") as f:
+        assert f["trace/rel_change"].shape == (12,)
+    assert json.load(open(tmp_path / "out.json"))["n_iters"] == 12
 
 
 def test_run_sense_none_runs_cg_and_recovers_fully_sampled_image(tmp_path):

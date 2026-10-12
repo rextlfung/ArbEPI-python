@@ -72,6 +72,9 @@ class ReconResult:
     lambdas: list[float]
     runtime_s: float
     meta: dict = field(default_factory=dict)
+    # name -> array of per-iteration diagnostics beyond the lists above (PDHG: iter, dc_cost,
+    # reg_cost, rel_change; CG: rel_residual). Per-frame solvers: leading frame axis.
+    trace: dict = field(default_factory=dict)
 
 
 def run_sense(
@@ -109,6 +112,7 @@ def run_sense(
     hp_cutoff_hz: float = 0.15,
     volume_tr_s: float | None = None,
     joint: bool = False,
+    trace_every: int = 5,
 ) -> ReconResult:
     """Reconstruct the frames of fn_ksp with regularizer `reg`.
 
@@ -123,6 +127,9 @@ def run_sense(
     with A normalized to unit norm; needs volume_tr_s (default: fn_ksp's
     'volume_tr' attr). joint (wavelet-tv): reconstruct all frames together, with
     one data scale, even with no temporal term (implied by lamb_ttv/hp_weight).
+    trace_every (wavelet-tv): evaluate the cost every this many PDHG iterations
+    for ReconResult.trace (each evaluation costs one forward operator and one
+    regularizer pass; the relative change is recorded every iteration).
 
     device: default "cuda" if available, else "cpu".
     sigma1A: spectral norm of A; measured by power iteration when None.
@@ -258,10 +265,11 @@ def run_sense(
         if joint or lamb_ttv > 0 or hp is not None:
             return _solve_wavelet_tv_joint(
                 A, ksp, (Nx, Ny, Nz, Nt), sigma1A, lamb_l1, lamb_tv, lamb_ttv, wave, levels,
-                niters, hp, hp_weight, common, temporal,
+                niters, hp, hp_weight, common, temporal, trace_every,
             )
         return _solve_wavelet_tv(
-            A, ksp, (Nx, Ny, Nz, Nt), sigma1A, lamb_l1, lamb_tv, wave, levels, niters, common
+            A, ksp, (Nx, Ny, Nz, Nt), sigma1A, lamb_l1, lamb_tv, wave, levels, niters, common,
+            trace_every,
         )
     if lambda_global is None:
         lambda_global = float(R)
@@ -310,7 +318,9 @@ def _solve_cg(
         L=float("nan"),
         lambdas=[],
         runtime_s=runtime_s,
-        meta=dict(niters=niters, tol=tol, **(temporal or {})),
+        meta=dict(niters=niters, tol=tol, iterations_run=len(residuals) - 1,
+                  converged=bool(residuals[-1] < tol), **(temporal or {})),
+        trace={"rel_residual": np.asarray(residuals)},
         **common,
     )
 
@@ -395,6 +405,8 @@ def _solve_mslr(
             niters=niters,
             mom=mom,
             conv_tol=conv_tol,
+            iterations_run=len(dc_costs) - 1,
+            converged=len(dc_costs) - 1 < niters,
             lambda_global=lambda_global,
             patch_sizes=g.patch_sizes,
             strides=g.strides,
@@ -406,7 +418,7 @@ def _solve_mslr(
 
 
 def _solve_wavelet_tv(
-    A, ksp, shape, sigma1A, lamb_l1, lamb_tv, wave, levels, niters, common
+    A, ksp, shape, sigma1A, lamb_l1, lamb_tv, wave, levels, niters, common, trace_every=5
 ) -> ReconResult:
     """Frame by frame. The operator is normalized to unit spectral norm and
     each frame's data to O(1) (its 99th-percentile magnitude), so lamb_l1/
@@ -415,7 +427,7 @@ def _solve_wavelet_tv(
     Nx, Ny, Nz, Nt = shape
     g = WaveletTV((Nx, Ny, Nz), lamb_l1, lamb_tv, wave=wave, levels=levels)
     X = torch.zeros(shape, dtype=torch.complex64, device=ksp.device)
-    dc_costs, reg_costs = [], []
+    dc_costs, reg_costs, traces = [], [], []
     print(
         f"\nReconstructing {Nt} frame(s) with L1-wavelet + TV (lamb_l1={lamb_l1}, "
         f"lamb_tv={lamb_tv}, {niters} PDHG iterations, operator normalized by 1/{sigma1A:.4f})..."
@@ -433,8 +445,14 @@ def _solve_wavelet_tv(
             return A_t.adjoint(A_t.apply(x) - y_s)
 
         x0 = torch.zeros(Nx, Ny, Nz, dtype=torch.complex64, device=ksp.device)
-        x = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters,
-                 progress=f"frame {it + 1}/{Nt}")
+
+        def trace_fun(x, A_t=A_t, y_s=y_s):
+            return dict(dc_cost=0.5 * (A_t.apply(x) - y_s).norm().item() ** 2, reg_cost=g.cost(x))
+
+        x, tr = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters,
+                     trace_fun=trace_fun, trace_every=trace_every,
+                     progress=f"frame {it + 1}/{Nt}")
+        traces.append(tr)
         dc_costs.append(0.5 * (A_t.apply(x) - y_s).norm().item() ** 2)
         reg_costs.append(g.cost(x))
         X[..., it] = x / scale / sigma1A
@@ -451,14 +469,17 @@ def _solve_wavelet_tv(
         L=float("nan"),
         lambdas=[lamb_l1, lamb_tv],
         runtime_s=runtime_s,
-        meta=dict(niters=niters, wave=wave, levels=levels),
+        meta=dict(niters=niters, iterations_run=niters, wave=wave, levels=levels,
+                  trace_every=trace_every),
+        trace=({k: traces[0][k] if k == "iter" else np.stack([t[k] for t in traces])
+               for k in traces[0]} if traces else {}),
         **common,
     )
 
 
 def _solve_wavelet_tv_joint(
     A, ksp, shape, sigma1A, lamb_l1, lamb_tv, lamb_ttv, wave, levels, niters, hp, hp_weight,
-    common, temporal,
+    common, temporal, trace_every=5,
 ) -> ReconResult:
     """All frames at once: min_x 0.5||A x - y||^2 [+ (mu/2)||P x||^2] +
     SpatioTemporalWaveletTV(x), by PDHG. Same normalization as the per-frame
@@ -486,8 +507,12 @@ def _solve_wavelet_tv_joint(
     )
     t_start = time.time()
     x0 = torch.zeros(shape, dtype=torch.complex64, device=ksp.device)
-    x = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters, prox_g=g.f_prox,
-             progress=True)
+    def trace_fun(x):
+        return dict(dc_cost=0.5 * (A_n.apply(x) - y_s).norm().item() ** 2, reg_cost=g.cost(x))
+
+    x, trace = pdhg(dc_grad, 1.0, g.h_prox, g.G, g.G_norm_squared, x0, niter=niters,
+                    prox_g=g.f_prox, trace_fun=trace_fun, trace_every=trace_every,
+                    progress=True)
     runtime_s = time.time() - t_start
     dc = 0.5 * (A_n.apply(x) - y_s).norm().item() ** 2
     reg = g.cost(x)  # includes the high-pass penalty
@@ -503,8 +528,9 @@ def _solve_wavelet_tv_joint(
         L=float("nan"),
         lambdas=[lamb_l1, lamb_tv, lamb_ttv],
         runtime_s=runtime_s,
-        meta=dict(niters=niters, wave=wave, levels=levels, joint=True, lamb_ttv=lamb_ttv,
-                  **temporal),
+        meta=dict(niters=niters, iterations_run=niters, wave=wave, levels=levels, joint=True,
+                  lamb_ttv=lamb_ttv, trace_every=trace_every, data_scale=scale, **temporal),
+        trace=trace,
         **common,
     )
 
@@ -673,6 +699,8 @@ def _cli() -> None:
     tp.add_argument("--hp-cutoff", type=float, default=0.15, help="Hz (default 0.15)")
     tp.add_argument("--volume-tr", type=float, default=None,
                     help="s; default: the k-space file's 'volume_tr' attr")
+    p.add_argument("--trace-every", type=int, default=5,
+                   help="wavelet-tv: evaluate the cost every N PDHG iterations (default 5)")
     p.add_argument("--tag", default=None, help="suffix for the output directory")
     p.add_argument("--sigma1A", type=float, default=None,
                    help="spectral norm of A, if known (skips the power iteration)")
@@ -690,6 +718,7 @@ def _cli() -> None:
         hp_weight=a.hp_weight,
         hp_cutoff_hz=a.hp_cutoff,
         volume_tr_s=a.volume_tr,
+        trace_every=a.trace_every,
     )
     if a.reg == "mslr":
         with h5py.File(os.path.join(a.datdir, "recon", f"{a.seqname}_preprocessed.h5"), "r") as f:
