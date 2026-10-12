@@ -135,3 +135,50 @@ def test_cg_sense_solve_handles_all_zero_kspace():
 
     assert torch.all(X == 0)
     assert residuals == [1.0]
+
+
+def _lasso_problem(n=30):
+    g = torch.Generator(device=DEVICE).manual_seed(3)
+    b = torch.randn(n, generator=g, device=DEVICE).to(torch.complex64)
+    return b, torch.zeros(n, dtype=torch.complex64, device=DEVICE)
+
+
+def test_pogm_restart_progress_bar_does_not_change_result(capfd):
+    b, x0 = _lasso_problem()
+    args = (x0, lambda x: 0.5 * (x - b).norm().item() ** 2, lambda x: x - b, 1.0)
+    x_quiet, _ = pogm_restart(*args, niter=15)
+    capfd.readouterr()
+    x_bar, _ = pogm_restart(*args, niter=15, progress="solve")
+    err = capfd.readouterr().err
+    assert torch.equal(x_quiet, x_bar)
+    assert "solve" in err
+
+
+def test_cg_progress_bar_does_not_change_result(capfd):
+    Nx, Ny, Nz, Nc, Nt = 4, 4, 4, 2, 1
+    A = build_sense(complex_randn(Nc, Nx, Ny, Nz, seed=4),
+                    torch.ones(Nx, Ny, Nz, Nt, dtype=torch.bool, device=DEVICE))
+    ksp = complex_randn(A.A[0].idx.numel(), Nc, Nt, seed=5)
+    shape = (Nx, Ny, Nz, Nt)
+    X0, r0 = cg(A, ksp, shape, num_iter=5, tol=0.0)
+    capfd.readouterr()
+    X1, r1 = cg(A, ksp, shape, num_iter=5, tol=0.0, progress=True)
+    assert torch.equal(X0, X1) and r0 == r1
+    assert "CG" in capfd.readouterr().err
+
+
+def test_pdhg_progress_bar_does_not_change_result(capfd):
+    from recon.regularizers import WaveletTV
+    from recon.solvers import pdhg
+
+    shape = (8, 8, 8)
+    g = WaveletTV(shape, 1e-2, 1e-2, wave="db2", levels=1)
+    b = complex_randn(*shape, seed=6)
+    z = torch.zeros(shape, dtype=torch.complex64, device=DEVICE)
+    args = (lambda v: v - b, 1.0, g.h_prox, g.G, g.G_norm_squared, z)
+    x0 = pdhg(*args, niter=7)
+    capfd.readouterr()
+    x1 = pdhg(*args, niter=7, progress="frame 1/1")
+    err = capfd.readouterr().err
+    assert torch.equal(x0, x1)
+    assert "frame 1/1" in err

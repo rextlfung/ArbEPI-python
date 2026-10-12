@@ -281,6 +281,12 @@ quantitative imaging).
 - **CG** for `none`, on $A^H A x = A^H y$ (with $+\mu P$ added when
   `--hp-weight` is set).
 
+`sense.py` shows a `tqdm` progress bar for all three (stderr; POGM and CG with
+cost / relative change or residual, PDHG with the iteration count, labelled
+`frame i/Nt` in the per-frame mode). Each bar disappears when its solve
+finishes, leaving the printed summary. The solver functions take
+`progress=False` by default, so library use and tests stay quiet.
+
 ## Encoding operators (`operators.py`)
 
 Each operator maps one frame's image (Nx, Ny, Nz) to k-space at that frame's
