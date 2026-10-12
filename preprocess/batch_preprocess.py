@@ -50,13 +50,16 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--zero-pad-z', action='store_true',
                    help='zero-fill EPI slices outside the deGRE slab instead of failing')
     p.add_argument('--keep-cache', action='store_true', help='keep <seqname>_gridded.h5')
+    p.add_argument('--gre-n-echoes', type=int,
+                   help='use only the first K GRE echoes for the B0/R2* fits (default: all); '
+                        'use a separate --outdir per K')
     a = p.parse_args(argv)
     cfg = PreprocessConfig(
         datdir=a.datdir, seqnames=a.seqnames, outdir=a.outdir, fn_gre=a.fn_gre,
         compress=not a.no_compress, cc_energy_thresh=a.cc_energy,
         Nvcoils=a.nvcoils, estimate_smaps=not a.no_smaps, estimate_b0=not a.no_b0,
         estimate_r2star=not a.no_r2star, extract_calib=not a.no_calib,
-        zero_pad_z=a.zero_pad_z, keep_cache=a.keep_cache,
+        zero_pad_z=a.zero_pad_z, keep_cache=a.keep_cache, gre_n_echoes=a.gre_n_echoes,
     )
     batch_preprocess(cfg)
 

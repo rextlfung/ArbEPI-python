@@ -90,6 +90,10 @@ class PreprocessConfig:
     estimate_b0: bool = True  # needs julia
     estimate_r2star: bool = True
     gre_echo_idx: int = 0  # echo for ESPIRiT and compression (0 = shorter TE, more SNR)
+    # Use only the first K echoes of the GRE for the B0 and R2* fits (None =
+    # all). Lets one 20-echo meGRE scan answer "how many echoes are needed":
+    # run once per K and compare. The QA volume degre/img_echoes keeps every echo.
+    gre_n_echoes: int | None = None
     crop: float = 0.95  # ESPIRiT eigenvalue threshold, also the smaps/B0 support mask
     smaps_smooth_sigma_mm: float = 6.0  # Gaussian smoothing of smaps on the EPI grid; 0 = off
     b0map_mask_thresh: float = 0.1  # fraction of peak echo-1 magnitude fit by b0map.jl
@@ -639,6 +643,17 @@ def estimate_maps(
     img_echoes = utils.rss_echo_images(ksp_gre)
     maps = {'degre/img_echoes': img_echoes.astype(np.float32)}
     te = None if sp.TE_degre is None else np.asarray(sp.TE_degre, dtype=np.float64)
+    if cfg.gre_n_echoes is not None:
+        if not 2 <= cfg.gre_n_echoes <= ksp_gre.shape[3]:
+            raise ValueError(
+                f'gre_n_echoes={cfg.gre_n_echoes} must be in [2, {ksp_gre.shape[3]}] '
+                f'(the GRE has {ksp_gre.shape[3]} echoes)'
+            )
+        ksp_gre = ksp_gre[..., :cfg.gre_n_echoes, :]
+        img_fit = img_echoes[..., :cfg.gre_n_echoes]
+        te = None if te is None else te[:cfg.gre_n_echoes]
+    else:
+        img_fit = img_echoes
 
     smaps_degre = emap_degre = None
     if cfg.estimate_smaps:
@@ -686,9 +701,9 @@ def estimate_maps(
         if te is None or te.size < 2:
             raise ValueError('estimate_r2star needs a multi-echo deGRE (TE_degre in scan_info.mat)')
         if mask_degre is None:
-            mask_degre = fit_mask(img_echoes[..., 0], cfg.b0map_mask_thresh, emap_degre, cfg.crop,
+            mask_degre = fit_mask(img_fit[..., 0], cfg.b0map_mask_thresh, emap_degre, cfg.crop,
                                   cfg.b0map_min_component)
-        r2_degre = fit_r2star(img_echoes, te, mask_degre, cfg.r2star_max)
+        r2_degre = fit_r2star(img_fit, te, mask_degre, cfg.r2star_max)
         maps['r2star_map'] = resize_r2star_to_epi(
             r2_degre, mask_degre, fov_degre, fov, n_epi, zero_pad_z=cfg.zero_pad_z
         )
@@ -800,9 +815,14 @@ def write_output(
         f.attrs['t_ref_s'] = utils.nominal_te_s(paths.scan_info, sp.ETL)
         if sp.TE_degre is not None:
             f.attrs['TE_degre'] = np.asarray(sp.TE_degre)
+            f.attrs['gre_n_echoes_used'] = (
+                len(sp.TE_degre) if cfg.gre_n_echoes is None else cfg.gre_n_echoes
+            )
         if 'r2star_map' in maps:
             f.attrs['r2star_method'] = R2STAR_METHOD
-            f.attrs['r2star_n_echoes'] = len(sp.TE_degre)
+            f.attrs['r2star_n_echoes'] = (
+                len(sp.TE_degre) if cfg.gre_n_echoes is None else cfg.gre_n_echoes
+            )
         for key, val in maps.items():
             f.create_dataset(key, data=val)
     finally:

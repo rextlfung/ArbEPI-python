@@ -17,10 +17,11 @@ from sample.gen_sampling_masks import resolve_omegas
 from sequences.ArbEPI import generate_arbepi
 from sequences.deGRE import generate_degre
 from sequences.EPIcal import generate_epical
+from sequences.meGRE import generate_megre
 from sequences.noise import generate_noise
 
 
-def main(export_ge: bool = False, plot: bool = False):
+def main(export_ge: bool = False, plot: bool = False, gre: str = 'degre'):
     params = load_params()
 
     # 1. Sampling masks and main EPI sequence. resolve_omegas returns
@@ -44,7 +45,14 @@ def main(export_ge: bool = False, plot: bool = False):
     # map). Last, not because 2/3 depend on it, but so its scan_info.mat
     # TE_degre patch (see generate_degre's docstring) runs after
     # generate_arbepi has created that file.
-    generate_degre(params)
+    # --gre megre swaps it for the 20-echo monopolar multi-echo GRE
+    # (sequences/meGRE.py, 2.4 mm like the EPI), which patches the same
+    # scan_info.mat keys; its output is meGRE.seq/.pge, and the archive is
+    # still passed to preprocess/ as fn_gre.
+    if gre == 'megre':
+        generate_megre(params)
+    else:
+        generate_degre(params)
 
     if plot:
         # Diagnostic sampling-mask/trajectory/PSF plots — see plot_last_run.py.
@@ -60,7 +68,7 @@ def main(export_ge: bool = False, plot: bool = False):
 
         seq_paths = {
             name: os.path.join(params.output_dir, f'{name}.seq')
-            for name in ('ArbEPI', 'EPIcal', 'noise', 'deGRE')
+            for name in ('ArbEPI', 'EPIcal', 'noise', 'meGRE' if gre == 'megre' else 'deGRE')
         }
 
         # Check all four sequences for GE hardware/PNS/acoustic-resonance
@@ -90,5 +98,10 @@ if __name__ == '__main__':
         '--plot', action='store_true',
         help='also write diagnostic sampling-mask/trajectory/PSF plots (see plot_last_run.py)',
     )
+    parser.add_argument(
+        '--gre', choices=('degre', 'megre'), default='degre',
+        help="calibration GRE for maps: dual-echo 3 mm 'degre' (default) or "
+             "20-echo 2.4 mm monopolar 'megre' (sequences/meGRE.py)",
+    )
     args = parser.parse_args()
-    main(export_ge=args.export_ge, plot=args.plot)
+    main(export_ge=args.export_ge, plot=args.plot, gre=args.gre)

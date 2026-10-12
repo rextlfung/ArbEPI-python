@@ -295,6 +295,17 @@ monopolar, ~4–8 echoes, the last near 1–2× T2*, thin slices. `r2star.py`'s
 docstring has the details and references, and `docs/TODO.md` tracks it. The fit
 already uses every echo, so such a scan needs no code change here.
 
+That scan is `sequences/meGRE.py` (`main.py --gre megre`): 20 monopolar echoes at
+TE = n × 2.236 ms, 2.4 mm. Its archive is passed as `fn_gre` like a deGRE's, and
+`scan_info.mat` carries `n_echoes_degre`/`TE_degre`. To find how many echoes the
+maps need, run once per K with `--gre-n-echoes K --outdir <one per K>` (or
+`PreprocessConfig(gre_n_echoes=K)`): the B0 and R2\* fits use the first K echoes,
+the sensitivity maps and compression always use echo `gre_echo_idx`, and
+`degre/img_echoes` keeps every echo. Two things to check on the first real
+scan, neither verified yet: MRIFieldmaps' model has no T2\* decay, so late,
+low-SNR echoes enter the B0 fit with equal weight; and `finit` is still the
+ROMEO unwrap of echoes 1 and 2 only (ΔTE 2.236 ms).
+
 ### Calibration region
 
 `find_calib_region` grows a rectangle outward from the k-space center, one edge at
