@@ -5,7 +5,7 @@ matrix sizes. The tests that matter most are the ones that tie the simulated
 k-space to an independent statement of what it should be: the centered FFT of
 the true image at the scheduled locations (and recon/'s own SENSE operator),
 the decay each echo should carry, the noise level the file reports, and
-recon/testbed.py's scorer recovering the truth from a perfect reconstruction.
+analyze/score.py's scorer recovering the truth from a perfect reconstruction.
 """
 
 from dataclasses import replace
@@ -270,9 +270,9 @@ def test_truth_group_reproduces_the_frames_and_scores_as_a_perfect_recon(tmp_pat
     """Single-shot frames (one phantom state per frame), fully sampled, no
     noise or decay: the inverse FFT of each frame is the true image, which the
     truth group must reproduce as x0 * (1 + amp_map * w(t)). Handing those
-    images to recon/testbed.py's scorer as a reconstruction must then score as
+    images to analyze/score.py's scorer as a reconstruction must then score as
     exact -- the check that the group follows the layout the scorer reads."""
-    testbed = pytest.importorskip('recon.testbed')
+    scoring = pytest.importorskip('analyze.score')
     shape = (24, 24, 16)
     # 1 s per frame: the scorer's low-band (< 0.15 Hz) GLM needs a few bins there
     protocol = replace(make_protocol(shape, etl=24 * 16, n_frames=24), volume_tr_s=1.0)
@@ -304,7 +304,7 @@ def test_truth_group_reproduces_the_frames_and_scores_as_a_perfect_recon(tmp_pat
     fn_recon = str(tmp_path / 'perfect.h5')
     with h5py.File(fn_recon, 'w') as f:
         f['X_recon'] = recon.astype(np.complex64)
-    s = testbed.score(fn, fn_recon)
+    s = scoring.score(fn, fn_recon)
     assert s['block_occipital_amp_ratio'] == pytest.approx(1, abs=0.02)
     assert s['block_occipital_corr'] > 0.999
     assert s['nrmse_frame_pct'] < 0.1

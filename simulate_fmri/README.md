@@ -14,7 +14,7 @@ activation maps on the anatomical image, ROC curves, test-retest reliability.
 
 ```
                          ┌─ session.py ─► scanarchives/*.h5 ─► preprocess ─► <name>_preprocessed.h5 ─┐
-scan_info.mat ───────────┤   raw readouts of all four scans                                           ├─► recon.sense ─► recon.testbed score
+scan_info.mat ───────────┤   raw readouts of all four scans                                           ├─► recon.sense ─► analyze.score
  (sequences/ArbEPI.py)   └─ ideal.py ───────────────────────────────────► <name>_preprocessed.h5 ────┘        against <name>_truth.h5
 ```
 
@@ -34,9 +34,9 @@ There are two levels of fidelity.
 | Built on | this repo's signal model (`forward.py`) and task model (`task.py`); SNAKE's phantom | [SNAKE-fMRI](https://github.com/mind-inria/snake-fmri)'s acquisition engine |
 | Use it for | how the whole pipeline behaves on realistic data | isolating sampling, ordering and noise; an exact reference |
 
-`recon/testbed.py` is a third option: a real object, coils and field, but
-k-space synthesized by the recon's own operator. Conclusions should hold on
-all of them, then on a scan.
+`from_real.py` is a third option: a real object, coils and field, but
+k-space synthesized by the recon's own operator (see "Activation injected into
+a real run" below). Conclusions should hold on all of them, then on a scan.
 
 ## Layout
 
@@ -51,6 +51,7 @@ all of them, then on a scan.
 | `study.py` | Repetitions of an experiment through `preprocess/` and `recon/`, resumable; `python -m simulate_fmri.study` |
 | `analysis.py` | Activation maps and overlays, ROC curves, the mixed-binomial test-retest model, true signals and aliasing. The GLM itself is `analyze/glm.py`'s; `t_map` here is its low-band form, this simulator's calibrated default (`analyze/` prewhitens instead) |
 | `ideal.py` | `simulate()` and `python -m simulate_fmri.ideal`: SNAKE's engine, output in recon's format |
+| `from_real.py` | `build_testbed()` and `python -m simulate_fmri.from_real`: known activations injected into a real fully sampled run (needs only the `recon` extra) |
 | `sampler.py`, `engine.py`, `handlers.py`, `export.py` | The ideal mode's SNAKE sampler, engine and activation handler, and its export |
 | `protocol.py` | `load_protocol()`: the acquisition recorded in `scan_info.mat` |
 | `phantom.py` | BrainWeb at 3 T, an analytic phantom, the head outline and air cavities |
@@ -60,7 +61,9 @@ Tests: `tests/test_simulate_fmri_task.py` (the response against a brute-force
 convolution), `..._analysis.py` (ROC, the reliability model on data with known
 rates), `..._study.py`, `tests/test_simulate_fmri_forward.py` (the signal model against a
 brute-force sum), `..._models.py` (field, coils, physiology), `..._session.py`
-(sessions through the real `preprocess()`), `test_simulate_fmri.py` (ideal mode).
+(sessions through the real `preprocess()`), `test_simulate_fmri.py` (ideal mode),
+`test_simulate_fmri_from_real.py` (building a testbed; scoring it is
+`tests/test_analyze_score.py`'s).
 
 ## Setup
 
@@ -106,7 +109,7 @@ $PY -m preprocess.batch_preprocess $OUT sim
 $PY -m recon.sense $OUT sim --reg wavelet-tv --B0 --hp-weight 3 --volume-tr 0.506 --tag hp3
 
 # 4. Score against the truth
-$PY -m recon.testbed score $OUT/sim_truth.h5 \
+$PY -m analyze.score $OUT/sim_truth.h5 \
     $OUT/recon/sense_wavelet-tv_b0_hp3/sim_recon.h5 --json hp3.json --png hp3.png
 ```
 
@@ -162,7 +165,7 @@ one peaking at 15 s, unit area) convolved with it and delayed:
     w(t) = (h * p)(t − delay),      S(t) / mean(S) = 1 + amplitude × ŵ(t)
 
 with ŵ the response minus its time average, scaled to a peak of 1 (the
-convention of `recon/testbed.py`'s `amp`). **`amplitude` is therefore the
+convention of `analyze/score.py`'s `amp`). **`amplitude` is therefore the
 largest excursion of the signal from its mean**: with 0.03 the signal swings
 between −3% and +3%, 6% from trough to peak. A 20 s block is too short for the
 canonical response to settle, so w overshoots ±1 (to ±1.29) and the plateaus
@@ -230,6 +233,33 @@ left the ROC curve where it was, so the analysis below keeps those frames.
 | `levels`, `reliability_map`, `fit_mixed_binomial` | test-retest reliability without the truth: the mixed-binomial model of Genovese, Noll and Eddy (Magn Reson Med 1997;38:497), at one threshold or several with a shared proportion of active voxels, fitted by EM |
 | `true_signal` | the noise-free signal of any voxel at every excitation, from the truth file's modes |
 | `alias`, `frame_average_gain` | where a frequency lands at the volume rate, and how much of it survives a frame |
+
+## Activation injected into a real run (`from_real.py`)
+
+```bash
+# 80 frames: the object from a fully sampled run, masks from a 10x run
+$PY -m simulate_fmri.from_real $DAT/recon/5_1x_radial_preprocessed.h5 \
+    $DAT/recon/1_10x_radial_preprocessed.h5 $TB/recon/tb_preprocessed.h5 --volume-tr 0.4851
+$PY -m recon.sense $TB tb --reg wavelet-tv --B0 --hp-weight 3 --tag hp3
+$PY -m analyze.score $TB/recon/tb_preprocessed.h5 \
+    $TB/recon/sense_wavelet-tv_b0_hp3/tb_recon.h5 --json hp3.json --png hp3.png
+```
+
+Unlike `session.py` and `ideal.py` this simulates no scanner: the object,
+coils and field are those of a real, fully sampled acquisition, and only the
+activation and the noise are synthetic. It needs the `recon` extra
+(`.venv-recon`), not SNAKE. It writes a `<name>_preprocessed.h5` that
+`recon.sense` reads as is: the object is the B0-SENSE CG reconstruction of the
+fully sampled run's mean frame; each frame applies another run's real sampling
+mask to it with the fully sampled run's echo times (`--timing masks` uses that
+run's own) and adds fresh unit-variance noise. The B0 model is then exactly the
+one the recon uses -- an inverse crime by construction, so this isolates
+sampling, noise and prior effects, not model mismatch. Four 2%-peak
+activations are injected in spherical ROIs: an HRF-convolved 10 s on/off block
+at radius 3 and at radius 1.5 voxels, a 0.10 Hz sinusoid (in band), and a
+0.25 Hz sinusoid (out of band). The `truth` group is in the layout
+[`analyze.score`](../analyze/README.md#scoring-against-a-known-truth) scores
+against.
 
 ## What the raw-data simulation models
 
@@ -302,7 +332,7 @@ the uncorrected values would count it twice.
 | `truth/` | |
 |---|---|
 | `x0` | (Nx, Ny, Nz) noise-free magnitude at the nominal TE, at the acquisition's resolution (the fine-grid image cut to the acquired k-space), time-averaged |
-| `roi_masks`, `waveforms`; attrs `roi_names`, `amps`, `amp` | per activated region (`block_occipital`, `block_motor`): its voxels, time course (zero-mean, peak 1) and peak fractional change, in `recon/testbed.py`'s layout. `amp` is the median over all regions |
+| `roi_masks`, `waveforms`; attrs `roi_names`, `amps`, `amp` | per activated region (`block_occipital`, `block_motor`): its voxels, time course (zero-mean, peak 1) and peak fractional change, in `analyze/score.py`'s layout. `amp` is the median over all regions |
 | `amp_map`, `r2s_change` | the peak fractional change voxel by voxel (zero outside `brain_mask`); each region's R2* change per excitation, (regions, excitations) |
 | `task/paradigm`, `task/response`, `task/canonical`; attrs `amplitudes`, `delays` | per region: the ±1 paradigm and the response w(t) per excitation; the response without the regional delay per frame, which is the regressor an analysis would use |
 | `modes/gain`, `modes/course`; attr `names` | every perturbation (activations, physiological modes): its map of fractional signal change at TE per unit of its time course, and that course per excitation. The noise-free signal of any voxel at any excitation is `image_rest × (1 + Σ gain × course)` |
@@ -339,7 +369,7 @@ object in the data, `preprocess()`'s k-space reconstructs the truth image to
 within 1%.
 
 Reconstruction (`recon.sense --reg wavelet-tv --hp-weight 3`, 100 iterations,
-B0 with 16 time segments) scored by `recon.testbed score`; means over the four
+B0 with 16 time segments) scored by `analyze.score`; means over the four
 runs, each of which is within 10% of its mean on these rows:
 
 | | without B0 | with B0 |

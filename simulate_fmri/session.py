@@ -16,7 +16,7 @@ so
 
     python -m preprocess.batch_preprocess <outdir> <name>
     python -m recon.sense <outdir> <name> --reg ... --B0
-    python -m recon.testbed score <outdir>/<name>_truth.h5 <recon>.h5
+    python -m analyze.score <outdir>/<name>_truth.h5 <recon>.h5
 
 run the real pipeline end to end: noise whitening, readout-delay and odd/even
 calibration, ramp-sample gridding, coil compression, ESPIRiT maps, the B0 and
@@ -97,11 +97,11 @@ class Activation:
     Anatomy.rois[region] ('occipital' and 'motor' on both phantoms) changes its
     signal by `amplitude` times task.bold_response, the canonical HRF convolved
     with a paradigm that is +1 during the task and -1 during rest, `delay`
-    seconds late. Scored by recon.testbed as 'block_<region>'.
+    seconds late. Scored by analyze.score as 'block_<region>'.
 
     amplitude is the response's largest excursion from the time average, as a
     fraction of the T2*-weighted signal at the nominal TE, in the region's
-    median activated voxel: recon.testbed's `amp`, the peak change of a
+    median activated voxel: analyze.score's `amp`, the peak change of a
     zero-mean waveform scaled to peak 1 (voxels with less of the activated gray
     matter in them change less, pure ones more). The signal therefore swings
     about +-amplitude: 2 x amplitude from trough to peak. It is produced as a
@@ -572,7 +572,7 @@ def simulate_session(
             g.create_dataset('r2s_change', data=np.stack([mode.course for mode in act_modes]))
             g.attrs['roi_names'] = [mode.name for mode in act_modes]
             g.attrs['roi_kinds'] = ['block'] * len(act_modes)
-            g.attrs['amps'] = amps  # per region; recon.testbed.score prefers it to amp
+            g.attrs['amps'] = amps  # per region; analyze.score.score prefers it to amp
             # the task as specified: per excitation, and (canonical, no regional
             # delay: what an analysis would model) per frame
             t_ = g.create_group('task')

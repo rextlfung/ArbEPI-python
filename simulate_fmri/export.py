@@ -1,4 +1,4 @@
-"""SNAKE's .mrd -> the file recon/ reads and recon/testbed.py scores against.
+"""SNAKE's .mrd -> the file recon/ reads and analyze/score.py scores against.
 
 export() writes <outdir>/recon/<name>_preprocessed.h5 from a finished
 simulation, in the layout preprocess/ produces for real scans, so
@@ -13,8 +13,8 @@ simulation, in the layout preprocess/ produces for real scans, so
 
 There is no b0_map or r2star_map: SNAKE models no off-resonance.
 
-It also holds a `truth` group in recon/testbed.py's layout, so
-`python -m recon.testbed score <this file> <recon.h5>` scores a reconstruction
+It also holds a `truth` group in analyze/score.py's layout, so
+`python -m analyze.score <this file> <recon.h5>` scores a reconstruction
 of a simulation the way it scores the real-data testbed:
 
     x0          (Nx, Ny, Nz) the noise-free magnitude image at TE, time-averaged
@@ -26,7 +26,7 @@ so that the true image of frame t is x0 * (1 + amp_map * w(t)). The activation
 is a copy of gray matter added on top of the anatomy, so its fractional size
 amp_map (also saved) varies from voxel to voxel with the tissue mix; roi_masks
 keeps the voxels that are at least 90% tissue and at half the largest change
-among those or more, and amp is their median, which makes testbed.score's
+among those or more, and amp is their median, which makes analyze.score's
 amp_ratio 1 for a perfect reconstruction. The rest of the
 group is what a scan would not know either: image_rest (no activation),
 bold_shots and stimulus_shots (per excitation), tissues and brain_mask.
@@ -42,7 +42,7 @@ from numpy.typing import NDArray
 from snake.mrd_utils import CartesianFrameDataLoader
 
 ROI = 'ROI'  # the tissue SNAKE's activation handlers add
-ROI_NAME = 'block_occipital'  # 'block...': testbed.score also reports its low-band t
+ROI_NAME = 'block_occipital'  # 'block...': analyze.score also reports its low-band t
 
 
 def schedule_maps(

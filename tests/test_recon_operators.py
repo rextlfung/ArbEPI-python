@@ -596,7 +596,7 @@ def test_check_operator_unitary_warns_for_real_b0_correction():
 
 
 def test_segment_fit_covers_frames_that_sample_different_echo_times():
-    """A frame may sample echo times another frame doesn't (recon/testbed.py
+    """A frame may sample echo times another frame doesn't (simulate_fmri/from_real.py
     applies one run's masks to another run's timing): the shared fit covers
     the union, and every sample maps to its own time."""
     from recon.operators import _segment_fit

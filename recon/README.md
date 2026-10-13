@@ -26,7 +26,6 @@ results. Start there if you want to see what each option does.
 | `sense.py` | `run_sense()` and the `python -m recon.sense` command line |
 | `rss.py` | `run_rss()` and the `python -m recon.rss` command line |
 | `utils.py` | File I/O, spectral-norm estimation, the tSNR report, and one-off analyses |
-| `testbed.py` | A known-truth testbed (undersampled dynamic data with injected activation, built from a fully sampled run) and scoring of recons against it |
 | `demo.ipynb` | Worked examples on `20260915ball/2_6x_2.4mm` |
 
 Tests mirror this: `tests/test_recon_<module>.py`.
@@ -443,51 +442,15 @@ without a temporal term (one data scale for all frames instead of one per
 frame), the baseline for the temporal variants. `--tag` suffixes the output
 directory so differently configured runs don't overwrite each other.
 
-## Known-truth testbed (`testbed.py`)
+## Scoring a reconstruction against a known truth
 
-```bash
-# 80 frames: the object from a fully sampled run, masks from a 10x run
-$PY -m recon.testbed build $DAT/recon/5_1x_radial_preprocessed.h5 \
-    $DAT/recon/1_10x_radial_preprocessed.h5 $TB/recon/tb_preprocessed.h5 --volume-tr 0.4851
-$PY -m recon.sense $TB tb --reg wavelet-tv --B0 --hp-weight 3 --tag hp3
-$PY -m recon.testbed score $TB/recon/tb_preprocessed.h5 \
-    $TB/recon/sense_wavelet-tv_b0_hp3/tb_recon.h5 --json hp3.json --png hp3.png
-```
-
-`build` makes a `<name>_preprocessed.h5` that `recon.sense` reads as is: the
-object is the B0-SENSE CG reconstruction of the fully sampled run's mean
-frame; each frame applies another run's real sampling mask to it with the
-fully sampled run's echo times (the B0 model is then exactly the one the recon
-uses -- an inverse crime by construction, so this isolates sampling, noise and
-prior effects, not model mismatch) and adds fresh unit-variance noise. Four
-2%-peak activations are injected in spherical ROIs: an HRF-convolved 10 s
-on/off block at radius 3 and at radius 1.5 voxels, a 0.10 Hz sinusoid (in
-band), and a 0.25 Hz sinusoid (out of band). `score` compares magnitudes after
-one global scale: error of the mean image and per frame, temporal
-fluctuation in non-activated voxels split into below/above 0.15 Hz, each
-ROI's recovered amplitude (GLM; 1 = exact), t-score and leakage into a
-surrounding shell, the false-positive rate (|t| > 3.29) of the block regressor
-elsewhere, and edge sharpness relative to the truth. `--png` adds a panel
-(truth and recon mean, temporal std, block t-map) through the first ROI, or
-through ROI `--roi N` with that ROI's regressor. The `_t_lowband` and
-`false_pos_frac_lowband` entries repeat the GLM on the DCT components below
-the cutoff only, with their own degrees of freedom: a temporal penalty leaves
-the residual band-limited, which inflates the plain per-frame t (25-32% of
-null voxels above |t| = 3.29 on `20260930ballfat`, vs 0.1% in the low band).
-
-`score` also reads the truth files [`simulate_fmri/`](../simulate_fmri/README.md)
-writes: a digital brain simulated as raw scanner data along a `scan_info.mat`
-schedule and run through `preprocess/`, with a block task activating the
-visual cortex and both hand motor areas (`block_occipital`, `block_motor`,
-the motor response 0.6 s later) in the same `truth` layout
-(`score <datdir>/<name>_truth.h5 <recon>.h5`). Their regions differ in tissue
-mix, so those files carry one peak change per ROI (`amps`), which `score` uses
-in place of the shared `amp` when it is there. That data comes from a forward
-model the recon does not share (spins on a finer grid, a susceptibility-derived
-field, ramp sampling, T2* decay and an R2*-based BOLD change at every sample's
-own time, physiological noise per excitation) and reaches the recon with
-estimated, not true, sensitivity and field maps; the price is a synthetic
-object and coils.
+Not part of `recon/`: `python -m analyze.score <truth.h5> <recon.h5>` (see
+[analyze/README.md](../analyze/README.md#scoring-against-a-known-truth)) scores
+a `<name>_recon.h5` against a file with a `truth` group, which
+[`simulate_fmri/`](../simulate_fmri/README.md) writes -- from a simulated
+session, or from a real fully sampled run with activation injected
+(`python -m simulate_fmri.from_real`). This was `recon/testbed.py` until
+2026-10-13.
 
 ## Performance notes
 
