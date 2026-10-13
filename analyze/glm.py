@@ -13,11 +13,6 @@ The whitening is the exact AR(1) (Prais-Winsten) filter,
     y*_0 = sqrt(1 - rho^2) y_0,   y*_t = y_t - rho y_{t-1},
 applied to Y and X alike. Degrees of freedom are nt - rank(X); the whitened
 model is treated as ordinary least squares from there.
-
-`low_band` is an alternative to prewhitening, the GLM on the temporal
-frequencies up to a cutoff only (data and design projected onto the DCT
-components below it, k - P degrees of freedom), which `simulate_fmri/`
-calibrates its scores with. It filters the data, so it is opt-in.
 """
 
 from __future__ import annotations
@@ -27,8 +22,6 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 from scipy import special, stats
-
-from analyze.design import dct_matrix
 
 _CHUNK = 50_000  # voxels per block of the fit; bounds float64 temporaries
 
@@ -42,12 +35,6 @@ class GLMResult:
     rho: float  # AR(1) coefficient used (0 without prewhitening)
     sigma2: NDArray  # (V,) residual variance of the whitened model
     contrast_beta: NDArray  # (V,) c' beta
-
-
-def low_band(n_frames: int, tr: float, cutoff_hz: float = 0.15) -> NDArray[np.float64]:
-    """(k, n_frames) orthonormal DCT components up to cutoff_hz."""
-    keep = int((np.arange(n_frames) / (2 * n_frames * tr) <= cutoff_hz).sum())
-    return dct_matrix(n_frames)[:keep]
 
 
 def whiten(a: NDArray, rho: float, axis: int = -1) -> NDArray:
@@ -118,13 +105,12 @@ def _estimate_rho(Y: NDArray, X: NDArray, rho: float) -> float:
     return num / den
 
 
-def fit_glm(Y: NDArray, X: NDArray, contrast: NDArray, ar1: bool = True, max_iter: int = 5,
-            basis: NDArray | None = None) -> GLMResult:
+def fit_glm(Y: NDArray, X: NDArray, contrast: NDArray, ar1: bool = True,
+            max_iter: int = 5) -> GLMResult:
     """GLM of every row of Y (V, nt) on X (nt, P); t-score of `contrast` (P,).
 
     ar1: prewhiten with a pooled AR(1) coefficient (iterated until it moves by
-    less than 1e-3, at most max_iter times). basis (k, nt) orthonormal rows: fit
-    in that subspace instead (see the module docstring); excludes ar1."""
+    less than 1e-3, at most max_iter times)."""
     Y = np.asarray(Y)
     X = np.asarray(X, dtype=np.float64)
     c = np.asarray(contrast, dtype=np.float64)
@@ -132,12 +118,7 @@ def fit_glm(Y: NDArray, X: NDArray, contrast: NDArray, ar1: bool = True, max_ite
         raise ValueError(f"Y {Y.shape} and X {X.shape} disagree on the number of frames")
     if c.shape != (X.shape[1],):
         raise ValueError(f"contrast has {c.size} weights, the design {X.shape[1]} columns")
-    if basis is not None:
-        if ar1:
-            raise ValueError("basis (low-band) and ar1 prewhitening are alternatives; "
-                             "pass ar1=False")
-        X = basis @ X
-    nt = X.shape[0] if basis is not None else Y.shape[1]
+    nt = Y.shape[1]
     rank = np.linalg.matrix_rank(X)
     if nt <= rank:
         raise ValueError(f"{nt} frames cannot fit {rank} independent regressors")
@@ -160,9 +141,7 @@ def fit_glm(Y: NDArray, X: NDArray, contrast: NDArray, ar1: bool = True, max_ite
     sigma2 = np.empty(V, np.float32)
     for sl in _blocks(V):
         y = Y[sl].astype(np.float64)
-        if basis is not None:
-            y = y @ basis.T
-        elif rho:
+        if rho:
             y = whiten(y, rho)
         b = y @ Xw @ XtXi
         r = y - b @ Xw.T

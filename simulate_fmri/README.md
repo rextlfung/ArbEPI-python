@@ -9,8 +9,8 @@ to the same `preprocess/` and `recon/` code a real scan goes through. Because
 the truth is known, every stage can be checked against it: the calibrated
 readout delay, the ghost correction, the sensitivity and field maps, and the
 activation in the reconstructed series. `study.py` repeats an experiment and
-`analysis.py` analyzes the repetitions the way an fMRI study is analyzed:
-activation maps on the anatomical image, ROC curves, test-retest reliability.
+`analysis.py` has the tools to analyze the repetitions: overlays on the
+anatomical image, ROC curves, test-retest reliability.
 
 ```
                          ┌─ session.py ─► scanarchives/*.h5 ─► preprocess ─► <name>_preprocessed.h5 ─┐
@@ -49,13 +49,13 @@ a real run" below). Conclusions should hold on all of them, then on a scan.
 | `task.py` | The task: block paradigm, canonical HRF, the BOLD response and its regional delays |
 | `physio.py` | Physiological noise: BOLD-like, cardiac, respiratory, drift |
 | `study.py` | Repetitions of an experiment through `preprocess/` and `recon/`, resumable; `python -m simulate_fmri.study` |
-| `analysis.py` | Activation maps and overlays, ROC curves, the mixed-binomial test-retest model, true signals and aliasing. The GLM itself is `analyze/glm.py`'s; `t_map` here is its low-band form, this simulator's calibrated default (`analyze/` prewhitens instead) |
+| `analysis.py` | Overlays, ROC curves, the mixed-binomial test-retest model (all taking any statistic map, e.g. `analyze/`'s t-scores), true signals and aliasing |
 | `ideal.py` | `simulate()` and `python -m simulate_fmri.ideal`: SNAKE's engine, output in recon's format |
 | `from_real.py` | `build_testbed()` and `python -m simulate_fmri.from_real`: known activations injected into a real fully sampled run (needs only the `recon` extra) |
 | `sampler.py`, `engine.py`, `handlers.py`, `export.py` | The ideal mode's SNAKE sampler, engine and activation handler, and its export |
 | `protocol.py` | `load_protocol()`: the acquisition recorded in `scan_info.mat` |
 | `phantom.py` | BrainWeb at 3 T, an analytic phantom, the head outline and air cavities |
-| `demo.ipynb` | The visual-motor study: four 320 s runs simulated, preprocessed and reconstructed; contrast, spectra, activation maps, ROC curves, test-retest reliability |
+| `demo.ipynb` | The visual-motor study: four 320 s runs simulated, preprocessed and reconstructed; contrast, spectra, the reconstructions scored against the truth |
 
 Tests: `tests/test_simulate_fmri_task.py` (the response against a brute-force
 convolution), `..._analysis.py` (ROC, the reliability model on data with known
@@ -219,16 +219,13 @@ at 38 GB. Each piece is its own reconstruction, so the joined series has a seam
 at 80, 160 and 240 s (the output's `frame_chunks` attribute): in a typical
 voxel the step between the two frames is 4–5 times the usual one, and the error
 is larger over about 3 frames either side. With this task every seam is at the
-start of a task block. Replacing 3 frames either side of each seam by
-interpolation changed the task's t map by 0.06 rms (correlation 0.9995) and
-left the ROC curve where it was, so the analysis below keeps those frames.
+start of a task block.
 
 `analysis.py` then works on the reconstructions and truth files:
 
 | | |
 |---|---|
-| `t_map`, `t_threshold` | GLM of every voxel on the task regressor, fitted on the temporal frequencies below 0.15 Hz so that its degrees of freedom are the data's |
-| `overlay` | the thresholded map over the truth file's T1-weighted anatomical image |
+| `overlay` | a thresholded statistic map over the truth file's T1-weighted anatomical image |
 | `roc`, `rates`, `truth_classes` | ROC curve against the truth |
 | `levels`, `reliability_map`, `fit_mixed_binomial` | test-retest reliability without the truth: the mixed-binomial model of Genovese, Noll and Eddy (Magn Reson Med 1997;38:497), at one threshold or several with a shared proportion of active voxels, fitted by EM |
 | `true_signal` | the noise-free signal of any voxel at every excitation, from the truth file's modes |
@@ -379,78 +376,19 @@ runs, each of which is within 10% of its mean on these rows:
 | edge sharpness vs truth | 0.70 | 0.90 |
 | **visual** (`block_occipital`): mean time course vs truth, `corr` | 0.32 | 0.95 |
 | recovered amplitude, `amp_ratio` (1 = exact) | 0.26 | 0.72 |
-| t-score, median, low band (`_t_lowband`) | 1.2 | 13.1 |
 | **motor** (`block_motor`): mean time course vs truth, `corr` | 0.74 | 0.93 |
 | recovered amplitude, `amp_ratio` | 0.65 | 0.49 |
-| t-score, median, low band | 3.7 | 11.8 |
-
-Activation maps (low-band GLM on the canonical regressor, thresholded at
-|t| > 3.40, the value of a nominal p < 0.001 with 93 degrees of freedom) and
-ROC curves against the truth, the four runs pooled:
-
-| | without B0 | with B0 |
-|---|---|---|
-| activated voxels above threshold, run 1 (of 1031) | 244 | 1031 |
-| area under the ROC curve | 0.862 | 0.9997 |
-| activated voxels found at a false positive rate of 0.1% | 32% | 95% |
-| the same from the first 80 s of each run | 4.5% (area 0.672) | 85% (area 0.9986) |
 
 What these show:
 
-- **The field model decides.** Without it most of the visual cortex's
-  activation is missing in every run and four times the scan time does not
-  bring it back; with it every activated voxel is found.
-- **A 3% activation over 320 s is at the ceiling** for a reconstruction that
-  models the field, so this experiment separates reconstructions with and
-  without B0 but would not rank two that both have it. The first 80 s, or a
-  smaller `amplitude`, would.
 - **The amplitude lost inside the regions is next to them.** With B0 (run 1)
   the regions hold 0.71 (visual) and 0.46 (motor) of the true activation, but the
   region together with the voxels within 3 of it holds 1.10 and 0.91: the
   reconstruction mostly spreads the activation (its resolution) rather than
   attenuating it. The motor region is two small patches, with more surface.
-- **What the threshold lets through.** Of the truly inactive voxels, 0.57% are
-  above |t| > 3.40 with B0, against a nominal 0.1%. Next to the regions that
-  is the spread above: 24% of those within 3 voxels of one, 89% with positive
-  t. Away from them the test is about right on average but not run by run:
-  6 voxels or more from a region the four runs give 0.09%, 0.03%, 0.32% and
-  0.16%, and the same GLM on the true series with the task switched off
-  (physiology only, nothing to find) gives 0.00%, 0.00%, 1.45% and 0.06%. The
-  BOLD-like fluctuations are four patterns shared by the whole brain, so when
-  one happens to follow the task, a whole area passes together. With the task
-  on, the noise-free true series also shows the faint ringing of a
-  band-limited activation (0.5% in runs where the null gives none), which
-  thermal noise hides in a reconstruction.
-- **Which t-score.** The scorer's plain GLM (`_t`, `false_pos_frac_t3.29`)
-  assumes white residuals and puts 14% (no B0) and 22% (B0) of the rest of the
-  brain above |t| = 3.29; on the simulated BOLD-like fluctuations alone it
-  flags 20–40% at any run length. Read the low-band scores.
 - **The fluctuation floor is physiological.** The true series' temporal
   standard deviation is 0.71% of the mean (median over the brain, run 1); the
   reconstruction with B0 has 1.26% (temporal SNR 79).
-
-Test-retest reliability (the mixed-binomial model fitted to the four runs'
-maps, `analysis.fit_mixed_binomial`), against the truth, at |t| > 3.40:
-
-| | λ (proportion active) | p_A | p_I |
-|---|---|---|---|
-| truth: fully activated voxels / activated at all | 0.74% / 2.83% | | |
-| with B0: model | 2.80% | 0.95 | 0.0015 |
-| with B0: true rates | | 1.00 | 0.0051 |
-| without B0: model | 0.43% | 0.87 | 0.0003 |
-| without B0: true rates | | 0.26 | 0.0004 |
-
-The model measures reproducibility. With B0 its active class is every voxel
-that lights up consistently, the partly activated edges and the 335 inactive
-voxels next to the regions that are above threshold in all four runs
-included, so its p_I is lower than the true one. Without B0 it reports a p_A
-of 0.87 where the truth is 0.26: 705 of the 1031 activated voxels are above
-threshold in no run and are indistinguishable from inactive ones, and the 0.4%
-of voxels this reconstruction does find, it finds every time. A reconstruction
-that misses the same activation in every run looks reliable. With several
-thresholds and a shared λ the estimated ROC points lie below the true curve
-(with B0: 0.81 where the truth is 0.95). The model's assumptions (two kinds of
-voxel, independent runs) do not hold when the errors are systematic.
 
 One brain, one field, one protocol, four noise realizations: these numbers show
 that the chain works and what the simulation is sensitive to. They do not rank

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from analyze.design import canonical_hrf
-from analyze.score import _dct, _glm, panel, score
+from analyze.score import panel, score
 
 N = (32, 32, 24)
 NT, TR, AMP = 24, 0.5, 0.02
@@ -150,22 +150,3 @@ def test_scoring_detects_noise_attenuation_and_blur(truth):
         T.imag, (1.5, 1.5, 1.5, 0))
     _write_recon(str(tmp / "blur.h5"), blur)
     assert score(fn, str(tmp / "blur.h5"))["edge_sharpness_ratio"] < 0.8
-
-
-
-
-def test_lowband_glm_is_calibrated_for_band_limited_residuals():
-    """A temporally smooth (low-pass) residual inflates the plain t; the low-band
-    GLM, with its own degrees of freedom, keeps the false-positive rate near
-    nominal (p < 0.001)."""
-    rng = np.random.default_rng(4)
-    nt, keep, V = 80, 12, 20000
-    C = _dct(nt)
-    w = _wave("block", nt, 0.4851)
-    noise = rng.normal(size=(V, keep)) @ C[:keep]  # band-limited null data
-    _, t_plain = _glm(1 + 0.01 * noise, w)
-    _, t_lb = _glm(1 + 0.01 * noise, w, C[:keep])
-    from scipy import stats
-
-    assert np.mean(np.abs(t_plain) > 3.29) > 0.05  # badly inflated
-    assert np.mean(np.abs(t_lb) > stats.t.ppf(1 - 0.0005, keep - 3)) < 0.005

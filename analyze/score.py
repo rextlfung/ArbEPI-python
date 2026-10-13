@@ -5,7 +5,7 @@ Compares a reconstruction (the `<name>_recon.h5` of recon/sense.py) with the
 least-squares scale (recon outputs are not quantitative; one scale for all
 frames, so it can't hide fluctuations). Reports the reconstruction error,
 fluctuation in and out of the temporal band, each region's activation
-amplitude, t-score (plain and low-band), time-course correlation and leakage
+amplitude, t-score, time-course correlation and leakage
 into its surroundings, the false-positive fraction away from the regions, and
 edge sharpness.
 
@@ -48,18 +48,12 @@ def _dct(nt: int) -> np.ndarray:
     return dct_matrix(nt)
 
 
-def _glm(s: np.ndarray, w: np.ndarray, basis: np.ndarray | None = None):
-    """Fit s (V, nt) = c0 + c1 t + beta w; return (beta, t-stat), each (V,).
-
-    basis (k, nt), orthonormal rows: fit in that subspace instead (data and
-    regressors projected onto it, k - 3 degrees of freedom). With the DCT
-    components up to the cutoff, this is the GLM on low-pass-filtered series --
-    the fair comparison for recons whose residual is itself band-limited (a
-    temporal penalty leaves it smooth, and the plain t assumes independent
-    frames, overstating it by up to sqrt(nt / k)). The fit is analyze.glm's."""
+def _glm(s: np.ndarray, w: np.ndarray):
+    """Fit s (V, nt) = c0 + c1 t + beta w by ordinary least squares; return
+    (beta, t-stat), each (V,). The fit is analyze.glm's."""
     nt = s.shape[1]
     X = np.stack([np.ones(nt), np.linspace(-1, 1, nt), w], 1)
-    r = fit_glm(s, X, np.array([0.0, 0.0, 1.0]), ar1=False, basis=basis)
+    r = fit_glm(s, X, np.array([0.0, 0.0, 1.0]), ar1=False)
     return r.beta[:, 2], r.t
 
 
@@ -100,12 +94,9 @@ def score(fn_truth: str, fn_recon: str, cutoff_hz: float = 0.15,
     out["fluct_inband_pct"] = 100 * float(np.median(np.sqrt((Rc[:, 1:keep] ** 2).sum(1) / nt)))
     out["fluct_outband_pct"] = 100 * float(np.median(np.sqrt((Rc[:, keep:] ** 2).sum(1) / nt)))
 
-    lowband = _dct(nt)[:keep]  # the GLM on low-pass-filtered series (<= cutoff_hz)
     for name, m, w, a in zip(names, rois, waves, amps):
         s = M[m] / x0[m][:, None]
         beta, tstat = _glm(s, w)
-        if name.startswith("block") or name == "sin0.10":  # in-band waveforms
-            out[f"{name}_t_lowband"] = float(np.median(_glm(s, w, lowband)[1]))
         shell = (ndimage.binary_dilation(m, iterations=4)
                  & ~ndimage.binary_dilation(m, iterations=1) & interior & ~(rois.any(0) & ~m))
         beta_shell, _ = _glm(M[shell] / x0[shell][:, None], w)
@@ -117,12 +108,6 @@ def score(fn_truth: str, fn_recon: str, cutoff_hz: float = 0.15,
         out[f"{name}_leak_ratio"] = float(np.median(beta_shell) / a)
     _, t_bg = _glm(M[bg] / x0[bg][:, None], waves[0])
     out["false_pos_frac_t3.29"] = float(np.mean(np.abs(t_bg) > 3.29))
-    # the same in the low band, against its own t threshold (two-sided p < 0.001)
-    from scipy import stats
-
-    _, t_bg_lb = _glm(M[bg] / x0[bg][:, None], waves[0], lowband)
-    thr = float(stats.t.ppf(1 - 0.0005, keep - 3))
-    out["false_pos_frac_lowband"] = float(np.mean(np.abs(t_bg_lb) > thr))
 
     edge = ndimage.binary_dilation(obj, iterations=1) & ~ndimage.binary_erosion(obj, iterations=2)
     gm = np.linalg.norm(np.stack(np.gradient(M.mean(-1))), axis=0)

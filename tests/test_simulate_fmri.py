@@ -274,7 +274,7 @@ def test_truth_group_reproduces_the_frames_and_scores_as_a_perfect_recon(tmp_pat
     exact -- the check that the group follows the layout the scorer reads."""
     scoring = pytest.importorskip('analyze.score')
     shape = (24, 24, 16)
-    # 1 s per frame: the scorer's low-band (< 0.15 Hz) GLM needs a few bins there
+    # 1 s per frame: the scorer's in-band (< 0.15 Hz) fluctuation split needs a few bins there
     protocol = replace(make_protocol(shape, etl=24 * 16, n_frames=24), volume_tr_s=1.0)
     fn = run(tmp_path, protocol, model='simple', block_on=5, block_off=5)['preprocessed']
     ksp, smaps, x0, amp_map, waves, rois = read(

@@ -42,7 +42,7 @@ from numpy.typing import NDArray
 from snake.mrd_utils import CartesianFrameDataLoader
 
 ROI = 'ROI'  # the tissue SNAKE's activation handlers add
-ROI_NAME = 'block_occipital'  # 'block...': analyze.score also reports its low-band t
+ROI_NAME = 'block_occipital'
 
 
 def schedule_maps(

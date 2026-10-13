@@ -1422,11 +1422,13 @@ runs in the main `.venv` (`uv sync --extra analyze`).
 - **One GLM, one HRF, one DCT.** `analyze/glm.py`'s `fit_glm`,
   `analyze/design.py`'s `canonical_hrf`/`hrf_integral`/`dct_matrix` are the
   single copies; `analyze/score.py`'s `_glm`/`_dct` and
-  `simulate_fmri/task.py`/`analysis.py` call them. `analysis.t_map` stays as a
-  wrapper only because its *default* differs (low-band 0.15 Hz, the
-  simulator's calibrated null); `analyze/` does not low-pass the data
-  (explicit user decision: the low-band GLM is preprocessing that "may raise
-  eyebrows").
+  `simulate_fmri/task.py` call them. A "low-band" GLM (the fit restricted to
+  DCT components below 0.15 Hz, `glm.low_band`/`fit_glm(basis=)`, with its own
+  degrees of freedom) and everything built on it -- `analysis.t_map`/
+  `t_threshold`, the scorer's `_t_lowband`/`false_pos_frac_lowband`, and the
+  demo notebook's activation-map, ROC and test-retest sections -- was removed
+  2026-10-13 (user: confusing; nothing in the literature goes by that name).
+  `analyze/` never low-passed the data and prewhitens instead.
 - **AR(1) prewhitening, SPM style, not full SPM.** One coefficient pooled over
   voxels (pooled lag-1 autocorrelation of unit-variance GLS residuals,
   iterated), exact Prais-Winsten whitening, dof = nt - rank. SPM12 fits AR(1)
@@ -1458,7 +1460,7 @@ runs in the main `.venv` (`uv sync --extra analyze`).
 - **`score.py`** (`python -m analyze.score <truth> <recon>`; moved from
   `recon/testbed.py` 2026-10-13) scores a reconstruction against a `truth`
   group: error, fluctuation in/out of band, per-ROI activation amplitude,
-  t (plain and low-band, the calibrated one), leakage, false-positive
+  t, leakage, false-positive
   fraction and edge sharpness, on magnitudes after one global scale. It
   shares `fit_glm` and `dct_matrix` with the rest of the package, and
   `simulate_fmri/from_real.py` imports `object_masks` from it, so the ROI
@@ -1665,8 +1667,6 @@ the signal is 1 + amplitude x w. Decisions and what they rest on:
   lagging by a quarter cycle, 10 s blocks, one hemisphere) existed for one
   commit and is gone. Its point (uncorrelated regressors expose cross-talk)
   still holds if `onset` is used.
-- *Names keep the `block_` prefix* (`block_occipital`, `block_motor`):
-  `analyze.score.score` reports `_t_lowband` only for those.
 - *Per-region truth*: each mask is cut at half of that region's own largest
   change; `x0` is the time average with every region's mean change in it;
   `r2s_change` is (regions, excitations); `task/` holds the paradigm and
@@ -1711,9 +1711,8 @@ voxels grouped by count pattern; several starts; the class with higher levels
 is "active") and is tested on data with known rates. So a study is M
 repetitions: `study.py` simulates, preprocesses and reconstructs them,
 resumably (a `.ok` marker next to each preprocessed file, so a half-written
-one is not taken for done), and `analysis.py` has the GLM (the scorer's
-low-band one: 93 degrees of freedom for 632 frames), the T1w overlay, ROC
-against the truth and the model. Things measured on the way:
+one is not taken for done), and `analysis.py` has the T1w overlay, ROC
+against the truth and the model (they take any statistic map). Things measured on the way:
 - *The B0 operator needs 16 time segments here, not 32*: forward error against
   L = 64 is 0.001% at 16, 0.19% at 12, 1.9% at 8, on the default protocol
   (31 ms echo train, field clipped to about 300 Hz, BT about 10), at half the
@@ -1730,10 +1729,9 @@ against the truth and the model. Things measured on the way:
   raised over about 3 frames either side (the high-pass penalty's DCT has an
   edge there). 158 frames is exactly two task cycles, so every seam is at a
   block onset, at the same task phase in every run: not random, and a candidate
-  for inflating test-retest agreement. The control that clears it: replacing 3
-  frames either side of each seam by interpolation moved run 1's low-band t
-  map by 0.06 rms (correlation 0.9995 with B0, 0.997 without) and left the AUC
-  unchanged. Overlapping pieces and discarding the edges would remove the seams
+  for inflating test-retest agreement. Replacing 3 frames either side of each
+  seam by interpolation moved run 1's t map by 0.06 rms (a low-band GLM, since
+  removed) and left the AUC unchanged. Overlapping pieces and discarding the edges would remove the seams
   at about 25% more time; not done.
 - *Cost, measured*: per 320 s run 43 s to simulate, 31-37 min to preprocess,
   16 min to reconstruct without B0 and 110-119 min with it (L = 16), so about
@@ -1753,54 +1751,15 @@ against the truth and the model. Things measured on the way:
 README).** Default protocol, 320 s, the 3% visual-motor task, four seeds. The
 runs agree within 10% on the scores quoted here (leak ratios and false
 positive fractions vary more). With B0: frame error 10.9%, fluctuation
-1.19%, mean time course vs truth 0.95 (visual) and 0.93 (motor), low-band
-median t 13.1 and 11.8, every one of the 1031 activated voxels above
-|t| > 3.40 in every run, pooled AUC 0.9997, 95% of activated voxels found at a
-false positive rate of 0.1% (85% from the first 80 s alone). Without B0:
-23.9%, 5.1%, 0.32 and 0.74, t 1.2 and 3.7, AUC 0.862, 32% (4.5% from 80 s).
-What was learned, beyond "B0 decides":
-- *The task is at the ceiling for a B0 reconstruction.* 3% over 320 s cannot
-  rank two reconstructions that both model the field; the notebook therefore
-  also analyses the first 80 s (one reconstructed piece, 21 degrees of
-  freedom). The amplitude stays at +-3% (user, 2026-10-09), so a comparison of
-  reconstructions that both model the field should use the 80 s analysis, a
-  shorter run or a smaller `amplitude`.
+1.19%, mean time course vs truth 0.95 (visual) and 0.93 (motor). Without B0:
+23.9%, 5.1%, 0.32 and 0.74. (The activation-map, ROC and test-retest results
+this study also produced came from the low-band GLM and were removed with it,
+2026-10-13; see `analyze/`'s notes.) What was learned:
 - *Amplitude ratios below 1 are mostly spatial spread, not attenuation*: with
   B0 the regions hold 0.71 (visual) and 0.46 (motor) of the true activation
   (coefficient x signal, summed), the regions plus 3 voxels around them 1.10
   and 0.91 (the motor sum peaks there and falls further out). Not investigated further (which regularizer, how it scales with
   lambda).
-- *The low-band threshold away from the regions is right on average and
-  wrong run by run*: among truly inactive voxels (true change under 5% of the
-  activation's) 0.57% exceed the nominal-0.1% threshold with B0. Within 3
-  voxels of a region that is the spread (24%, 89% positive t). At 6 voxels or
-  more the runs give 0.09, 0.03, 0.32 and 0.16%, and the null control (the
-  true series with the activations off, `true_signal(modes=` everything but
-  `block_*`), no reconstruction) gives 0.00, 0.00, 1.45 and 0.06%: the four
-  shared BOLD-like patterns again, as on the 60 s session, so voxels are not
-  independent and a run either passes none or a whole area. A first version of
-  these notes called the true signal's 1.7% (task on) "ringing, not a
-  miscalibration" on the strength of a control that could not tell (removing
-  the BOLD-like modes raises it to 26%, but with no in-band residual anything
-  is significant); the advisor asked for the null, and it shows both: ringing
-  is real (0.5% far from the regions in runs whose null is zero) and the null
-  itself is seed-dependent. So "false positive" needs the distance table and
-  the per-run null next to it, and overlay titles say "nominal". This is
-  another reason the physiological model's shape (four patterns) is an open
-  question for the user.
-- *The mixed-binomial model measures reproducibility, and a systematic error
-  is reproducible.* At |t| > 3.40 with B0 it gives lambda 2.80% (truth: 0.74%
-  fully activated, 2.83% activated at all), p_A 0.95 (true 1.00), p_I 0.0015
-  (true 0.0051: 335 inactive voxels next to the regions are above threshold in
-  all four runs and count as active). Without B0 it gives lambda 0.43%, p_A
-  0.87 against a true 0.26: 705 activated voxels are detected in no run and
-  sit with the inactive ones. With nine thresholds and a shared lambda the
-  estimated ROC lies below the true one (B0: 0.81 where the truth is 0.95) and
-  the no-B0 fit settles on a different split (lambda 6.6%). The EM is tested
-  on data that satisfy the model, so this is the model's assumptions meeting
-  systematic errors, which is the notebook's stated conclusion. I did not read
-  Genovese et al. beyond what the blog post reports; the notebook cites the
-  post for the assumptions.
 - *Preprocessing on run 1*: delay -0.30, odd/even -0.263/-0.338 for
   -0.250/-0.320, noise variance 0.96, 19 virtual coils, maps 0.998, B0 error
   0.3 Hz median and 3.5 Hz at the 90th percentile on the deGRE grid, R2*
@@ -1832,8 +1791,8 @@ the region's mean time course unrelated to the task (correlation 0.12); with
 `--B0`, 11.0%, 1.2%, 0.90, and the course recovered (correlation 0.79,
 amplitude ratio 0.64). With the motor region added (2026-10-05) those numbers
 did not move, and the motor region scored: correlation 0.38 without B0 and
-0.72 with it, amplitude ratio 0.56 and 0.51, low-band t 0.5 and 2.5 (plain t
-1.4 and 6.4), leak ratio 0.12 with B0. The lag between the tasks earns its
+0.72 with it, amplitude ratio 0.56 and 0.51, t 1.4 and 6.4,
+leak ratio 0.12 with B0. The lag between the tasks earns its
 keep here: with B0 each region's mean course correlates with the other
 region's task at -0.10 (visual) and -0.04 (motor), but without B0 the motor
 course correlates -0.42 with the visual task against +0.38 with its own, so
@@ -1851,16 +1810,8 @@ meeting an uncalibrated test, measured without any reconstruction: the same
 GLM on random unit mixtures of the session's four `physio/bold_like_*`
 courses (frame means x TE) plus 0.26% white noise flags 41%; on fresh
 `physio.band_noise` courses, 35% at 60 s, 21% at 240 s and 24% at 480 s (0-68%
-per session), so run length does not fix it. The low-band scores are the
-calibrated ones (0-3% from noise alone), and there the noise-only model with
-a true 1.5% task gives a median t of about 6 against a threshold of 4.0 at
-60 s (11 at 240 s, 16 at 480 s): a perfect reconstruction of this run would
-detect the activation. The B0 reconstruction reaches 2.3 (2.5 in the motor
-region, at an amplitude ratio of 0.51), because it recovers
-0.64 of the amplitude and has 1.2% of in-band fluctuation where the
-physiology accounts for 0.5-0.8% (6.0 x 0.64 x 0.84/1.16 = 2.8). So the
-shortfall is the reconstruction's, which is what the simulation is for.
-Whether the physiological model itself should be re-tuned (more, smaller
+per session), so run length does not fix it: read the scorer's t-scores
+relative to each other, not against a nominal threshold. Whether the physiological model itself should be re-tuned (more, smaller
 patterns; less power at the task frequency) is an open realism question, not
 decided. The B0 run took 39-40 min after a 75 min
 power iteration (sigma1A = 1.488; the plain operator's is 1.000), the plain

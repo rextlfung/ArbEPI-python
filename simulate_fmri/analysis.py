@@ -1,8 +1,7 @@
 """Analysis of reconstructed simulated runs against their truth.
 
-- activation maps: t_map (a GLM on the task regressor, in the low band so that
-  its degrees of freedom are those the data has) and overlay, which lays the
-  thresholded map over the T1-weighted anatomical image of the truth file;
+- overlay, which lays a thresholded statistic map over the T1-weighted
+  anatomical image of the truth file;
 - ROC curves against the truth: roc;
 - test-retest reliability without the truth, from M repetitions of the same
   experiment: the mixed-binomial model of Genovese, Noll and Eddy (Magn Reson
@@ -23,8 +22,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 from analyze import glm
-from analyze.glm import low_band
-from analyze.glm import t_threshold as _t_threshold
 
 # ---------------------------------------------------------------------------
 # loading
@@ -111,35 +108,8 @@ def true_signal(truth: Truth, mask: NDArray, modes: list[str] | None = None,
 
 
 # ---------------------------------------------------------------------------
-# activation maps
+# volumes
 # ---------------------------------------------------------------------------
-
-
-def t_threshold(n_frames: int, tr: float, p: float = 0.001, cutoff_hz: float | None = 0.15,
-                two_sided: bool = True) -> float:
-    """The t value of significance p in t_map's GLM (three regressors)."""
-    dof = (len(low_band(n_frames, tr, cutoff_hz)) if cutoff_hz else n_frames) - 3
-    return _t_threshold(dof, p, two_sided)
-
-
-def t_map(series: NDArray, regressor: NDArray, tr: float,
-          cutoff_hz: float | None = 0.15) -> tuple[NDArray, NDArray]:
-    """GLM of each voxel's series (V, nt) on a constant, a linear trend and
-    the task regressor (nt,). Returns (beta, t): beta as a fraction of the
-    voxel's mean signal per unit of the regressor.
-
-    cutoff_hz: fit on the temporal frequencies up to it only (analyze.glm's
-    low-band GLM). A reconstruction with a temporal penalty, and physiological
-    noise, leave residuals that are far from white, so the plain GLM's t
-    (cutoff_hz=None) counts degrees of freedom the data does not have. This is
-    the simulator's calibrated default; analyze/ prewhitens instead."""
-    series = np.asarray(series, dtype=np.float64)
-    mean = np.maximum(series.mean(axis=1, keepdims=True), 1e-30)
-    nt = series.shape[1]
-    X = np.stack([np.ones(nt), np.linspace(-1, 1, nt), np.asarray(regressor, dtype=np.float64)], 1)
-    basis = low_band(nt, tr, cutoff_hz) if cutoff_hz else None
-    r = glm.fit_glm(series / mean, X, np.array([0.0, 0.0, 1.0]), ar1=False, basis=basis)
-    return r.beta[:, 2], r.t
 
 
 to_volume = glm.to_volume

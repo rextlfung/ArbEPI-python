@@ -78,11 +78,7 @@ amplitude (GLM; 1 = exact), t-score and leakage into a surrounding shell, the
 false-positive rate (|t| > 3.29) of the block regressor elsewhere, and edge
 sharpness relative to the truth. `--png` adds a panel (truth and recon mean,
 temporal std, the block t-map) through the first ROI, or through ROI `--roi N`
-with that ROI's regressor. The `_t_lowband` and `false_pos_frac_lowband`
-entries repeat the GLM on the DCT components below the cutoff only, with their
-own degrees of freedom: a temporal penalty leaves the residual band-limited,
-which inflates the plain per-frame t (25-32% of null voxels above |t| = 3.29
-on `20260930ballfat`, vs 0.1% in the low band). Python: `analyze.score.score`,
+with that ROI's regressor. Python: `analyze.score.score`,
 `panel`.
 
 The truth file has, in `truth/`: `x0` (the noise-free mean image), `roi_masks`
@@ -103,7 +99,7 @@ the file attribute `volume_tr`. Three producers write it, all in
 | file | contents |
 |---|---|
 | `design.py` | `ExperimentParams`/`Condition`, the canonical HRF, `build_design_matrix` (conditions, DCT drift, constant) |
-| `glm.py` | `fit_glm` (OLS or AR(1)-prewhitened), `t_to_z`, FDR/Bonferroni, `low_band` |
+| `glm.py` | `fit_glm` (OLS or AR(1)-prewhitened), `t_to_z`, FDR/Bonferroni |
 | `mask.py` | `brain_mask` (BET), `load_mask` |
 | `io.py` | `read_recon` (sum and per-scale series), `save_stat_nifti` |
 | `run.py`, `__main__.py` | `analyze_recon` and the CLI |
@@ -127,8 +123,7 @@ autocorrelation of unit-variance residuals iterated to convergence
 (Cochrane-Orcutt), not a ReML fit of AR(1) plus white noise. It is global, not
 per voxel as in FSL's FILM. A recon with a temporal penalty can leave
 residuals that are not AR(1); `simulate_fmri/` measured exactly that (see
-CLAUDE.md), and its low-band GLM is available here as `glm.low_band` for
-comparison.
+CLAUDE.md), so check `rho` and a null region before trusting thresholds.
 
 **z-scores.** `t_to_z` is `sign(t) Phi^-1(F_t(|t|; dof))`, computed in log
 space so it does not saturate at |z| = 8.3.
