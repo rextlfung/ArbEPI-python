@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip('torch')
 pytest.importorskip('snake')
 
-from simulate_fmri import analysis, task  # noqa: E402
+from simulate_fmri import analysis  # noqa: E402
 
 TR, NT = 0.5, 400
 
@@ -29,31 +29,6 @@ def fake_truth(shape=(6, 5, 4), n_shots=2, factor=2):
         t1w=rng.random(tuple(factor * n for n in shape)).astype(np.float32), factor=factor,
         volume_tr=1.0, tr_shot=0.5, te=0.03,
     )
-
-
-# ---------------------------------------------------------------------------
-# activation maps
-# ---------------------------------------------------------------------------
-
-
-def test_t_map_recovers_an_injected_response_and_its_size():
-    rng = np.random.default_rng(1)
-    t = (np.arange(NT) + 0.5) * TR
-    w = task.bold_response(t, 20, 20, NT * TR)
-    beta_true = np.r_[np.zeros(300), np.full(100, 0.02)]
-    series = 50 * (1 + beta_true[:, None] * w[None, :] + 0.01 * rng.standard_normal((400, NT)))
-    for cutoff in (None, 0.15):
-        beta, t_stat = analysis.t_map(series, w, TR, cutoff_hz=cutoff)
-        assert np.median(beta[300:]) == pytest.approx(0.02, rel=0.03)  # a fraction of the mean
-        assert abs(np.median(beta[:300])) < 2e-4
-        thr = analysis.t_threshold(NT, TR, 0.001, cutoff)
-        assert (t_stat[300:] > thr).all()
-        # white noise: the test is calibrated, about 0.1% of null voxels pass
-        assert (np.abs(t_stat[:300]) > thr).mean() < 0.02
-    # the low band has fewer degrees of freedom, hence a higher threshold
-    n_low = len(analysis.low_band(NT, TR, 0.15))
-    assert n_low == int(np.floor(0.15 * 2 * NT * TR)) + 1
-    assert analysis.t_threshold(NT, TR, 0.001, 0.15) > analysis.t_threshold(NT, TR, 0.001, None)
 
 
 def test_to_volume_puts_values_back_in_place():

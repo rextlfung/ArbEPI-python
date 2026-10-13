@@ -149,15 +149,6 @@ def test_drift_terms_remove_a_slow_drift_from_the_residual():
     assert res[1] < 0.5 * res[0]
 
 
-def test_low_band_basis_is_the_alternative_not_a_companion():
-    X = np.ones((NT, 1))
-    with pytest.raises(ValueError):
-        glm.fit_glm(np.zeros((2, NT)), X, np.array([1.0]), ar1=True, basis=glm.low_band(NT, TR))
-    r = glm.fit_glm(np.random.default_rng(5).standard_normal((50, NT)), X, np.array([1.0]),
-                    ar1=False, basis=glm.low_band(NT, TR, 0.15))
-    assert r.dof == len(glm.low_band(NT, TR, 0.15)) - 1
-
-
 def test_fit_glm_validates_shapes():
     with pytest.raises(ValueError):
         glm.fit_glm(np.zeros((3, 10)), np.ones((11, 1)), np.array([1.0]))

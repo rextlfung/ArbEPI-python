@@ -241,7 +241,7 @@ recon/                        Image reconstruction (.venv-recon, uv sync), on Py
   demo.ipynb                    Every recon type on one real dataset
 analyze/                     Task activation maps from reconstructions (main .venv, `uv sync --extra analyze`) -- see analyze/README.md:
   design.py                     Task blocks x canonical HRF, DCT drift terms, constant
-  glm.py                        GLM with SPM-style AR(1) prewhitening; t -> z, FDR; low-band GLM
+  glm.py                        GLM with SPM-style AR(1) prewhitening; t -> z, FDR
   mask.py                       Brain mask: FSL bet if on PATH, else brainextractor
   io.py                         recon .h5 (summed image, per-scale components) in, NIfTI out
   run.py, __main__.py           analyze_recon and `python -m analyze`
