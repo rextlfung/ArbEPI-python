@@ -1000,7 +1000,6 @@ of older modules; see git history for those):
 | `sense.py` | driver: `run_sense(reg=...)` + CLI (`--reg {none,mslr,wavelet-tv}`, `--B0`, `--R2star`, `--frames`, `--patch`/`--stride`, `--hp-weight`/`--hp-cutoff` (any reg), `--lamb-ttv`/`--joint` (wavelet-tv), `--tag`, ...). `none` -> CG, `mslr` -> POGM, `wavelet-tv` -> PDHG (TV has no closed-form prox), per frame unless a temporal term or `--joint` makes it joint. `--device` defaults to cuda if available, else cpu (everything also runs on CPU, slowly) |
 | `rss.py` | root-sum-of-squares, GPU-batched over frames |
 | `utils.py` | I/O (`read_frames_cropped`, `load_*`, `load_and_gather_ksp`, `save_result`, ...), operator norms (`estimate_spectral_norm`, `check_operator_unitary`), `tsnr_report`, and the one-off `sweep`/`benchmark`/`validate` analyses (`python -m recon.utils {tsnr,sweep,benchmark,validate}`) |
-| `testbed.py` | known-truth testbed: `build` turns a fully sampled run plus another run's masks into undersampled dynamic data with injected activation (a `<name>_preprocessed.h5` `sense.py` reads as is), `score` compares a recon with the truth (fluctuation in/out of band, activation amplitude/t/leakage, error, edge sharpness) |
 | `demo.ipynb` | runs every recon type on `20260915ball/2_6x_2.4mm` |
 
 Outputs land in `<datdir>/recon/sense_<reg>[_b0|_b0r2star]/` and
@@ -1422,7 +1421,7 @@ runs in the main `.venv` (`uv sync --extra analyze`).
 
 - **One GLM, one HRF, one DCT.** `analyze/glm.py`'s `fit_glm`,
   `analyze/design.py`'s `canonical_hrf`/`hrf_integral`/`dct_matrix` are the
-  single copies; `recon/testbed.py`'s `_glm`/`_dct` and
+  single copies; `analyze/score.py`'s `_glm`/`_dct` and
   `simulate_fmri/task.py`/`analysis.py` call them. `analysis.t_map` stays as a
   wrapper only because its *default* differs (low-band 0.15 Hz, the
   simulator's calibrated null); `analyze/` does not low-pass the data
@@ -1456,6 +1455,16 @@ runs in the main `.venv` (`uv sync --extra analyze`).
   selected on the first series by default (same voxels in every line).
   `analyze_recon(keep_series=True)` keeps the masked series (percent of the
   summed image's mean) for it.
+- **`score.py`** (`python -m analyze.score <truth> <recon>`; moved from
+  `recon/testbed.py` 2026-10-13) scores a reconstruction against a `truth`
+  group: error, fluctuation in/out of band, per-ROI activation amplitude,
+  t (plain and low-band, the calibrated one), leakage, false-positive
+  fraction and edge sharpness, on magnitudes after one global scale. It
+  shares `fit_glm` and `dct_matrix` with the rest of the package, and
+  `simulate_fmri/from_real.py` imports `object_masks` from it, so the ROI
+  placement and the scorer's object definitions cannot drift apart. Its tests
+  (`tests/test_analyze_score.py`) write a synthetic truth file directly and
+  need no torch; the builder's are `tests/test_simulate_fmri_from_real.py`.
 - **Not done**: motion regressors (none estimated), per-voxel AR, cluster
   correction.
 
@@ -1466,7 +1475,8 @@ output files, the literature values) is `simulate_fmri/README.md`, with a
 worked example in `simulate_fmri/demo.ipynb`; this section keeps the design
 history behind it.
 
-Two levels of fidelity, both starting from a `scan_info.mat`:
+Two levels of fidelity, both starting from a `scan_info.mat` (plus
+`from_real.py`, a third source of truth files that simulates no scanner, below):
 
 - **`session.py` (`python -m simulate_fmri.session`)** writes the raw ADC
   readouts of all four scans (noise, EPIcal, deGRE, ArbEPI) as
@@ -1482,10 +1492,20 @@ Two levels of fidelity, both starting from a `scan_info.mat`:
   `recon/operators.py`'s `SENSE` when the decay is off, which makes it the
   reference the raw mode reduces to.
 
-Either truth is a `truth` group in `recon/testbed.py`'s layout, so
-`python -m recon.testbed score <truth file> <recon.h5>` scores both, and the
-real-data testbed, the same way (a first plan had its own nilearn GLM + ROC
-script, dropped when the testbed landed on main mid-way).
+- **`from_real.py` (`python -m simulate_fmri.from_real`)** is the real-data
+  testbed (until 2026-10-13 `recon/testbed.py`'s `build`, moved here on the
+  user's rule that nothing that is not reconstruction stays in `recon/`): a
+  real fully sampled run's object, coils and field, another run's masks, the
+  recon's own B0-SENSE operator (an inverse crime) and four injected
+  activations. It needs only the `recon` extra: `simulate_fmri/__init__.py`
+  imports `ismrmrd` optionally for that reason, so `.venv-recon` runs it
+  without SNAKE.
+
+Every truth is a `truth` group in `analyze/score.py`'s layout (the scorer was
+`recon/testbed.py`'s `score`, moved to `analyze/` the same day: it evaluates a
+reconstruction, it does not reconstruct), so `python -m analyze.score <truth
+file> <recon.h5>` scores all three the same way (a first plan had its own
+nilearn GLM + ROC script, dropped when the testbed landed on main mid-way).
 
 **Why the raw mode exists (explicit user request, 2026-10-04: model B0,
 ghosting, ramp sampling, physiological noise, sensitivity-map estimation,
@@ -1619,7 +1639,7 @@ the response is w(t) = (h * p)(t - delay) with h SPM's canonical HRF (exact,
 through the HRF's running integral; equal to nilearn's `spm_hrf` to 0.3%), and
 the signal is 1 + amplitude x w. Decisions and what they rest on:
 - *Amplitude is the peak excursion from the time average*, i.e. w is centered
-  and scaled to peak 1 first, which is `recon/testbed.py`'s `amp` convention
+  and scaled to peak 1 first, which is `analyze/score.py`'s `amp` convention
   (and the user's "+1/-1 ... amplitude of 3%"). With 20 s blocks the canonical
   response does not settle and w overshoots +-1 to +-1.29, so "3% x w" taken
   literally would peak at 3.9%. As implemented: +-3% at the peaks, about
@@ -1646,13 +1666,13 @@ the signal is 1 + amplitude x w. Decisions and what they rest on:
   commit and is gone. Its point (uncorrelated regressors expose cross-talk)
   still holds if `onset` is used.
 - *Names keep the `block_` prefix* (`block_occipital`, `block_motor`):
-  `recon.testbed.score` reports `_t_lowband` only for those.
+  `analyze.score.score` reports `_t_lowband` only for those.
 - *Per-region truth*: each mask is cut at half of that region's own largest
   change; `x0` is the time average with every region's mean change in it;
   `r2s_change` is (regions, excitations); `task/` holds the paradigm and
   response per excitation and the canonical (undelayed) response per frame,
   the regressor an analysis would use.
-- *`recon/testbed.py` changed for multi-region truth*, backward compatibly:
+- *The scorer (then `recon/testbed.py`) changed for multi-region truth*, backward compatibly:
   `score` prefers a per-ROI `amps` attribute to the single `amp`; `panel` (and
   `score --roi`) can show any ROI. Its false-positive fractions still use the
   first ROI's regressor.

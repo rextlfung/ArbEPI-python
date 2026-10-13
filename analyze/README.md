@@ -4,7 +4,8 @@ Turns a reconstruction (`recon/`'s `<name>_recon.h5`) into statistic maps for a
 block-design task: the t-score of a contrast per voxel, the equivalent z-score,
 and the effect in percent of the voxel's mean signal, as NIfTI. Real data is
 the point; `simulate_fmri/` uses the same GLM on simulated runs, and
-`simulate_fmri/analysis.py` keeps only what needs a truth file.
+`simulate_fmri/analysis.py` keeps only what needs a truth file. `score.py`
+scores a reconstruction against such a truth.
 
 ## Setup
 
@@ -62,6 +63,41 @@ blocks shaded, and the power spectrum with the task fundamental marked.
 survivors. Python: `analyze.compare.compare_recons`, `plot_maps`,
 `plot_timecourses`, `summary_table`.
 
+## Scoring against a known truth
+
+```
+uv run python -m analyze.score <truth.h5> <recon.h5> [--json out.json] [--png out.png] [--roi N]
+```
+
+Compares a reconstruction with the `truth` group of a file that has one, on
+magnitudes after one global least-squares scale (recon outputs are not
+quantitative; one scale for all frames, so it cannot hide fluctuations). It
+reports the error of the mean image and per frame, the temporal fluctuation in
+non-activated voxels split into below and above 0.15 Hz, each ROI's recovered
+amplitude (GLM; 1 = exact), t-score and leakage into a surrounding shell, the
+false-positive rate (|t| > 3.29) of the block regressor elsewhere, and edge
+sharpness relative to the truth. `--png` adds a panel (truth and recon mean,
+temporal std, the block t-map) through the first ROI, or through ROI `--roi N`
+with that ROI's regressor. The `_t_lowband` and `false_pos_frac_lowband`
+entries repeat the GLM on the DCT components below the cutoff only, with their
+own degrees of freedom: a temporal penalty leaves the residual band-limited,
+which inflates the plain per-frame t (25-32% of null voxels above |t| = 3.29
+on `20260930ballfat`, vs 0.1% in the low band). Python: `analyze.score.score`,
+`panel`.
+
+The truth file has, in `truth/`: `x0` (the noise-free mean image), `roi_masks`
+(regions, x, y, z), `waveforms` (regions, frames; zero-mean, peak 1) and the
+attributes `roi_names` and `amp` (the peak fractional change; `amps`, one per
+ROI, is preferred when present -- simulated regions differ in tissue mix); and
+the file attribute `volume_tr`. Three producers write it, all in
+[`simulate_fmri/`](../simulate_fmri/README.md):
+
+| producer | object, coils, field | k-space |
+|---|---|---|
+| `from_real.py` | a real fully sampled run's | synthesized by the recon's own operator (an inverse crime: isolates sampling, noise and prior effects, not model mismatch) |
+| `ideal.py` | a digital brain's, on the Cartesian grid | SNAKE-fMRI's engine: sampling, T2* decay and thermal noise |
+| `session.py` | a digital brain's, with a susceptibility-derived field | raw readouts, run through `preprocess/` (estimated, not true, sensitivity and field maps) |
+
 ## What it does
 
 | file | contents |
@@ -72,6 +108,7 @@ survivors. Python: `analyze.compare.compare_recons`, `plot_maps`,
 | `io.py` | `read_recon` (sum and per-scale series), `save_stat_nifti` |
 | `run.py`, `__main__.py` | `analyze_recon` and the CLI |
 | `compare.py` | side-by-side maps, time courses, spectra and a summary table for several series |
+| `score.py` | `score`/`panel` and `python -m analyze.score`: a reconstruction against a known truth (error, fluctuation in/out of band, activation amplitude/t/leakage, edge sharpness) |
 
 **Design.** Each condition is its blocks convolved with SPM's canonical HRF
 (exactly, via the HRF's running integral), sampled at frame centers. Nuisance

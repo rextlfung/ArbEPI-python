@@ -203,7 +203,7 @@ def _segment_fit(
     samples and map each frame's samples to rows of the fit. On acquired data
     every frame has the same set (one per echo index, ETL values), so this is
     frame 0's set; a frame that samples only some echo times (e.g. one mask
-    applied to another schedule's timing, recon/testbed.py) is covered too.
+    applied to another schedule's timing, simulate_fmri/from_real.py) is covered too.
     Returns (b_by_echo, c, tl, unique_t_ms, pos_per_frame)."""
     Nt = omega.shape[-1]
     Ny, Nz = omega.shape[1], omega.shape[2]

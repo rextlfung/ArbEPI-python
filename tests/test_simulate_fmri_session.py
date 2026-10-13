@@ -232,7 +232,7 @@ def test_estimated_field_map_matches_the_true_one(realistic):
 
 
 def test_truth_file_has_each_activated_region_in_the_testbed_layout(realistic):
-    """The truth file follows recon/testbed.py's layout, one entry per
+    """The truth file follows analyze/score.py's layout, one entry per
     activated region: its mask, its time course and its amplitude."""
 
     paths, _, cfg, _ = realistic

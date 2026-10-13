@@ -15,14 +15,22 @@ ideal.py     SNAKE-fMRI's acquisition engine on the Cartesian grid, written
              noise only.
                sampler.py, engine.py, handlers.py, export.py
 
+from_real.py is a third source of truth files that simulates no scanner: it
+injects known activations into a real, fully sampled run (a real object, coils
+and field; needs only the recon extra).
+
 protocol.py reads scan_info.mat; phantom.py holds the BrainWeb and analytic
-phantoms (SNAKE's Phantom). Either mode's output carries its ground truth in
-recon/testbed.py's layout. See README.md in this folder.
+phantoms (SNAKE's Phantom). Every mode's output carries its ground truth in
+analyze/score.py's layout, which scores a reconstruction against it. See
+README.md in this folder.
 """
 
 import warnings
 
-import ismrmrd  # noqa: F401 -- importing it resets the warning filters, so it goes first
+try:
+    import ismrmrd  # noqa: F401 -- importing it resets the warning filters, so it goes first
+except ImportError:  # from_real.py needs only the recon extra (the SNAKE modules import it)
+    pass
 
 # xsdata, once per MRD header read (so in every worker and every loader):
 # SNAKE stores its handlers' time courses under waveform ids outside the MRD
