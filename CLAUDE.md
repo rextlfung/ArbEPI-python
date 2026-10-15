@@ -1470,6 +1470,25 @@ runs in the main `.venv` (`uv sync --extra analyze`).
 - **Not done**: motion regressors (none estimated), per-voxel AR, cluster
   correction.
 
+### `postprocess/` -- operations on `recon/` output before `analyze/` (prototype, 2026-10-15)
+
+User-facing documentation is `postprocess/README.md`. Named for being
+recon-centric (user's wording: confusing, but it fits this repo). First and so
+far only feature: inter-frame rigid-body motion correction, requested as FSL
+MCFLIRT without making FSL a dependency, so `postprocess/motion.py` has two
+backends behind one result type: MCFLIRT when `mcflirt` is found (PATH,
+`$FSLDIR/bin`, `~/fsl/bin`; `/home/rexfung/fsl` is installed but not on PATH),
+else a scipy implementation (the same fallback pattern as `analyze/mask.py`'s
+`bet`/`brainextractor`). FSL supplies transforms only; resampling is ours so
+both agree and complex data works. Alternatives looked at: nipy `SpaceTimeRealign`
+(pure Python, 2.6 MB wheel, last release 2024), SimpleITK (53 MB wheel),
+antspyx (22 MB); a ~200-line scipy registration was enough and adds no
+dependency (`uv sync --extra analyze`, no new extra). Gotchas, both measured:
+FSL's matrices need no x-flip with a negative-x affine (det < 0 means FSL
+uses voxel x size directly); trilinear interpolation inside the cost biases
+rotations by ~0.6 deg. Estimation is on magnitude; the transforms are applied
+to `X_recon` and every `X` component.
+
 ### `simulate_fmri/` -- simulated scan sessions acquired with ArbEPI's schedules
 
 User-facing documentation (setup, commands, what is and is not modeled, the
