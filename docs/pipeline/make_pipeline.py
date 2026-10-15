@@ -41,6 +41,7 @@ THEMES = {
         'scan-band': '#f2ece2', 'scan': '#8d5f22',
         'pre-band': '#e4f1ea', 'pre': '#2a7250',
         'rec-band': '#eee8f6', 'rec': '#664a9c',
+        'post-band': '#f3efd9', 'post': '#7a6208',
         'ana-band': '#f6e9ec', 'ana': '#a13a55',
         'hand': '#bb4a24', 'hand-bg': '#fbe9e1',
     },
@@ -51,6 +52,7 @@ THEMES = {
         'scan-band': '#282116', 'scan': '#d7a864',
         'pre-band': '#13281e', 'pre': '#78c8a0',
         'rec-band': '#221b33', 'rec': '#b7a0e8',
+        'post-band': '#2a2511', 'post': '#dcc25a',
         'ana-band': '#33181f', 'ana': '#ee94a8',
         'hand': '#f0906b', 'hand-bg': '#3a2119',
     },
@@ -65,15 +67,15 @@ STYLE = f"""
 .band {{ stroke: none; }}
 .band.seq {{ fill: var(--seq-band); }} .band.scan {{ fill: var(--scan-band); }}
 .band.pre {{ fill: var(--pre-band); }} .band.rec {{ fill: var(--rec-band); }}
-.band.ana {{ fill: var(--ana-band); }}
+.band.post {{ fill: var(--post-band); }} .band.ana {{ fill: var(--ana-band); }}
 .rail {{ font: 600 11px {SANS}; letter-spacing: .12em; }}
 .rail.seq {{ fill: var(--seq); }} .rail.scan {{ fill: var(--scan); }}
 .rail.pre {{ fill: var(--pre); }} .rail.rec {{ fill: var(--rec); }}
-.rail.ana {{ fill: var(--ana); }}
+.rail.post {{ fill: var(--post); }} .rail.ana {{ fill: var(--ana); }}
 .box {{ fill: var(--box); stroke-width: 1.5; }}
 .box.seq {{ stroke: var(--seq); }} .box.scan {{ stroke: var(--scan); }}
 .box.pre {{ stroke: var(--pre); }} .box.rec {{ stroke: var(--rec); }}
-.box.ana {{ stroke: var(--ana); }}
+.box.post {{ stroke: var(--post); }} .box.ana {{ stroke: var(--ana); }}
 .box.plain {{ stroke: var(--line); }}
 .box.key {{ stroke-width: 2.5; }}
 .box.dashed {{ stroke-dasharray: 5 4; }}
@@ -150,7 +152,9 @@ ARIA = (
     'from EPIcal, regrids, corrects and scatters the ArbEPI data, and derives coil compression, '
     'sensitivity maps, B0 and R2* from the deGRE before compressing the k-space, extracting the '
     'calibration region and writing one preprocessed file. Reconstruction is root-sum-of-squares '
-    'or iterative SENSE with optional B0 and R2* models. Analysis fits a GLM with the task '
+    'or iterative SENSE with optional B0 and R2* models. Postprocessing registers every frame '
+    'of the series to the middle frame with a rigid-body transform (FSL MCFLIRT or a scipy fallback) and '
+    'resamples it. Analysis fits a GLM with the task '
     'regressors and drift terms to the reconstructed series, with AR(1) prewhitening, and writes '
     't, z and percent-change maps. scan_info.mat bypasses the scanner and '
     'carries the sampling schedule to preprocessing.'
@@ -711,12 +715,37 @@ def draw(d):
     rec_y1 = out_y + out_h + 20
     d.band(rec_y0, rec_y1, 'rec', 'RECON · uv (.venv-recon)')
 
-    # ---- analysis: GLM activation maps of the reconstructed series ----
-    ana_y0 = rec_y1 + 50
-    ana_y = ana_y0 + 14
-    d.line(f'M470 {out_y + out_h} V{ana_y - 2}')
-    d.arrow(f'M470 {ana_y - 14} V{ana_y - 2}')
+    # ---- postprocessing: motion correction of the reconstructed series ----
+    post_y0 = rec_y1 + 50
+    post_y = post_y0 + 14
+    d.line(f'M470 {out_y + out_h} V{post_y - 2}')
+    d.arrow(f'M470 {post_y - 14} V{post_y - 2}')
     d.chip(470, rec_y1 + 25, 'sense_<reg>/<seq>_recon.h5 · X_recon, X (one component per scale)')
+    post_h = d.box(55, post_y, 1030, None, 'post', [
+        ('title', 'Motion correction: rigid-body registration of every frame'),
+        ('mono', 'postprocess/ · python -m postprocess'),
+        ('para', 'Six-parameter registration of each frame\'s magnitude to the middle frame '
+                 '(MCFLIRT\'s default; mean of the aligned series optional). Backend: FSL '
+                 'mcflirt if found, else a multi-resolution least-squares registration in '
+                 'scipy. FSL supplies the transforms only: resampling is shared, so the complex '
+                 'series and every mslr component are resampled with one set of matrices.'),
+    ])
+    post_out_y = post_y + post_h + 26
+    d.arrow(f'M470 {post_y + post_h} V{post_out_y - 2}')
+    d.tag(55, post_out_y, 1030, 60, [
+        ('mono-b', '<out>.h5 · <out>.par · <out>.json'),
+        ('mono-s', 'X_recon, X (same layout as the input) · motion/{matrices,params,ref} · '
+                   'rx ry rz tx ty tz per frame'),
+    ])
+    post_y1 = post_out_y + 60 + 20
+    d.band(post_y0, post_y1, 'post', 'POSTPROCESS · uv (.venv)')
+
+    # ---- analysis: GLM activation maps of the reconstructed series ----
+    ana_y0 = post_y1 + 50
+    ana_y = ana_y0 + 14
+    d.line(f'M470 {post_out_y + 60} V{ana_y - 2}')
+    d.arrow(f'M470 {ana_y - 14} V{ana_y - 2}')
+    d.chip(470, post_y1 + 25, '<name>_mc_recon.h5 (or the recon .h5 itself)')
     ana_h = d.box(55, ana_y, 1030, None, 'ana', [
         ('title', 'Activation maps: GLM t- and z-scores'),
         ('mono', 'analyze/ · python -m analyze'),

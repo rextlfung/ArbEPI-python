@@ -18,6 +18,7 @@ but nothing is executed.
    ge
    preprocess
    recon
+   postprocess
    analyze
    simulate_fmri
 ```

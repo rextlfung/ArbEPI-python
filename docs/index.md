@@ -18,6 +18,7 @@ needs, and the mistakes people make first.
 | export to a GE scanner or copy `.pge` files over | {doc}`ge_export`, {doc}`ge` |
 | turn raw ScanArchives into reconstruction-ready files | {doc}`preprocess` |
 | reconstruct images, and see the cost functions | {doc}`recon` |
+| motion-correct a reconstruction | {doc}`postprocess` |
 | compute task activation maps | {doc}`analyze` |
 | simulate a whole session without a scanner | {doc}`simulate_fmri` |
 | know why a default is what it is | {doc}`design_sequences` and the other design notes |
@@ -50,6 +51,7 @@ ge
 
 preprocess
 recon
+postprocess
 analyze
 simulate_fmri
 notebooks
@@ -62,6 +64,7 @@ notebooks
 design_sequences
 design_preprocess
 design_recon
+design_postprocess
 design_analysis
 ```
 

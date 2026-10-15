@@ -129,6 +129,16 @@ MSLR
   Multi-scale low-rank reconstruction (`--reg mslr`): the image is a sum of
   components, each low rank over patches of one size.
 
+motion correction, MCFLIRT
+  Rigid-body (three rotations, three translations) registration of every frame
+  to a reference frame, `postprocess/`. MCFLIRT is FSL's tool for it; the
+  middle frame is its default reference. See {doc}`postprocess`.
+
+framewise displacement (FD)
+  Per-frame head motion summary: the summed absolute change in the six
+  motion parameters from the previous frame, rotations scaled by a 50 mm head
+  radius (Power et al. 2012).
+
 PDHG, POGM, CG
   The solvers: primal-dual hybrid gradient (wavelet + TV), proximal optimized
   gradient method (low rank), and conjugate gradient (no regularizer).

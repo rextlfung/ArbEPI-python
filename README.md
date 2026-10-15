@@ -6,7 +6,7 @@ Python port of [ArbEPI](../ArbEPI) (MATLAB/Pulseq), using [pypulseq](https://git
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/pipeline/pipeline-dark.svg">
-  <img alt="ArbEPI pipeline: scan configuration, sampling masks and echo-train partitioning produce four Pulseq sequences (deGRE, noise, EPIcal, ArbEPI), exported to GE .pge and run on the scanner; each sequence's raw data feeds its own preprocessing step, and the preprocessed file feeds RSS or iterative SENSE reconstruction" src="docs/pipeline/pipeline-light.svg">
+  <img alt="ArbEPI pipeline: scan configuration, sampling masks and echo-train partitioning produce four Pulseq sequences (deGRE, noise, EPIcal, ArbEPI), exported to GE .pge and run on the scanner; each sequence's raw data feeds its own preprocessing step, and the preprocessed file feeds RSS or iterative SENSE reconstruction, whose output is motion-corrected and then analyzed" src="docs/pipeline/pipeline-light.svg">
 </picture>
 
 Each of the four sequences keeps its own lane from generation through the scanner. The noise scan sets the whitening matrix W, the EPIcal scan calibrates the readout delay and odd/even phase, the ArbEPI time series is gridded and scattered into k-space, and the shared deGRE supplies coil compression, sensitivity maps, B0 and R2*. The sampling schedule never passes through the scanner: it travels in `scan_info.mat`, which preprocessing needs to put each echo back at its (ky, kz) location.
@@ -18,6 +18,7 @@ Each of the four sequences keeps its own lane from generation through the scanne
 | Preprocess | `.venv-preprocessing` | `.venv-preprocessing/bin/python -m preprocess.batch_preprocess <datdir> <seq> ...` | `<datdir>/recon/<seq>_preprocessed.h5` |
 | RSS | `.venv-recon` (`uv sync`, see [recon/README.md](recon/README.md#setup)) | `UV_PROJECT_ENVIRONMENT=.venv-recon uv run --extra recon python -m recon.rss <datdir> <seq>` | `<datdir>/recon/rss/` |
 | Iterative SENSE | `.venv-recon` | `UV_PROJECT_ENVIRONMENT=.venv-recon uv run --extra recon python -m recon.sense <datdir> <seq> --reg mslr --B0` | `<datdir>/recon/sense_mslr_b0/` |
+| Motion correction | main (`uv sync --extra analyze`, see [postprocess/README.md](postprocess/README.md)) | `uv run python -m postprocess --recon <datdir>/recon/sense_mslr_b0/<seq>_recon.h5 --out <datdir>/recon/sense_mslr_b0/<seq>_mc_recon.h5` | `<seq>_mc_recon.h5` (same layout as the input) + `.par` + `.json` |
 | Activation maps | main (`uv sync --extra analyze`, see [analyze/README.md](analyze/README.md)) | `uv run python -m analyze --recon <datdir>/recon/sense_mslr_b0/<seq>_recon.h5 --tr <TR> --onsets ... --duration 20 --scales all --out <dir>` | `<dir>/<seq>_recon_{sum,scaleK}_{t,z,psc}.nii.gz` |
 
 Before preprocessing, put the raw ScanArchives in `<datdir>/scanarchives/` and copy that session's `scan_info.mat` to `<datdir>/seqs/<seq>/` (see [preprocess/README.md](preprocess/README.md)).
@@ -239,6 +240,9 @@ recon/                        Image reconstruction (.venv-recon, uv sync), on Py
   utils.py                      I/O, operator norms, tSNR report, one-off L sweep/benchmark and
                                  validation vs. ../mslr-recon (python -m recon.utils ...)
   demo.ipynb                    Every recon type on one real dataset
+postprocess/                 Operations on recon/ output before analyze/ (main .venv, `uv sync --extra analyze`) -- see postprocess/README.md:
+  motion.py                     Rigid-body motion correction: FSL MCFLIRT if found, else scipy registration; shared resampling
+  __main__.py                   `python -m postprocess --recon ... --out ...`
 analyze/                     Task activation maps from reconstructions (main .venv, `uv sync --extra analyze`) -- see analyze/README.md:
   design.py                     Task blocks x canonical HRF, DCT drift terms, constant
   glm.py                        GLM with SPM-style AR(1) prewhitening; t -> z, FDR

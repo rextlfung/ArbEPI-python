@@ -1,7 +1,7 @@
 # Start here
 
 ArbEPI-python takes you from a sampling pattern to an activation map. The work
-happens in six steps, each with its own page and (for the later ones) its own
+happens in seven steps, each with its own page and (for the later ones) its own
 Python environment.
 
 ## The steps, in order
@@ -13,10 +13,11 @@ Python environment.
 | 3 | **Export and scan** | `uv run python main.py --ge`, copy the `.pge` files to the scanner (`ge.coppe`), run all four scans | raw ScanArchives | {doc}`ge_export`, {doc}`ge` |
 | 4 | **Preprocess** | `python -m preprocess.batch_preprocess <datdir> <seq> ...` | one `<seq>_preprocessed.h5` per sequence: zero-filled k-space, sensitivity and B0 maps | {doc}`preprocess` |
 | 5 | **Reconstruct** | `python -m recon.rss ...` or `python -m recon.sense ...` | image time series (`.h5`, `.nii.gz`) | {doc}`recon` |
-| 6 | **Analyze** | `python -m analyze ...` | t- and z-score maps | {doc}`analyze` |
+| 6 | **Motion-correct** (optional) | `python -m postprocess --recon ... --out ...` | the series registered to its middle frame, plus motion parameters | {doc}`postprocess` |
+| 7 | **Analyze** | `python -m analyze ...` | t- and z-score maps | {doc}`analyze` |
 
 Without a scanner, {doc}`simulate_fmri` replaces step 3 by simulating the raw
-data of all four scans, so steps 4 to 6 run unchanged on it.
+data of all four scans, so steps 4 to 7 run unchanged on it.
 
 ## Why four sequences
 
@@ -41,7 +42,7 @@ environments, all created from the same `uv.lock`.
 
 | Environment | Used for | Created with |
 |---|---|---|
-| `.venv` | sequence generation, GE export, plotting, `analyze/` | `uv sync --extra test` (add `--extra analyze`) |
+| `.venv` | sequence generation, GE export, plotting, `postprocess/`, `analyze/` | `uv sync --extra test` (add `--extra analyze`) |
 | `.venv-preprocessing` | `preprocess/` on real scanner data (needs GE's proprietary `GERecon`, Python 3.10, `numpy<2`) | see {doc}`preprocess` |
 | `.venv-recon` | `recon/` (needs PyTorch) | `UV_PROJECT_ENVIRONMENT=.venv-recon uv sync --extra recon --extra test` |
 | `.venv-simulate` | `simulate_fmri/` (also runs preprocessing and recon on the simulated session, no `GERecon` needed) | `UV_PROJECT_ENVIRONMENT=.venv-simulate uv sync --extra simulate --extra preprocessing --extra recon --extra test` |

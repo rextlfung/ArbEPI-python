@@ -11,7 +11,7 @@ points and global config (`main.py`, `demo.ipynb`, `params.py`,
 `scanners.py`) sit at the repo root, mirroring `../ArbEPI` having `params.m`/`main.m` directly
 at its own root — everything else lives under
 `lib/`/`sequences/`/`sample/`/`plot/`/`ge/` (plus the
-`preprocess/`/`recon/` data-processing stages, `simulate_fmri/`, which
+`preprocess/`/`recon/`/`postprocess/` data-processing stages, `simulate_fmri/`, which
 simulates scans of these sequences, and `tests/`/`docs/`), matching
 `../ArbEPI`'s `src/`/`lib/` split (see README.md's Architecture section
 for the full layout).
@@ -56,8 +56,8 @@ guides, the root README is split into pages by `## ` section
 (`generate`, `custom_masks`, `mask2epi`, `ge_export`, `background`), and the
 **design notes** (`docs/design_*.md`) are the `###` sections of this file
 that hold design history (Data flow, Index convention, `.mat` format, Key
-design decisions, GE export, the `preprocess/`/`recon/`/`analyze/`/
-`simulate_fmri/` sections, B0 correction); the instruction sections above
+design decisions, GE export, the `preprocess/`/`recon/`/`postprocess/`/
+`analyze/`/`simulate_fmri/` sections, B0 correction); the instruction sections above
 (commit conventions, commands, this one) are not published. A new `###`
 section here is not published until a design page names it. The reconstruction
 cost functions (LaTeX) live in `recon/README.md`'s "The optimization
