@@ -362,6 +362,17 @@ $$g(X_1,\dots,X_K) = \sum_k \lambda_k \sum_{\text{patches } b} \|P_b(X_k)\|_*$$
   global + local decomposition.
 - `--stride` controls patch overlap (defaults to the patch size, i.e. no
   overlap, except for the default 6 6 6 patch, which uses stride 3).
+- `--cycle-spin` (with `--cycle-spin-seed`) moves every local scale's patch grid
+  by a random shift in `[0, stride)` along each axis at every iteration
+  (cycle spinning), so non-overlapping patches (`--stride` = `--patch`, `1/p^3`
+  of the SVDs of stride 1, about `1/8` of stride `p/2` per axis) stand in for
+  overlapping ones without a fixed block boundary. The shifted volume is rolled
+  periodically, so patches at one edge wrap to the opposite edge (harmless while
+  the object stays away from the field of view's edge). The penalty is a
+  different one every iteration, so the cost trace is noisy and `--conv-tol`
+  and POGM's restart rule do not apply: use `--mom pgm` (or `fpgm`) with
+  `--conv-tol 0`. Global (whole-volume) scales are not shifted. The returned
+  image is one prox output, so it carries the last iteration's grid.
 - The weights follow the paper's eq. 4,
   $\lambda_k = \lambda_{\text{global}} \big(\sqrt{p_k} + \sqrt{N_t} + \sqrt{\log(N_{\text{vox}} N_t / \max(p_k, N_t))}\big)$
   with $p_k$ the number of voxels per patch — the expected largest singular

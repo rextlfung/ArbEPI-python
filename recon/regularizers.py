@@ -11,6 +11,7 @@
 
 import math
 
+import numpy as np
 import pywt
 import torch
 import torch.nn.functional as F
@@ -230,6 +231,22 @@ def patchSVST(
     return img_out / pcount.unsqueeze(-1), reg_total
 
 
+def shifted_patchSVST(
+    img: torch.Tensor, beta: float, patch_size, stride_size, shift: tuple[int, int, int]
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """patchSVST on a patch grid whose origin is moved to voxel `shift`:
+    roll the volume by -shift, threshold, roll back. The roll is periodic, so
+    patches at the far edge wrap around to the near one (harmless while the
+    object does not touch the edges of the field of view). shift = (0, 0, 0)
+    is patchSVST exactly."""
+    if not any(shift):
+        return patchSVST(img, beta, patch_size, stride_size)
+    rolled = torch.roll(img, tuple(-s for s in shift), dims=(0, 1, 2))
+    out, reg = patchSVST(rolled, beta, patch_size, stride_size)
+    del rolled
+    return torch.roll(out, tuple(shift), dims=(0, 1, 2)), reg
+
+
 class SumScales(LinearMap):
     """(Nx,Ny,Nz,Nt,Nscales) -> (Nx,Ny,Nz,Nt): the image is the sum of its
     per-scale components, X_recon = X[...,0] + ... + X[...,Nscales-1]. Data
@@ -261,9 +278,16 @@ class MultiScaleLowRank:
         strides: list[tuple[int, int, int]],
         img_shape: tuple[int, int, int, int],
         lambda_global: float = 1.0,
+        cycle_spin_seed: int | None = None,
     ):
         assert len(patch_sizes) == len(strides), "one stride per patch size"
         Nx, Ny, Nz, Nt = img_shape
+        self.img_shape = (Nx, Ny, Nz)
+        # Cycle spinning (Coifman & Donoho 1995): every prox call moves each local
+        # scale's patch grid by a random shift in [0, stride) along each axis, so no
+        # patch boundary persists across iterations and non-overlapping patches
+        # (cheap) stand in for overlapping ones. None = off, a fixed grid.
+        self._rng = None if cycle_spin_seed is None else np.random.default_rng(cycle_spin_seed)
         self.patch_sizes = [tuple(p) for p in patch_sizes]
         self.strides = [tuple(s) for s in strides]
         self.Nscales = len(patch_sizes)
@@ -288,14 +312,26 @@ class MultiScaleLowRank:
             total += self.lambdas[k] * nuc
         return total
 
+    def _draw_shift(self, k: int) -> tuple[int, int, int]:
+        """Grid shift for scale k's next prox: uniform in [0, stride) per axis,
+        0 on an axis the patch spans whole (a shift there changes nothing)."""
+        if self._rng is None:
+            return (0, 0, 0)
+        return tuple(
+            int(self._rng.integers(min(s, n))) if min(p, n) < n else 0
+            for p, s, n in zip(self.patch_sizes[k], self.strides[k], self.img_shape)
+        )
+
     def prox(self, X: torch.Tensor, c: float) -> torch.Tensor:
         """prox_{c*g}(X), computed scale by scale (g is separable across
         scales). Writes into X and returns it; also records g(result) in
-        self.last_cost."""
+        self.last_cost, which with cycle spinning is the cost on this call's
+        shifted grid, so it varies from call to call."""
         reg = 0.0
         for k in range(self.Nscales):
-            result, cost = patchSVST(
-                X[..., k], c * self.lambdas[k], self.patch_sizes[k], self.strides[k]
+            result, cost = shifted_patchSVST(
+                X[..., k], c * self.lambdas[k], self.patch_sizes[k], self.strides[k],
+                self._draw_shift(k),
             )
             X[..., k] = result
             reg += self.lambdas[k] * cost.item()

@@ -1074,6 +1074,23 @@ aliasing, forced `GC.gc()`/`CUDA.reclaim()`); it is kept instead of
 mirtorch's own `POGM`, which has no FPGM/PGM variants and different
 restart/stopping rules.
 
+**Cycle spinning** (`--cycle-spin`, `MultiScaleLowRank(cycle_spin_seed=...)`,
+2026-10-16, user request): each prox rolls every local scale by a random shift
+in `[0, stride)` per axis, thresholds a non-overlapping grid and rolls back
+(`shifted_patchSVST`), instead of averaging overlapping patches. Motivation,
+measured on 20261006tap run A, all 660 frames, B0, one local scale, PGM, 3
+iterations (a 48 GB card with another user's 3 GB on it): the solver state,
+not the series, is what does not fit -- two scales (global + 6^3) ran out of
+memory with PGM (44 GB), POGM does not fit even with one scale (PGM 33.4 GB,
+FPGM 38 GB at 6^3 stride 6); the patch step scales as patches x (m n^2), so
+9^3 patches at stride 3 (14,000 SVDs of 729 x 660) did not finish one
+iteration in 57 min, stride 5 took 1377 s/iteration (27.8 GB) and a
+non-overlapping grid is projected at about 6 min. The penalty changes every
+call, so it is not one objective: `last_cost` and the cost trace are of the
+call's own grid, early stopping and POGM's restart do not apply (use PGM or
+FPGM with `--conv-tol 0`), and the periodic roll lets patches wrap across the
+FOV edge. Not checked: that it matches true overlap in image quality.
+
 `SENSE_B0`/`SENSE_B0_R2star` add B0 off-resonance (and R2* decay) modeling on
 top of `SENSE` -- see the "B0 off-resonance correction" subsection below for
 the design and investigation history. `utils.py`'s `sweep` and `benchmark`
