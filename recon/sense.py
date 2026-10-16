@@ -97,6 +97,7 @@ def run_sense(
     lambda_global: float | None = None,
     mom: str = "fpgm",
     conv_tol: float = 1e-5,
+    cycle_spin_seed: int | None = None,
     normalize_operator: bool = True,
     normalize_noise: bool = True,
     # wavelet-tv
@@ -147,6 +148,9 @@ def run_sense(
     calibrated for unit-variance noise; None (default) means the acceleration
     factor R, since incoherent aliasing needs stronger regularization than
     noise alone.
+
+    cycle_spin_seed (mslr): when not None, every prox shifts each local scale's
+    patch grid randomly (cycle spinning, `MultiScaleLowRank`), seeded.
     """
     if reg not in REGULARIZERS:
         raise ValueError(f"reg={reg!r}, expected one of {REGULARIZERS}")
@@ -289,6 +293,7 @@ def run_sense(
         hp,
         hp_weight,
         temporal,
+        cycle_spin_seed,
     )
 
 
@@ -341,8 +346,9 @@ def _solve_mslr(
     hp=None,
     hp_weight=0.0,
     temporal=None,
+    cycle_spin_seed=None,
 ) -> ReconResult:
-    g = MultiScaleLowRank(patch_sizes, strides, shape, lambda_global)
+    g = MultiScaleLowRank(patch_sizes, strides, shape, lambda_global, cycle_spin_seed)
     S = g.synthesis  # (Nx,Ny,Nz,Nt,Nscales) -> (Nx,Ny,Nz,Nt)
     Nscales = g.Nscales
 
@@ -411,6 +417,7 @@ def _solve_mslr(
             patch_sizes=g.patch_sizes,
             strides=g.strides,
             normalize_operator=normalize_operator,
+            cycle_spin_seed=cycle_spin_seed,
             **(temporal or {}),
         ),
         **common,
@@ -684,6 +691,12 @@ def _cli() -> None:
     lr.add_argument(
         "--lambda-global", type=float, default=None, help="default: acceleration factor R"
     )
+    lr.add_argument(
+        "--cycle-spin",
+        action="store_true",
+        help="shift every patch grid randomly each iteration (use with non-overlapping strides)",
+    )
+    lr.add_argument("--cycle-spin-seed", type=int, default=0)
     lr.add_argument("--mom", choices=["pogm", "fpgm", "pgm"], default="pogm")
     lr.add_argument("--conv-tol", type=float, default=1e-5, help="<= 0 disables early stopping")
     wt = p.add_argument_group("wavelet-tv")
@@ -733,6 +746,7 @@ def _cli() -> None:
             lambda_global=a.lambda_global,
             mom=a.mom,
             conv_tol=a.conv_tol,
+            cycle_spin_seed=a.cycle_spin_seed if a.cycle_spin else None,
         )
     elif a.reg == "wavelet-tv":
         kwargs.update(lamb_l1=a.lamb_l1, lamb_tv=a.lamb_tv, wave=a.wave, levels=a.levels,

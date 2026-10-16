@@ -197,3 +197,43 @@ def test_reg_weights_clip_oversized_patch_to_image():
     assert over == clipped
     reg = MultiScaleLowRank([(16, 16, 16)], [(16, 16, 16)], (*shape, 5))
     assert reg.lambdas == clipped
+
+
+def test_shifted_patchsvst_zero_shift_is_patchsvst_and_shift_is_a_rolled_grid():
+    from recon.regularizers import shifted_patchSVST
+
+    img = _random_img(12, 10, 8, 6)
+    args = (0.5, (4, 4, 4), (4, 4, 4))
+    base, base_reg = patchSVST(img, *args)
+    out0, reg0 = shifted_patchSVST(img, *args, (0, 0, 0))
+    assert torch.equal(out0, base) and reg0 == base_reg
+
+    s = (1, 3, 2)
+    out, reg = shifted_patchSVST(img, *args, s)
+    rolled = torch.roll(img, tuple(-v for v in s), dims=(0, 1, 2))
+    want, want_reg = patchSVST(rolled, *args)
+    assert torch.equal(out, torch.roll(want, s, dims=(0, 1, 2)))
+    assert reg == want_reg
+    assert not torch.allclose(out, base)  # a different grid thresholds differently
+
+
+def test_cycle_spinning_shifts_are_seeded_bounded_and_skip_whole_axes():
+    shape = (12, 12, 8, 5)
+    kw = dict(patch_sizes=[(4, 4, 4), (12, 12, 8)], strides=[(4, 4, 4), (12, 12, 8)], img_shape=shape)
+    a, b = MultiScaleLowRank(**kw, cycle_spin_seed=3), MultiScaleLowRank(**kw, cycle_spin_seed=3)
+    draws_a = [a._draw_shift(0) for _ in range(20)]
+    assert draws_a == [b._draw_shift(0) for _ in range(20)]
+    assert all(0 <= s < 4 for d in draws_a for s in d) and len(set(draws_a)) > 1
+    assert a._draw_shift(1) == (0, 0, 0)  # whole-volume scale
+    assert MultiScaleLowRank(**kw)._draw_shift(0) == (0, 0, 0)  # off by default
+
+
+def test_cycle_spinning_prox_changes_between_calls_and_matches_fixed_grid_when_off():
+    shape = (12, 12, 8, 6)
+    X0 = _random_img(*shape).unsqueeze(-1)
+    fixed = MultiScaleLowRank([(4, 4, 4)], [(4, 4, 4)], shape)
+    spun = MultiScaleLowRank([(4, 4, 4)], [(4, 4, 4)], shape, cycle_spin_seed=0)
+    ref = patchSVST(X0[..., 0], 0.5 * fixed.lambdas[0], (4, 4, 4), (4, 4, 4))[0]
+    assert torch.equal(fixed.prox(X0.clone(), 0.5)[..., 0], ref)
+    y1, y2 = spun.prox(X0.clone(), 0.5), spun.prox(X0.clone(), 0.5)
+    assert not torch.equal(y1, y2)
