@@ -372,6 +372,10 @@ $$g(X_1,\dots,X_K) = \sum_k \lambda_k \sum_{\text{patches } b} \|P_b(X_k)\|_*$$
   and POGM's restart rule do not apply: use `--mom pgm` (or `fpgm`) with
   `--conv-tol 0`. Global (whole-volume) scales are not shifted. The returned
   image is one prox output, so it carries the last iteration's grid.
+- `--init RECON.h5` starts from that recon's `X` (same frames and scales) instead of
+  A^H y, to run more iterations of an earlier result. PGM has no momentum, so a PGM
+  continuation equals the longer run (tested); FPGM/POGM restart their momentum.
+  With cycle spinning give a new `--cycle-spin-seed`, or the shifts repeat.
 - The weights follow the paper's eq. 4,
   $\lambda_k = \lambda_{\text{global}} \big(\sqrt{p_k} + \sqrt{N_t} + \sqrt{\log(N_{\text{vox}} N_t / \max(p_k, N_t))}\big)$
   with $p_k$ the number of voxels per patch — the expected largest singular
