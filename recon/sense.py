@@ -98,6 +98,7 @@ def run_sense(
     mom: str = "fpgm",
     conv_tol: float = 1e-5,
     cycle_spin_seed: int | None = None,
+    fn_init: str | None = None,
     normalize_operator: bool = True,
     normalize_noise: bool = True,
     # wavelet-tv
@@ -151,6 +152,11 @@ def run_sense(
 
     cycle_spin_seed (mslr): when not None, every prox shifts each local scale's
     patch grid randomly (cycle spinning, `MultiScaleLowRank`), seeded.
+
+    fn_init (mslr): a recon .h5 of the same frames and scales (its `X`) to start
+    from instead of A^H y, i.e. to run more iterations of an earlier result. PGM
+    has no momentum, so a PGM continuation equals the longer run; FPGM/POGM
+    restart their momentum.
     """
     if reg not in REGULARIZERS:
         raise ValueError(f"reg={reg!r}, expected one of {REGULARIZERS}")
@@ -277,6 +283,15 @@ def run_sense(
         )
     if lambda_global is None:
         lambda_global = float(R)
+    init_X = None
+    if fn_init is not None:
+        with h5py.File(fn_init, "r") as f:
+            init_X = torch.from_numpy(f["X"][()]).to(ksp.device)
+        if tuple(init_X.shape) != (Nx, Ny, Nz, Nt, len(patch_sizes)):
+            raise ValueError(
+                f"{fn_init}: X has shape {tuple(init_X.shape)}, expected "
+                f"{(Nx, Ny, Nz, Nt, len(patch_sizes))} (same frames and scales)"
+            )
     return _solve_mslr(
         A,
         ksp,
@@ -294,6 +309,7 @@ def run_sense(
         hp_weight,
         temporal,
         cycle_spin_seed,
+        init_X,
     )
 
 
@@ -347,6 +363,7 @@ def _solve_mslr(
     hp_weight=0.0,
     temporal=None,
     cycle_spin_seed=None,
+    init_X=None,
 ) -> ReconResult:
     g = MultiScaleLowRank(patch_sizes, strides, shape, lambda_global, cycle_spin_seed)
     S = g.synthesis  # (Nx,Ny,Nz,Nt,Nscales) -> (Nx,Ny,Nz,Nt)
@@ -373,7 +390,7 @@ def _solve_mslr(
         return S.adjoint(r + mu * hp.apply(x) if mu else r)
 
     print("Initializing X0...")
-    X0 = S.adjoint(A.adjoint(ksp) / Nscales)
+    X0 = init_X if init_X is not None else S.adjoint(A.adjoint(ksp) / Nscales)
     g.last_cost = g.cost(X0)
 
     dc_costs, reg_costs, restarts, rel_changes = [], [], [], []
@@ -697,6 +714,12 @@ def _cli() -> None:
         help="shift every patch grid randomly each iteration (use with non-overlapping strides)",
     )
     lr.add_argument("--cycle-spin-seed", type=int, default=0)
+    lr.add_argument(
+        "--init",
+        default=None,
+        metavar="RECON.h5",
+        help="start from this recon's X (same frames/scales) to continue it",
+    )
     lr.add_argument("--mom", choices=["pogm", "fpgm", "pgm"], default="pogm")
     lr.add_argument("--conv-tol", type=float, default=1e-5, help="<= 0 disables early stopping")
     wt = p.add_argument_group("wavelet-tv")
@@ -747,6 +770,7 @@ def _cli() -> None:
             mom=a.mom,
             conv_tol=a.conv_tol,
             cycle_spin_seed=a.cycle_spin_seed if a.cycle_spin else None,
+            fn_init=a.init,
         )
     elif a.reg == "wavelet-tv":
         kwargs.update(lamb_l1=a.lamb_l1, lamb_tv=a.lamb_tv, wave=a.wave, levels=a.levels,

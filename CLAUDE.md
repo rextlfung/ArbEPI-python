@@ -1089,7 +1089,9 @@ non-overlapping grid is projected at about 6 min. The penalty changes every
 call, so it is not one objective: `last_cost` and the cost trace are of the
 call's own grid, early stopping and POGM's restart do not apply (use PGM or
 FPGM with `--conv-tol 0`), and the periodic roll lets patches wrap across the
-FOV edge. Not checked: that it matches true overlap in image quality.
+FOV edge. Not checked: that it matches true overlap in image quality. `--init`
+(`run_sense(fn_init=)`) starts `--reg mslr` from an earlier recon's `X` to run more
+iterations; for PGM that is exactly the longer run (`test_run_sense_init_continues_a_pgm_run_exactly`).
 
 `SENSE_B0`/`SENSE_B0_R2star` add B0 off-resonance (and R2* decay) modeling on
 top of `SENSE` -- see the "B0 off-resonance correction" subsection below for

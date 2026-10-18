@@ -345,3 +345,26 @@ def test_save_result_writes_h5_nifti_and_json_for_every_regularizer(tmp_path, re
     save_result(fn_base, r, fov=(0.2, 0.2, 0.05), seqname="test")
     for ext in (".h5", ".nii.gz", ".json"):
         assert (tmp_path / f"out_{reg}{ext}").exists()
+
+
+def test_run_sense_init_continues_a_pgm_run_exactly(tmp_path):
+    """PGM carries no momentum, so 10 iterations then 5 more from the saved X equal 15 in one go."""
+    import h5py
+
+    Nx, Ny, Nz, Nc, Nt = 12, 12, 8, 4, 3
+    fn_ksp, fn_smaps = _write_synthetic_dataset(tmp_path, Nx, Ny, Nz, Nc, Nt, R=3.0)
+    kw = dict(fn_ksp=fn_ksp, fn_smaps=fn_smaps, patch_sizes=[(4, 4, 4)], strides=[(4, 4, 4)],
+              sigma1A=1.0, device=DEVICE, mom="pgm", conv_tol=0.0, lambda_global=0.05)
+    whole = run_sense(niters=15, **kw)
+    first = run_sense(niters=10, **kw)
+    fn_init = str(tmp_path / "first.h5")
+    with h5py.File(fn_init, "w") as f:
+        f["X"] = first.X.cpu().numpy()
+    more = run_sense(niters=5, fn_init=fn_init, **kw)
+    rel = (more.X_recon - whole.X_recon).norm() / whole.X_recon.norm()
+    assert rel < 1e-5
+    assert abs(more.dc_costs[0] - first.dc_costs[-1]) < 1e-3 * first.dc_costs[-1]
+    with pytest.raises(ValueError, match="expected"):
+        with h5py.File(fn_init, "w") as f:
+            f["X"] = first.X.cpu().numpy()[..., :2, :]
+        run_sense(niters=1, fn_init=fn_init, **kw)
