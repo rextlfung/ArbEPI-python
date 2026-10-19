@@ -1061,12 +1061,26 @@ longer a torch-free subset. Tests gate on `pytest.importorskip("torch")`/
 `("mirtorch")`, so the main test suite still collects without it.
 
 **Patch SVST** (`regularizers.py`, ported from `../mslr-recon/src/recon.jl`)
-batches patches into one `torch.linalg.svd` call per memory-budgeted chunk
-rather than looping per patch like the Julia original -- PyTorch's batched
-SVD already parallelizes internally. The one piece of Julia's `SVST` that *is*
-still needed is the exact-zero shortcut (patches with `‖X‖_F <= beta` are
-forced to exact zero before the SVD) -- a correctness safeguard against
-subnormal-magnitude matrices producing NaN. **`pogm_restart`**
+batches patches into one SVD call per memory-budgeted chunk rather than looping
+per patch like the Julia original. Which SVD runs was measured on the lab
+server (2026-10-19; see "Performance on the lab server" below): torch's batched
+SVD does *not* parallelize over the batch on the CPU (216 x 120 patches:
+5.9 ms/matrix with 32 threads, 3.4 with 1), so the CPU path is a thread pool of
+single-threaded LAPACK calls (`_svd_cpu_pooled`, 0.15-0.8 ms/matrix), and on
+the GPU the default driver (gesvdj, 5.3 ms/matrix, 3e-5 relative error against
+float64) loses to cuSOLVER's `gesvda` (0.57 ms, 4e-7) for batches of moderate
+matrices (`_svd`, `_uses_gesvda`). `gesvda` raises on exactly rank-deficient
+input (zero or duplicated rows/columns), so `_svd` falls back to the default
+driver on any raise or non-finite output; its workspace is 15-24x its input
+(the default driver's is 2.6x), so its calls are capped at 96 MB of input
+(`_svd_chunk_bytes`) however large `max_chunk_bytes` is. The single
+whole-volume matrix of a global patch keeps the default driver (faster and
+lighter there). The exact-zero shortcut is now a skip: patches with
+`‖X‖_F <= beta` threshold to exactly zero, so they never reach the SVD (which
+cuSOLVER cannot take as subnormal or all-zero input, and which is wasted work
+on the noise-only background patches); a NaN patch is kept so it fails
+loudly. The thresholded patch is rebuilt from the leading components only,
+those with a singular value above beta. **`pogm_restart`**
 (`solvers.py`, from `../mslr-recon/src/mirt_mod.jl`) is faithful in the
 momentum/restart math but drops Julia's GPU-memory mechanics (manual buffer
 aliasing, forced `GC.gc()`/`CUDA.reclaim()`); it is kept instead of
@@ -1120,6 +1134,39 @@ was a real, measured fix, not a preemptive optimization (`build_sense` +
 `utils.load_and_gather_ksp` are the two entry points; `.A[it].idx` on the
 returned `mirtorch.linear.BlockDiagonal` exposes each frame's own flat
 spatial sample indices for gathering a matching k-space target array).
+Since 2026-10-19 the operator does not call `fftshift`/`ifftshift` at all
+(they were half of every apply: 1.1 of 2.2 ms on the GPU, 61 of 134 ms on the
+CPU, more than the FFT): shifting the input by `h = N // 2` is a phase
+`exp(+2 pi i k h / N)` on the plain transform's output, and the output shift
+picks index `(j - h) mod N`, so the forward gathers the plain `fftn` at
+precomputed indices and multiplies by a precomputed phase (`SENSE._kidx`,
+`_kphase`; exact for odd N, where the phase is not +-1; the adjoint uses the
+conjugate phase and a process-wide shared zero buffer for the scatter,
+`operators._zeroed_buffer`). `tests/test_recon_fast_paths.py` checks it against
+the dense `fftshift` definition on even, odd and mixed sizes.
+
+**Performance on the lab server (2026-10-19, user request: efficiency and peak
+memory on CPU and GPU, then machine-specific).** The machine is shared (64
+threads on an EPYC 9374F, 750 GB RAM, one RTX A6000 also used by others' Julia
+and MATLAB jobs, load average ~30, 42 users), so CPU timings are noisy and
+defaults stay at `torch.get_num_threads()` = 32 (FFT time is flat past 8
+threads and worse at 64). Measured and kept: the SVD backends above (the SVD
+was ~all of the mslr prox: 4.9 ms per 216 x 120 patch on the GPU, slower than
+one CPU core's share); the shift-free `SENSE`; `forward` reuse in `_solve_mslr`
+(cost and next gradient share A x, exact); a power iteration warm-started across
+frames (its stopping rule leaves ~2e-4 relative uncertainty from any start, so
+agreement with a cold start is checked to 5e-4; it finds a slightly higher,
+closer-to-true norm, 1.3502 vs 1.3488 on real data); `iter_frames`; `vdot`
+instead of elementwise temporaries in `cg`; `rss()` shifting only the image.
+Real data, B0, mslr POGM, 124 frames, stride 3: 82.4 -> 62.5 s/iteration, 30.3
+-> 10.1 GB, same costs, images equal to 1.2e-5. Measured and rejected:
+`MKL_ENABLE_INSTRUCTIONS=AVX512` (no change, 117 GFLOP/s per core either way);
+`gesvda` for the single whole-volume matrix (slower and heavier); the Gram-
+matrix eigendecomposition for SVST (fast, but float32 loses singular values
+below ~3e-4 of the largest, which is where beta sits on high-SNR data); 64 CPU
+threads. Not done: pruning the (ky, kz) transform to the sampled lines, a
+vectorized patch gather/scatter (~5% after the SVD fix), splitting SVD batches
+between GPU and CPU.
 
 **`recon/utils.py`'s `read_frames_cropped` (behind `load_array`) reads chunked HDF5 datasets
 chunk-by-chunk along the last axis, not via a single `d[()]` call.** Measured

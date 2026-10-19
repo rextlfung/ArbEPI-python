@@ -6165,3 +6165,14 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   module (and its test) now that `recon/run_recon.py` has its own
   independent CG-SENSE path, or add a one-line docstring note that it's
   kept only as the reference algorithm `cg_sense_solve` was ported from.
+
+- [x] **264. `recon/` spent most of its time in the patch SVD and in two
+  `fftshift` copies per operator apply; peak memory was set by the SVD
+  workspace.** [resolved 2026-10-19] Measured on the lab server (see
+  CLAUDE.md, "Performance on the lab server"): batched SVD of 216 x 120 patches
+  4.9 ms/matrix on the GPU (gesvdj), 5.9 on the CPU with 32 threads; now `gesvda`
+  with fallback (0.57) and a CPU thread pool (0.15-0.8). `SENSE` had two
+  full-array shift copies (half its time). `_solve_mslr` applied A to the same
+  iterate twice, `cg` built full-size temporaries, the power iteration restarted
+  from random per frame, gzip k-space loaded on one core. Real-data result:
+  82.4 -> 62.5 s/iteration, 30.3 -> 10.1 GB, images equal to 1.2e-5.

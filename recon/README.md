@@ -472,9 +472,27 @@ session, or from a real fully sampled run with activation injected
 - K-space is read and gathered one frame at a time, never as a dense
   (Nx, Ny, Nz, Ncoils, Nt) array; HDF5 datasets are read chunk by chunk
   (`utils.read_frames_cropped`), which is ~70× faster than a single read.
-- Patch SVDs run in batches sized to a ~4 GB budget
-  (`regularizers.patchSVST`), so fine patch sizes on large grids fit on a
-  48 GB GPU with no measurable slowdown.
+- Patch SVDs run in batches (`regularizers.patchSVST`). On the CPU a thread pool
+  of single-threaded LAPACK calls (torch's batched SVD does not parallelize over
+  the batch; the pool size is `torch.get_num_threads()`, so `OMP_NUM_THREADS`
+  bounds it on a shared machine). On the GPU, cuSOLVER's `gesvda` for batches of
+  moderate matrices, with a fallback to the default driver when it raises
+  (rank-deficient patches); its workspace is ~20x its input, so those calls
+  carry at most 96 MB of patches. Patches with a Frobenius norm below the
+  threshold skip the SVD. Measured on 90x90x60, 6^3 patches at stride 3 (16k
+  patches), 119 frames: prox 79 s and 22 GB peak -> 8 s and 2.7 GB (GPU); 12.7x
+  on the CPU.
+- The encoding operator has no `fftshift`/`ifftshift` copies (shifts are a
+  precomputed phase and index at the sampled locations), halving `SENSE` and
+  `SENSE_B0` apply/adjoint time. `--reg mslr` with PGM/POGM reuses A x between
+  the cost and the next gradient (one of three operator applications per
+  iteration). The power iteration for sigma1 starts each frame from the previous
+  frame's vector. K-space frames are inflated by a pool of 8 threads
+  (`utils.iter_frames`), 3.7x faster than h5py on gzip-compressed files.
+- Real data (`20260930ballfat/1_10x_radial`, 124 frames, 13 coils, B0, mslr POGM,
+  6^3 patches stride 3, sigma1A fixed): 82.4 -> 62.5 s/iteration and 30.3 -> 10.1
+  GB peak GPU memory, same costs, images equal to 1.2e-5. Stride 6, 10 frames:
+  2.83 -> 1.46 s/iteration; the power iteration of that run 257 -> 87 s.
 - On the demo dataset (90×90×60, 14 coils, R = 6, RTX A6000): RSS of 60 frames
   ≈ 10 s; CG-SENSE of 2 frames, 20 iterations ≈ 0.5 s (plain) or 6 s (B0);
   wavelet-TV of 1 frame, 50 iterations ≈ 2–35 s depending on the operator.

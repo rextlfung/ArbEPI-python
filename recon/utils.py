@@ -15,6 +15,10 @@ import os
 import sys
 import time
 import warnings
+import zlib
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from itertools import islice
 from typing import TYPE_CHECKING, Callable
 
 import h5py
@@ -72,6 +76,43 @@ def read_frames_cropped(
                 out = np.empty(cropped.shape[:-1] + (d.shape[-1],), dtype=d.dtype)
             out[..., start : start + step] = cropped
         return out
+
+
+def iter_frames(d: "h5py.Dataset", frames, workers: int = 8):
+    """Yield d[..., t] (a numpy array) for t in frames, in order.
+
+    preprocess writes ksp_epi_zf with one frame per chunk, gzip-compressed (8x
+    smaller; 70 MB frames), and h5py decompresses on one core at ~300 MB/s -- two
+    and a half minutes for a 681-frame session. For such a dataset the raw chunks
+    are read here and inflated by `workers` threads (zlib releases the GIL), a
+    bounded few frames ahead of the consumer: 1.1-1.3 GB/s with 8-16 workers on
+    the lab server's page-cached RAID (3.7-4.2x). Any other layout (another
+    filter, shuffle, chunks that are not single frames) is read by h5py as before."""
+    frames = list(frames)
+    single_frame_chunks = d.chunks is not None and tuple(d.chunks) == d.shape[:-1] + (1,)
+    plain_gzip = d.compression == "gzip" and not d.shuffle and not d.fletcher32 \
+        and d.scaleoffset is None
+    if workers <= 1 or not (single_frame_chunks and plain_gzip):
+        for t in frames:
+            yield np.asarray(d[..., t])
+        return
+
+    dtype, chunk_shape = d.dtype, d.shape[:-1]
+
+    def decode(t):
+        filter_mask, raw = d.id.read_direct_chunk((0,) * (d.ndim - 1) + (t,))
+        if filter_mask:  # a filter was skipped for this chunk; let h5py handle it
+            return np.asarray(d[..., t])
+        return np.frombuffer(zlib.decompress(raw), dtype=dtype).reshape(chunk_shape)
+
+    with ThreadPoolExecutor(workers) as pool:
+        todo = iter(frames)
+        pending = deque(pool.submit(decode, t) for t in islice(todo, 2 * workers))
+        while pending:
+            frame = pending.popleft().result()
+            for t in islice(todo, 1):
+                pending.append(pool.submit(decode, t))
+            yield frame
 
 
 def load_array(fn: str, key: str) -> np.ndarray:
@@ -136,8 +177,8 @@ def load_and_gather_ksp(
     out = torch.empty(K, Nc, Nt, dtype=torch.complex64, device=device)
     with h5py.File(fn_ksp, "r") as f:
         d = f["ksp_epi_zf"]
-        for it in range(Nt):
-            frame = torch.from_numpy(np.asarray(d[..., frames[it]]).astype(np.complex64)).to(device)
+        for it, frame_np in enumerate(iter_frames(d, frames[:Nt])):
+            frame = torch.from_numpy(frame_np.astype(np.complex64)).to(device)
             flat = frame.reshape(-1, Nc)  # spatial C-order flatten, matches SENSE
             out[:, :, it] = flat[A.A[it].idx, :]
     return out
@@ -213,28 +254,44 @@ def poweriter(
     *,
     niter: int = 200,
     tol: float = 1e-6,
-) -> float:
+    return_vector: bool = False,
+) -> float | tuple[float, torch.Tensor]:
     """Spectral norm ||A||_2 by power iteration on A^H A, stopping once the
-    estimate changes by less than tol (it converges from below)."""
+    estimate changes by less than tol (it converges from below). With
+    return_vector, also the unit vector the estimate was measured on (a start for
+    a similar operator)."""
     x = x0.clone()
     ratio_old = float("inf")
     for _ in range(niter):
         Ax = apply_fwd(x)
         ratio = Ax.norm().item() / x.norm().item()
         if abs(ratio - ratio_old) / ratio < tol:
-            return ratio
+            return (ratio, x / x.norm()) if return_vector else ratio
         ratio_old = ratio
         x = apply_adj(Ax)
         x = x / x.norm()
-    return apply_fwd(x).norm().item() / x.norm().item()
+    ratio = apply_fwd(x).norm().item() / x.norm().item()
+    return (ratio, x) if return_vector else ratio
 
 
 def estimate_spectral_norm(A, x0: torch.Tensor, niter: int = 200, tol: float = 1e-6) -> float:
     """sigma1(A) by power iteration. For a BlockDiagonal (one block per frame)
-    it is the max over the blocks, which keeps buffers at one frame's size.
-    x0: nonzero start of one block's input shape (*N,)."""
+    it is the max over the blocks, which keeps buffers at one frame's size. Each
+    block starts from the previous block's final vector: the blocks share the
+    coil maps (and field map) and differ in the sampled locations, so their top
+    singular vectors are close, and a block needs a few iterations instead of
+    the hundreds a random start can take (the B0 operator took 75 min over all
+    frames). Each block is still iterated to the same tolerance, from a start
+    that is no worse, so the estimate stays a lower bound that converges to the
+    norm. x0: nonzero start of one block's input shape (*N,)."""
     if isinstance(A, BlockDiagonal):
-        return max(poweriter(block.apply, block.adjoint, x0, niter=niter, tol=tol) for block in A.A)
+        best, x = 0.0, x0
+        for block in A.A:
+            ratio, x = poweriter(
+                block.apply, block.adjoint, x, niter=niter, tol=tol, return_vector=True
+            )
+            best = max(best, ratio)
+        return best
     return poweriter(A.apply, A.adjoint, x0, niter=niter, tol=tol)
 
 
