@@ -180,3 +180,77 @@ def test_rampsamp2cart_absolute_scale_matches_ortho_fft_for_uniform_kx():
         assert abs(median_ratio - 1.0) < 0.1, (
             f'nx={nx}: median scale ratio {median_ratio:.4f}, expected ~1.0'
         )
+
+
+# --- method='spline' (hmriutils ca7e9f6) ---
+
+def _spline_case(nx=64, fov_cm=20.0, descending=False):
+    """A ramp-sampled readout: 1.5x oversampled, denser at the center, a hair
+    past Nyquist at the ends (the power-law stand-in above is sparser than a
+    Cartesian grid at its ends, which no interpolation recovers)."""
+    u = np.linspace(-1, 1, int(1.5 * nx))
+    kx = 1.02 * (nx / 2 / fov_cm) * (0.8 * u + 0.2 * np.sign(u) * u**2)
+    if descending:
+        kx = kx[::-1].copy()
+    x_true = _object(nx)
+    return nx, fov_cm, kx, x_true, sigpy.nufft(x_true, (kx * fov_cm)[:, None])
+
+
+@pytest.mark.parametrize('descending', [False, True])
+def test_rampsamp2cart_spline_recovers_the_cartesian_kspace(descending):
+    nx, fov_cm, kx, x_true, y = _spline_case(descending=descending)
+    dc = rampsamp2cart(y[:, None], kx, nx, fov_cm, 'spline')[:, 0]
+    # sigpy.nufft is unnormalized-by-nothing: its value at an on-grid k is the orthonormal DFT
+    n = np.arange(nx) - nx // 2
+    ref = np.exp(-2j * np.pi * np.outer(np.arange(-nx // 2, nx // 2), n) / nx) @ x_true / np.sqrt(nx)
+    assert np.linalg.norm(dc - ref) / np.linalg.norm(ref) < 0.02
+    dc_n = rampsamp2cart(y[:, None], kx, nx, fov_cm, 'nufft')[:, 0]
+    assert np.linalg.norm(dc - ref) < np.linalg.norm(dc_n - ref)  # no worse than the NUFFT
+
+
+def test_rampsamp2cart_spline_uniform_kx_is_the_orthonormal_dft():
+    nx, fov_cm = 64, 20.0
+    n = np.arange(nx) - nx // 2
+    kx = np.arange(-nx // 2, nx // 2 + 1) / fov_cm  # the Cartesian grid, plus the +N/2 end sample
+    x_true = _object(nx)
+    dft = np.exp(-2j * np.pi * np.outer(np.arange(-nx // 2, nx // 2 + 1), n) / nx) / np.sqrt(nx)
+    dc = rampsamp2cart((dft @ x_true)[:, None], kx, nx, fov_cm, 'spline')[:, 0]
+    np.testing.assert_allclose(dc, (dft @ x_true)[:-1], atol=0.01 * np.abs(dc).max())
+
+
+def test_rampsamp2cart_spline_is_linear_batched_and_rejects_odd_nx():
+    nx, fov_cm, kx, _, y = _spline_case()
+    batch = np.stack([y, 2j * y, y[::-1]], axis=1).reshape(len(kx), 3, 1)
+    dc = rampsamp2cart(batch, kx, nx, fov_cm, 'spline')
+    assert dc.shape == (nx, 3, 1)
+    np.testing.assert_allclose(dc[:, 1, 0], 2j * dc[:, 0, 0], atol=1e-10)
+    np.testing.assert_allclose(dc[:, 0, 0], rampsamp2cart(y[:, None], kx, nx, fov_cm, 'spline')[:, 0])
+    with pytest.raises(ValueError, match='even nx'):
+        rampsamp2cart(y[:63, None], kx[:63], 63, fov_cm, 'spline')
+    with pytest.raises(ValueError, match='method'):
+        rampsamp2cart(y[:, None], kx, nx, fov_cm, 'bogus')
+
+
+def test_rampsampepi2cart_spline_recovers_object_under_real_pope_readout_trajectory(tmp_path):
+    p = replace(
+        load_params(), Ny=16, Nz=12, ETL=8, Nshots=3, Nframes=1,
+        sampling_method='caipi', R=8, output_dir=str(tmp_path),
+    )
+    generate_arbepi(gen_sampling_masks(p.R, p), p, seqname='xcheck')
+    scan_info = hdf5storage.loadmat(str(tmp_path / 'scan_info.mat'))
+    kxo = scan_info['kxo'].ravel() / 100
+    kxe = scan_info['kxe'].ravel() / 100
+    nx, fov_cm = p.Nx, p.fov[0] * 100
+
+    x_true = _object(nx)
+    x_true[nx // 2] = 1.5
+    dr = np.zeros((len(kxo), 4), dtype=complex)
+    dr[:, 0::2] = sigpy.nufft(x_true, (kxo * fov_cm)[:, None])[:, None]
+    dr[:, 1::2] = sigpy.nufft(x_true, (kxe * fov_cm)[:, None])[:, None]
+
+    dc = rampsampepi2cart(dr, kxo, kxe, nx, fov_cm, 'spline')
+    true_n = np.abs(x_true) / np.abs(x_true).max()
+    for e in range(4):
+        img = np.fft.fftshift(np.fft.ifft(np.fft.fftshift(dc[:, e])))
+        img_n = np.abs(img) / np.abs(img).max()
+        assert np.linalg.norm(img_n - true_n) / np.linalg.norm(true_n) < 0.05

@@ -154,7 +154,7 @@ def _trajectories(ds, delay):
     return apply_delay(ds['kxo'] / 100, ds['kxo'][::-1] / 100, NFID, delay)
 
 
-def _reference(ds, W, GCC, delay):
+def _reference(ds, W, GCC, delay, grid_method='nufft'):
     """Each frame whitened, gridded and scattered on its own, then compressed
     with GCC (if given): (k-space, noise variance)."""
     kxo, kxe = _trajectories(ds, delay)
@@ -163,11 +163,11 @@ def _reference(ds, W, GCC, delay):
     frames = [
         process_epi_frame(
             np.stack(ds['epi_shots'][t * spf:(t + 1) * spf], axis=-1), W, kxo, kxe, A_FIXED,
-            sched[t], NX, NY, NZ, ETL, NSHOTS, FOV[0] * 100,
+            sched[t], NX, NY, NZ, ETL, NSHOTS, FOV[0] * 100, grid_method,
         )
         for t in range(NFRAMES)
     ]
-    noise = grid_noise(ds['noise'], W, kxo, kxe, A_FIXED, NX, ETL, FOV[0] * 100)
+    noise = grid_noise(ds['noise'], W, kxo, kxe, A_FIXED, NX, ETL, FOV[0] * 100, grid_method)
     if GCC is not None:
         frames = [apply_gcc_kspace(k, GCC) for k in frames]
         noise = apply_gcc_kspace(noise, GCC)
@@ -191,6 +191,22 @@ def test_gcc_output_is_gcc_applied_to_the_whitened_gridded_data(dataset):
     ref_ksp, ref_noise_var = _reference(dataset, W, GCC, delay)
     assert _rel(ksp, ref_ksp) < 1e-5
     assert noise_var == pytest.approx(ref_noise_var, rel=1e-5)
+
+
+def test_spline_grid_method_is_used_throughout_and_recorded(dataset):
+    out = preprocess(_cfg(dataset, estimate_smaps=False, grid_method='spline', keep_cache=True),
+                     SEQ, a=A_FIXED)
+    with h5py.File(out, 'r') as f:
+        ksp, GCC, W = f['ksp_epi_zf'][()], f['GCC'][()], f['W'][()]
+        assert f.attrs['grid_method'] == 'spline'
+        noise_var, delay = f.attrs['noise_var'], f.attrs['delay']
+    ref_ksp, ref_noise_var = _reference(dataset, W, GCC, delay, 'spline')
+    assert _rel(ksp, ref_ksp) < 1e-5
+    assert noise_var == pytest.approx(ref_noise_var, rel=1e-5)
+    # a kept nufft cache cannot be silently reused for a spline run, or vice versa
+    with pytest.raises(ValueError, match='grid_method'):
+        preprocess(_cfg(dataset, estimate_smaps=False, grid_method='nufft', keep_cache=True),
+                   SEQ, a=A_FIXED)
 
 
 def test_nvcoils_sets_the_exact_virtual_coil_count(dataset):

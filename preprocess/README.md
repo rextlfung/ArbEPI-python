@@ -20,7 +20,7 @@ are documented and set. Start there. Ported from the MATLAB
 | `preprocess.py` | `PreprocessConfig`, `preprocess()` and its stages (gridding, compression, maps, output) |
 | `batch_preprocess.py` | `batch_preprocess()` and the `python -m preprocess.batch_preprocess` command line |
 | `coils.py` | Noise whitening; GCC coil compression and the virtual-coil count rule |
-| `epi_gridding.py` | Ramp-sampled readouts → Cartesian kx (1D NUFFT) |
+| `epi_gridding.py` | Ramp-sampled readouts → Cartesian kx (1D NUFFT, or spline) |
 | `oephase.py` | Odd/even (Nyquist ghost) phase estimation and correction |
 | `smaps.py` | ESPIRiT sensitivity maps and their resize/mask/smooth/normalize |
 | `b0map.py` + `julia/` | B0 field map: runs `julia/b0map.jl` (MRIFieldmaps.jl + ROMEO.jl) |
@@ -177,7 +177,13 @@ kept too.
 4. **Per frame**: regrid the ramp-sampled readouts onto Cartesian kx (1D NUFFT,
    density-compensated; separate trajectories for odd and even echoes, shifted by
    the calibrated delay), apply the odd/even correction, and scatter each (shot,
-   echo) into its (ky, kz) slot of the zero-filled grid.
+   echo) into its (ky, kz) slot of the zero-filled grid. `--grid-method spline`
+   (`PreprocessConfig.grid_method`) swaps the NUFFT for hmriutils' cubic-spline
+   path (2x oversampled grid, zero outside the sampled kx range, deapodized),
+   applied as one cached matrix per trajectory: ~10x faster gridding (0.096 s
+   -> 0.009 s per default-protocol frame) and closer to a known object on a
+   synthetic ramp (0.24% vs 2-3% image error), but it needs even Nx and a cache
+   gridded with one method is not reused for the other.
 5. **Noise**: the noise-scan readouts go through the same gridding and correction,
    so `noise_var` can later be measured in the output coil space.
 
