@@ -263,10 +263,10 @@ DPI = 130
 COL = {'active': 'tab:red', 'inactive': 'k', 'counter-active': 'tab:blue'}
 
 
-def load_underlay(root, run):
+def load_underlay(gre_h5):
     """The deGRE's first-echo magnitude (TE = 1 / f_fat, the T1-weighted contrast of the dual-echo GRE), which
     preprocessing resamples onto the EPI grid, so it overlays the activation maps voxel for voxel."""
-    with h5py.File(f'{root}/recon/{run}_preprocessed.h5') as f:
+    with h5py.File(gre_h5) as f:
         return np.asarray(f['degre/img_echoes'][..., 0], dtype=np.float32)
 
 
@@ -390,7 +390,7 @@ def plot_spectrum(fn, f_p, ps, n_set, f0, tr, nt):
     plt.close(fig)
 
 
-def plot_split_half(fn, r1, r2, rep):
+def plot_split_half(fn, r1, r2, rep, odd, even):
     fig, ax = plt.subplots(figsize=(6.2, 5.2), constrained_layout=True)
     lim = 10
     hb = ax.hexbin(np.clip(r1.z, -lim, lim), np.clip(r2.z, -lim, lim), gridsize=70, bins='log', mincnt=1,
@@ -399,8 +399,8 @@ def plot_split_half(fn, r1, r2, rep):
         if np.isfinite(zt):
             for sgn in (-1, 1):
                 (ax.axvline if kind == 'x' else ax.axhline)(sgn * zt, color='r', lw=0.8, ls='--')
-    ax.set_xlabel('z from the odd cycles only (1, 3, 5, 7)')
-    ax.set_ylabel('z from the even cycles only (2, 4, 6, 8)')
+    ax.set_xlabel(f'z from the odd cycles only ({odd})')
+    ax.set_ylabel(f'z from the even cycles only ({even})')
     fig.colorbar(hb, ax=ax, shrink=0.8, pad=0.01).set_label('voxels per bin (log)', fontsize=8)
     fig.savefig(fn, dpi=DPI)
     plt.close(fig)
@@ -464,11 +464,20 @@ def _md_table(header, rows):
     return '\n'.join(out)
 
 
-def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=False):
-    """Write <out_root>/<name>/report.md with its PNGs and metrics.json; returns the report path."""
+def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=False, h5=None,
+                gre_h5=None, base=None, title=None, note=None):
+    """Write <out_root>/<name>/report.md with its PNGs and metrics.json; returns the report path.
+
+    A folder named like the 20261006tap analyses (<run>_<tag>) needs only analysis_dir. Otherwise pass h5 (the
+    reconstruction), gre_h5 (a preprocessed file holding degre/img_echoes), base (the file prefix of the
+    analysis folder's NIfTIs and summary) and optionally title and note (a paragraph under the title)."""
     from scipy import stats as st
     root = os.path.dirname(os.path.dirname(os.path.normpath(analysis_dir)))
-    base, run, tag, lowband = parse(analysis_dir)
+    base_parsed = base is None
+    if base is None:
+        base, run, tag, lowband = parse(analysis_dir)
+        h5 = h5 or None
+        gre_h5 = gre_h5 or f'{root}/recon/{run}_preprocessed.h5'
     name = os.path.basename(os.path.normpath(analysis_dir))
     out_root = out_root or f'{os.path.dirname(os.path.normpath(analysis_dir))}/reports'
     out = f'{out_root}/{name}'
@@ -489,7 +498,7 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
         o = [paradigm['task_onset_s'] + k * paradigm['period_s'] - t0 for k in range(paradigm['n_cycles'])]
         return [x for x in o if x + paradigm['on_s'] > 0 and x < T]
 
-    h5 = recon_path(root, run, tag, summ)
+    h5 = h5 or recon_path(root, run, tag, summ)
     L = loaded or Loaded(h5, tr, onsets_fn, paradigm)
     vox = np.asarray(summ['voxel_size_mm'], dtype=float)
     shape = z.shape
@@ -513,7 +522,7 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
     eff = {k: (float(psc_vox[sets[k]].mean()) if n_set[k] else np.nan) for k in ('active', 'counter-active')}
 
     # ---- 1. activation maps over the T1-weighted GRE, at the strongest distinct peaks
-    gre = load_underlay(root, run)
+    gre = load_underlay(gre_h5)
     if gre.shape != shape:
         raise ValueError(f'GRE {gre.shape} is not on the EPI grid {shape}')
     peaks = top_peaks(z, brain, vox)
@@ -600,14 +609,19 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
     plot_timeseries(f'{out}/timeseries.png', L, ts, n_set, paradigm)
     n_cyc = plot_cycle_average(f'{out}/cycle_average.png', L, ts, paradigm)
     plot_spectrum(f'{out}/spectrum.png', f_p, ps, n_set, f0, tr, nt)
-    plot_split_half(f'{out}/split_half.png', r1, r2, rep)
+    odd_s = ', '.join(str(c + 1) for c in range(0, ncyc_all, 2))
+    even_s = ', '.join(str(c + 1) for c in range(1, ncyc_all, 2))
+    plot_split_half(f'{out}/split_half.png', r1, r2, rep, odd_s, even_s)
     plot_reliability(f'{out}/reliability_histogram.png', Rv, mb, M, k0, n_vox)
     plot_roc(f'{out}/roc.png', mb, kb, fpr_roc, tpr_roc)
 
     # ---- the report
     md = []
-    md.append(f'# Functional analysis: {name}\n')
-    md.append(f'{run.replace("_", " ")}, regularization `{tag}`, motion-corrected reconstruction `{h5}`. '
+    md.append(f'# Functional analysis: {title or name}\n')
+    if note:
+        md.append(note + '\n')
+    md.append((f'{run.replace("_", " ")}, regularization `{tag}`, ' if base_parsed else '') +
+              f'reconstruction `{h5}`. '
               f'{L.nt} frames at TR {tr:.4f} s; block task of {paradigm["on_s"]:g} s on / '
               f'{paradigm["period_s"] - paradigm["on_s"]:g} s off, {ncyc_all} cycles, first onset at '
               f'{paradigm["task_onset_s"]:g} s. Only voxels inside the brain mask ({n_vox}) are ever classified.\n')
@@ -669,7 +683,7 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
 
     md.append('## 3. Reproducibility\n')
     md.append('### Split half: odd vs even cycles\n')
-    md.append('The GLM is fit twice, on the odd cycles (1, 3, 5, 7) and on the even cycles (2, 4, 6, 8), with the '
+    md.append(f'The GLM is fit twice, on the odd cycles ({odd_s}) and on the even cycles ({even_s}), with the '
               'full-run HRF regressor and drift terms restricted to each half\'s frames and the AR(1) filter restarted '
               'at every cycle. Interleaving puts both halves across the whole run, so drift, habituation and the '
               'reconstruction pieces affect them equally; but neighbouring cycles share slow noise and HRF tails, and '
