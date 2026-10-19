@@ -216,9 +216,10 @@ Each `.pge` file gets its own entry number, chosen as follows:
 1. **Unused numbers first**, ascending from 0 — this is the common case,
    and never touches anyone else's existing entry.
 2. **Oldest-entry reuse**, only once every number 0–9999 is already taken
-   — the least-recently-written entries are overwritten first. This always
-   prints a `WARNING: reusing entry N (last written <age> ago)` line so
-   it's visible even though there's no confirmation prompt.
+   — the least-recently-written entries are overwritten first. It
+   first lists the entries it would overwrite and asks `Overwrite them?
+   [y/N]` (default no, which aborts before anything is touched), then
+   prints a `WARN reusing entry N (last written <age> ago)` line per entry.
 
 Claiming a number is done atomically on the scanner (via `mkdir`, which
 either succeeds or fails outright, never partially) so two lab members

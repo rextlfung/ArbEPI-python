@@ -7,6 +7,8 @@ scanner."""
 
 from pathlib import Path
 
+import pytest
+
 from ge.coppe import (
     assign_entry_numbers,
     find_pge_files,
@@ -105,3 +107,31 @@ def test_split_reused_files_with_no_existing_entries():
 
     assert reused == {}
     assert to_claim == files
+
+
+def test_assign_exhausted_declined_raises_before_reusing(capsys):
+    entries = {n: float(n) for n in range(10000)}
+    seen = {}
+
+    def decline(picks):
+        seen.update(picks)
+        return False
+
+    with pytest.raises(RuntimeError, match='declined'):
+        assign_entry_numbers([Path('a.pge')], entries, confirm=decline)
+    assert list(seen) == [0]
+    assert 'WARN' not in capsys.readouterr().out
+
+
+def test_assign_exhausted_accepted_reuses_oldest():
+    entries = {n: float(n) for n in range(10000)}
+    primary, _ = assign_entry_numbers([Path('a.pge')], entries, confirm=lambda p: True)
+    assert primary == [0]
+
+
+def test_assign_confirm_not_called_when_unused_numbers_exist():
+    def fail(picks):
+        raise AssertionError('should not prompt')
+
+    primary, _ = assign_entry_numbers([Path('a.pge')], {0: 1.0}, confirm=fail)
+    assert primary == [1]
