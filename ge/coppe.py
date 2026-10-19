@@ -14,8 +14,9 @@ dropped entirely):
   - Transfers a whole folder of .pge files in one run, not one at a time.
   - Auto-allocates each file's entry number N (0-9999) by scanning the
     scanner for unused numbers first, falling back to overwriting the
-    oldest existing entry only once 0-9999 is exhausted -- so no one's
-    sequence is overwritten unless every slot is genuinely taken.
+    oldest existing entry only once 0-9999 is exhausted (and then only
+    after you confirm) -- so no one's sequence is overwritten unless every
+    slot is genuinely taken and you say so.
   - Prints the resulting filename -> N mapping so it can be typed into
     the scanner console.
 
@@ -438,14 +439,26 @@ def confirm_replace(run_id: str, existing: dict[str, int]) -> bool:
     return answer.strip().lower() in ('y', 'yes')
 
 
+def confirm_reuse(picks: dict[int, float]) -> bool:
+    """picks maps each entry number about to be overwritten to the age in
+    hours of its last write."""
+    print('All 10000 entry numbers are taken. Continuing overwrites these '
+          "other users' existing sequence(s):")
+    for n, age_h in sorted(picks.items()):
+        print(f'  entry {n} (last written {age_h:.1f}h ago)')
+    answer = input('Overwrite them? [y/N] ')
+    return answer.strip().lower() in ('y', 'yes')
+
+
 def assign_entry_numbers(
-    pge_files: list[Path], entries: dict[int, float],
+    pge_files: list[Path], entries: dict[int, float], confirm=None,
 ) -> tuple[list[int], list[int]]:
     """Returns (primary, padding). primary[i] is the preferred entry number
     for pge_files[i]: unused numbers 0-9999 first (ascending), falling
     back to the oldest-mtime existing entries only once every number is
-    taken (prints a WARNING per reused number -- never silent, even though
-    no confirmation prompt is required). padding is a list of backup
+    taken (prints a WARNING per reused number; if confirm is given, it is
+    called with {entry: age in hours} first and a False return raises
+    RuntimeError before anything is overwritten). padding is a list of backup
     candidates for claim_entry_numbers to fall through to if a concurrent
     coppe.py run claims one of the primary picks first between this query
     and the claim step -- any successfully claimed number is equally valid
@@ -460,8 +473,13 @@ def assign_entry_numbers(
     if n_reused > 0:
         oldest = sorted(entries, key=lambda n: entries[n])
         reuse_picks = oldest[:n_reused]
-        for n in reuse_picks:
-            age_h = (time.time() - entries[n]) / 3600
+        ages = {n: (time.time() - entries[n]) / 3600 for n in reuse_picks}
+        if confirm is not None and not confirm(ages):
+            raise RuntimeError(
+                'all 10000 entry numbers are taken and overwriting the oldest '
+                'was declined -- ask the scanner admin to free some'
+            )
+        for n, age_h in ages.items():
             print(
                 f'WARN reusing entry {n} (last written {age_h:.1f}h ago) '
                 '-- all 10000 entry numbers are currently taken'
@@ -572,7 +590,7 @@ def main(args: argparse.Namespace) -> None:
     claimed: list[int] = []
     if to_claim:
         entries = query_existing_entries(ssh_prefix)
-        primary, padding = assign_entry_numbers(to_claim, entries)
+        primary, padding = assign_entry_numbers(to_claim, entries, confirm=confirm_reuse)
         claimed = claim_entry_numbers(ssh_prefix, primary, padding, count=len(to_claim))
     new_assignment = dict(zip(to_claim, claimed))
 
