@@ -177,13 +177,14 @@ kept too.
 4. **Per frame**: regrid the ramp-sampled readouts onto Cartesian kx (1D NUFFT,
    density-compensated; separate trajectories for odd and even echoes, shifted by
    the calibrated delay), apply the odd/even correction, and scatter each (shot,
-   echo) into its (ky, kz) slot of the zero-filled grid. `--grid-method spline`
-   (`PreprocessConfig.grid_method`) swaps the NUFFT for hmriutils' cubic-spline
-   path (2x oversampled grid, zero outside the sampled kx range, deapodized),
+   echo) into its (ky, kz) slot of the zero-filled grid. `--grid-method`
+   (`PreprocessConfig.grid_method`) selects hmriutils' cubic-spline path (the
+   default; `nufft` is the density-compensated alternative) (2x oversampled grid, zero outside the sampled kx range, deapodized),
    applied as one cached matrix per trajectory: ~10x faster gridding (0.096 s
    -> 0.009 s per default-protocol frame) and closer to a known object on a
    synthetic ramp (0.24% vs 2-3% image error), but it needs even Nx and a cache
-   gridded with one method is not reused for the other.
+   gridded with one method is not reused for the other (caches from before this
+   option count as `nufft`: pass `--grid-method nufft` to reuse one).
 5. **Noise**: the noise-scan readouts go through the same gridding and correction,
    so `noise_var` can later be measured in the output coil space.
 

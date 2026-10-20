@@ -49,8 +49,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--no-calib', action='store_true', help='skip the calibration-region dataset')
     p.add_argument('--zero-pad-z', action='store_true',
                    help='zero-fill EPI slices outside the deGRE slab instead of failing')
-    p.add_argument('--grid-method', choices=('nufft', 'spline'), default='nufft',
-                   help='ramp-sampled readout regridding (spline: faster, needs even Nx)')
+    p.add_argument('--grid-method', choices=('nufft', 'spline'), default='spline',
+                   help='ramp-sampled readout regridding (spline needs even Nx; default spline)')
     p.add_argument('--keep-cache', action='store_true', help='keep <seqname>_gridded.h5')
     p.add_argument('--gre-n-echoes', type=int,
                    help='use only the first K GRE echoes for the B0/R2* fits (default: all); '

@@ -104,9 +104,9 @@ class PreprocessConfig:
     # (for an EPI z-FOV slightly larger than the deGRE slab).
     zero_pad_z: bool = False
 
-    # Ramp-sampled readout -> Cartesian kx: 'nufft' (default) or 'spline'
-    # (epi_gridding.py; faster, needs even Nx). Changing it needs a new cache.
-    grid_method: str = 'nufft'
+    # Ramp-sampled readout -> Cartesian kx: 'spline' (default; needs even Nx) or
+    # 'nufft' (epi_gridding.py). Changing it needs a new cache.
+    grid_method: str = 'spline'
 
     # Output
     extract_calib: bool = True  # write the fully sampled calibration region

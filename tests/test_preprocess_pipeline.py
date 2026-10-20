@@ -154,7 +154,7 @@ def _trajectories(ds, delay):
     return apply_delay(ds['kxo'] / 100, ds['kxo'][::-1] / 100, NFID, delay)
 
 
-def _reference(ds, W, GCC, delay, grid_method='nufft'):
+def _reference(ds, W, GCC, delay, grid_method='spline'):
     """Each frame whitened, gridded and scattered on its own, then compressed
     with GCC (if given): (k-space, noise variance)."""
     kxo, kxe = _trajectories(ds, delay)
@@ -193,20 +193,26 @@ def test_gcc_output_is_gcc_applied_to_the_whitened_gridded_data(dataset):
     assert noise_var == pytest.approx(ref_noise_var, rel=1e-5)
 
 
-def test_spline_grid_method_is_used_throughout_and_recorded(dataset):
-    out = preprocess(_cfg(dataset, estimate_smaps=False, grid_method='spline', keep_cache=True),
+@pytest.mark.parametrize('method', ['spline', 'nufft'])
+def test_grid_method_is_used_throughout_and_recorded(dataset, method):
+    out = preprocess(_cfg(dataset, estimate_smaps=False, grid_method=method, keep_cache=True),
                      SEQ, a=A_FIXED)
     with h5py.File(out, 'r') as f:
         ksp, GCC, W = f['ksp_epi_zf'][()], f['GCC'][()], f['W'][()]
-        assert f.attrs['grid_method'] == 'spline'
+        assert f.attrs['grid_method'] == method
         noise_var, delay = f.attrs['noise_var'], f.attrs['delay']
-    ref_ksp, ref_noise_var = _reference(dataset, W, GCC, delay, 'spline')
+    ref_ksp, ref_noise_var = _reference(dataset, W, GCC, delay, method)
     assert _rel(ksp, ref_ksp) < 1e-5
     assert noise_var == pytest.approx(ref_noise_var, rel=1e-5)
-    # a kept nufft cache cannot be silently reused for a spline run, or vice versa
+    # a kept cache cannot be silently reused with the other method
+    other = 'nufft' if method == 'spline' else 'spline'
     with pytest.raises(ValueError, match='grid_method'):
-        preprocess(_cfg(dataset, estimate_smaps=False, grid_method='nufft', keep_cache=True),
+        preprocess(_cfg(dataset, estimate_smaps=False, grid_method=other, keep_cache=True),
                    SEQ, a=A_FIXED)
+
+
+def test_default_grid_method_is_spline():
+    assert PreprocessConfig(datdir='x').grid_method == 'spline'
 
 
 def test_nvcoils_sets_the_exact_virtual_coil_count(dataset):
