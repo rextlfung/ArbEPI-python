@@ -44,6 +44,27 @@ Outputs in `--out`, per analyzed series `<label>` (`sum`, `scale0`, ...):
 `<name>_summary.json` (design columns, dof, the AR(1) coefficient, the
 FDR-surviving |t| threshold, voxel counts).
 
+## Reports
+
+`report.py` turns each `analysis/` folder into a Markdown report with every
+plot as its own PNG, in `analysis/reports/<name>/` (plus an index,
+`analysis/reports/README.md`). Run it in `.venv-recon` after the maps exist:
+
+```
+python -m analyze.report [--root DIR] [--only SUBSTRING] [--force]
+```
+
+Order: activation maps (Benjamini-Hochberg FDR q < 0.05 survivors over the
+T1-weighted GRE, orthogonal views at the five strongest distinct peaks) ->
+time and frequency domain (active, counter-active and inactive voxel sets:
+time series, cycle average, spectrum, task / non-task power) ->
+reproducibility (odd/even cycle split half; test-retest with the
+mixed-binomial model and estimated ROC). `Loaded(n_discard=)` drops leading
+frames (e.g. the instruction period) from the series the split-half and
+replicate fits read; the saved maps must have been fit on the same frames.
+Dataset-specific drivers (task period, onset) stay in the dataset folder,
+not here.
+
 ## Comparing reconstructions
 
 ```
