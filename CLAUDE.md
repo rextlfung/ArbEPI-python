@@ -774,6 +774,23 @@ modules (`config.py`, `raw_io.py`, `matio.py`, `nifti_io.py`,
 `gre_diagnostics.py`, `run_b0map.py`, `r2star_map.py`, `cg_sense.py`); see git
 history for those.
 
+**Gridding method (2026-10-19, user request): `grid_method='spline'` (default)
+or `'nufft'`** (`--grid-method`), the latter hmriutils' `rampsamp2cart.m`
+spline branch as fixed by HarmonizedMRI/utils ca7e9f6 (2x oversampled grid with
+DC at index N/2, zero outside the sampled kx instead of cubic extrapolation,
+deapodization). The "20x faster" of that commit is against MATLAB's per-column
+Gmri loop; sigpy's NUFFT is vectorized, so here the speedup comes from
+noticing every step is linear: the whole path is one cached `[nx, nr]` matrix
+per trajectory, applied as a GEMM (10x: 0.096 -> 0.009 s per frame at 90 x 104
+samples, ETL 54, 10 shots, 32 coils; ~10 s saved per 119 frames, a small part of
+Stage A). Measured on synthetic data only (no real-data comparison yet); against a known object
+the spline path was closer than the NUFFT (0.24% vs 2-3% on the real POPE
+trajectories), and its noise gain is 0.965 vs 0.925. Needs even Nx (the
+library functions in `epi_gridding.py` still default to `'nufft'`; the pipeline
+passes `cfg.grid_method`).
+`simulate_fmri/session.py`'s `gridding_noise_gain` models the NUFFT only. The
+cache records `grid_method` and refuses to be reused with the other one.
+
 **Raw ScanArchive reading needs GE's proprietary Orchestra SDK (`GERecon`).**
 `h5dump -H` on a real ScanArchive shows the k-space payload is an opaque
 `H5T_STD_U8LE` byte blob, and even `ge_to_ismrmrd` links Orchestra's own

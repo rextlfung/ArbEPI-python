@@ -104,6 +104,10 @@ class PreprocessConfig:
     # (for an EPI z-FOV slightly larger than the deGRE slab).
     zero_pad_z: bool = False
 
+    # Ramp-sampled readout -> Cartesian kx: 'spline' (default; needs even Nx) or
+    # 'nufft' (epi_gridding.py). Changing it needs a new cache.
+    grid_method: str = 'spline'
+
     # Output
     extract_calib: bool = True  # write the fully sampled calibration region
     keep_cache: bool = False  # keep <seq>_gridded.h5 (lets a rerun skip Stage A)
@@ -166,7 +170,8 @@ def apply_delay(
 
 
 def compute_oephase(
-    ksp_cal: np.ndarray, kxo: np.ndarray, kxe: np.ndarray, nx: int, fov_x_cm: float
+    ksp_cal: np.ndarray, kxo: np.ndarray, kxe: np.ndarray, nx: int, fov_x_cm: float,
+    grid_method: str = 'nufft',
 ) -> tuple[np.ndarray, np.ndarray]:
     """Odd/even phase model from blip-free calibration echo trains.
 
@@ -177,7 +182,7 @@ def compute_oephase(
     oephase.epiphasecorrect, so `a` is estimated in the pixel frame it is
     applied in (docs/review-findings.md item 251).
     """
-    oephase_data = rampsampepi2cart(ksp_cal, kxo, kxe, nx, fov_x_cm)
+    oephase_data = rampsampepi2cart(ksp_cal, kxo, kxe, nx, fov_x_cm, grid_method)
     oephase_data = np.fft.fftshift(
         np.fft.ifft(np.fft.ifftshift(oephase_data, axes=0), n=nx, axis=0), axes=0
     )
@@ -205,6 +210,7 @@ def sweep_delay(
     fov_x_cm: float,
     delays: np.ndarray = DELAY_SWEEP,
     wrap_thresh: float = np.pi,
+    grid_method: str = 'nufft',
 ) -> dict[str, np.ndarray]:
     """The odd/even phase model at each candidate readout delay. Ports
     calibrate_delay.m.
@@ -221,7 +227,8 @@ def sweep_delay(
     rows = slice(matlab_round(Nx / 4), matlab_round(3 * Nx / 4))
     a_all, wraps = [], []
     for d in delays:
-        a, th = compute_oephase(ksp_cal, *apply_delay(kxo0, kxe0, Nfid, d), Nx, fov_x_cm)
+        a, th = compute_oephase(ksp_cal, *apply_delay(kxo0, kxe0, Nfid, d), Nx, fov_x_cm,
+                             grid_method)
         d_th = np.diff(th[rows, th.shape[1] // 2:], axis=0)
         a_all.append(a.mean(axis=0))  # mid-train value: getoephase's fit is centered there
         wraps.append(int(np.sum(np.abs(d_th) > wrap_thresh)))
@@ -254,6 +261,7 @@ def calibrate_odd_even(
     Nx: int,
     ETL: int,
     fov_x_cm: float,
+    grid_method: str = 'nufft',
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, np.ndarray]]:
     """Calibration scan -> (kxo, kxe, a, sweep): the readout delay, calibrated
     by sweep_delay/select_best_delay and applied to the odd/even readout
@@ -262,7 +270,7 @@ def calibrate_odd_even(
     Nfid = ksp_cal_raw.shape[0]
     ksp_cal = prepare_cal_data(ksp_cal_raw, W, ETL)
     kxo0, kxe0 = load_kxoe(scan_info)
-    sweep = sweep_delay(ksp_cal, kxo0, kxe0, Nx, fov_x_cm)
+    sweep = sweep_delay(ksp_cal, kxo0, kxe0, Nx, fov_x_cm, grid_method=grid_method)
     delay = select_best_delay(sweep)
     sweep['best'] = delay
     wraps = int(sweep['wrap_count'][np.argmin(np.abs(sweep['delay'] - delay))])
@@ -278,7 +286,7 @@ def calibrate_odd_even(
             f'sweep ({sweep["delay"][0]:+.2f} to {sweep["delay"][-1]:+.2f})', stacklevel=2
         )
     kxo, kxe = apply_delay(kxo0, kxe0, Nfid, delay)
-    a, _ = compute_oephase(ksp_cal, kxo, kxe, Nx, fov_x_cm)
+    a, _ = compute_oephase(ksp_cal, kxo, kxe, Nx, fov_x_cm, grid_method)
     print(f'  odd/even phase at mid-train: constant {a[:, 0].mean():.4f} rad, linear '
           f'{a[:, 1].mean():.4f} rad/FOV; first to last echo pair: {a[-1, 0] - a[0, 0]:+.4f} rad, '
           f'{a[-1, 1] - a[0, 1]:+.4f} rad/FOV')
@@ -332,6 +340,7 @@ def process_epi_frame(
     ETL: int,
     Nshots: int,
     fov_x_cm: float,
+    grid_method: str = 'nufft',
 ) -> np.ndarray:
     """One EPI frame of raw shots [Nfid, Ncoils, ETL*Nshots] (acquisition
     order, one shot's echoes contiguous) -> zero-filled [Nx, Ny, Nz, Nc]:
@@ -341,7 +350,7 @@ def process_epi_frame(
     Nc = ksp.shape[-1]
     # MATLAB: reshape(ksp, Nfid, Nc, ETL, Nshots) then permute([1 3 4 2]).
     ksp = ksp.transpose(0, 2, 1).reshape(Nfid, Nc, ETL, Nshots, order='F').transpose(0, 2, 3, 1)
-    ksp_cart = epiphasecorrect(rampsampepi2cart(ksp, kxo, kxe, Nx, fov_x_cm), a)
+    ksp_cart = epiphasecorrect(rampsampepi2cart(ksp, kxo, kxe, Nx, fov_x_cm, grid_method), a)
     return scatter_frame(ksp_cart, schedule_frame, Ny, Nz)
 
 
@@ -354,6 +363,7 @@ def grid_noise(
     Nx: int,
     ETL: int,
     fov_x_cm: float,
+    grid_method: str = 'nufft',
 ) -> np.ndarray:
     """Noise-scan readouts [Nfid, Ncoils, Nacq] through the same whitening,
     regridding and odd/even correction as the EPI data,
@@ -368,7 +378,7 @@ def grid_noise(
     x = apply_whitening(ksp_noise[:, :, : n_trains * ETL].transpose(0, 2, 1), W)
     Nc = x.shape[-1]
     x = x.transpose(0, 2, 1).reshape(Nfid, Nc, ETL, n_trains, order='F').transpose(0, 2, 3, 1)
-    return epiphasecorrect(rampsampepi2cart(x, kxo, kxe, Nx, fov_x_cm), a)
+    return epiphasecorrect(rampsampepi2cart(x, kxo, kxe, Nx, fov_x_cm, grid_method), a)
 
 
 def resume_start_frame(mf: h5py.File, epi_reader, shots_per_frame: int) -> int:
@@ -470,6 +480,12 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
             # place; without it the file is left over from a run that failed first.
             initialized = 'oephase_a' in f.attrs
             complete = bool(f.attrs.get('complete', False))
+            cached_method = f.attrs.get('grid_method', 'nufft')
+        if initialized and cached_method != cfg.grid_method:
+            raise ValueError(
+                f'grid_epi: the cache was gridded with {cached_method!r}, cfg.grid_method is '
+                f'{cfg.grid_method!r}; delete {paths.cache} to regrid'
+            )
         if not initialized:
             print(f'Stage A: {paths.cache} is from a failed run; starting over')
             os.remove(paths.cache)
@@ -509,7 +525,7 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
                 ksp_noise, W, whitened = None, np.eye(Ncoils, dtype=np.complex128), False
 
             kxo, kxe, a_est, sweep = calibrate_odd_even(
-                ksp_cal_raw, W, paths.scan_info, Nx, ETL, fov_x_cm
+                ksp_cal_raw, W, paths.scan_info, Nx, ETL, fov_x_cm, cfg.grid_method
             )
             if a is None:
                 a = a_est
@@ -529,12 +545,14 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
             f.create_dataset('kxo', data=kxo)
             f.create_dataset('kxe', data=kxe)
             if ksp_noise is not None:
-                noise_gridded = grid_noise(ksp_noise, W, kxo, kxe, a, Nx, ETL, fov_x_cm)
+                noise_gridded = grid_noise(ksp_noise, W, kxo, kxe, a, Nx, ETL, fov_x_cm,
+                                               cfg.grid_method)
                 f.create_dataset('noise_gridded', data=noise_gridded.astype(np.complex64))
             g = f.create_group('delay_sweep')
             for k in ('delay', 'a1', 'a2', 'wrap_count'):
                 g.create_dataset(k, data=sweep[k])
             f.attrs['delay'] = sweep['best']
+            f.attrs['grid_method'] = cfg.grid_method
             f.attrs['whitened'] = whitened
             f.attrs['n_frames_discard'] = round(sp.discard_duration / sp.volume_tr)
             f.attrs['complete'] = False
@@ -553,7 +571,7 @@ def grid_epi(cfg: PreprocessConfig, paths: SeqPaths, a: np.ndarray | None = None
                     )
                 ksp_frame_zf = process_epi_frame(
                     np.stack(shots, axis=-1), W, kxo, kxe, a, schedules[frame],
-                    Nx, Ny, Nz, ETL, Nshots, fov_x_cm,
+                    Nx, Ny, Nz, ETL, Nshots, fov_x_cm, cfg.grid_method,
                 )
                 f['ksp_epi_zf'][..., frame] = ksp_frame_zf.astype(np.complex64)
                 f.attrs['last_completed_frame'] = frame
@@ -799,6 +817,7 @@ def write_output(
         f.attrs['whitened'] = bool(cache_attrs['whitened'])
         f.attrs['oephase_a'] = cache_attrs['oephase_a']
         f.attrs['delay'] = cache_attrs['delay']
+        f.attrs['grid_method'] = cache_attrs.get('grid_method', 'nufft')
         f.attrs['n_frames_discard'] = cache_attrs['n_frames_discard']
         f.attrs['Ncoils'] = Ncoils
         f.attrs['Nc_out'] = Nc_out

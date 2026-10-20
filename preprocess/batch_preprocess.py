@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--no-calib', action='store_true', help='skip the calibration-region dataset')
     p.add_argument('--zero-pad-z', action='store_true',
                    help='zero-fill EPI slices outside the deGRE slab instead of failing')
+    p.add_argument('--grid-method', choices=('nufft', 'spline'), default='spline',
+                   help='ramp-sampled readout regridding (spline needs even Nx; default spline)')
     p.add_argument('--keep-cache', action='store_true', help='keep <seqname>_gridded.h5')
     p.add_argument('--gre-n-echoes', type=int,
                    help='use only the first K GRE echoes for the B0/R2* fits (default: all); '
@@ -59,7 +61,7 @@ def main(argv: list[str] | None = None) -> None:
         compress=not a.no_compress, cc_energy_thresh=a.cc_energy,
         Nvcoils=a.nvcoils, estimate_smaps=not a.no_smaps, estimate_b0=not a.no_b0,
         estimate_r2star=not a.no_r2star, extract_calib=not a.no_calib,
-        zero_pad_z=a.zero_pad_z, keep_cache=a.keep_cache, gre_n_echoes=a.gre_n_echoes,
+        zero_pad_z=a.zero_pad_z, grid_method=a.grid_method, keep_cache=a.keep_cache, gre_n_echoes=a.gre_n_echoes,
     )
     batch_preprocess(cfg)
 
