@@ -21,12 +21,44 @@ from mirtorch.linear import BlockDiagonal
 from mirtorch.linear.linearmaps import LinearMap
 from mirtorch.linear.mri import mri_exp_approx
 
+_scatter_buffers: dict = {}
+
+
+def _zeroed_buffer(
+    shape: tuple[int, int], dtype: torch.dtype, device: torch.device,
+) -> torch.Tensor:
+    """A shared all-zero tensor of `shape` for scattering k-space samples into.
+    Whoever takes it must leave it all-zero again. One per (shape, dtype,
+    device) for the whole process, so the adjoint of every frame (and every B0
+    segment) reuses it instead of allocating and zeroing (Nc,*N) each call
+    (11 ms of a 100 ms adjoint on the CPU)."""
+    key = (shape, dtype, device)
+    buf = _scatter_buffers.get(key)
+    if buf is None:
+        buf = _scatter_buffers[key] = torch.zeros(shape, dtype=dtype, device=device)
+    return buf
+
+
+def release_scratch() -> None:
+    """Free the scatter buffers _zeroed_buffer keeps (one (Nc, prod(N)) tensor
+    per device and dtype in use); they are re-created on the next adjoint."""
+    _scatter_buffers.clear()
+
 
 class SENSE(LinearMap):
     """smaps -> centered ortho FFT -> keep sampled points.
 
     smaps: (Nc,*N) complex64. samp: (*N,) bool with K True entries.
-    Maps (*N,) -> (K,Nc); `idx` holds the K flat (C-order) sample indices."""
+    Maps (*N,) -> (K,Nc); `idx` holds the K flat (C-order) sample indices.
+
+    The centered transform fftshift(fftn(ifftshift(.))) is applied as a plain
+    fftn with the shifts moved to the K samples: shifting the input by
+    h = N // 2 along an axis is a phase exp(+2 pi i k h / N) on the plain
+    transform's output index k, and the output shift picks k = (j - h) mod N
+    for sample j. So the forward gathers the plain transform at `_kidx` and
+    multiplies by `_kphase`, instead of copying the (Nc,*N) array twice. This
+    holds for odd N as well (the phase is then not +-1). Memory per frame:
+    16 bytes per sample on top of `idx`."""
 
     def __init__(self, smaps: torch.Tensor, samp: torch.Tensor):
         N = tuple(smaps.shape[1:])
@@ -38,26 +70,44 @@ class SENSE(LinearMap):
         self.N = N
         self.Nc = Nc
         self.dims = tuple(range(1, len(N) + 1))  # spatial dims of a (Nc,*N) tensor
+        self._kidx, self._kphase = self._plain_fft_samples(idx, N, smaps.dtype)
+
+    @staticmethod
+    def _plain_fft_samples(
+        idx: torch.Tensor, N: tuple[int, ...], dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """(flat index into the plain fftn output, phase) for each centered sample."""
+        j = idx
+        coords = []
+        for n in reversed(N):  # unravel the C-order flat index
+            coords.append(j % n)
+            j = j // n
+        coords.reverse()
+        kidx = torch.zeros_like(idx)
+        turns = torch.zeros(idx.shape, dtype=torch.float64, device=idx.device)
+        for jn, n in zip(coords, N):
+            h = n // 2
+            k = (jn - h) % n
+            kidx = kidx * n + k
+            turns += ((k * h) % n).to(torch.float64) / n  # exact integer mod, then divide
+        phase = torch.polar(torch.ones_like(turns), 2 * math.pi * turns).to(dtype)
+        return kidx, phase
 
     def _apply(self, x: torch.Tensor) -> torch.Tensor:
         xc = x * self.smaps  # (Nc,*N)
-        kc = torch.fft.fftshift(
-            torch.fft.fftn(torch.fft.ifftshift(xc, dim=self.dims), dim=self.dims, norm="ortho"),
-            dim=self.dims,
-        )
-        kc_flat = kc.reshape(self.Nc, -1).T  # (prod(N), Nc), spatial C-order flatten
-        return kc_flat[self.idx, :]
+        kc = torch.fft.fftn(xc, dim=self.dims, norm="ortho")
+        del xc
+        kc = kc.reshape(self.Nc, -1)[:, self._kidx] * self._kphase  # (Nc,K)
+        return kc.T.contiguous()
 
     def _apply_adjoint(self, y: torch.Tensor) -> torch.Tensor:
-        # Scatter along dim 1 so the reshape below is a view, not a (Nc,*N) copy.
-        kc_full = torch.zeros(self.Nc, math.prod(self.N), dtype=y.dtype, device=y.device)
-        kc_full[:, self.idx] = y.T
-        kc_full = kc_full.reshape(self.Nc, *self.N)
-        kc_shifted = torch.fft.ifftshift(kc_full, dim=self.dims)
-        xc = torch.fft.fftshift(
-            torch.fft.ifftn(kc_shifted, dim=self.dims, norm="ortho"), dim=self.dims
-        )
-        return (xc * self.smaps.conj()).sum(dim=0)
+        buf = _zeroed_buffer((self.Nc, math.prod(self.N)), y.dtype, y.device)
+        try:
+            buf[:, self._kidx] = y.T * self._kphase.conj()
+            xc = torch.fft.ifftn(buf.reshape(self.Nc, *self.N), dim=self.dims, norm="ortho")
+        finally:
+            buf[:, self._kidx] = 0
+        return xc.mul_(self.smaps.conj()).sum(dim=0)
 
 
 def build_sense(smaps: torch.Tensor, omega: torch.Tensor) -> BlockDiagonal:
@@ -102,7 +152,7 @@ class SENSE_B0(SENSE):
         for il in range(self.L):
             kc_gathered = super()._apply(x * self.c_phasors[il])  # (K,Nc)
             b_il = self.b_by_echo[self.pos, il : il + 1]  # (K,1), gathered lazily
-            y = y + b_il * kc_gathered
+            y.addcmul_(b_il, kc_gathered)
         return y
 
     def _apply_adjoint(self, y: torch.Tensor) -> torch.Tensor:
@@ -110,7 +160,7 @@ class SENSE_B0(SENSE):
         for il in range(self.L):
             b_il = self.b_by_echo[self.pos, il : il + 1].conj()  # (K,1)
             xc = super()._apply_adjoint(y * b_il)  # (Nc,*N)-summed scatter/IFFT/coil-combine
-            x = x + self.c_phasors[il].conj() * xc
+            x.addcmul_(self.c_phasors[il].conj(), xc)
         return x
 
 

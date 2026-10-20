@@ -19,17 +19,19 @@ import numpy as np
 import torch
 
 from preprocess.utils import save_recon_nifti
-from recon.utils import resolve_device
+from recon.utils import iter_frames, resolve_device
 
 
 def rss(ksp: torch.Tensor) -> torch.Tensor:
     """ksp: (Nx,Ny,Nz,Nc,Nb) zero-filled k-space -> (Nx,Ny,Nz,Nb) magnitude.
-    Uses the same centered, ortho-normalized IFFT as recon/operators.py's SENSE."""
+    Same image as the centered, ortho-normalized IFFT of recon/operators.py's
+    SENSE. Shifting k-space before the IFFT only multiplies the image by a phase
+    ramp, which the magnitude does not see, so the shifts are not applied to the
+    (Nc-times larger) k-space: the coil-summed magnitude is shifted instead."""
     dims = (0, 1, 2)
-    x = torch.fft.fftshift(
-        torch.fft.ifftn(torch.fft.ifftshift(ksp, dim=dims), dim=dims, norm="ortho"), dim=dims
-    )
-    return x.abs().pow(2).sum(dim=3).sqrt()
+    x = torch.fft.ifftn(ksp, dim=dims, norm="ortho")
+    rss_img = x.abs().pow(2).sum(dim=3).sqrt()
+    return torch.fft.fftshift(rss_img, dim=dims)
 
 
 def run_rss(fn_ksp: str, device: str | None = None, max_batch_bytes: float = 4e9) -> np.ndarray:
@@ -44,7 +46,10 @@ def run_rss(fn_ksp: str, device: str | None = None, max_batch_bytes: float = 4e9
         img = np.empty((Nx, Ny, Nz, Nt), dtype=np.float32)
         for t0 in range(0, Nt, batch):
             t1 = min(t0 + batch, Nt)
-            ksp = torch.from_numpy(np.asarray(d[..., t0:t1]).astype(np.complex64)).to(device)
+            ksp_np = np.empty((Nx, Ny, Nz, Nc, t1 - t0), dtype=np.complex64)
+            for i, frame in enumerate(iter_frames(d, range(t0, t1))):
+                ksp_np[..., i] = frame
+            ksp = torch.from_numpy(ksp_np).to(device)
             img[..., t0:t1] = rss(ksp).cpu().numpy()
             print(f"  frames {t0 + 1}-{t1}/{Nt} done")
     return img

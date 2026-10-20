@@ -379,14 +379,29 @@ def _solve_mslr(
     L = Nscales * (sigma1A**2 + mu)  # Lipschitz constant of grad f
     print(f"Regularization weights lambdas = {[round(lam, 6) for lam in g.lambdas]}")
 
+    # PGM and POGM evaluate the cost of an iterate and, next iteration, the gradient
+    # at that same iterate: the forward product A x (L FFTs per coil with B0) is
+    # computed once. dc_cost leaves (X, X's version, x, A x) here and dc_grad takes
+    # it, whether or not it matches, so A x is never held through the prox.
+    forward = []
+
     def dc_cost(X):
         x = S.apply(X)
-        c = 0.5 * (A.apply(x) - ksp).norm().item() ** 2
+        Ax = A.apply(x)
+        c = 0.5 * (Ax - ksp).norm().item() ** 2
+        forward[:] = [(X, X._version, x, Ax)]
         return c + hp.cost(x, mu) if mu else c
 
     def dc_grad(X):
-        x = S.apply(X)
-        r = A.adjoint(A.apply(x) - ksp)
+        hit = forward.pop() if forward else None
+        if hit is not None and hit[0] is X and hit[1] == X._version:
+            x, Ax = hit[2:]
+        else:
+            x = S.apply(X)
+            Ax = A.apply(x)
+        del hit
+        r = A.adjoint(Ax - ksp)
+        del Ax
         return S.adjoint(r + mu * hp.apply(x) if mu else r)
 
     print("Initializing X0...")

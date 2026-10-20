@@ -25,6 +25,12 @@ def _gr_restart(fgrad: torch.Tensor, ynew_yold: torch.Tensor, restart_cutoff: fl
     return inner <= restart_cutoff * fgrad.norm().item() * ynew_yold.norm().item()
 
 
+def _vdot(a: torch.Tensor, b: torch.Tensor) -> float:
+    """Re <a, b> over all elements, without the elementwise temporaries of
+    sum(real(conj(a) * b)) (each a full image series: 2.5 GB at 660 frames)."""
+    return torch.vdot(a.reshape(-1), b.reshape(-1)).real.item()
+
+
 def _bar(progress: bool | str, total: int, default_desc: str):
     """A tqdm bar over `total` iterations, or None when progress is off. A str
     `progress` is the label; leave=False so per-frame solves don't stack bars."""
@@ -212,7 +218,7 @@ def cg(
     X = torch.zeros_like(B)
     R = B.clone()
     P = R.clone()
-    rsold = torch.sum(torch.abs(R) ** 2).item()
+    rsold = _vdot(R, R)
     rs0 = rsold
     residuals = [1.0]
 
@@ -225,10 +231,10 @@ def cg(
         AHAP = A.adjoint(AP)
         if reg_normal is not None:
             AHAP = AHAP + reg_normal(P)
-        alpha = rsold / torch.sum(torch.real(torch.conj(P) * AHAP)).item()
+        alpha = rsold / _vdot(P, AHAP)
         X = X + alpha * P
         R = R - alpha * AHAP
-        rsnew = torch.sum(torch.abs(R) ** 2).item()
+        rsnew = _vdot(R, R)
         rel_res = (rsnew / rs0) ** 0.5
         residuals.append(rel_res)
         if bar is not None:

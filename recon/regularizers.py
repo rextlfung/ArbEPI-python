@@ -10,6 +10,8 @@
 """
 
 import math
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 import numpy as np
 import pywt
@@ -51,6 +53,9 @@ def _patch_starts(n: int, patch: int, stride: int) -> list[int]:
 
 
 _DEFAULT_SVD_CHUNK_BYTES = 4_000_000_000  # per batched SVD call; see SVST
+_GESVDA_CHUNK_BYTES = 96_000_000  # input per gesvda call; see _svd_chunk_bytes
+_GESVDA_MAX_ELEMENTS = 1 << 20  # largest m * n taking gesvda
+_GESVDA_MIN_BATCH = 8  # fewest matrices taking gesvda
 
 
 def _all_patch_starts(
@@ -67,10 +72,32 @@ def _all_patch_starts(
     return starts, (psx, psy, psz)
 
 
+def _uses_gesvda(device: torch.device, batch: int, m: int, n: int) -> bool:
+    """Whether _svd takes cuSOLVER's gesvda for a (batch, m, n) stack. The single
+    whole-volume matrix of a global patch is faster and lighter on the default
+    driver (486000 x 119: 0.20 s, 2.4 GB vs 0.32 s, 2.8 GB; x 660: 1.2 s, 8.7 GB
+    vs 6.6 s, 15 GB), so gesvda is for many moderate matrices."""
+    return (device.type == "cuda" and batch >= 8 and min(m, n) > 32
+            and m * n <= _GESVDA_MAX_ELEMENTS)
+
+
+def _svd_chunk_bytes(device: torch.device, m: int, n: int, requested: int) -> int:
+    """Input bytes per batched SVD call. gesvda's workspace is 15-24x its input
+    (216 x 120 patches: 21x; the default driver 2.6x), so on the GPU its calls
+    are capped at _GESVDA_CHUNK_BYTES, which keeps a call under ~2 GB however
+    large the requested budget is, with no loss of throughput."""
+    if _uses_gesvda(device, _GESVDA_MIN_BATCH, m, n):
+        return min(requested, _GESVDA_CHUNK_BYTES)
+    return requested
+
+
 def _chunk_size_for_budget(
-    patch_size: tuple[int, int, int], Nt: int, element_size: int, max_chunk_bytes: int
+    patch_size: tuple[int, int, int], Nt: int, element_size: int, max_chunk_bytes: int,
+    device: torch.device | None = None,
 ) -> int:
     p_k = patch_size[0] * patch_size[1] * patch_size[2]
+    if device is not None:
+        max_chunk_bytes = _svd_chunk_bytes(device, p_k, Nt, max_chunk_bytes)
     return max(1, max_chunk_bytes // (element_size * p_k * Nt))
 
 
@@ -135,27 +162,88 @@ def patches2img(P: torch.Tensor, patch_size, stride_size, og_size) -> torch.Tens
     return img / pcount.unsqueeze(-1)
 
 
+def _svd_cpu_pooled(X: torch.Tensor, vals_only: bool = False):
+    """Batched SVD on the CPU, one single-threaded LAPACK call per worker.
+
+    torch's own batched CPU SVD does not parallelize over the batch, and giving
+    each matrix many MKL threads is slower than one (216 x 120 patches on the
+    32-core EPYC: 5.9 ms/matrix at 32 threads, 3.4 at 1; a pool of 32 workers
+    with 1 thread each: 0.15-0.8 ms/matrix, depending on the machine's load).
+    Workers = torch.get_num_threads(), so the usual knob (torch.set_num_threads,
+    OMP_NUM_THREADS) bounds it. Each worker thread picks up the intra-op count
+    set here, which is restored afterwards."""
+    fn = torch.linalg.svdvals if vals_only else partial(torch.linalg.svd, full_matrices=False)
+    workers = min(X.shape[0], torch.get_num_threads())
+    if workers <= 1:
+        return fn(X)
+    previous = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        with ThreadPoolExecutor(workers) as pool:
+            parts = list(pool.map(fn, X.chunk(workers)))
+    finally:
+        torch.set_num_threads(previous)
+    return torch.cat(parts) if vals_only else tuple(torch.cat(p) for p in zip(*parts))
+
+
+def _svd(X: torch.Tensor, vals_only: bool = False):
+    """SVD of a batch of patches (B, m, n) -> (U, S, Vh), or only S.
+
+    CPU: _svd_cpu_pooled. CUDA: cuSOLVER's gesvda where _uses_gesvda -- 9-10x
+    faster than the default driver (gesvdj) on 216 x 120 patches (0.57 vs
+    5.3 ms/matrix on the RTX A6000) and more accurate (4e-7 vs 3e-5 relative
+    error of the thresholded patch against float64) -- falling back to the
+    default driver when it raises, which it does on exactly rank-deficient
+    input (zero rows or columns, duplicated frames), or returns non-finite
+    values. At most 32 on a side the default is the batched Jacobi routine,
+    which is already fast. Callers cap the batch with _svd_chunk_bytes."""
+    if X.device.type == "cpu":
+        return _svd_cpu_pooled(X, vals_only)
+    fn = torch.linalg.svdvals if vals_only else partial(torch.linalg.svd, full_matrices=False)
+    if _uses_gesvda(X.device, *X.shape):
+        try:
+            out = fn(X, driver="gesvda")
+            if bool(torch.isfinite(out if vals_only else out[1]).all()):
+                return out
+        except torch.linalg.LinAlgError:
+            pass
+    return fn(X)
+
+
 def patch_nucnorm(P: torch.Tensor) -> torch.Tensor:
     """Sum of nuclear norms across all (space x time) patches in P: (Np, m, n)."""
     if P.ndim != 3:
         raise ValueError("P must be (patches, space, time)")
-    return torch.linalg.svdvals(P).sum()
+    return _svd(P, vals_only=True).sum()
 
 
 def _svst_batch(X: torch.Tensor, beta: float) -> tuple[torch.Tensor, torch.Tensor]:
     """SVST of one batch of patches (see SVST)."""
-    fro = torch.linalg.matrix_norm(X, ord="fro")
-    zero_mask = fro <= beta
-    mask_mnn = zero_mask[..., None, None]
-    X_safe = torch.where(mask_mnn, torch.zeros_like(X), X)
+    if X.ndim == 2:  # a single matrix
+        recon, reg = _svst_batch(X[None], beta)
+        return recon[0], reg[0]
+    fro =torch.linalg.matrix_norm(X, ord="fro")
+    keep = ~(fro <= beta)  # a NaN patch is kept, so it fails loudly in the SVD
+    reg = torch.zeros_like(fro)
+    n_keep = int(keep.sum())
+    if n_keep == 0:
+        return torch.zeros_like(X), reg
 
-    U, S, Vh = torch.linalg.svd(X_safe, full_matrices=False)
+    # Patches with ||X||_F <= beta threshold to exactly zero, so they skip the SVD
+    # (which would also hand cuSOLVER subnormal or all-zero input it can fail on).
+    Xk = X if n_keep == X.shape[0] else X[keep]
+    U, S, Vh = _svd(Xk)
     s_thresh = torch.clamp(S - beta, min=0.0)
-    recon = U @ (s_thresh.to(Vh.dtype).unsqueeze(-1) * Vh)
-    reg = s_thresh.sum(dim=-1)
-
-    recon = torch.where(mask_mnn, torch.zeros_like(recon), recon)
-    reg = torch.where(zero_mask, torch.zeros_like(reg), reg)
+    # S is descending, so every thresholded value past the largest count is zero:
+    # multiply only the k leading components (k << n once the data are low rank).
+    k = int((s_thresh > 0).sum(dim=-1).max())
+    rk = U[..., :k] @ (s_thresh[..., :k].to(Vh.dtype).unsqueeze(-1) * Vh[..., :k, :])
+    del U, Vh
+    reg[keep] = s_thresh.sum(dim=-1)
+    if n_keep == X.shape[0]:
+        return rk, reg
+    recon = torch.zeros_like(X)
+    recon[keep] = rk
     return recon, reg
 
 
@@ -175,7 +263,8 @@ def SVST(
     bytes, which bounds memory with no measurable slowdown.
     """
     item_bytes = X.element_size() * X.shape[-2] * X.shape[-1]
-    chunk_size = max(1, max_chunk_bytes // item_bytes)
+    budget = _svd_chunk_bytes(X.device, X.shape[-2], X.shape[-1], max_chunk_bytes)
+    chunk_size = max(1, budget // item_bytes)
     if X.shape[0] <= chunk_size:
         return _svst_batch(X, beta)
 
@@ -212,7 +301,9 @@ def patchSVST(
     if (psx, psy, psz) == (1, 1, 1):
         return _unit_block_svst(img, beta)
 
-    chunk_size = _chunk_size_for_budget((psx, psy, psz), Nt, img.element_size(), max_chunk_bytes)
+    chunk_size = _chunk_size_for_budget(
+        (psx, psy, psz), Nt, img.element_size(), max_chunk_bytes, img.device
+    )
     img_out = torch.zeros_like(img)
     pcount = torch.zeros(Nx, Ny, Nz, dtype=torch.float32, device=img.device)
     reg_total = torch.zeros((), dtype=torch.float32, device=img.device)
@@ -303,7 +394,8 @@ class MultiScaleLowRank:
             img_k = X[..., k]
             starts, ps = _all_patch_starts(img_k.shape[:3], self.patch_sizes[k], self.strides[k])
             chunk_size = _chunk_size_for_budget(
-                ps, img_k.shape[-1], img_k.element_size(), _DEFAULT_SVD_CHUNK_BYTES
+                ps, img_k.shape[-1], img_k.element_size(), _DEFAULT_SVD_CHUNK_BYTES,
+                img_k.device,
             )
             nuc = 0.0
             for i in range(0, len(starts), chunk_size):

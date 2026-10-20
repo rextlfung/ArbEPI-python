@@ -18,6 +18,7 @@ pytest.importorskip("mirtorch")
 from recon.operators import build_sense  # noqa: E402
 from recon.rss import rss, run_rss  # noqa: E402
 from recon.utils import (  # noqa: E402
+    iter_frames,
     load_and_gather_ksp,
     object_mask,
     read_frames_cropped,
@@ -31,14 +32,14 @@ def _encode(x, y, z, c, t):
     return ((((x * NY + y) * NZ + z) * NC + c) * NT + t).astype(np.complex64)
 
 
-def _make_dataset(fn, key, chunked: bool):
+def _make_dataset(fn, key, chunked: bool, **dataset_kwargs):
     x, y, z, c, t = np.meshgrid(
         np.arange(NX), np.arange(NY), np.arange(NZ), np.arange(NC), np.arange(NT), indexing="ij"
     )
     full = _encode(x, y, z, c, t)
     with h5py.File(fn, "w") as f:
         chunks = (NX, NY, NZ, NC, 1) if chunked else None
-        f.create_dataset(key, data=full, chunks=chunks)
+        f.create_dataset(key, data=full, chunks=chunks, **dataset_kwargs)
     return full
 
 
@@ -99,6 +100,38 @@ def test_load_and_gather_ksp_frames_maps_blocks_to_file_frames(tmp_path):
     ksp = load_and_gather_ksp(str(fn), A, torch.device("cpu"), frames=[5, 2])
     np.testing.assert_array_equal(ksp[:, :, 0].numpy(), full[..., 5].reshape(-1, NC))
     np.testing.assert_array_equal(ksp[:, :, 1].numpy(), full[..., 2].reshape(-1, NC))
+
+
+@pytest.mark.parametrize(
+    "kwargs,chunked",
+    [
+        (dict(compression="gzip", compression_opts=4), True),  # the pooled-inflate path
+        (dict(compression="gzip", shuffle=True), True),  # shuffled: h5py reads it
+        (dict(), True),  # uncompressed
+        (dict(compression="gzip"), False),  # not one frame per chunk
+    ],
+)
+@pytest.mark.parametrize("workers", [1, 3])
+def test_iter_frames_yields_the_requested_frames_in_order(tmp_path, kwargs, chunked, workers):
+    fn = tmp_path / "k.h5"
+    full = _make_dataset(fn, "ksp_epi_zf", chunked=chunked, **kwargs)
+    order = [6, 0, 3, 3, 1, 5, 2, 4]  # more frames than 2 * workers; a repeat
+    with h5py.File(fn, "r") as f:
+        got = list(iter_frames(f["ksp_epi_zf"], order, workers=workers))
+    assert len(got) == len(order)
+    for t, frame in zip(order, got):
+        np.testing.assert_array_equal(frame, full[..., t])
+
+
+def test_load_and_gather_ksp_reads_gzip_frames_like_plain_ones(tmp_path):
+    full = _make_dataset(
+        tmp_path / "k.h5", "ksp_epi_zf", chunked=True, compression="gzip", compression_opts=4
+    )
+    smaps = torch.ones(NC, NX, NY, NZ, dtype=torch.complex64)
+    A = build_sense(smaps, torch.ones(NX, NY, NZ, 3, dtype=torch.bool))
+    ksp = load_and_gather_ksp(str(tmp_path / "k.h5"), A, torch.device("cpu"), frames=[6, 0, 3])
+    for it, t in enumerate([6, 0, 3]):
+        np.testing.assert_array_equal(ksp[:, :, it].numpy(), full[..., t].reshape(-1, NC))
 
 
 def test_rss_matches_numpy_reference(tmp_path):
