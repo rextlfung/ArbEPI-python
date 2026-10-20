@@ -1,6 +1,6 @@
 """Everything in recon/ that isn't an operator, regularizer, solver or driver.
 
-    I/O              read_frames_cropped, load_*, load_and_gather_ksp, read_julia_mat,
+    I/O              read_frames_cropped, load_*, load_and_gather_ksp[_host], read_julia_mat,
                      save_result
     operator norms   poweriter, estimate_spectral_norm, check_operator_unitary
     tSNR             object_mask, temporal_stability, tsnr_report
@@ -164,23 +164,47 @@ def load_normalized_smaps(
     return smaps, smaps_chw
 
 
+def _gathered_frames(fn_ksp, A, device, frames):
+    """Yield (it, (K,Nc) k-space of block it at A's sampled locations), one frame
+    read at a time."""
+    Nt = len(A.A)
+    frames = list(range(Nt)) if frames is None else list(frames)
+    Nc = A.A[0].Nc
+    with h5py.File(fn_ksp, "r") as f:
+        d = f["ksp_epi_zf"]
+        for it, frame_np in enumerate(iter_frames(d, frames[:Nt])):
+            frame = torch.from_numpy(frame_np.astype(np.complex64)).to(device)
+            flat = frame.reshape(-1, Nc)  # spatial C-order flatten, matches SENSE
+            yield it, flat[A.A[it].idx, :]
+
+
 def load_and_gather_ksp(
     fn_ksp: str, A: BlockDiagonal, device: torch.device, frames: list[int] | None = None,
 ) -> torch.Tensor:
     """(K,Nc,Nt) k-space at A's sampled locations, read one frame at a time so
     the dense (Nx,Ny,Nz,Nc,Nt) array is never in memory. frames: the file's
     frame index for each block of A (default: block it <- frame it)."""
-    Nt = len(A.A)
-    frames = list(range(Nt)) if frames is None else list(frames)
-    Nc = A.A[0].Nc
-    K = A.A[0].idx.numel()
-    out = torch.empty(K, Nc, Nt, dtype=torch.complex64, device=device)
-    with h5py.File(fn_ksp, "r") as f:
-        d = f["ksp_epi_zf"]
-        for it, frame_np in enumerate(iter_frames(d, frames[:Nt])):
-            frame = torch.from_numpy(frame_np.astype(np.complex64)).to(device)
-            flat = frame.reshape(-1, Nc)  # spatial C-order flatten, matches SENSE
-            out[:, :, it] = flat[A.A[it].idx, :]
+    out = torch.empty(
+        A.A[0].idx.numel(), A.A[0].Nc, len(A.A), dtype=torch.complex64, device=device
+    )
+    for it, y in _gathered_frames(fn_ksp, A, device, frames):
+        out[:, :, it] = y
+    return out
+
+
+def load_and_gather_ksp_host(
+    fn_ksp: str, A: BlockDiagonal, device: torch.device, frames: list[int] | None = None,
+) -> torch.Tensor:
+    """The same k-space as `load_and_gather_ksp`, but in host memory as (Nt,K,Nc)
+    (a frame, or a run of frames, is contiguous), page-locked when `device` is a
+    GPU so frames copy to it asynchronously. Each frame is gathered on `device`
+    and moved to the host at once, so the series never occupies the GPU."""
+    out = torch.empty(
+        len(A.A), A.A[0].idx.numel(), A.A[0].Nc, dtype=torch.complex64,
+        pin_memory=torch.device(device).type == "cuda",
+    )
+    for it, y in _gathered_frames(fn_ksp, A, device, frames):
+        out[it] = y.cpu()
     return out
 
 

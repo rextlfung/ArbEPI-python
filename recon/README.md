@@ -376,6 +376,18 @@ $$g(X_1,\dots,X_K) = \sum_k \lambda_k \sum_{\text{patches } b} \|P_b(X_k)\|_*$$
   A^H y, to run more iterations of an earlier result. PGM has no momentum, so a PGM
   continuation equals the longer run (tested); FPGM/POGM restart their momentum.
   With cycle spinning give a new `--cycle-spin-seed`, or the shifts repeat.
+- `--dc-chunk FRAMES` (mslr) keeps the k-space in host memory and computes the
+  data-consistency cost and gradient that many frames at a time
+  (`solvers.ChunkedDataFidelity`), instead of holding the series' k-space, the
+  prediction A x and the residual on the GPU: three tensors of Nc / R times an
+  image series each (7.7 GB each for 516 frames of 23 coils at R = 10 on a
+  136 x 136 x 44 grid). The result is the same up to the order the cost is
+  summed (tested, with and without `--hp-weight`). A is applied frame by frame
+  either way, so the chunk size changes neither the result nor the speed (8 frames
+  of run C, B0, on a GPU shared with another job: 0.22 s/frame for the whole-series
+  product and for chunks of 1, 2 and 4, 0.16 for 8): it only sets how many frames of
+  k-space are on the device (15 MB each at that size), so any value from 1 to a few
+  dozen will do.
 - The weights follow the paper's eq. 4,
   $\lambda_k = \lambda_{\text{global}} \big(\sqrt{p_k} + \sqrt{N_t} + \sqrt{\log(N_{\text{vox}} N_t / \max(p_k, N_t))}\big)$
   with $p_k$ the number of voxels per patch — the expected largest singular

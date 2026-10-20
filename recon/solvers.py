@@ -4,6 +4,9 @@
     pdhg          primal-dual for min_x f(x) + h(G x), f smooth, h prox-friendly
                   (for g = h o G with no closed-form prox, e.g. TV)
     cg            conjugate gradient on the normal equations A^H A x = A^H y
+    ChunkedDataFidelity  0.5||A x - y||^2 and its gradient for a block-diagonal A, a few
+                  frames of k-space on the device at a time (the series' k-space, prediction
+                  and residual are each Nc / R times an image series: 2.3x at 23 coils, R = 10)
 """
 
 import math
@@ -198,6 +201,52 @@ def pogm_restart(
         bar.close()
     result = xnew if mom == "pogm" else ynew
     return result, out[: niter_actual + 1]
+
+
+class ChunkedDataFidelity:
+    """f(x) = 0.5 ||scale A x - y||^2 for a block-diagonal A (one block per frame),
+    with grad f = scale A^H (scale A x - y), computed `chunk` frames at a time.
+
+    `blocks` is `A.A` of a `BlockDiagonal`, `ksp` the k-space in host memory as
+    (Nt, K, Nc) (`utils.load_and_gather_ksp_host`). Only `chunk` frames of k-space
+    are on the device at once, and each block is applied to its own frame exactly
+    as `BlockDiagonal` does, so a chunk costs the same as the same frames in the
+    whole-series product: the chunk size trades copy calls against device memory
+    (three k-space-sized tensors per chunk frame) and has no effect on the result
+    beyond the order in which the cost is summed.
+    """
+
+    def __init__(self, blocks, ksp: torch.Tensor, scale: float = 1.0, chunk: int = 8):
+        if ksp.shape[0] != len(blocks):
+            raise ValueError(f"ksp has {ksp.shape[0]} frames for {len(blocks)} blocks")
+        if chunk < 1:
+            raise ValueError(f"chunk must be >= 1 frame, got {chunk}")
+        self.blocks, self.ksp, self.scale, self.chunk = blocks, ksp, scale, int(chunk)
+
+    def _chunks(self, device):
+        for a in range(0, len(self.blocks), self.chunk):
+            b = min(a + self.chunk, len(self.blocks))
+            yield a, self.ksp[a:b].to(device, non_blocking=True)
+
+    def cost_and_grad(self, x: torch.Tensor, grad: bool = True):
+        """(0.5||scale A x - y||^2 as a float, its gradient or None); x is (..., Nt)."""
+        g = torch.empty_like(x) if grad else None
+        total = torch.zeros((), dtype=torch.float64, device=x.device)
+        for a, y in self._chunks(x.device):
+            for k in range(a, a + y.shape[0]):
+                res = self.scale * self.blocks[k].apply(x[..., k]) - y[k - a]
+                total += res.norm().double() ** 2
+                if grad:
+                    g[..., k] = self.scale * self.blocks[k].adjoint(res)
+        return 0.5 * total.item(), g
+
+    def adjoint_data(self, like: torch.Tensor) -> torch.Tensor:
+        """scale A^H y, shaped and typed like `like` (Nx, Ny, Nz, Nt)."""
+        out = torch.empty_like(like)
+        for a, y in self._chunks(like.device):
+            for k in range(a, a + y.shape[0]):
+                out[..., k] = self.scale * self.blocks[k].adjoint(y[k - a])
+        return out
 
 
 def cg(
