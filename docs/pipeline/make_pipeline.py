@@ -477,7 +477,7 @@ def draw(d):
               ('para', 'readout-delay sweep and linear phase estimation, on whitened '
                        'calibration data')]
     grid = [('title', 'Grid ramp-sampled data'), ('mono', 'epi_gridding.py'),
-            ('para', 'whitened readouts onto Cartesian kx (1D NUFFT); odd/even kx shifted by '
+            ('para', 'whitened readouts onto Cartesian kx (spline or NUFFT); odd/even kx shifted by '
                      'the calibrated delay')]
     corr = [('title', 'Linear phase correction'), ('mono', 'oephase.py'),
             ('para', 'subtracts a[0] + a[1]·x from every even echo')]
