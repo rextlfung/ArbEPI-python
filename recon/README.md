@@ -387,7 +387,13 @@ $$g(X_1,\dots,X_K) = \sum_k \lambda_k \sum_{\text{patches } b} \|P_b(X_k)\|_*$$
   of run C, B0, on a GPU shared with another job: 0.22 s/frame for the whole-series
   product and for chunks of 1, 2 and 4, 0.16 for 8): it only sets how many frames of
   k-space are on the device (15 MB each at that size), so any value from 1 to a few
-  dozen will do.
+  dozen will do. Measured on run C (516 frames, 23 coils, 136 x 136 x 44, one 9^3 local
+  scale, PGM, a card with 38 GB free): without it the first iteration ran out of memory
+  at 35.7 GB allocated, asking for 7.2 GB more; with `--dc-chunk 8` the k-space load left
+  7.7 GB more free and a 100-iteration run fit, at a peak of 35.9 GB allocated over its
+  first iterations. The rest of that peak is the solver's own image-sized buffers (3.4 GB
+  each for 516 frames), which this does not touch: at this size it is a fit, not a
+  comfortable margin.
 - The weights follow the paper's eq. 4,
   $\lambda_k = \lambda_{\text{global}} \big(\sqrt{p_k} + \sqrt{N_t} + \sqrt{\log(N_{\text{vox}} N_t / \max(p_k, N_t))}\big)$
   with $p_k$ the number of voxels per patch — the expected largest singular
