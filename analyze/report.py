@@ -101,14 +101,14 @@ def parse(folder):
 class Loaded:
     """One reconstruction, read once: the series of the sum (and scales), its mean, the design."""
 
-    def __init__(self, h5, tr, onsets_fn, paradigm):
-        self.rec = read_recon(h5, scales=('all',))
+    def __init__(self, h5, tr, onsets_fn, paradigm, n_discard=0):
+        self.rec = read_recon(h5, scales=('all',), n_discard=n_discard)
         if self.rec.n_scales < 2:  # a single-scale recon: scale0 would just repeat the sum
             self.rec.series = {'sum': self.rec.series['sum']}
         with h5py.File(h5) as f:
             self.pieces = json.loads(f.attrs['pieces']) if 'pieces' in f.attrs else []
         meta = json.load(open(h5[:-3] + '.json'))
-        self.first_frame = meta['first_frame']
+        self.first_frame = meta['first_frame'] + n_discard  # of the frames kept
         self.tr = tr
         self.nt = self.rec.series['sum'].shape[-1]
         self.t0 = self.first_frame * tr
