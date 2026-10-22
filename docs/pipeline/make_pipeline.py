@@ -154,7 +154,8 @@ ARIA = (
     'calibration region and writing one preprocessed file. Reconstruction is root-sum-of-squares '
     'or iterative SENSE with optional B0 and R2* models. Postprocessing registers every frame '
     'of the series to the middle frame with a rigid-body transform (FSL MCFLIRT or a scipy '
-    'fallback) and resamples it. Analysis fits a GLM with the task '
+    'fallback) and resamples it, then zeroes everything outside a brain mask from the T1-weighted '
+    'deGRE, registered to the corrected series. Analysis fits a GLM with the task '
     'regressors and drift terms to the reconstructed series, with AR(1) prewhitening, and writes '
     't, z and percent-change maps. scan_info.mat bypasses the scanner and '
     'carries the sampling schedule to preprocessing.'
@@ -715,43 +716,49 @@ def draw(d):
     rec_y1 = out_y + out_h + 20
     d.band(rec_y0, rec_y1, 'rec', 'RECON · uv (.venv-recon)')
 
-    # ---- postprocessing: motion correction of the reconstructed series ----
+    # ---- postprocessing: motion correction and brain mask of the reconstructed series ----
     post_y0 = rec_y1 + 50
     post_y = post_y0 + 14
     d.line(f'M470 {out_y + out_h} V{post_y - 2}')
     d.arrow(f'M470 {post_y - 14} V{post_y - 2}')
     d.chip(470, rec_y1 + 25, 'sense_<reg>/<seq>_recon.h5 · X_recon, X (one component per scale)')
     post_h = d.box(55, post_y, 1030, None, 'post', [
-        ('title', 'Motion correction: rigid-body registration of every frame'),
+        ('title', 'Motion correction and brain mask'),
         ('mono', 'postprocess/ · python -m postprocess'),
         ('para', 'Six-parameter registration of each frame\'s magnitude to the middle frame '
                  '(MCFLIRT\'s default; mean of the aligned series optional). Backend: FSL '
                  'mcflirt if found, else a multi-resolution least-squares registration in '
                  'scipy. FSL supplies the transforms only: resampling is shared, so the complex '
-                 'series and every mslr component are resampled with one set of matrices.'),
+                 'series and every mslr component are resampled with one set of matrices. '
+                 'Brain mask (--brain-mask-from): FSL bet on the T1-weighted deGRE, which has '
+                 'the anatomical contrast the EPI mean lacks; the skull-stripped deGRE is '
+                 'registered to the corrected series\' mean (flirt, rigid) and the mask moved with '
+                 'it, then applied to the corrected series.'),
     ])
     post_out_y = post_y + post_h + 26
     d.arrow(f'M470 {post_y + post_h} V{post_out_y - 2}')
-    d.tag(55, post_out_y, 1030, 60, [
+    post_tag_h = 78
+    d.tag(55, post_out_y, 1030, post_tag_h, [
         ('mono-b', '<out>.h5 · <out>.par · <out>.json'),
         ('mono-s', 'X_recon, X (same layout as the input) · motion/{matrices,params,ref} · '
                    'rx ry rz tx ty tz per frame'),
+        ('mono-s', 'brain_mask, brain_mask_xfm · <out>_brain_mask.nii.gz (with --brain-mask-from)'),
     ])
-    post_y1 = post_out_y + 60 + 20
+    post_y1 = post_out_y + post_tag_h + 20
     d.band(post_y0, post_y1, 'post', 'POSTPROCESS · uv (.venv)')
 
     # ---- analysis: GLM activation maps of the reconstructed series ----
     ana_y0 = post_y1 + 50
     ana_y = ana_y0 + 14
-    d.line(f'M470 {post_out_y + 60} V{ana_y - 2}')
+    d.line(f'M470 {post_out_y + post_tag_h} V{ana_y - 2}')
     d.arrow(f'M470 {ana_y - 14} V{ana_y - 2}')
     d.chip(470, post_y1 + 25, '<name>_mc_recon.h5 (or the recon .h5 itself)')
     ana_h = d.box(55, ana_y, 1030, None, 'ana', [
         ('title', 'Activation maps: GLM t- and z-scores'),
         ('mono', 'analyze/ · python -m analyze'),
         ('para', 'Design: task blocks convolved with the canonical HRF, plus DCT drift terms '
-                 '(periods > 128 s) and a constant. Brain mask: FSL bet if on PATH, else '
-                 'brainextractor, on the temporal mean. Fit: SPM-style AR(1) prewhitening with '
+                 '(periods > 128 s) and a constant. Brain mask: the postprocess one when given, else FSL '
+                 'bet if on PATH (else brainextractor) on the temporal mean. Fit: SPM-style AR(1) prewhitening with '
                  'one coefficient pooled over voxels; contrast t, z at the same tail '
                  'probability, FDR. The summed image and each mslr scale are analyzed '
                  'separately. compare.py draws several reconstructions side by side.'),

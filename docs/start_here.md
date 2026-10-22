@@ -13,7 +13,7 @@ Python environment.
 | 3 | **Export and scan** | `uv run python main.py --ge`, copy the `.pge` files to the scanner (`ge.coppe`), run all four scans | raw ScanArchives | {doc}`ge_export`, {doc}`ge` |
 | 4 | **Preprocess** | `python -m preprocess.batch_preprocess <datdir> <seq> ...` | one `<seq>_preprocessed.h5` per sequence: zero-filled k-space, sensitivity and B0 maps | {doc}`preprocess` |
 | 5 | **Reconstruct** | `python -m recon.rss ...` or `python -m recon.sense ...` | image time series (`.h5`, `.nii.gz`) | {doc}`recon` |
-| 6 | **Motion-correct** (optional) | `python -m postprocess --recon ... --out ...` | the series registered to its middle frame, plus motion parameters | {doc}`postprocess` |
+| 6 | **Motion-correct and brain-mask** (optional) | `python -m postprocess --recon ... --out ... [--brain-mask-from <seq>_preprocessed.h5]` | the series registered to its middle frame, plus motion parameters, and zeroed outside a brain mask from the T1-weighted deGRE | {doc}`postprocess` |
 | 7 | **Analyze** | `python -m analyze ...` | t- and z-score maps | {doc}`analyze` |
 
 Without a scanner, {doc}`simulate_fmri` replaces step 3 by simulating the raw

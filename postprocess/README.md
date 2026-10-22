@@ -1,6 +1,6 @@
 # postprocess/ -- operations on `recon/`'s output, before `analyze/`
 
-Prototype. One operation so far: inter-frame rigid-body motion correction.
+Prototype. Two operations: inter-frame rigid-body motion correction, and a brain mask applied to the corrected series.
 
 ```
 python -m postprocess --recon <name>_recon.h5 --out <name>_mc_recon.h5 \
@@ -12,6 +12,19 @@ component `X` of an `mslr` run, all resampled with the same transforms), so
 `python -m analyze --recon <name>_mc_recon.h5 ...` works unchanged. It also
 holds `motion/{matrices,params,ref}`, and `<out>.par` has one line per frame:
 rx ry rz (rad), tx ty tz (mm), about the volume center.
+
+## Brain mask
+
+`--brain-mask-from <seq>_preprocessed.h5` zeroes the corrected series outside a BET mask of
+that file's T1-weighted deGRE (`degre/img_echoes`, echo 1, which is on the EPI grid and has
+the anatomical contrast the EPI mean lacks: BET on an EPI mean gave 4184 cm3 at 2.4 mm).
+`--bet-frac` is BET's threshold (default 0.5). The mask is stored as `brain_mask` in the
+output and written as `<out minus .h5>_brain_mask.nii.gz`; pass that to `analyze/` as its
+mask. The deGRE is acquired before the EPI, so the skull-stripped deGRE is first registered
+to the corrected series' mean (rigid, FSL `flirt`, normalized mutual information, search
+limited to +-15 deg) and the mask moved with that transform (`brain_mask_xfm`; the CLI
+prints how far it moved the mask). `--no-mask-registration` skips it.
+`brainmask.py` has the pieces; `tests/test_postprocess_brainmask.py` the checks.
 
 ## Backends
 
