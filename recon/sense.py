@@ -42,10 +42,11 @@ from recon.regularizers import (
     TemporalHighPass,
     WaveletTV,
 )
-from recon.solvers import cg, pdhg, pogm_restart
+from recon.solvers import ChunkedDataFidelity, cg, pdhg, pogm_restart
 from recon.utils import (
     estimate_spectral_norm,
     load_and_gather_ksp,
+    load_and_gather_ksp_host,
     load_array,
     load_echo_times,
     load_normalized_smaps,
@@ -99,6 +100,7 @@ def run_sense(
     conv_tol: float = 1e-5,
     cycle_spin_seed: int | None = None,
     fn_init: str | None = None,
+    dc_chunk: int | None = None,
     normalize_operator: bool = True,
     normalize_noise: bool = True,
     # wavelet-tv
@@ -157,9 +159,18 @@ def run_sense(
     from instead of A^H y, i.e. to run more iterations of an earlier result. PGM
     has no momentum, so a PGM continuation equals the longer run; FPGM/POGM
     restart their momentum.
+
+    dc_chunk (mslr): when set, k-space stays in host memory and the data-consistency
+    cost and gradient are computed this many frames at a time
+    (`solvers.ChunkedDataFidelity`), instead of holding the series' k-space, the
+    prediction A x and the residual on the device (three tensors of Nc / R times an
+    image series each). Same result up to float summation order; the chunk size
+    only trades copy calls against memory, since A is applied frame by frame either way.
     """
     if reg not in REGULARIZERS:
         raise ValueError(f"reg={reg!r}, expected one of {REGULARIZERS}")
+    if dc_chunk is not None and reg != "mslr":
+        raise ValueError("dc_chunk is only implemented for reg='mslr'")
     if lamb_ttv > 0 and reg != "wavelet-tv":
         raise ValueError("lamb_ttv (temporal TV) is only implemented for reg='wavelet-tv'")
     if r2star_map is not None and fn_b0map is None:
@@ -239,7 +250,10 @@ def run_sense(
         del x0
 
     print("Loading k-space (gathered per frame, never materializing the dense array)...")
-    ksp = load_and_gather_ksp(fn_ksp, A, device, frames=frames)  # (K,Nc,Nt)
+    if dc_chunk is None:
+        ksp = load_and_gather_ksp(fn_ksp, A, device, frames=frames)  # (K,Nc,Nt)
+    else:  # host memory, (Nt,K,Nc): the data-consistency term takes it dc_chunk frames at a time
+        ksp = load_and_gather_ksp_host(fn_ksp, A, device, frames=frames)
     with h5py.File(fn_ksp, "r") as f:
         noise_var = f.attrs.get("noise_var")
         whitened = f.attrs.get("whitened", True)
@@ -259,7 +273,10 @@ def run_sense(
             f"  thermal-noise variance {noise_var:.4f} (recorded by preprocessing) "
             f"-- dividing k-space by {np.sqrt(noise_var):.4f}"
         )
-        ksp = ksp / float(np.sqrt(noise_var))
+        if dc_chunk is None:
+            ksp = ksp / float(np.sqrt(noise_var))
+        else:
+            ksp.div_(float(np.sqrt(noise_var)))  # in place: a copy would not be page-locked
     if device.type == "cuda":
         torch.cuda.empty_cache()
         free_gb, total_gb = (x / 1e9 for x in torch.cuda.mem_get_info())
@@ -286,7 +303,7 @@ def run_sense(
     init_X = None
     if fn_init is not None:
         with h5py.File(fn_init, "r") as f:
-            init_X = torch.from_numpy(f["X"][()]).to(ksp.device)
+            init_X = torch.from_numpy(f["X"][()]).to(device)
         if tuple(init_X.shape) != (Nx, Ny, Nz, Nt, len(patch_sizes)):
             raise ValueError(
                 f"{fn_init}: X has shape {tuple(init_X.shape)}, expected "
@@ -310,6 +327,7 @@ def run_sense(
         temporal,
         cycle_spin_seed,
         init_X,
+        dc_chunk,
     )
 
 
@@ -364,14 +382,17 @@ def _solve_mslr(
     temporal=None,
     cycle_spin_seed=None,
     init_X=None,
+    dc_chunk=None,
 ) -> ReconResult:
     g = MultiScaleLowRank(patch_sizes, strides, shape, lambda_global, cycle_spin_seed)
     S = g.synthesis  # (Nx,Ny,Nz,Nt,Nscales) -> (Nx,Ny,Nz,Nt)
     Nscales = g.Nscales
 
+    blocks, op_scale = A.A, 1.0  # the unscaled per-frame operators, for the chunked path
     if normalize_operator:
         print(f"  Normalizing A by 1/sigma1A = 1/{sigma1A:.4f}")
         A = (1.0 / sigma1A) * A
+        op_scale = 1.0 / sigma1A
         sigma1A = 1.0
     # f(X) = 0.5||A S X - y||^2 [+ (mu/2)||P S X||^2]; mu relative to ||A||^2, so
     # mu * sigma1A^2 once A is normalized (sigma1A = 1) or not.
@@ -385,27 +406,65 @@ def _solve_mslr(
     # it, whether or not it matches, so A x is never held through the prox.
     forward = []
 
-    def dc_cost(X):
-        x = S.apply(X)
-        Ax = A.apply(x)
-        c = 0.5 * (Ax - ksp).norm().item() ** 2
-        forward[:] = [(X, X._version, x, Ax)]
-        return c + hp.cost(x, mu) if mu else c
+    if dc_chunk is None:
 
-    def dc_grad(X):
-        hit = forward.pop() if forward else None
-        if hit is not None and hit[0] is X and hit[1] == X._version:
-            x, Ax = hit[2:]
-        else:
+        def dc_cost(X):
             x = S.apply(X)
             Ax = A.apply(x)
-        del hit
-        r = A.adjoint(Ax - ksp)
-        del Ax
-        return S.adjoint(r + mu * hp.apply(x) if mu else r)
+            c = 0.5 * (Ax - ksp).norm().item() ** 2
+            forward[:] = [(X, X._version, x, Ax)]
+            return c + hp.cost(x, mu) if mu else c
+
+        def dc_grad(X):
+            hit = forward.pop() if forward else None
+            if hit is not None and hit[0] is X and hit[1] == X._version:
+                x, Ax = hit[2:]
+            else:
+                x = S.apply(X)
+                Ax = A.apply(x)
+            del hit
+            r = A.adjoint(Ax - ksp)
+            del Ax
+            return S.adjoint(r + mu * hp.apply(x) if mu else r)
+
+        def adjoint_data():
+            return A.adjoint(ksp)
+
+    else:
+        # ksp is in host memory; the series' k-space, prediction and residual are never on the
+        # device together. Cost and gradient come from the same pass over the frames, so the
+        # one forward product per iteration is kept (the gradient, not A x, is what is held).
+        dc = ChunkedDataFidelity(blocks, ksp, op_scale, dc_chunk)
+        print(f"  data consistency: {dc_chunk} frame(s) of host k-space at a time")
+
+        def _cost_and_grad(x):
+            c, gx = dc.cost_and_grad(x)
+            if mu:
+                c += hp.cost(x, mu)
+                gx += mu * hp.apply(x)
+            return c, gx
+
+        def dc_cost(X):
+            c, gx = _cost_and_grad(S.apply(X))
+            forward[:] = [(X, X._version, gx)]
+            return c
+
+        def dc_grad(X):
+            hit = forward.pop() if forward else None
+            if hit is not None and hit[0] is X and hit[1] == X._version:
+                gx = hit[2]
+            else:
+                gx = _cost_and_grad(S.apply(X))[1]
+            del hit
+            return S.adjoint(gx)
+
+        def adjoint_data():
+            return dc.adjoint_data(
+                torch.empty(shape, dtype=torch.complex64, device=common["omega"].device)
+            )
 
     print("Initializing X0...")
-    X0 = init_X if init_X is not None else S.adjoint(A.adjoint(ksp) / Nscales)
+    X0 = init_X if init_X is not None else S.adjoint(adjoint_data() / Nscales)
     g.last_cost = g.cost(X0)
 
     dc_costs, reg_costs, restarts, rel_changes = [], [], [], []
@@ -450,6 +509,7 @@ def _solve_mslr(
             strides=g.strides,
             normalize_operator=normalize_operator,
             cycle_spin_seed=cycle_spin_seed,
+            dc_chunk=dc_chunk,
             **(temporal or {}),
         ),
         **common,
@@ -735,6 +795,14 @@ def _cli() -> None:
         metavar="RECON.h5",
         help="start from this recon's X (same frames/scales) to continue it",
     )
+    lr.add_argument(
+        "--dc-chunk",
+        type=int,
+        default=None,
+        metavar="FRAMES",
+        help="keep k-space in host memory and compute the data-consistency cost and gradient "
+        "this many frames at a time (saves ~3 k-space series of GPU memory)",
+    )
     lr.add_argument("--mom", choices=["pogm", "fpgm", "pgm"], default="pogm")
     lr.add_argument("--conv-tol", type=float, default=1e-5, help="<= 0 disables early stopping")
     wt = p.add_argument_group("wavelet-tv")
@@ -771,6 +839,8 @@ def _cli() -> None:
         volume_tr_s=a.volume_tr,
         trace_every=a.trace_every,
     )
+    if a.dc_chunk is not None and a.reg != "mslr":
+        p.error("--dc-chunk is only implemented for --reg mslr")
     if a.reg == "mslr":
         with h5py.File(os.path.join(a.datdir, "recon", f"{a.seqname}_preprocessed.h5"), "r") as f:
             shape = f["ksp_epi_zf"].shape[:3]
@@ -786,6 +856,7 @@ def _cli() -> None:
             conv_tol=a.conv_tol,
             cycle_spin_seed=a.cycle_spin_seed if a.cycle_spin else None,
             fn_init=a.init,
+            dc_chunk=a.dc_chunk,
         )
     elif a.reg == "wavelet-tv":
         kwargs.update(lamb_l1=a.lamb_l1, lamb_tv=a.lamb_tv, wave=a.wave, levels=a.levels,

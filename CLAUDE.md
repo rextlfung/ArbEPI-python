@@ -1123,6 +1123,30 @@ FOV edge. Not checked: that it matches true overlap in image quality. `--init`
 (`run_sense(fn_init=)`) starts `--reg mslr` from an earlier recon's `X` to run more
 iterations; for PGM that is exactly the longer run (`test_run_sense_init_continues_a_pgm_run_exactly`).
 
+**Chunked data consistency** (`--dc-chunk FRAMES`, `solvers.ChunkedDataFidelity`,
+2026-10-20, user request: 1.6 mm run C, 516 frames, 23 coils, 136 x 136 x 44, did
+not fit one local scale of PGM on a card with 38 GB free to us -- other users held
+9.6 GB -- on `910ab17` either, #55's lighter SVD included, because the limit was not
+the patch step: 9^3 and 13^3 patches both failed in the first iteration at the same
+35.7 GB allocated). The data-consistency term held the series' k-space, A x and the
+residual on the device, Nc / R = 2.3 image series each (7.7 GB). With `--dc-chunk` the
+gathered k-space stays in host memory as (Nt, K, Nc) (page-locked on a GPU), and cost
+and gradient come out of one pass over the frames, a chunk at a time (A is a
+`BlockDiagonal`, so a frame needs only its own block): the one forward product per
+iteration that #55 reuses is kept, holding the gradient instead of A x. Same result up
+to the order the cost is summed (`tests/test_recon_chunked_dc.py`, with and without the
+high-pass penalty). Speed does not depend on the chunk size, because A was applied
+frame by frame anyway (8 frames of run C: 0.22 s/frame at chunks of 1, 2, 4 and
+unchunked, 0.16 at 8, on a GPU shared with another job). **What it bought was smaller than first estimated:** about 20 GB was
+predicted from 3 x 7.7 GB of k-space-sized buffers, but the 9^3 probe peaked at 35.9 GB
+allocated, so the saving is the 7.7 GB of resident k-space plus some temporaries
+(unchunked would have needed about 43 GB); the remaining peak is the solver's
+image-sized state, about ten buffers of 3.4 GB. It fits 38 GB with about 2 GB to spare,
+and a larger matrix or more frames would not. Run C 9^3 then ran 100 iterations in five
+segments of 20 (`--init`, a new cycle-spin seed each), 4.0 h (143 s/iteration with the
+setup of each segment),
+because the GPU had to be free by a deadline and a segment is saved when it ends.
+
 `SENSE_B0`/`SENSE_B0_R2star` add B0 off-resonance (and R2* decay) modeling on
 top of `SENSE` -- see the "B0 off-resonance correction" subsection below for
 the design and investigation history. `utils.py`'s `sweep` and `benchmark`
