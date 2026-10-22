@@ -1572,6 +1572,24 @@ uses voxel x size directly); trilinear interpolation inside the cost biases
 rotations by ~0.6 deg. Estimation is on magnitude; the transforms are applied
 to `X_recon` and every `X` component.
 
+Brain mask (2026-10-22, `postprocess/brainmask.py`, `--brain-mask-from`): BET
+on the first deGRE echo, applied to the motion-corrected series. Why the deGRE:
+`bet` on the EPI temporal mean (coil shading, no skull contrast) returned
+4184 cm3 at 2.4 mm on 20261006tap; the deGRE's first echo has anatomical
+contrast and is on the EPI grid, and the same file on 20261006tap gives
+1964 cm3 (still generous). Why registered: the deGRE is acquired minutes
+before the EPI, so the skull-stripped deGRE is rigidly registered (`flirt`,
+normalized mutual information, rotations limited to +-15 deg) to the mean of
+the corrected series and the mask moved with that transform, nearest-neighbour;
+checked on synthetic heads only (a 7.2 mm shift is recovered to ~0.4 mm),
+not yet on real data. The matrix's translation is not the head's
+displacement (it is measured from the grid origin, so rotation adds to it),
+hence `mask_shift_mm`, the shift at the mask's centre of mass, for the printout.
+As for `mcflirt`, the images use the negative-x affine (det < 0) so FSL needs
+no x flip. The mask is applied at this stage, not inside `analyze/`, so every
+reconstruction of a session is masked the same way; `analyze/` takes the saved
+`_brain_mask.nii.gz` through its existing NIfTI-mask path.
+
 ### `simulate_fmri/` -- simulated scan sessions acquired with ArbEPI's schedules
 
 User-facing documentation (setup, commands, what is and is not modeled, the

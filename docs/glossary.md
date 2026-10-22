@@ -134,6 +134,12 @@ motion correction, MCFLIRT
   to a reference frame, `postprocess/`. MCFLIRT is FSL's tool for it; the
   middle frame is its default reference. See {doc}`postprocess`.
 
+brain mask
+  Binary mask of the brain voxels. `postprocess/` estimates it with FSL's `bet`
+  on the T1-weighted deGRE (the EPI mean has no skull contrast), registers the
+  deGRE to the corrected series' mean with `flirt`, and zeroes the series
+  outside it. See {doc}`postprocess`.
+
 framewise displacement (FD)
   Per-frame head motion summary: the summed absolute change in the six
   motion parameters from the previous frame, rotations scaled by a 50 mm head
