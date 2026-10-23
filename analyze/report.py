@@ -94,7 +94,9 @@ def parse(folder):
     name = os.path.basename(os.path.normpath(folder))
     lowband = name.endswith('_lowband')
     base = name[:-len('_lowband')] if lowband else name
-    m = re.match(r'^(\d+\.\d+mm_(?:radial|laminar))_(.+)$', base)
+    # run names are <res>mm_<arm> (radial, laminar, pd, caipi, caipi_rw, ...); tags start with a regularizer name
+    m = (re.match(r'^(\d+\.\d+mm_(?:radial|laminar))_(.+)$', base)
+         or re.match(r'^(\d+\.\d+mm_[a-z_]+?)_((?:wtv|llr|mslr|lr|hp)\S*)$', base))
     return base, m.group(1), m.group(2), lowband
 
 
