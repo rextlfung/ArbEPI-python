@@ -39,7 +39,6 @@ from matplotlib.colors import ListedColormap, Normalize  # noqa: E402
 from analyze import glm  # noqa: E402
 from analyze.design import ExperimentParams, build_design_matrix, drift_basis  # noqa: E402
 from analyze.io import read_recon  # noqa: E402
-from analyze.mask import brain_mask as skull_strip  # noqa: E402
 from simulate_fmri.analysis import fit_mixed_binomial, levels  # noqa: E402
 
 ROOT = '/StorageRAID/rexfung/20261006tap'
@@ -278,12 +277,6 @@ def load_underlay(gre_h5):
     preprocessing resamples onto the EPI grid, so it overlays the activation maps voxel for voxel."""
     with h5py.File(gre_h5) as f:
         return np.asarray(f['degre/img_echoes'][..., 0], dtype=np.float32)
-
-
-def masked_underlay(gre, vox, method='auto'):
-    """The underlay with everything outside its own brain mask set to zero (BET on the GRE itself, so the mask lines
-    up with the image it is applied to; the activation maps' EPI-space mask is registered to the EPI and need not)."""
-    return np.where(skull_strip(gre, vox, method=method), gre, 0).astype(np.float32)
 
 
 def top_peaks(z, brain, vox, n=N_PEAKS, sep_mm=PEAK_SEP_MM, sign=1):
@@ -542,7 +535,6 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
     gre = load_underlay(gre_h5)
     if gre.shape != shape:
         raise ValueError(f'GRE {gre.shape} is not on the EPI grid {shape}')
-    gre = masked_underlay(gre, vox)  # always skull-stripped: scalp and neck are not part of the maps
     peaks = top_peaks(z, brain, vox)
     peak_rows = []
     counter_rows = []
@@ -659,7 +651,7 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
     ]) + '\n')
 
     md.append('## 1. Activation maps\n')
-    md.append(f'z of the FDR survivors (red/yellow z > 0, blue/cyan z < 0), overlaid on the skull-stripped (BET) first-echo magnitude of the '
+    md.append(f'z of the FDR survivors (red/yellow z > 0, blue/cyan z < 0), overlaid on the first-echo magnitude of the '
               'dual-echo GRE (T1-weighted), which preprocessing resamples onto the EPI grid, so the overlay is voxel '
               'for voxel; residual misregistration (B0 distortion of the EPI, head motion between the GRE and the '
               'EPI) is not corrected. Axes are mm from the centre voxel. The five views are cut through the five '
