@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""One Markdown report per analysis/ folder, with each plot as its own PNG, in analysis/reports/<name>/.
+"""One Markdown report per analysis/ folder, with each plot as its own PNG, inside that folder (analysis/<name>/).
 
-    report.md, activation_{1..5}.png, timeseries.png, cycle_average.png, spectrum.png, split_half.png,
-    reliability_histogram.png, roc.png, metrics.json     (and analysis/reports/README.md indexing them)
+    report.md, activation_{1..5}.png, counter_activation_{1..3}.png, timeseries.png, cycle_average.png, spectrum.png, split_half.png,
+    reliability_histogram.png, roc.png, metrics.json     (and analysis/stats.md indexing them)
 
 Sections, in order: (1) activation maps: z of the Benjamini-Hochberg FDR (q < 0.05, two-sided, brain mask)
 survivors over the T1-weighted dual-echo GRE (on the EPI grid), orthogonal views through the five strongest
-distinct peaks; (2) time and frequency domain: active (red), counter-active (blue) and inactive (black) voxel
+distinct peaks, and through the three most counter-active ones; (2) time and frequency domain: active (red), counter-active (blue) and inactive (black) voxel
 sets as time series, cycle average and spectrum, and task / non-task power ratios; (3) reproducibility:
 odd vs even cycle split half, and test-retest with the mixed-binomial model and estimated ROC (Genovese,
 Noll & Eddy 1997).
@@ -77,10 +77,16 @@ def periodogram(y, tr):
 
 
 def find_recon(root, run, tag):
+    """The reconstruction behind analysis/<run>_<tag>: recon/<run>_<tag>/<run>_recon_final.h5 (the motion-corrected,
+    masked series; the full series without postprocessing is <run>_recon.h5 beside it), else the older
+    recon/sense_*_b0_<tag>/joined/<run>_recon.h5."""
+    new = f'{root}/recon/{run}_{tag}/{run}_recon_final.h5'
+    if os.path.exists(new):
+        return new
     c = sorted(glob.glob(f'{root}/recon/sense_*_b0_{tag}/joined/{run}_recon.h5'))
     c = [f for f in c if os.path.basename(os.path.dirname(os.path.dirname(f))).endswith('_b0_' + tag)]
     if len(c) != 1:
-        raise FileNotFoundError(f'{run} {tag}: {len(c)} reconstructions {c}')
+        raise FileNotFoundError(f'{run} {tag}: no {new} and {len(c)} reconstructions in the old layout {c}')
     return c[0]
 
 
@@ -94,7 +100,9 @@ def parse(folder):
     name = os.path.basename(os.path.normpath(folder))
     lowband = name.endswith('_lowband')
     base = name[:-len('_lowband')] if lowband else name
-    m = re.match(r'^(\d+\.\d+mm_(?:radial|laminar))_(.+)$', base)
+    # run names are <res>mm_<arm> (radial, laminar, pd, caipi, caipi_rw, ...); tags start with a regularizer name
+    m = (re.match(r'^(\d+\.\d+mm_(?:radial|laminar))_(.+)$', base)
+         or re.match(r'^(\d+\.\d+mm_[a-z_]+?)_((?:wtv|llr|mslr|lr|hp)\S*)$', base))
     return base, m.group(1), m.group(2), lowband
 
 
@@ -258,6 +266,7 @@ def fit_cycle_groups(L, Y, paradigm, groups):
 
 
 N_PEAKS = 5  # ortho views, one per activation peak
+N_COUNTER_PEAKS = 3  # and one per counter-activation (most negative z) peak
 PEAK_SEP_MM = 15.0  # peaks closer than this to a stronger one belong to the same cluster
 DPI = 130
 COL = {'active': 'tab:red', 'inactive': 'k', 'counter-active': 'tab:blue'}
@@ -270,10 +279,11 @@ def load_underlay(gre_h5):
         return np.asarray(f['degre/img_echoes'][..., 0], dtype=np.float32)
 
 
-def top_peaks(z, brain, vox, n=N_PEAKS, sep_mm=PEAK_SEP_MM):
-    """Indices (i, j, k) of the n highest-z brain voxels, each at least sep_mm from every stronger one picked
-    (the next-highest voxel of a cluster is its neighbour and adds no new activation pattern)."""
-    zb = np.where(brain & (z > 0), z, -np.inf)
+def top_peaks(z, brain, vox, n=N_PEAKS, sep_mm=PEAK_SEP_MM, sign=1):
+    """Indices (i, j, k) of the n highest-z brain voxels (sign=-1: the n lowest, the most counter-active), each at
+    least sep_mm from every stronger one picked (the next-highest voxel of a cluster is its neighbour and adds no new
+    activation pattern)."""
+    zb = np.where(brain & (sign * z > 0), sign * z, -np.inf)
     order = np.argsort(zb.ravel())[::-1][:200000]
     picked = []
     for o in order:
@@ -315,8 +325,8 @@ def plot_ortho(fn, under, z, survm, brain, peak, vox, z_fdr, title):
         ax.axvline((peak[da] - shape[da] // 2) * vox[da], color='c', lw=0.6, alpha=0.8)
         ax.axhline((peak[db] - shape[db] // 2) * vox[db], color='c', lw=0.6, alpha=0.8)
         ax.set_title(name, fontsize=10)
-        ax.set_xlabel(f'{la} (mm from centre)')
-        ax.set_ylabel(f'{lb} (mm from centre)')
+        ax.set_xlabel(f'{la} (mm)')
+        ax.set_ylabel(f'{lb} (mm)')
     cax = fig.add_subplot(gs[1, :])
     cb = fig.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax, orientation='horizontal')
     cb.set_label(f'z of FDR survivors (|z| > {z_fdr:.2f}) over the GRE', fontsize=8)
@@ -466,7 +476,8 @@ def _md_table(header, rows):
 
 def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=False, h5=None,
                 gre_h5=None, base=None, title=None, note=None):
-    """Write <out_root>/<name>/report.md with its PNGs and metrics.json; returns the report path.
+    """Write report.md with its PNGs and metrics.json into the analysis folder (or <out_root>/<name>/ if given); returns
+    the report path.
 
     A folder named like the 20261006tap analyses (<run>_<tag>) needs only analysis_dir. Otherwise pass h5 (the
     reconstruction), gre_h5 (a preprocessed file holding degre/img_echoes), base (the file prefix of the
@@ -479,8 +490,7 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
         h5 = h5 or None
         gre_h5 = gre_h5 or f'{root}/recon/{run}_preprocessed.h5'
     name = os.path.basename(os.path.normpath(analysis_dir))
-    out_root = out_root or f'{os.path.dirname(os.path.normpath(analysis_dir))}/reports'
-    out = f'{out_root}/{name}'
+    out = f'{out_root}/{name}' if out_root else analysis_dir  # beside the maps by default
     os.makedirs(out, exist_ok=True)
     report_fn = f'{out}/report.md'
     if os.path.exists(report_fn) and not force:
@@ -527,12 +537,16 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
         raise ValueError(f'GRE {gre.shape} is not on the EPI grid {shape}')
     peaks = top_peaks(z, brain, vox)
     peak_rows = []
-    for n, pk in enumerate(peaks, 1):
-        mm = [(d - sh // 2) * v for d, sh, v in zip(pk, shape, vox)]
-        peak_rows.append(dict(rank=n, voxel=list(pk), mm=mm, z=float(z[pk]), psc=float(psc_map[pk]),
-                              survives=bool(survm[pk])))
-        plot_ortho(f'{out}/activation_{n}.png', gre, z, survm, brain, pk, vox, z_fdr,
-                   f'peak {n}: z = {z[pk]:.2f} at (x, y, z) = ({mm[0]:.0f}, {mm[1]:.0f}, {mm[2]:.0f}) mm')
+    counter_rows = []
+    for rows, pks, prefix, label in ((peak_rows, peaks, 'activation', 'peak'),
+                                     (counter_rows, top_peaks(z, brain, vox, n=N_COUNTER_PEAKS, sign=-1),
+                                      'counter_activation', 'counter-active peak')):
+        for n, pk in enumerate(pks, 1):
+            mm = [(d - sh // 2) * v for d, sh, v in zip(pk, shape, vox)]
+            rows.append(dict(rank=n, voxel=list(pk), mm=mm, z=float(z[pk]), psc=float(psc_map[pk]),
+                             survives=bool(survm[pk])))
+            plot_ortho(f'{out}/{prefix}_{n}.png', gre, z, survm, brain, pk, vox, z_fdr,
+                       f'{label} {n}: z = {z[pk]:.2f} at (x, y, z) = ({mm[0]:.0f}, {mm[1]:.0f}, {mm[2]:.0f}) mm')
 
     # ---- 3a. odd vs even cycles (split half)
     ncyc_all = paradigm['n_cycles']
@@ -649,6 +663,15 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
                          for r in peak_rows]) + '\n')
     for r in peak_rows:
         md.append(f'![peak {r["rank"]}](activation_{r["rank"]}.png)\n')
+    md.append('### Counter-active peaks\n')
+    md.append(f'The same views through the {N_COUNTER_PEAKS} lowest-z (most counter-active) brain voxels, at least '
+              f'{PEAK_SEP_MM:g} mm apart.\n')
+    md.append(_md_table(['peak', 'voxel (i, j, k)', '(x, y, z) mm', 'z', 'task effect (%)', 'FDR survivor'],
+                        [[r['rank'], tuple(r['voxel']), '({:.0f}, {:.0f}, {:.0f})'.format(*r['mm']),
+                          f'{r["z"]:.2f}', f'{r["psc"]:.2f}', 'yes' if r['survives'] else 'no']
+                         for r in counter_rows]) + '\n')
+    for r in counter_rows:
+        md.append(f'![counter-active peak {r["rank"]}](counter_activation_{r["rank"]}.png)\n')
 
     md.append('## 2. Time and frequency domain\n')
     md.append('Voxels are divided into three sets by the full-run FDR result: **active** (red), **counter-active** '
@@ -742,6 +765,7 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
                'n_counter_active': n_set['counter-active'], 'n_inactive': n_set['inactive'], 'n_mask': n_vox,
                'mean_task_effect_active_pct': eff['active'],
                'mean_task_effect_counter_active_pct': eff['counter-active'], 'peaks': peak_rows,
+               'counter_peaks': counter_rows,
                'split_half_odd_even': rep, 'test_retest': tr_stats,
                'task_power': {k.replace('-', '_'): v for k, v in tp.items()}, 'task_f0_hz': f0}
     with open(f'{out}/metrics.json', 'w') as fh:
@@ -749,16 +773,16 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
     return report_fn
 
 
-def write_index(out_root):
-    """reports/README.md: one row per report with the headline numbers."""
+def write_index(analysis_root):
+    """analysis/stats.md: one row per report (analysis/<name>/metrics.json) with the headline numbers."""
     rows = []
-    for d in sorted(glob.glob(f'{out_root}/*/metrics.json')):
+    for d in sorted(glob.glob(f'{analysis_root}/*/metrics.json')):
         m = json.load(open(d))
         sh, trt = m['split_half_odd_even'], m['test_retest']
         rows.append([f'[{m["name"]}]({m["name"]}/report.md)', m['n_active'], m['n_counter_active'],
                      f'{m["z_fdr"]:.2f}', f'{sh["z_pearson"]:.2f}', f'{sh["dice"]:.2f}',
                      _num(trt.get('auc'), '.2f')])
-    with open(f'{out_root}/README.md', 'w') as fh:
+    with open(f'{analysis_root}/stats.md', 'w') as fh:
         fh.write('# Functional analysis reports\n\n' + _md_table(
             ['report', 'active', 'counter-active', '\\|z\\| FDR', 'odd/even z corr', 'Dice', 'ROC area'], rows) + '\n')
 
@@ -772,7 +796,7 @@ def main():
     paradigm = json.load(open(f'{a.root}/paradigm.json'))
     dirs = sorted(d for d in glob.glob(f'{a.root}/analysis/*') if os.path.isdir(d))
     dirs = [d for d in dirs if a.only in os.path.basename(d)
-            and glob.glob(f'{d}/*_summary.json')]  # skip archived/, figures/, reports/, ...
+            and glob.glob(f'{d}/*_summary.json')]  # skip archived/, figures/, ...
     cache = {}
     for d in dirs:
         base, run, tag, lowband = parse(d)
@@ -790,7 +814,7 @@ def main():
             print(make_report(d, loaded=cache[h5], paradigm=paradigm, force=a.force), flush=True)
         except Exception as e:  # keep going: one broken folder should not stop the rest
             print(f'FAILED {d}: {e!r}', flush=True)
-    write_index(f'{a.root}/analysis/reports')
+    write_index(f'{a.root}/analysis')
 
 
 if __name__ == '__main__':
