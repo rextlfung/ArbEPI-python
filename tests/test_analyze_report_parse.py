@@ -7,7 +7,7 @@ pytest.importorskip("nibabel")
 
 import numpy as np  # noqa: E402
 
-from analyze.report import find_recon, parse, top_peaks, write_index  # noqa: E402
+from analyze.report import find_recon, masked_underlay, parse, top_peaks, write_index  # noqa: E402
 
 
 @pytest.mark.parametrize("name, run, tag", [
@@ -67,3 +67,11 @@ def test_top_peaks_counter_active_takes_the_most_negative_distinct_voxels():
     vox = (2.4, 2.4, 2.4)
     assert top_peaks(z, brain, vox, n=3, sign=-1) == [(2, 2, 2), (15, 15, 5), (10, 4, 7)]
     assert top_peaks(z, brain, vox, n=1) == [(1, 1, 1)]
+
+
+def test_masked_underlay_zeroes_everything_outside_the_brain():
+    gre = np.full((16, 16, 8), 3.0, np.float32)  # background (scalp, air)
+    gre[4:12, 4:12, 2:6] = 100.0  # "brain"
+    out = masked_underlay(gre, (2.4, 2.4, 2.4), method="threshold")
+    assert (out[4:12, 4:12, 2:6] == 100.0).all()
+    assert out[0, 0, 0] == 0 and out.sum() == 100.0 * 8 * 8 * 4
