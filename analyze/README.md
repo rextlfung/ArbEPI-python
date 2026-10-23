@@ -55,7 +55,7 @@ python -m analyze.report [--root DIR] [--only SUBSTRING] [--force]
 ```
 
 Order: activation maps (Benjamini-Hochberg FDR q < 0.05 survivors over the
-T1-weighted GRE, orthogonal views at the five strongest distinct peaks) ->
+T1-weighted GRE, orthogonal views at the five strongest distinct peaks and at the three most counter-active ones) ->
 time and frequency domain (active, counter-active and inactive voxel sets:
 time series, cycle average, spectrum, task / non-task power) ->
 reproducibility (odd/even cycle split half; test-retest with the

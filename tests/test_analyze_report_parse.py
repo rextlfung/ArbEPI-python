@@ -5,7 +5,9 @@ import pytest
 pytest.importorskip("matplotlib")
 pytest.importorskip("nibabel")
 
-from analyze.report import find_recon, parse, write_index  # noqa: E402
+import numpy as np  # noqa: E402
+
+from analyze.report import find_recon, parse, top_peaks, write_index  # noqa: E402
 
 
 @pytest.mark.parametrize("name, run, tag", [
@@ -54,3 +56,14 @@ def test_write_index_reads_reports_beside_the_maps(tmp_path):
     text = (tmp_path / "stats.md").read_text()
     assert "[2.4mm_pd_wtv0.005](2.4mm_pd_wtv0.005/report.md)" in text and text.index("caipi") < text.index("_pd_")
     assert not (tmp_path / "reports").exists()
+
+
+def test_top_peaks_counter_active_takes_the_most_negative_distinct_voxels():
+    z = np.zeros((20, 20, 10))
+    z[2, 2, 2], z[3, 2, 2] = -9.0, -8.5  # a cluster: the neighbour is skipped
+    z[15, 15, 5], z[10, 4, 7] = -7.0, -6.0
+    z[1, 1, 1] = 12.0  # an active voxel is never a counter-active peak
+    brain = np.ones(z.shape, bool)
+    vox = (2.4, 2.4, 2.4)
+    assert top_peaks(z, brain, vox, n=3, sign=-1) == [(2, 2, 2), (15, 15, 5), (10, 4, 7)]
+    assert top_peaks(z, brain, vox, n=1) == [(1, 1, 1)]
