@@ -77,10 +77,16 @@ def periodogram(y, tr):
 
 
 def find_recon(root, run, tag):
+    """The reconstruction behind analysis/<run>_<tag>: recon/<run>_<tag>/<run>_recon_final.h5 (the motion-corrected,
+    masked series; the full series without postprocessing is <run>_recon.h5 beside it), else the older
+    recon/sense_*_b0_<tag>/joined/<run>_recon.h5."""
+    new = f'{root}/recon/{run}_{tag}/{run}_recon_final.h5'
+    if os.path.exists(new):
+        return new
     c = sorted(glob.glob(f'{root}/recon/sense_*_b0_{tag}/joined/{run}_recon.h5'))
     c = [f for f in c if os.path.basename(os.path.dirname(os.path.dirname(f))).endswith('_b0_' + tag)]
     if len(c) != 1:
-        raise FileNotFoundError(f'{run} {tag}: {len(c)} reconstructions {c}')
+        raise FileNotFoundError(f'{run} {tag}: no {new} and {len(c)} reconstructions in the old layout {c}')
     return c[0]
 
 

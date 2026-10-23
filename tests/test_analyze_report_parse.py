@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("matplotlib")
 pytest.importorskip("nibabel")
 
-from analyze.report import parse  # noqa: E402
+from analyze.report import find_recon, parse  # noqa: E402
 
 
 @pytest.mark.parametrize("name, run, tag", [
@@ -25,3 +25,17 @@ def test_parse(name, run, tag):
 
 def test_parse_lowband():
     assert parse("analysis/2.4mm_pd_wtv0.005_lowband")[1:] == ("2.4mm_pd", "wtv0.005", True)
+
+
+def test_find_recon_new_layout_then_old(tmp_path):
+    root = str(tmp_path)
+    old = tmp_path / "recon" / "sense_wavelet-tv_b0_wtv0.005" / "joined" / "2.4mm_radial_recon.h5"
+    old.parent.mkdir(parents=True)
+    old.touch()
+    assert find_recon(root, "2.4mm_radial", "wtv0.005") == str(old)
+    new = tmp_path / "recon" / "2.4mm_radial_wtv0.005" / "2.4mm_radial_recon_final.h5"
+    new.parent.mkdir(parents=True)
+    new.touch()
+    assert find_recon(root, "2.4mm_radial", "wtv0.005") == str(new)
+    with pytest.raises(FileNotFoundError):
+        find_recon(root, "2.4mm_pd", "wtv0.005")
