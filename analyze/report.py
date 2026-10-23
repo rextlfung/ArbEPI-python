@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""One Markdown report per analysis/ folder, with each plot as its own PNG, in analysis/reports/<name>/.
+"""One Markdown report per analysis/ folder, with each plot as its own PNG, inside that folder (analysis/<name>/).
 
     report.md, activation_{1..5}.png, timeseries.png, cycle_average.png, spectrum.png, split_half.png,
-    reliability_histogram.png, roc.png, metrics.json     (and analysis/reports/README.md indexing them)
+    reliability_histogram.png, roc.png, metrics.json     (and analysis/stats.md indexing them)
 
 Sections, in order: (1) activation maps: z of the Benjamini-Hochberg FDR (q < 0.05, two-sided, brain mask)
 survivors over the T1-weighted dual-echo GRE (on the EPI grid), orthogonal views through the five strongest
@@ -474,7 +474,8 @@ def _md_table(header, rows):
 
 def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=False, h5=None,
                 gre_h5=None, base=None, title=None, note=None):
-    """Write <out_root>/<name>/report.md with its PNGs and metrics.json; returns the report path.
+    """Write report.md with its PNGs and metrics.json into the analysis folder (or <out_root>/<name>/ if given); returns
+    the report path.
 
     A folder named like the 20261006tap analyses (<run>_<tag>) needs only analysis_dir. Otherwise pass h5 (the
     reconstruction), gre_h5 (a preprocessed file holding degre/img_echoes), base (the file prefix of the
@@ -487,8 +488,7 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
         h5 = h5 or None
         gre_h5 = gre_h5 or f'{root}/recon/{run}_preprocessed.h5'
     name = os.path.basename(os.path.normpath(analysis_dir))
-    out_root = out_root or f'{os.path.dirname(os.path.normpath(analysis_dir))}/reports'
-    out = f'{out_root}/{name}'
+    out = f'{out_root}/{name}' if out_root else analysis_dir  # beside the maps by default
     os.makedirs(out, exist_ok=True)
     report_fn = f'{out}/report.md'
     if os.path.exists(report_fn) and not force:
@@ -757,16 +757,16 @@ def make_report(analysis_dir, loaded=None, out_root=None, paradigm=None, force=F
     return report_fn
 
 
-def write_index(out_root):
-    """reports/README.md: one row per report with the headline numbers."""
+def write_index(analysis_root):
+    """analysis/stats.md: one row per report (analysis/<name>/metrics.json) with the headline numbers."""
     rows = []
-    for d in sorted(glob.glob(f'{out_root}/*/metrics.json')):
+    for d in sorted(glob.glob(f'{analysis_root}/*/metrics.json')):
         m = json.load(open(d))
         sh, trt = m['split_half_odd_even'], m['test_retest']
         rows.append([f'[{m["name"]}]({m["name"]}/report.md)', m['n_active'], m['n_counter_active'],
                      f'{m["z_fdr"]:.2f}', f'{sh["z_pearson"]:.2f}', f'{sh["dice"]:.2f}',
                      _num(trt.get('auc'), '.2f')])
-    with open(f'{out_root}/README.md', 'w') as fh:
+    with open(f'{analysis_root}/stats.md', 'w') as fh:
         fh.write('# Functional analysis reports\n\n' + _md_table(
             ['report', 'active', 'counter-active', '\\|z\\| FDR', 'odd/even z corr', 'Dice', 'ROC area'], rows) + '\n')
 
@@ -780,7 +780,7 @@ def main():
     paradigm = json.load(open(f'{a.root}/paradigm.json'))
     dirs = sorted(d for d in glob.glob(f'{a.root}/analysis/*') if os.path.isdir(d))
     dirs = [d for d in dirs if a.only in os.path.basename(d)
-            and glob.glob(f'{d}/*_summary.json')]  # skip archived/, figures/, reports/, ...
+            and glob.glob(f'{d}/*_summary.json')]  # skip archived/, figures/, ...
     cache = {}
     for d in dirs:
         base, run, tag, lowband = parse(d)
@@ -798,7 +798,7 @@ def main():
             print(make_report(d, loaded=cache[h5], paradigm=paradigm, force=a.force), flush=True)
         except Exception as e:  # keep going: one broken folder should not stop the rest
             print(f'FAILED {d}: {e!r}', flush=True)
-    write_index(f'{a.root}/analysis/reports')
+    write_index(f'{a.root}/analysis')
 
 
 if __name__ == '__main__':

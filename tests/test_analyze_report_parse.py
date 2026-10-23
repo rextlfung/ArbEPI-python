@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("matplotlib")
 pytest.importorskip("nibabel")
 
-from analyze.report import find_recon, parse  # noqa: E402
+from analyze.report import find_recon, parse, write_index  # noqa: E402
 
 
 @pytest.mark.parametrize("name, run, tag", [
@@ -39,3 +39,18 @@ def test_find_recon_new_layout_then_old(tmp_path):
     assert find_recon(root, "2.4mm_radial", "wtv0.005") == str(new)
     with pytest.raises(FileNotFoundError):
         find_recon(root, "2.4mm_pd", "wtv0.005")
+
+
+def test_write_index_reads_reports_beside_the_maps(tmp_path):
+    import json
+
+    for name, n in (("2.4mm_pd_wtv0.005", 100), ("2.4mm_caipi_wtv0.005", 200)):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "metrics.json").write_text(json.dumps({
+            "name": name, "n_active": n, "n_counter_active": 5, "z_fdr": 3.0,
+            "split_half_odd_even": {"z_pearson": 0.4, "dice": 0.5}, "test_retest": {"auc": 0.8}}))
+    write_index(str(tmp_path))
+    text = (tmp_path / "stats.md").read_text()
+    assert "[2.4mm_pd_wtv0.005](2.4mm_pd_wtv0.005/report.md)" in text and text.index("caipi") < text.index("_pd_")
+    assert not (tmp_path / "reports").exists()

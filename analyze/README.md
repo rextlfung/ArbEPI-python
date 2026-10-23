@@ -47,8 +47,8 @@ FDR-surviving |t| threshold, voxel counts).
 ## Reports
 
 `report.py` turns each `analysis/` folder into a Markdown report with every
-plot as its own PNG, in `analysis/reports/<name>/` (plus an index,
-`analysis/reports/README.md`). Run it in `.venv-recon` after the maps exist:
+plot as its own PNG, in the analysis folder itself, `analysis/<name>/` (plus an index,
+`analysis/stats.md`). Run it in `.venv-recon` after the maps exist:
 
 ```
 python -m analyze.report [--root DIR] [--only SUBSTRING] [--force]
