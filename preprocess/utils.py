@@ -289,7 +289,16 @@ def ift3c(d: np.ndarray) -> np.ndarray:
 def rss_echo_images(ksp_echoes: np.ndarray) -> np.ndarray:
     """[Nx, Ny, Nz, n_echoes, Nc] k-space -> [Nx, Ny, Nz, n_echoes]
     root-sum-of-squares magnitude image of each echo."""
-    return np.sqrt(np.sum(np.abs(ift3c(ksp_echoes)) ** 2, axis=-1))
+    # Per echo, with the output shift applied once to the RSS image (a
+    # permutation, so it commutes with abs/sum): the 5-D transform otherwise
+    # holds several full-size copies (~15 GB for a 20-echo meGRE).
+    axes = (0, 1, 2)
+    imgs = [
+        np.sqrt(np.sum(np.abs(np.fft.ifftn(
+            np.fft.ifftshift(ksp_echoes[..., e, :], axes=axes), axes=axes)) ** 2, axis=-1))
+        for e in range(ksp_echoes.shape[3])
+    ]
+    return np.fft.fftshift(np.stack(imgs, axis=3), axes=axes)
 
 
 # ---------------------------------------------------------------------------

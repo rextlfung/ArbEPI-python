@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--outdir', help='default: <datdir>/recon')
     p.add_argument('--fn-gre', help='deGRE archive; default <datdir>/scanarchives/gre.h5')
     p.add_argument('--no-compress', action='store_true', help='keep all physical coils')
-    p.add_argument('--cc-energy', type=float, default=0.999,
+    p.add_argument('--cc-energy', type=float, default=PreprocessConfig.cc_energy_thresh,
                    help='fraction of eigenvalue energy the virtual coils keep')
     p.add_argument('--nvcoils', type=int,
                    help='exact number of virtual coils (overrides --cc-energy)')
@@ -49,7 +49,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--no-calib', action='store_true', help='skip the calibration-region dataset')
     p.add_argument('--zero-pad-z', action='store_true',
                    help='zero-fill EPI slices outside the deGRE slab instead of failing')
-    p.add_argument('--grid-method', choices=('nufft', 'spline'), default='spline',
+    p.add_argument('--grid-method', choices=('nufft', 'spline'),
+                   default=PreprocessConfig.grid_method,
                    help='ramp-sampled readout regridding (spline needs even Nx; default spline)')
     p.add_argument('--keep-cache', action='store_true', help='keep <seqname>_gridded.h5')
     p.add_argument('--gre-n-echoes', type=int,
@@ -61,7 +62,8 @@ def main(argv: list[str] | None = None) -> None:
         compress=not a.no_compress, cc_energy_thresh=a.cc_energy,
         Nvcoils=a.nvcoils, estimate_smaps=not a.no_smaps, estimate_b0=not a.no_b0,
         estimate_r2star=not a.no_r2star, extract_calib=not a.no_calib,
-        zero_pad_z=a.zero_pad_z, grid_method=a.grid_method, keep_cache=a.keep_cache, gre_n_echoes=a.gre_n_echoes,
+        zero_pad_z=a.zero_pad_z, grid_method=a.grid_method,
+        keep_cache=a.keep_cache, gre_n_echoes=a.gre_n_echoes,
     )
     batch_preprocess(cfg)
 

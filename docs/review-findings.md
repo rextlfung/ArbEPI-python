@@ -6199,3 +6199,33 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   stretching / rewinders for deGRE and meGRE; (d) `build_epi_shot_parts` merging
   ArbEPI's and EPIcal's setup; (e) `T1` as a `Params` field instead of
   re-deriving it from `alpha_degre` in meGRE, and `n_dummy_shots` as a property.
+
+- [x] **266. `preprocess/`: per-frame Python loops, full-size temporaries and
+  restated defaults.** [resolved 2026-10-29, `/simplify` pass 2]
+  `_build_omegas`/`_build_echo_times` looped over frames (`_iy_iz` now returns
+  the index arrays for all frames and both builders are one fancy-index
+  assignment; same last-write-wins order within a frame). `rss_echo_images`
+  inverse-transformed the whole 5-D array (several full copies, ~15 GB for a
+  20-echo meGRE); now per echo, with the output shift applied once to the RSS
+  image (values identical, checked against the old formula). `load_gre` whitened
+  the whole deGRE in complex128 (~5 GB transient for 20 echoes); now per echo.
+  `ksp_calib` is chunked one frame per chunk like `ksp_epi_zf` (it was written a
+  frame at a time into a contiguous last-axis layout). `batch_preprocess`'s
+  `--cc-energy`/`--grid-method` defaults come from `PreprocessConfig`; the
+  duplicated multi-echo `ValueError` is `_require_multi_echo`; `estimate_b0map`
+  no longer copies already-complex64 arrays.
+  **Not done (open):** (a) Stage A is serial read -> grid -> gzip write, and
+  the gzip of a ~124 MB frame probably dominates (pre-compress in threads and
+  `write_direct_chunk`); (b) Stage B coil compression transforms the full
+  zero-filled frame though ~90% of (ky, kz) columns are empty (compress only
+  `ksp[:, omegas[..., frame], :]`); (c) `compute_oephase` could average the
+  calibration shots before gridding (linear; changes float rounding, so
+  `select_best_delay` could in principle flip on a tie) and `sweep_delay`
+  rebuilds two spline matrices per candidate (cache `maxsize=8`); (d) a shared
+  centered x-FFT (`ifftc_x`/`fftc_x`) for `preprocess.py`, `oephase.py` and
+  `coils.py` would make item 251's "same frame" guarantee structural;
+  (e) an `EpiGrid(fov_degre, fov, n_epi, zero_pad_z)` object instead of threading
+  `zero_pad_z` through five resize call sites, plus `resize_masked`; (f) splitting
+  `grid_epi` (120 lines, cache state in three flags) and `write_output` into
+  cache/output helpers; (g) one shared NIfTI+JSON writer for
+  `preprocess/utils.py`, `analyze/io.py` and `postprocess/`.
