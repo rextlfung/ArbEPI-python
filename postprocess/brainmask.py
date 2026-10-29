@@ -11,7 +11,6 @@ mean of the motion-corrected EPI with FSL `flirt` and moving the mask with that 
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import tempfile
 
@@ -20,6 +19,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from analyze.mask import brain_mask
+from postprocess.motion import find_fsl_tool
 
 
 def load_gre(preprocessed: str, echo: int = 0):
@@ -38,14 +38,8 @@ def gre_brain_mask(preprocessed: str, method: str = "auto", frac: float = 0.5, e
 
 
 def find_flirt() -> str | None:
-    """Path of FSL's flirt: PATH, then $FSLDIR/bin, then ~/fsl/bin."""
-    exe = shutil.which("flirt")
-    if exe:
-        return exe
-    for d in (os.environ.get("FSLDIR"), os.path.expanduser("~/fsl")):
-        if d and os.access(os.path.join(d, "bin", "flirt"), os.X_OK):
-            return os.path.join(d, "bin", "flirt")
-    return None
+    """Path of FSL's flirt (see motion.find_fsl_tool)."""
+    return find_fsl_tool("flirt")
 
 
 def register_mask(gre: NDArray, mask: NDArray, epi_mean: NDArray, voxel_size_mm,

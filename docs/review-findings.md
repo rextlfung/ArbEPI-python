@@ -6257,3 +6257,29 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `SENSE_B0_R2star` has no logic of its own beyond `segment_phasors`;
   (e) the strided frame views reused L times in `SENSE_B0._apply`
   (`x.contiguous()`, measure first).
+
+- [x] **268. `postprocess/`: the FSL executable lookup was written twice.**
+  [resolved 2026-10-29, `/simplify` pass 4] `find_mcflirt` and
+  `brainmask.find_flirt` were the same PATH / `$FSLDIR/bin` / `~/fsl/bin` search
+  for different names; both are now thin wrappers over `motion.find_fsl_tool`
+  (the names stay, tests call them). `_estimate_fsl` builds its matrix list in one
+  expression and `correct_motion` no longer copies an already-float32 magnitude.
+  9 postprocess tests pass (the FSL-backed ones run only with the `analyze` extra
+  installed; without it two fail at `import nibabel`, on `HEAD` too).
+  **Tried and reverted:** hoisting the cubic spline prefilter out of
+  `register_volume`'s residual (it is redone on every one of the ~7 evaluations
+  per Jacobian). A review claimed filtering once with
+  `ndimage.spline_filter(order=3, output=float64, mode='nearest')` and passing
+  `prefilter=False` was bit-identical; it is not -- `affine_transform` pads the
+  input before filtering, and the warps differ by up to 6.6e-3 on a random
+  volume. A correct hoist has to reproduce that padding.
+  **Not done (open):** (a) cache the per-level reference preparation (Gaussian
+  downsample, percentile, dilation) across frames in `_estimate_python`;
+  (b) thread-pool `apply_transforms` over frames (`ndimage` releases the GIL) and
+  fill `comps` in place instead of `np.stack`-ing per scale; (c) run BET
+  concurrently with motion correction (it depends only on the deGRE);
+  (d) write the FSL input uncompressed (`FSLOUTPUTTYPE=NIFTI`) and skip mcflirt's
+  unused `-out` series; (e) `apply_brain_mask` allocates a new series (multiply in
+  place); (f) one `fsl_env`/`fsl_affine` pair for `motion`, `brainmask` and
+  `analyze/mask.bet_fsl`; (g) `postprocess/__main__.py` imports the private
+  `analyze.io._read_t` and re-inlines `brainmask.gre_brain_mask`.

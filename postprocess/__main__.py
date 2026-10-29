@@ -22,8 +22,8 @@ import h5py
 import numpy as np
 
 from analyze.io import _read_t, voxel_size_from_sidecar
-from postprocess.brainmask import apply_brain_mask, load_gre, mask_shift_mm, register_mask
 from analyze.mask import brain_mask
+from postprocess.brainmask import apply_brain_mask, load_gre, mask_shift_mm, register_mask
 from postprocess.motion import apply_transforms, correct_motion
 
 

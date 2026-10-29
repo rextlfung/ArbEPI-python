@@ -171,15 +171,20 @@ def _estimate_python(mag: NDArray, voxel_size_mm, ref_vol: NDArray, progress=Non
 # ---------------------------------------------------------------- FSL backend
 
 
-def find_mcflirt() -> str | None:
-    """Path of FSL's mcflirt: PATH, then $FSLDIR/bin, then ~/fsl/bin."""
-    exe = shutil.which("mcflirt")
+def find_fsl_tool(name: str) -> str | None:
+    """Path of an FSL executable: PATH, then $FSLDIR/bin, then ~/fsl/bin."""
+    exe = shutil.which(name)
     if exe:
         return exe
     for d in (os.environ.get("FSLDIR"), os.path.expanduser("~/fsl")):
-        if d and os.access(os.path.join(d, "bin", "mcflirt"), os.X_OK):
-            return os.path.join(d, "bin", "mcflirt")
+        if d and os.access(os.path.join(d, "bin", name), os.X_OK):
+            return os.path.join(d, "bin", name)
     return None
+
+
+def find_mcflirt() -> str | None:
+    """Path of FSL's mcflirt (see find_fsl_tool)."""
+    return find_fsl_tool("mcflirt")
 
 
 def _estimate_fsl(mag: NDArray, voxel_size_mm, ref, mcflirt: str, cost: str = "normcorr"):
@@ -196,10 +201,7 @@ def _estimate_fsl(mag: NDArray, voxel_size_mm, ref, mcflirt: str, cost: str = "n
         args = [mcflirt, "-in", inp, "-out", out, "-mats", "-cost", cost]
         args += ["-meanvol"] if ref == "mean" else ["-refvol", str(ref)]
         subprocess.run(args, check=True, env=env, capture_output=True)
-        mats = []
-        for t in range(nt):
-            M = np.loadtxt(os.path.join(out + ".mat", f"MAT_{t:04d}"))
-            mats.append(M)
+        mats = [np.loadtxt(os.path.join(out + ".mat", f"MAT_{t:04d}")) for t in range(nt)]
         ref_vol = nib.load(out + "_meanvol.nii.gz").get_fdata() if ref == "mean" else None
     return np.stack(mats), ref_vol
 
@@ -221,7 +223,7 @@ def correct_motion(series: NDArray, voxel_size_mm=(1.0, 1.0, 1.0), ref="middle",
     """
     if series.ndim != 4:
         raise ValueError("series must be (Nx, Ny, Nz, Nt)")
-    mag = np.abs(series).astype(np.float32)
+    mag = np.abs(series).astype(np.float32, copy=False)
     nt = mag.shape[3]
     if method == "auto":
         method = "fsl" if find_mcflirt() else "python"
