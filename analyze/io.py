@@ -68,6 +68,7 @@ def read_recon(path: str, scales: tuple = ("sum",), n_discard: int = 0,
     with h5py.File(path, "r") as f:
         frames = slice(n_discard, None)
         X_recon = _read_t(f["X_recon"], frames)
+        mag = np.abs(X_recon)
         has_scales = "X" in f and f["X"].ndim == 5
         n_scales = f["X"].shape[4] if has_scales else 1
         want = list(scales)
@@ -77,7 +78,7 @@ def read_recon(path: str, scales: tuple = ("sum",), n_discard: int = 0,
         phi = comps = None
         for s in want:
             if s == "sum":
-                series["sum"] = np.abs(X_recon).astype(np.float32)
+                series["sum"] = mag.astype(np.float32, copy=False)
                 continue
             if not has_scales:
                 raise ValueError(f"{path} has no per-scale components (not an mslr run)")
@@ -90,7 +91,7 @@ def read_recon(path: str, scales: tuple = ("sum",), n_discard: int = 0,
             if comps is None:
                 comps = _read_t(f["X"], frames)
             series[f"scale{s}"] = (comps[..., s] * np.conj(phi)[..., None]).real.astype(np.float32)
-    mean_signal = np.abs(X_recon).mean(axis=3).astype(np.float32)
+    mean_signal = mag.mean(axis=3).astype(np.float32)
     if voxel_size_mm is None:
         voxel_size_mm = voxel_size_from_sidecar(path) or (1.0, 1.0, 1.0)
     return Recon(series=series, mean_signal=mean_signal, voxel_size_mm=tuple(voxel_size_mm),

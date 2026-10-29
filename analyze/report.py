@@ -22,7 +22,6 @@ import json
 import os
 import re
 import sys
-from types import SimpleNamespace
 
 REPO = os.environ.get('ARBEPI_REPO', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, REPO)
@@ -39,7 +38,7 @@ from matplotlib.colors import ListedColormap, Normalize  # noqa: E402
 from analyze import glm  # noqa: E402
 from analyze.design import ExperimentParams, build_design_matrix, drift_basis  # noqa: E402
 from analyze.io import read_recon  # noqa: E402
-from simulate_fmri.analysis import fit_mixed_binomial, levels  # noqa: E402
+from simulate_fmri.analysis import alias, fit_mixed_binomial, levels  # noqa: E402
 
 ROOT = '/StorageRAID/rexfung/20261006tap'
 Q_FDR = 0.05
@@ -62,10 +61,6 @@ def _zcmap(thr):
     out[pos] = np.column_stack([np.ones(pos.sum()), 0.1 + 0.9 * f[pos], np.zeros(pos.sum()), np.ones(pos.sum())])
     out[neg] = np.column_stack([np.zeros(neg.sum()), 0.3 + 0.7 * f[neg], np.ones(neg.sum()), np.ones(neg.sum())])
     return ListedColormap(out)
-
-
-def alias(f, fs):
-    return abs(f - round(f / fs) * fs)
 
 
 def periodogram(y, tr):
@@ -200,58 +195,11 @@ def cycle_index(L, paradigm):
     return np.clip(c, 0, paradigm['n_cycles'] - 1)
 
 
-def _whiten_seg(a, rho, starts):
-    """The AR(1) prewhitening filter along the last axis, restarted at each index of `starts`."""
-    out = np.empty(a.shape, dtype=np.result_type(a.dtype, np.float32))
-    out[..., 1:] = a[..., 1:] - rho * a[..., :-1]
-    out[..., 0] = a[..., 0]
-    out[..., starts] = np.sqrt(1 - rho ** 2) * a[..., starts]
-    return out
-
-
-def fit_glm_segmented(Y, X, c, starts, max_iter=5, chunk=20000):
-    """analyze.glm.fit_glm with the AR(1) filter restarted at each segment start, for frames that are
-    not all adjacent in time (a subset of cycles). Y (V, n), X (n, P), c (P,), starts: indices in 0..n
-    where a new segment begins. Returns SimpleNamespace(t, z, dof, rho)."""
-    X = np.asarray(X, dtype=np.float64)
-    c = np.asarray(c, dtype=np.float64)
-    n, V = X.shape[0], Y.shape[0]
-    dof = n - np.linalg.matrix_rank(X)
-    lag_ok = np.ones(n - 1, bool)
-    lag_ok[np.asarray(starts[1:], dtype=int) - 1] = False  # the pair (i-1, i) is not a lag-1 pair at a start
-    rho = 0.0
-    for _ in range(max_iter):
-        pinv = np.linalg.pinv(_whiten_seg(X.T, rho, starts).T)
-        num = den = 0.0
-        for s in range(0, V, chunk):
-            y = Y[s:s + chunk].astype(np.float64)
-            r = y - (_whiten_seg(y, rho, starts) @ pinv.T) @ X.T
-            r -= r.mean(axis=1, keepdims=True)
-            r /= np.maximum(np.sqrt((r ** 2).mean(axis=1, keepdims=True)), 1e-30)
-            num += float((r[:, 1:] * r[:, :-1])[:, lag_ok].sum())
-            den += float((r ** 2).sum())
-        new = num / den
-        done = abs(new - rho) < 1e-3
-        rho = new
-        if done:
-            break
-    Xw = _whiten_seg(X.T, rho, starts).T
-    XtXi = np.linalg.pinv(Xw.T @ Xw)
-    var_c = float(c @ XtXi @ c)
-    t = np.empty(V, np.float32)
-    for s in range(0, V, chunk):
-        y = _whiten_seg(Y[s:s + chunk].astype(np.float64), rho, starts)
-        b = y @ Xw @ XtXi
-        s2 = ((y - b @ Xw.T) ** 2).sum(axis=1) / dof
-        t[s:s + chunk] = (b @ c) / np.maximum(np.sqrt(s2 * var_c), 1e-30)
-    return SimpleNamespace(t=t, z=glm.t_to_z(t, dof).astype(np.float32), dof=float(dof), rho=float(rho))
-
-
 def fit_cycle_groups(L, Y, paradigm, groups):
     """One GLM per group of cycles (each a set of 0-based cycle indices), on those frames only.
     The regressor and the drift columns are the full run's, restricted to the frames, so the HRF and
     the slow drift carry across the gaps; the AR(1) filter restarts at every cycle. Returns a list of
-    SimpleNamespace(t, z, dof, rho)."""
+    analyze.glm.GLMResult (its t, z, dof and rho are what the report reads)."""
     cyc = cycle_index(L, paradigm)
     out = []
     for g in groups:
@@ -261,7 +209,7 @@ def fit_cycle_groups(L, Y, paradigm, groups):
         X = np.column_stack([L.reg[h], L.D[h]])
         c = np.zeros(X.shape[1])
         c[0] = 1.0
-        out.append(fit_glm_segmented(Y[:, h], X, c, starts))
+        out.append(glm.fit_glm(Y[:, h], X, c, starts=starts))
     return out
 
 

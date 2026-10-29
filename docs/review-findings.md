@@ -6283,3 +6283,35 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   place); (f) one `fsl_env`/`fsl_affine` pair for `motion`, `brainmask` and
   `analyze/mask.bet_fsl`; (g) `postprocess/__main__.py` imports the private
   `analyze.io._read_t` and re-inlines `brainmask.gre_brain_mask`.
+
+- [x] **269. `analyze/`: `report.py` carried its own copy of the AR(1) GLM.**
+  [resolved 2026-10-29, `/simplify` pass 5] `fit_glm_segmented` and
+  `_whiten_seg` (~45 lines) repeated `glm.fit_glm`'s pooled-rho iteration,
+  prewhitening, pseudo-inverse and t/z computation, differing only in that the
+  filter restarts at the start of each stretch of frames. `glm.whiten`,
+  `_estimate_rho` and `fit_glm` now take `starts` (default `(0,)`, the old
+  behavior), and `fit_cycle_groups` calls `glm.fit_glm(..., starts=starts)`; a
+  fix to the GLM now reaches the cycle-group fits too. Checked against the old
+  function on 300 synthetic AR(1) voxels with three stretches: z, rho and dof
+  identical, t within 1e-6 (float32). Also: `report.alias` imports
+  `simulate_fmri.analysis.alias` (the same formula), `score._dct` was an alias of
+  `design.dct_matrix`, `glm.z_to_p` (no callers) and `glm.bonferroni_threshold`
+  (`alpha / n`, only a test) are gone, and `read_recon` takes `|X_recon|` once.
+  One caveat: `fit_glm` raises when a group has no more frames than regressors,
+  where the old segmented fit returned a meaningless t with non-positive dof.
+  47 analyze + postprocess tests pass.
+  **Not done (open):** (a) `score.py` reads `X_recon` with a bare `[()]` (the
+  ~7 MB/s HDF5 chunk-cache pathology CLAUDE.md documents; `analyze.io._read_t`
+  reads chunk by chunk) and builds three float64 4-D arrays;
+  (b) `read_recon` loads every scale of `X` even for `scales=(1,)`;
+  (c) `_estimate_rho` makes ~10 float64 passes per chunk, the dominant GLM cost
+  (the per-voxel variance is `nt` after normalization; skip the whitening at
+  rho = 0); (d) `analyze_recon` mixes fitting and writing, per-scale fits run
+  serially; (e) the `--tr/--onsets/--n-discard/...` options and the
+  `ExperimentParams` construction are declared in both `analyze/__main__.py`
+  and `compare.py` (drifted: no `--bet-frac` in compare); (f) `report.py` is a
+  821-line script with a hard-coded dataset root, `make_report` is ~300 lines,
+  and `Loaded` keeps attributes nothing reads (`pieces`, `names`, `X`, `params`,
+  `_brain_spec`); per the one-off-investigation rule that dataset-specific
+  tooling belongs in the dataset folder; (g) output file names are derived by
+  hand in `run.py`, `report.py` and `postprocess/__main__.py`.

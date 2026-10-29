@@ -44,10 +44,6 @@ def object_masks(x0_abs: np.ndarray, thresh: float = 0.4):
     return obj, ndimage.binary_erosion(obj, iterations=2)
 
 
-def _dct(nt: int) -> np.ndarray:
-    return dct_matrix(nt)
-
-
 def _glm(s: np.ndarray, w: np.ndarray):
     """Fit s (V, nt) = c0 + c1 t + beta w by ordinary least squares; return
     (beta, t-stat), each (V,). The fit is analyze.glm's."""
@@ -88,7 +84,7 @@ def score(fn_truth: str, fn_recon: str, cutoff_hz: float = 0.15,
     near_roi = ndimage.binary_dilation(rois.any(0), iterations=3)
     bg = interior & ~near_roi
     R = (M[bg] - T[bg]) / x0[bg][:, None]  # relative residual, (V, nt)
-    Rc = R @ _dct(nt).T
+    Rc = R @ dct_matrix(nt).T
     keep = int((np.arange(nt) / (2 * nt * tr) <= cutoff_hz).sum())
     out["fluct_pct"] = 100 * float(np.median(R.std(1)))
     out["fluct_inband_pct"] = 100 * float(np.median(np.sqrt((Rc[:, 1:keep] ** 2).sum(1) / nt)))

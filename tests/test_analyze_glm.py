@@ -87,7 +87,6 @@ def test_fdr_and_bonferroni():
     assert 1e-5 * 0.5 < thr < 0.01
     assert (p <= thr).sum() >= 900
     assert glm.fdr_threshold(rng.uniform(0.5, 1, 100), 0.05) == 0.0
-    assert glm.bonferroni_threshold(1000, 0.05) == 5e-5
 
 
 def test_ols_matches_closed_form_and_known_beta():
