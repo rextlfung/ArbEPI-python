@@ -24,7 +24,7 @@ _EPS = torch.finfo(torch.float32).eps
 
 
 def _gr_restart(fgrad: torch.Tensor, ynew_yold: torch.Tensor, restart_cutoff: float) -> bool:
-    inner = -torch.vdot(fgrad.reshape(-1), ynew_yold.reshape(-1)).real.item()
+    inner = -_vdot(fgrad, ynew_yold)
     return inner <= restart_cutoff * fgrad.norm().item() * ynew_yold.norm().item()
 
 
@@ -168,7 +168,7 @@ def pogm_restart(
                     tnew = 1.0
                     sig = 1.0
                     is_restart = True
-                elif torch.vdot(Fgrad.reshape(-1), Fgradold.reshape(-1)).real.item() < 0:
+                elif _vdot(Fgrad, Fgradold) < 0:
                     sig = bsig * sig
                 Fcostold = Fcostnew
                 Fgradold, Fgrad = Fgrad, Fgradold

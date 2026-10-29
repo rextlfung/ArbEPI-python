@@ -21,6 +21,8 @@ from mirtorch.linear import Diffnd, Vstack
 from mirtorch.linear.linearmaps import LinearMap
 from mirtorch.prox import Prox
 
+from analyze.design import dct_matrix as _dct_matrix_np
+
 
 def _reg_weights(
     patch_sizes: list[tuple[int, int, int]], Nt: int, N_voxels: int, lambda_global: float,
@@ -319,7 +321,7 @@ def patchSVST(
             pcount[sx : sx + psx, sy : sy + psy, sz : sz + psz] += 1.0
 
     pcount.clamp_(min=1.0)
-    return img_out / pcount.unsqueeze(-1), reg_total
+    return img_out.div_(pcount.unsqueeze(-1)), reg_total
 
 
 def shifted_patchSVST(
@@ -659,11 +661,7 @@ class TemporalTVProx(Prox):
 def dct_matrix(n: int, device=None) -> torch.Tensor:
     """Orthonormal DCT-II matrix C (n x n): C @ x is the DCT of x, C.T inverts it.
     Basis k is cos(pi k (t + 1/2) / n), frequency k / (2 n TR)."""
-    t = torch.arange(n, dtype=torch.float64)
-    k = t[:, None]
-    C = torch.cos(math.pi * k * (t[None, :] + 0.5) / n) * math.sqrt(2.0 / n)
-    C[0] /= math.sqrt(2.0)
-    return C.to(device=device, dtype=torch.float32)
+    return torch.from_numpy(_dct_matrix_np(n)).to(device=device, dtype=torch.float32)
 
 
 class TemporalHighPass:

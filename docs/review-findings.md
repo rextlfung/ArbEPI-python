@@ -6229,3 +6229,31 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `grid_epi` (120 lines, cache state in three flags) and `write_output` into
   cache/output helpers; (g) one shared NIfTI+JSON writer for
   `preprocess/utils.py`, `analyze/io.py` and `postprocess/`.
+
+- [x] **267. `recon/`: a duplicated DCT, inline `vdot`s and a transient k-space
+  copy.** [resolved 2026-10-29, `/simplify` pass 3] `regularizers.dct_matrix`
+  re-implemented `analyze.design.dct_matrix` (the high-pass penalty here and the
+  GLM drift terms must be the same basis); it now converts that one. Two inline
+  `torch.vdot(...).real.item()` calls in `solvers.py` use `_vdot`. `run_sense`
+  divided the dense-path k-space by `sqrt(noise_var)` out of place, holding a
+  second copy of the series (6.5 GB at 660 frames) while A was resident; both
+  paths now divide in place (the loaders return fresh tensors). `patchSVST`
+  divides its accumulator in place. 128 recon tests pass. Tried and reverted:
+  `astype(np.complex64, copy=False)` in `utils.iter_frames` makes the tensor
+  share a read-only HDF5 buffer on CPU, and torch warns.
+  **Not done (open; the numerics-touching ones need a re-run against the Julia
+  reference of "Validated against real ../mslr-recon", which matched to ~1e-5):**
+  (a) the wavelet-TV path loops over frames in Python on every `W`/`D` apply and
+  adjoint (~70k tiny kernels per apply at 660 frames; batch frames in
+  `Wavelet3D._real`/`PerFrame`/`Diffnd`, est. 1-3 s per PDHG iteration);
+  (b) `pogm_restart`'s update builds 7-9 series-sized temporaries per iteration
+  (build it in one scratch buffer; peak memory is the binding constraint on run
+  C); also CG's updates and the cost/gradient residual `Ax - ksp`, computed
+  twice; (c) `run_sense` takes ~30 keyword arguments, most for one regularizer
+  (per-regularizer config dataclasses behind the same `run_sense(**kwargs)`);
+  its four `ReconResult(...)` constructions repeat the same boilerplate; its
+  dense and chunked data-consistency paths duplicate the forward-cache logic;
+  (d) `build_sense_b0`/`build_sense_b0_r2star` are near-identical and
+  `SENSE_B0_R2star` has no logic of its own beyond `segment_phasors`;
+  (e) the strided frame views reused L times in `SENSE_B0._apply`
+  (`x.contiguous()`, measure first).

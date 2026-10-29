@@ -273,10 +273,10 @@ def run_sense(
             f"  thermal-noise variance {noise_var:.4f} (recorded by preprocessing) "
             f"-- dividing k-space by {np.sqrt(noise_var):.4f}"
         )
-        if dc_chunk is None:
-            ksp = ksp / float(np.sqrt(noise_var))
-        else:
-            ksp.div_(float(np.sqrt(noise_var)))  # in place: a copy would not be page-locked
+        # In place: a copy would not be page-locked (chunked) and, dense, would
+        # briefly hold a second copy of the k-space series. The loaders return
+        # a fresh tensor, so nothing else sees the old scale.
+        ksp.div_(float(np.sqrt(noise_var)))
     if device.type == "cuda":
         torch.cuda.empty_cache()
         free_gb, total_gb = (x / 1e9 for x in torch.cuda.mem_get_info())
