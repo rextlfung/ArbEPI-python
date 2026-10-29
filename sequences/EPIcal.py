@@ -13,7 +13,6 @@ ArbEPI's readout with the y/z blips zeroed, which doesn't affect gx
 timing/area at all), so there's no need for a second, redundant copy.
 """
 
-import copy
 import os
 
 import hdf5storage
@@ -25,7 +24,7 @@ from lib.make_excitation_pulse import make_excitation_from_params
 from lib.make_prephasers import make_prephasers
 from lib.make_spoilers import make_spoilers
 from lib.mask2epi import max_blip_steps
-from lib.readout_from_params import derated_sys, make_readout_grads_from_params
+from lib.readout_from_params import derated_sys, make_readout_grads_from_params, sequence_sys
 from lib.shot_start import add_fatsat_and_excitation, draw_spoil_scales
 from params import Params
 
@@ -73,9 +72,7 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
 
     # Assemble sequence (full-hardware system, matching ArbEPI -- the POPE
     # fall ramp deliberately exceeds the derate; see ArbEPI.py's comment)
-    sys_seq = copy.deepcopy(params.sys)
-    sys_seq.adc_dead_time = 0  # suppress warnings; no back-to-back ADC blocks
-    seq = pp.Sequence(system=sys_seq)
+    seq = pp.Sequence(system=sequence_sys(params))
 
     rf_count = 1
     # Deliberately unseeded (fresh entropy every run/process, independent of
@@ -95,6 +92,14 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
     # shot: the same steady-state warm-up ArbEPI plays as its discarded
     # frames, so the calibration is taken in the state the time series is.
     n_dummy = round(params.discard_duration / params.TR)
+    # Loop-invariant scaled gradients (scale_grad deep-copies): every shot
+    # plays the same unencoded waveform, blips scaled to zero.
+    gx_pre_scaled = pp.scale_grad(gx_pre, rg.gx_pre_scale)
+    gy_pre0, gz_pre0 = pp.scale_grad(gy_pre, 0), pp.scale_grad(gz_pre, 0)
+    gy_blip0, gz_blip0 = pp.scale_grad(rg.gy_blip, 0), pp.scale_grad(rg.gz_blip, 0)
+    gro_signed = {s: pp.scale_grad(rg.gro, s) for s in (1, -1)}
+    gro2_line = pp.scale_grad(rg.gro2, (-1) ** (params.ETL - 1))
+
     for shot in range(-n_dummy, params.Nshots * n_frames):
         is_dummy = shot < 0
         TRID = 1 if is_dummy else 2  # TRID 1 = dummy, TRID 2 = real (see Pulseq on GE manual)
@@ -116,28 +121,15 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
         # zero). gx pre-winds to -S/2, identical to ArbEPI (see
         # ReadoutGrads.gx_pre_scale) -- required for the calibration kx
         # trajectory to match the imaging one.
-        seq.add_block(
-            pp.scale_grad(gx_pre, rg.gx_pre_scale),
-            pp.scale_grad(gy_pre, 0),
-            pp.scale_grad(gz_pre, 0),
-        )
+        seq.add_block(gx_pre_scaled, gy_pre0, gz_pre0)
 
         # EPI readout — same waveform as ArbEPI, blips scaled to zero
+        adc = [] if is_dummy else [rg.adc]
         seq.add_block(rg.gro1)
         for echo in range(params.ETL - 1):
-            gro_line = pp.scale_grad(rg.gro, (-1) ** echo)
-            gy_blip0 = pp.scale_grad(rg.gy_blip, 0)
-            gz_blip0 = pp.scale_grad(rg.gz_blip, 0)
-            if not is_dummy:
-                seq.add_block(rg.adc, gro_line, gy_blip0, gz_blip0)
-            else:
-                seq.add_block(gro_line, gy_blip0, gz_blip0)
+            seq.add_block(*adc, gro_signed[(-1) ** echo], gy_blip0, gz_blip0)
         # Last echo line
-        gro2_line = pp.scale_grad(rg.gro2, (-1) ** (params.ETL - 1))
-        if not is_dummy:
-            seq.add_block(rg.adc, gro2_line)
-        else:
-            seq.add_block(gro2_line)
+        seq.add_block(*adc, gro2_line)
 
         # Spoilers: this shot's randomly-drawn x/y/z cycles/voxel. x still
         # rewinds gx_residual (the readout's own fixed net kx moment, same

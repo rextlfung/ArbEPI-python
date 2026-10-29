@@ -42,7 +42,6 @@ any `n_echoes_degre`.
 """
 
 import argparse
-import copy
 import math
 import os
 from dataclasses import dataclass
@@ -52,7 +51,8 @@ import numpy as np
 import pypulseq as pp
 from tqdm import tqdm
 
-from lib.trap4ge import trap4ge
+from lib.readout_from_params import degre_sys
+from lib.trap4ge import ceil_to_raster, trap4ge
 from params import Params, load_params
 
 # T2* used for the R2* precision figure of merit in `precision_table`: gray
@@ -111,14 +111,13 @@ def design_megre(
         if abs(n * r - f) > 1e-9:
             raise ValueError(f'fov {f} m is not a whole number of {r} m voxels')
     Nx, Ny, Nz = N
-    sys = copy.deepcopy(params.sys)
-    sys.max_slew = params.slew_degre * sys.gamma
+    sys = degre_sys(params)
     crt = params.crt
     raster = sys.grad_raster_time
     T1 = -params.TR_degre / math.log(math.cos(math.radians(params.alpha_degre)))  # params.py's T1
 
     def _up(t):
-        return math.ceil(t / crt - 1e-9) * crt
+        return ceil_to_raster(t, crt)
 
     T_esp = round((echo_spacing or 1 / params.fat_offres_freq) / raster) * raster
     dk = [1 / f for f in fov]
@@ -220,7 +219,7 @@ def design_megre(
         raise ValueError(
             f'TE1 minimum {te_min * 1e3:.3f} ms exceeds echo spacing {T_esp * 1e3:.3f} ms'
         )
-    delay_te = math.ceil((T_esp - te_min) / raster - 1e-9) * raster
+    delay_te = ceil_to_raster(T_esp - te_min, raster)
     te1 = te_min + delay_te
     TE = te1 + T_esp * np.arange(n_echoes)
 

@@ -39,11 +39,7 @@ from typing import Sequence, Tuple
 import numpy as np
 import pypulseq as pp
 
-from lib.trap4ge import trap4ge
-
-
-def _ceil_to(t: float, r: float) -> float:
-    return math.ceil(t / r - 1e-9) * r
+from lib.trap4ge import ceil_to_raster, trap4ge
 
 
 def make_water_excitation(
@@ -83,15 +79,15 @@ def make_water_excitation(
 
     # Longest subpulse (flat top d) whose lobe + rewinder fit in tau, with the
     # idle time around the rewinder splitting evenly on the raster.
-    d = _ceil_to(tau, crt)
+    d = ceil_to_raster(tau, crt)
     while True:
         d -= crt
         if d <= 0:
             raise ValueError(f'no subpulse fits the {tau * 1e6:.0f} us binomial spacing')
         G = tbw / d / thk  # Hz/m
-        r = _ceil_to(G / slew, crt)  # lobe ramp
+        r = ceil_to_raster(G / slew, crt)  # lobe ramp
         area = G * (d + r)  # full lobe area
-        tr = _ceil_to(math.sqrt(area / slew), crt)  # rewinder triangle half-width
+        tr = ceil_to_raster(math.sqrt(area / slew), crt)  # rewinder triangle half-width
         idle = tau - (2 * r + d) - 2 * tr  # gap between lobes not used by the rewinder
         if idle >= -1e-12 and round(idle / crt) % 2 == 0:
             break
@@ -138,7 +134,7 @@ def make_water_excitation(
         signal, alpha / 180 * math.pi, system=sys, use='excitation', center=center
     )
     assert rf.freq_offset == 0, 'a shifted slab would need per-subpulse modulation'
-    delay = max(rf.delay, _ceil_to(r, crt))
+    delay = max(rf.delay, ceil_to_raster(r, crt))
     rf.delay = delay
     gz_ss = pp.make_extended_trapezoid(
         channel='z', times=times, amplitudes=np.array(amps), system=sys

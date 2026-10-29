@@ -12,7 +12,6 @@ are intentionally not ported here — see ge/ge_export.py and
 plot/plotting.py respectively.
 """
 
-import copy
 import os
 from concurrent.futures import ProcessPoolExecutor
 from typing import Tuple
@@ -27,7 +26,7 @@ from lib.make_excitation_pulse import make_excitation_from_params
 from lib.make_prephasers import make_prephasers
 from lib.make_spoilers import make_spoilers
 from lib.mask2epi import mask2epi_laminar, mask2epi_radial, max_blip_steps
-from lib.readout_from_params import derated_sys, make_readout_grads_from_params
+from lib.readout_from_params import derated_sys, make_readout_grads_from_params, sequence_sys
 from lib.shot_start import add_fatsat_and_excitation, draw_spoil_scales
 from params import Params
 
@@ -195,8 +194,7 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # the readout's POPE fall ramp deliberately runs above the derate
     # (params.ro_slew_fall, still within hardware limits, which
     # ge/check.py verifies against params.spec).
-    sys_seq = copy.deepcopy(params.sys)
-    sys_seq.adc_dead_time = 0  # suppress warnings; no back-to-back ADC blocks
+    sys_seq = sequence_sys(params)
     seq = pp.Sequence(system=sys_seq)
 
     rf_count = 1
@@ -211,6 +209,20 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # reproducibility here would only make it easier to accidentally rely on
     # one (docs/review-findings.md item 176).
     spoil_rng = np.random.default_rng()
+
+    # scale_grad deep-copies, and the readout/blip scalings repeat across
+    # ~ Nframes * Nshots * ETL echoes while taking only a few dozen distinct
+    # values (blip steps are bounded by max_ky_step/max_kz_step): build each
+    # once, on first use.
+    gro_signed = {s: pp.scale_grad(rg.gro, s) for s in (1, -1)}
+    gx_pre_scaled = pp.scale_grad(gx_pre, rg.gx_pre_scale)
+    blip_cache = {}
+
+    def _blip(axis, step):
+        key = (axis, int(step))
+        if key not in blip_cache:
+            blip_cache[key] = pp.scale_grad(rg.gy_blip if axis == 'y' else rg.gz_blip, key[1])
+        return blip_cache[key]
 
     for frame in tqdm(range(params.Nframes), desc='Writing frames'):
 
@@ -237,16 +249,16 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             # about kx = 0 and reach +-kmax -- see ReadoutGrads.gx_pre_scale.
             gy_pre_tmp = pp.scale_grad(gy_pre, (y_locs[0] - Ny / 2) / (-Ny / 2))
             gz_pre_tmp = pp.scale_grad(gz_pre, (z_locs[0] - Nz / 2) / (-Nz / 2))
-            seq.add_block(pp.scale_grad(gx_pre, rg.gx_pre_scale), gy_pre_tmp, gz_pre_tmp)
+            seq.add_block(gx_pre_scaled, gy_pre_tmp, gz_pre_tmp)
 
             # EPI readout — zip through k-space with alternating readout polarity
             seq.add_block(rg.gro1)
             for echo in range(len(y_locs) - 1):
                 seq.add_block(
                     rg.adc,
-                    pp.scale_grad(rg.gro, (-1) ** echo),
-                    pp.scale_grad(rg.gy_blip, y_locs[echo + 1] - y_locs[echo]),
-                    pp.scale_grad(rg.gz_blip, z_locs[echo + 1] - z_locs[echo]),
+                    gro_signed[(-1) ** echo],
+                    _blip('y', y_locs[echo + 1] - y_locs[echo]),
+                    _blip('z', z_locs[echo + 1] - z_locs[echo]),
                 )
             # Last echo line (no blip needed). Sign is (-1)**(ETL-1): this
             # equals the MATLAB original's final `echo` loop-variable value

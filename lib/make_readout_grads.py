@@ -53,7 +53,7 @@ from typing import List, Sequence, Tuple
 
 import pypulseq as pp
 
-from lib.trap4ge import trap4ge
+from lib.trap4ge import ceil_to_raster, trap4ge
 
 
 class InfeasibleDwellError(AssertionError):
@@ -98,13 +98,6 @@ class ReadoutGrads:
     # (module docstring). calc_te_tr_delays consumes this so prescribed TE
     # lands on the true echo, not the block center.
     echo_offset: float
-
-
-def _ceil_to_raster(t: float, raster: float) -> float:
-    # Same epsilon rationale as lib/trap4ge.py's _round_up_to_raster:
-    # float64 division noise must not bump an already-on-raster time up by
-    # one extra raster step.
-    return math.ceil(t / raster - 1e-9) * raster
 
 
 def _composite_segments(
@@ -251,8 +244,8 @@ def make_readout_grads(
     # area-preserving amplitude rescale would perturb the a1/a_d geometry
     # the pre-wind and echo timing are derived from.
     A = min(deltak[0] / dwell, sys.max_grad)
-    r = max(_ceil_to_raster(A / slew_rise, crt), t_s)
-    d = max(_ceil_to_raster(A / slew_fall, crt), t_s)
+    r = max(ceil_to_raster(A / slew_rise, crt), t_s)
+    d = max(ceil_to_raster(A / slew_fall, crt), t_s)
     # (r, d >= t_s also guarantees the split lands inside the rise ramp and
     # the fall spans the first half of the blip window -- the turnaround
     # geometry the composite construction relies on.)
@@ -262,7 +255,7 @@ def make_readout_grads(
 
     # Smallest flat top whose area covers Nx*deltak plus the M lost off each
     # end of the ADC window (both parities must reach +-kmax).
-    flat = _ceil_to_raster((Nx * deltak[0] + 2 * M - A * (r + d) / 2) / A, crt)
+    flat = ceil_to_raster((Nx * deltak[0] + 2 * M - A * (r + d) / 2) / A, crt)
     if flat < 0:
         raise InfeasibleDwellError(
             'Readout lobe would be triangular (ramps alone exceed the required '
@@ -302,7 +295,7 @@ def make_readout_grads(
         system=sys,
         # The fall may exceed sys.max_slew (that's the point of POPE); the
         # tiny headroom factor covers the 1e-9-raster epsilon in
-        # _ceil_to_raster, which can leave realized slew above slew_fall by
+        # ceil_to_raster, which can leave realized slew above slew_fall by
         # ~1e-11 relative.
         max_slew=slew_fall * (1 + 1e-9),
     )

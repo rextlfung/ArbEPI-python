@@ -39,7 +39,6 @@ readout (confirmed via test_degre_excitation_is_centered, the deGRE
 analogue of test_epical_trajectory_is_centered).
 """
 
-import copy
 import math
 import os
 
@@ -48,7 +47,8 @@ import numpy as np
 import pypulseq as pp
 from tqdm import tqdm
 
-from lib.trap4ge import trap4ge
+from lib.readout_from_params import degre_sys
+from lib.trap4ge import ceil_to_raster, trap4ge
 from params import Params
 
 
@@ -59,8 +59,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     # sequence's single-line spoiled readout has a much lower PNS profile
     # than the EPI train's blip train, so it doesn't need nearly as
     # aggressive a cap (see that field's comment for the measured numbers).
-    sys = copy.deepcopy(params.sys)
-    sys.max_slew = params.slew_degre * sys.gamma  # T/m/s -> Hz/m/s (pypulseq's internal unit)
+    sys = degre_sys(params)
     crt = params.crt
 
     seq = pp.Sequence(system=sys)
@@ -187,7 +186,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         pp.calc_duration(pp.make_trapezoid(ax, system=sys, area=area))
         for ax, area in pre_areas.items()
     )
-    t_pre_min = math.ceil(t_pre_min / crt - 1e-9) * crt
+    t_pre_min = ceil_to_raster(t_pre_min, crt)
     t_pre = max(t_pre_min, math.floor((params.TE_degre[0] - te_base) / crt + 1e-9) * crt)
     gx_pre, gy_pre, gz_pre = _make_pre(t_pre)
     # trap4ge rounds each ramp/flat segment up to crt, which can overshoot

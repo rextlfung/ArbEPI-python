@@ -8,7 +8,6 @@ scan_info.mat from a prior generate_arbepi() run to match readout geometry.
 Outputs: <output_dir>/noise.seq (Pulseq format).
 """
 
-import copy
 import math
 import os
 
@@ -17,7 +16,7 @@ import pypulseq as pp
 
 from lib.make_excitation_pulse import make_excitation_pulse
 from lib.mask2epi import max_blip_steps
-from lib.readout_from_params import derated_sys, make_readout_grads_from_params
+from lib.readout_from_params import derated_sys, make_readout_grads_from_params, sequence_sys
 from params import Params
 
 
@@ -52,9 +51,7 @@ def generate_noise(params: Params, seqname: str = 'noise') -> pp.Sequence:
     # derate). This sequence has no gradients, so the choice has no
     # observable effect here, but keeping it consistent avoids a gratuitous
     # divergence for readers comparing the four sequence files.
-    sys_seq = copy.deepcopy(params.sys)
-    sys_seq.adc_dead_time = 0  # suppress warnings; no back-to-back ADC blocks
-    seq = pp.Sequence(system=sys_seq)
+    seq = pp.Sequence(system=sequence_sys(params))
     for _ in range(Nreps):
         seq.add_block(rg.adc, pp.make_label('TRID', 'SET', 1))
         if delay_block is not None:

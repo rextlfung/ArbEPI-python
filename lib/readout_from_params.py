@@ -24,6 +24,31 @@ from params import Params
 ACOUSTIC_MARGIN_US = 20.0
 
 
+def _sys_with_slew(params: Params, slew_t_per_m_s: float) -> pp.Opts:
+    """Fresh copy of params.sys with max_slew = slew_t_per_m_s (T/m/s).
+
+    Always a deepcopy -- params.sys is one shared mutable object across all
+    four sequence-generation calls (see params.py's Params.sys note).
+    """
+    sys = copy.deepcopy(params.sys)
+    sys.max_slew = slew_t_per_m_s * sys.gamma  # T/m/s -> Hz/m/s
+    return sys
+
+
+def sequence_sys(params: Params) -> pp.Opts:
+    """Full-hardware params.sys for pp.Sequence(system=...), as a fresh copy.
+
+    Deliberately NOT the derated system the gradients are built with: the
+    readout's POPE fall ramp runs above the derate (params.ro_slew_fall,
+    still within hardware limits, which ge/check.py verifies against
+    params.spec). adc_dead_time = 0 suppresses warnings; no sequence plays
+    back-to-back ADC blocks.
+    """
+    sys = copy.deepcopy(params.sys)
+    sys.adc_dead_time = 0
+    return sys
+
+
 def derated_sys(params: Params) -> pp.Opts:
     """params.sys derated to params.slew_derate (T/m/s), as a fresh copy.
 
@@ -33,9 +58,17 @@ def derated_sys(params: Params) -> pp.Opts:
     params.sys is one shared mutable object across all four
     sequence-generation calls (see params.py's Params.sys note).
     """
-    sys = copy.deepcopy(params.sys)
-    sys.max_slew = params.slew_derate * sys.gamma  # T/m/s -> Hz/m/s
-    return sys
+    return _sys_with_slew(params, params.slew_derate)
+
+
+def degre_sys(params: Params) -> pp.Opts:
+    """params.sys with max_slew = params.slew_degre (T/m/s), as a fresh copy.
+
+    The GRE sequences' (deGRE, meGRE) single-line spoiled readout has a much
+    lower PNS profile than the EPI train's blip train, so it doesn't need
+    nearly as aggressive a cap (see params.py's slew_degre comment).
+    """
+    return _sys_with_slew(params, params.slew_degre)
 
 
 def blip_sys(params: Params) -> pp.Opts:
@@ -44,9 +77,7 @@ def blip_sys(params: Params) -> pp.Opts:
     Handed to make_readout_grads, whose sys.max_slew governs the blips
     (the readout ramps get their own explicit slew_rise/slew_fall).
     """
-    sys = copy.deepcopy(params.sys)
-    sys.max_slew = params.blip_slew * sys.gamma  # T/m/s -> Hz/m/s
-    return sys
+    return _sys_with_slew(params, params.blip_slew)
 
 
 def _echo_spacing_in_forbidden_band(echo_us: float, ge_coil: str) -> bool:

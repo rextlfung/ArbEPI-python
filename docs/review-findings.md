@@ -6176,3 +6176,26 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   iterate twice, `cg` built full-size temporaries, the power iteration restarted
   from random per frame, gzip k-space loaded on one core. Real-data result:
   82.4 -> 62.5 s/iteration, 30.3 -> 10.1 GB, images equal to 1.2e-5.
+
+- [x] **265. Sequence generation (`sequences/`, `lib/`): the epsilon-ceil, the
+  `params.sys` copies and loop-invariant `scale_grad` calls were repeated.**
+  [resolved 2026-10-29, `/simplify` pass 1] `math.ceil(t / raster - 1e-9) *
+  raster` (CLAUDE.md's `trap4ge` bug fix) existed in five places
+  (`trap4ge`, `make_readout_grads`, `make_water_excitation`, `meGRE`, `deGRE`);
+  now one `lib/trap4ge.ceil_to_raster`. The deepcopy-then-set-slew pattern
+  (`derated_sys`, `blip_sys`, deGRE, meGRE) is `readout_from_params._sys_with_slew`
+  (+ `degre_sys`), and the ADC-dead-time-0 Sequence system copied in
+  ArbEPI/EPIcal/noise is `sequence_sys`. ArbEPI built three deep-copied
+  `scale_grad` objects per echo (~190k per build) for a few dozen distinct
+  values, and EPIcal rebuilt zero-scaled blips and the prephase per shot; both
+  now build each once. All five generated `.seq` files (ArbEPI, EPIcal, noise,
+  deGRE, meGRE; spoiler RNG seeded) are byte-identical to before.
+  **Not done (open):** (a) vectorize `lib/mask2epi.py`'s
+  `_euclidean_uncross_refine` / `_sum_2opt_refine` / `_bottleneck_2opt_order`
+  candidate loops (est. 5-20x on the schedule step, ~21 s of a 47 s build), which
+  needs exact tie-breaking and a randomized equivalence test against the loops;
+  (b) a shared sequence epilogue (`check_timing`, `set_definition`, write) and
+  `scan_info.mat` patch helper for the five sequence files; (c) shared prephaser
+  stretching / rewinders for deGRE and meGRE; (d) `build_epi_shot_parts` merging
+  ArbEPI's and EPIcal's setup; (e) `T1` as a `Params` field instead of
+  re-deriving it from `alpha_degre` in meGRE, and `n_dummy_shots` as a property.
