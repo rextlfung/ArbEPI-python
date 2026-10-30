@@ -259,7 +259,7 @@ def _segment_fit(
     Ny, Nz = omega.shape[1], omega.shape[2]
     n_yz = Ny * Nz
     echo_times_flat = echo_times_yz.reshape(n_yz, Nt)  # echo time doesn't depend on kx
-    fit_times_flat = echo_times_flat if t_ref_s == 0.0 else echo_times_flat - t_ref_s
+    fit_times_flat = echo_times_flat - t_ref_s
     b0_neg = (-b0_map).to(torch.float32)  # sign convention: see module docstring
 
     t_per_frame = []
@@ -282,6 +282,34 @@ def _segment_fit(
     return b_by_echo, c, tl, unique_t_ms, pos_per_frame
 
 
+def _build_b0(
+    op_cls,
+    smaps: torch.Tensor,
+    omega: torch.Tensor,
+    b0_map: torch.Tensor,
+    echo_times_yz: torch.Tensor,
+    L: int,
+    nbins: int,
+    b0_clip_percentile: float,
+    t_ref_s: float,
+    make_phasors,
+) -> BlockDiagonal:
+    """Clip the field map, fit the time segmentation once, and build one `op_cls`
+    per frame around the shared tables. make_phasors(b0_map, c, tl) -> the
+    (L,*N) segment phasors, from the fit's `c` (phase only) or its times `tl`."""
+    b0_map = clip_b0_outliers(b0_map, b0_clip_percentile)
+    b_by_echo, c, tl, _t, pos_per_frame = _segment_fit(
+        omega, b0_map, echo_times_yz, L, nbins, t_ref_s=t_ref_s,
+    )
+    b_by_echo = b_by_echo.to(smaps.dtype)
+    c_phasors = make_phasors(b0_map, c, tl)
+    frames = [
+        op_cls(smaps, omega[..., it], pos, b_by_echo, c_phasors)
+        for it, pos in enumerate(pos_per_frame)
+    ]
+    return BlockDiagonal(frames)
+
+
 def build_sense_b0(
     smaps: torch.Tensor,
     omega: torch.Tensor,
@@ -301,15 +329,10 @@ def build_sense_b0(
     norm is not 1; estimate it before solving.
     """
     N = tuple(smaps.shape[1:])
-    b0_map = clip_b0_outliers(b0_map, b0_clip_percentile)
-    b_by_echo, c, _tl, _t, pos_per_frame = _segment_fit(omega, b0_map, echo_times_yz, L, nbins)
-    b_by_echo = b_by_echo.to(smaps.dtype)
-    c_phasors = c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype)
-    frames = [
-        SENSE_B0(smaps, omega[..., it], pos, b_by_echo, c_phasors)
-        for it, pos in enumerate(pos_per_frame)
-    ]
-    return BlockDiagonal(frames)
+    return _build_b0(
+        SENSE_B0, smaps, omega, b0_map, echo_times_yz, L, nbins, b0_clip_percentile, 0.0,
+        lambda _b0, c, _tl: c.transpose(0, 1).reshape((L,) + N).to(smaps.dtype),
+    )
 
 
 def build_sense_b0_r2star(
@@ -325,14 +348,8 @@ def build_sense_b0_r2star(
 ) -> BlockDiagonal:
     """build_sense_b0 plus R2* decay (see SENSE_B0_R2star). r2star_map:
     (Nx,Ny,Nz) in 1/s. t_ref_s: nominal-TE echo time (the preprocessed file's t_ref_s attr)."""
-    b0_map = clip_b0_outliers(b0_map, b0_clip_percentile)
-    b_by_echo, _c, tl, _t, pos_per_frame = _segment_fit(
-        omega, b0_map, echo_times_yz, L, nbins, t_ref_s=t_ref_s,
+    return _build_b0(
+        SENSE_B0_R2star, smaps, omega, b0_map, echo_times_yz, L, nbins, b0_clip_percentile,
+        t_ref_s,
+        lambda b0, _c, tl: SENSE_B0_R2star.segment_phasors(b0, r2star_map, tl, smaps.dtype),
     )
-    b_by_echo = b_by_echo.to(smaps.dtype)
-    c_phasors = SENSE_B0_R2star.segment_phasors(b0_map, r2star_map, tl, smaps.dtype)
-    frames = [
-        SENSE_B0_R2star(smaps, omega[..., it], pos, b_by_echo, c_phasors)
-        for it, pos in enumerate(pos_per_frame)
-    ]
-    return BlockDiagonal(frames)

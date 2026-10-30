@@ -281,8 +281,8 @@ def cg(
         if reg_normal is not None:
             AHAP = AHAP + reg_normal(P)
         alpha = rsold / _vdot(P, AHAP)
-        X = X + alpha * P
-        R = R - alpha * AHAP
+        X.add_(P, alpha=alpha)
+        R.sub_(AHAP, alpha=alpha)
         rsnew = _vdot(R, R)
         rel_res = (rsnew / rs0) ** 0.5
         residuals.append(rel_res)
@@ -292,7 +292,7 @@ def cg(
         if rel_res < tol:
             break
         beta = rsnew / rsold
-        P = R + beta * P
+        P.mul_(beta).add_(R)
         rsold = rsnew
 
     if bar is not None:

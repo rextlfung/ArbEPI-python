@@ -64,14 +64,15 @@ class ReconResult:
     X_recon: torch.Tensor  # (Nx,Ny,Nz,Nt)
     omega: torch.Tensor  # (Nx,Ny,Nz,Nt) bool
     dc_costs: list[float]  # per iteration; CG: relative residual norms
-    reg_costs: list[float]
-    restarts: list[bool]
-    rel_changes: list[float]
     R: float
     sigma1A: float
-    L: float  # Lipschitz constant used for the step size (mslr only, else nan)
-    lambdas: list[float]
     runtime_s: float
+    # What only some solvers have (empty, or nan, when they don't):
+    reg_costs: list[float] = field(default_factory=list)
+    restarts: list[bool] = field(default_factory=list)  # POGM gradient restarts (mslr)
+    rel_changes: list[float] = field(default_factory=list)
+    L: float = float("nan")  # Lipschitz constant used for the step size (mslr only)
+    lambdas: list[float] = field(default_factory=list)
     meta: dict = field(default_factory=dict)
     # name -> array of per-iteration diagnostics beyond the lists above (PDHG: iter, dc_cost,
     # reg_cost, rel_change; CG: rel_residual). Per-frame solvers: leading frame axis.
@@ -351,11 +352,6 @@ def _solve_cg(
         X=X.unsqueeze(-1),
         X_recon=X,
         dc_costs=residuals,
-        reg_costs=[],
-        restarts=[],
-        rel_changes=[],
-        L=float("nan"),
-        lambdas=[],
         runtime_s=runtime_s,
         meta=dict(niters=niters, tol=tol, iterations_run=len(residuals) - 1,
                   converged=bool(residuals[-1] < tol), **(temporal or {})),
@@ -563,9 +559,6 @@ def _solve_wavelet_tv(
         X_recon=X,
         dc_costs=dc_costs,
         reg_costs=reg_costs,
-        restarts=[],
-        rel_changes=[],
-        L=float("nan"),
         lambdas=[lamb_l1, lamb_tv],
         runtime_s=runtime_s,
         meta=dict(niters=niters, iterations_run=niters, wave=wave, levels=levels,
@@ -622,9 +615,6 @@ def _solve_wavelet_tv_joint(
         X_recon=X,
         dc_costs=[dc],
         reg_costs=[reg],
-        restarts=[],
-        rel_changes=[],
-        L=float("nan"),
         lambdas=[lamb_l1, lamb_tv, lamb_ttv],
         runtime_s=runtime_s,
         meta=dict(niters=niters, iterations_run=niters, wave=wave, levels=levels, joint=True,
