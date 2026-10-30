@@ -64,18 +64,65 @@ class ReconResult:
     X_recon: torch.Tensor  # (Nx,Ny,Nz,Nt)
     omega: torch.Tensor  # (Nx,Ny,Nz,Nt) bool
     dc_costs: list[float]  # per iteration; CG: relative residual norms
-    reg_costs: list[float]
-    restarts: list[bool]
-    rel_changes: list[float]
     R: float
     sigma1A: float
-    L: float  # Lipschitz constant used for the step size (mslr only, else nan)
-    lambdas: list[float]
     runtime_s: float
+    # What only some solvers have (empty, or nan, when they don't):
+    reg_costs: list[float] = field(default_factory=list)
+    restarts: list[bool] = field(default_factory=list)  # POGM gradient restarts (mslr)
+    rel_changes: list[float] = field(default_factory=list)
+    L: float = float("nan")  # Lipschitz constant used for the step size (mslr only)
+    lambdas: list[float] = field(default_factory=list)
     meta: dict = field(default_factory=dict)
     # name -> array of per-iteration diagnostics beyond the lists above (PDHG: iter, dc_cost,
     # reg_cost, rel_change; CG: rel_residual). Per-frame solvers: leading frame axis.
     trace: dict = field(default_factory=dict)
+
+
+def _build_operator(smaps_chw, omega, grid, frames, device, fn_ksp, fn_b0map, r2star_map,
+                    t_ref_s, L_b0, nbins_b0):
+    """The encoding operator A of run_sense: plain SENSE, SENSE_B0 with fn_b0map's field
+    map and fn_ksp's per-sample echo times, or SENSE_B0_R2star with r2star_map as well."""
+    Nx, Ny, Nz = grid
+    if fn_b0map is None:
+        return build_sense(smaps_chw, omega)
+    print(f"  Loading B0 field map from {fn_b0map} (L={L_b0}, nbins={nbins_b0})...")
+    with h5py.File(fn_b0map, "r") as f:  # files from before 2026-09-28 say b0map_hz
+        b0_key = "b0_map" if "b0_map" in f else "b0map_hz"
+    b0_map = torch.from_numpy(load_array(fn_b0map, b0_key).astype(np.float32)).to(device)
+    assert tuple(b0_map.shape) == (Nx, Ny, Nz), (
+        f"b0_map shape {tuple(b0_map.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz})"
+    )
+    echo_times_yz = load_echo_times(fn_ksp, device)[..., frames]
+    if r2star_map is None:
+        return build_sense_b0(smaps_chw, omega, b0_map, echo_times_yz, L=L_b0, nbins=nbins_b0)
+    print(f"  R2* correction enabled (t_ref_s={t_ref_s * 1000:.3f} ms)...")
+    assert tuple(r2star_map.shape) == (Nx, Ny, Nz), (
+        f"r2star_map shape {tuple(r2star_map.shape)} != k-space grid ({Nx},{Ny},{Nz})"
+    )
+    return build_sense_b0_r2star(
+        smaps_chw, omega, b0_map, echo_times_yz, r2star_map, t_ref_s, L=L_b0, nbins=nbins_b0,
+    )
+
+
+def _make_highpass(hp_weight, hp_cutoff_hz, volume_tr_s, fn_ksp, Nt, device):
+    """The TemporalHighPass of run_sense's quadratic penalty, or None without one."""
+    if hp_weight <= 0:
+        return None
+    if volume_tr_s is None:
+        with h5py.File(fn_ksp, "r") as f:
+            if "volume_tr" not in f.attrs:
+                raise ValueError(
+                    f"hp_weight needs the volume TR: pass volume_tr_s ({fn_ksp} has no "
+                    "'volume_tr' attr; it is scan_info.mat's volume_tr)"
+                )
+            volume_tr_s = float(f.attrs["volume_tr"])
+    hp = TemporalHighPass(Nt, volume_tr_s, hp_cutoff_hz, device)
+    print(
+        f"  temporal high-pass penalty: mu={hp_weight}, cutoff {hp_cutoff_hz} Hz, TR "
+        f"{volume_tr_s:.4f} s: {hp.keep} of {Nt} DCT components left unpenalized"
+    )
+    return hp
 
 
 def run_sense(
@@ -197,50 +244,10 @@ def run_sense(
     assert torch.all(counts == counts[0]), "Frames have differing sample counts"
 
     print("Building encoding operator...")
-    if fn_b0map is None:
-        A = build_sense(smaps_chw, omega)
-    else:
-        print(f"  Loading B0 field map from {fn_b0map} (L={L_b0}, nbins={nbins_b0})...")
-        with h5py.File(fn_b0map, "r") as f:  # files from before 2026-09-28 say b0map_hz
-            b0_key = "b0_map" if "b0_map" in f else "b0map_hz"
-        b0_map = torch.from_numpy(load_array(fn_b0map, b0_key).astype(np.float32)).to(device)
-        assert tuple(b0_map.shape) == (Nx, Ny, Nz), (
-            f"b0_map shape {tuple(b0_map.shape)} doesn't match k-space dims ({Nx},{Ny},{Nz})"
-        )
-        echo_times_yz = load_echo_times(fn_ksp, device)[..., frames]
-        if r2star_map is None:
-            A = build_sense_b0(smaps_chw, omega, b0_map, echo_times_yz, L=L_b0, nbins=nbins_b0)
-        else:
-            print(f"  R2* correction enabled (t_ref_s={t_ref_s * 1000:.3f} ms)...")
-            assert tuple(r2star_map.shape) == (Nx, Ny, Nz), (
-                f"r2star_map shape {tuple(r2star_map.shape)} != k-space grid ({Nx},{Ny},{Nz})"
-            )
-            A = build_sense_b0_r2star(
-                smaps_chw,
-                omega,
-                b0_map,
-                echo_times_yz,
-                r2star_map,
-                t_ref_s,
-                L=L_b0,
-                nbins=nbins_b0,
-            )
+    A = _build_operator(smaps_chw, omega, (Nx, Ny, Nz), frames, device, fn_ksp, fn_b0map,
+                        r2star_map, t_ref_s, L_b0, nbins_b0)
 
-    hp = None
-    if hp_weight > 0:
-        if volume_tr_s is None:
-            with h5py.File(fn_ksp, "r") as f:
-                if "volume_tr" not in f.attrs:
-                    raise ValueError(
-                        f"hp_weight needs the volume TR: pass volume_tr_s ({fn_ksp} has no "
-                        "'volume_tr' attr; it is scan_info.mat's volume_tr)"
-                    )
-                volume_tr_s = float(f.attrs["volume_tr"])
-        hp = TemporalHighPass(Nt, volume_tr_s, hp_cutoff_hz, device)
-        print(
-            f"  temporal high-pass penalty: mu={hp_weight}, cutoff {hp_cutoff_hz} Hz, TR "
-            f"{volume_tr_s:.4f} s: {hp.keep} of {Nt} DCT components left unpenalized"
-        )
+    hp = _make_highpass(hp_weight, hp_cutoff_hz, volume_tr_s, fn_ksp, Nt, device)
 
     if sigma1A is None and (reg != "none" or hp is not None):
         print("  sigma1A not supplied -- measuring via power iteration...")
@@ -273,10 +280,10 @@ def run_sense(
             f"  thermal-noise variance {noise_var:.4f} (recorded by preprocessing) "
             f"-- dividing k-space by {np.sqrt(noise_var):.4f}"
         )
-        if dc_chunk is None:
-            ksp = ksp / float(np.sqrt(noise_var))
-        else:
-            ksp.div_(float(np.sqrt(noise_var)))  # in place: a copy would not be page-locked
+        # In place: a copy would not be page-locked (chunked) and, dense, would
+        # briefly hold a second copy of the k-space series. The loaders return
+        # a fresh tensor, so nothing else sees the old scale.
+        ksp.div_(float(np.sqrt(noise_var)))
     if device.type == "cuda":
         torch.cuda.empty_cache()
         free_gb, total_gb = (x / 1e9 for x in torch.cuda.mem_get_info())
@@ -351,11 +358,6 @@ def _solve_cg(
         X=X.unsqueeze(-1),
         X_recon=X,
         dc_costs=residuals,
-        reg_costs=[],
-        restarts=[],
-        rel_changes=[],
-        L=float("nan"),
-        lambdas=[],
         runtime_s=runtime_s,
         meta=dict(niters=niters, tol=tol, iterations_run=len(residuals) - 1,
                   converged=bool(residuals[-1] < tol), **(temporal or {})),
@@ -563,9 +565,6 @@ def _solve_wavelet_tv(
         X_recon=X,
         dc_costs=dc_costs,
         reg_costs=reg_costs,
-        restarts=[],
-        rel_changes=[],
-        L=float("nan"),
         lambdas=[lamb_l1, lamb_tv],
         runtime_s=runtime_s,
         meta=dict(niters=niters, iterations_run=niters, wave=wave, levels=levels,
@@ -622,9 +621,6 @@ def _solve_wavelet_tv_joint(
         X_recon=X,
         dc_costs=[dc],
         reg_costs=[reg],
-        restarts=[],
-        rel_changes=[],
-        L=float("nan"),
         lambdas=[lamb_l1, lamb_tv, lamb_ttv],
         runtime_s=runtime_s,
         meta=dict(niters=niters, iterations_run=niters, wave=wave, levels=levels, joint=True,

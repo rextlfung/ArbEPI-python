@@ -200,7 +200,7 @@ def compare_recons(recons: Mapping[str, str], params: ExperimentParams, scales: 
 def main(argv=None) -> None:
     import argparse
 
-    from analyze.design import Condition
+    from analyze.design import params_from_args, parse_scale
 
     ap = argparse.ArgumentParser(prog="python -m analyze.compare",
                                  description=__doc__.split("\n\n")[0])
@@ -212,7 +212,7 @@ def main(argv=None) -> None:
     ap.add_argument("--n-discard", type=int, default=0)
     ap.add_argument("--drift-cutoff", type=float, default=128.0)
     ap.add_argument("--no-ar1", action="store_true")
-    ap.add_argument("--scales", nargs="+", default=["sum"],
+    ap.add_argument("--scales", nargs="+", default=["sum"], type=parse_scale,
                     help="'sum', 'all' or component indices, for every file")
     ap.add_argument("--mask", default="auto")
     ap.add_argument("--stat", choices=["t", "z"], default="t")
@@ -222,10 +222,7 @@ def main(argv=None) -> None:
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
     recons = dict(r.split("=", 1) for r in a.recon)
-    params = ExperimentParams(a.tr, [Condition("task", tuple(a.onsets), tuple(a.duration))],
-                              n_discard=a.n_discard, drift_cutoff_s=a.drift_cutoff or None)
-    scales = tuple(s if s in ("sum", "all") else int(s) for s in a.scales)
-    compare_recons(recons, params, scales=scales, brain=a.mask, out_dir=a.out, ar1=not a.no_ar1,
+    compare_recons(recons, params_from_args(a), scales=tuple(a.scales), brain=a.mask, out_dir=a.out, ar1=not a.no_ar1,
                    top_percent=a.top_percent, stat=a.stat, threshold=a.threshold,
                    peak_source=a.peak_source)
     print(f"wrote {a.out}")

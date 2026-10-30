@@ -110,10 +110,10 @@ def estimate_b0map(
         fn_in = os.path.join(tmp, 'gre.h5')
         fn_out = os.path.join(tmp, 'b0map.h5')
         with h5py.File(fn_in, 'w') as f:
-            f.create_dataset('ksp_gre_echoes', data=ksp_echoes.astype(np.complex64))
+            f.create_dataset('ksp_gre_echoes', data=ksp_echoes.astype(np.complex64, copy=False))
             f.attrs['TE_degre'] = np.asarray(te, dtype=np.float64)
             if smaps_degre is not None:
-                f.create_dataset('smaps_degre', data=smaps_degre.astype(np.complex64))
+                f.create_dataset('smaps_degre', data=smaps_degre.astype(np.complex64, copy=False))
                 f.create_dataset('emap_degre', data=emap_degre.astype(np.float32))
         subprocess.run(
             [

@@ -20,6 +20,8 @@ Every function takes the coil axis last unless stated otherwise.
 
 import numpy as np
 
+from preprocess.utils import fftc_x, ifftc_x
+
 
 def compute_whitening_matrix(noise: np.ndarray) -> np.ndarray:
     """[Ncoils, Ncoils] whitening matrix from a noise-only acquisition.
@@ -53,16 +55,6 @@ def select_nvcoils(evals: np.ndarray, energy_thresh: float) -> int:
     evals = np.clip(np.atleast_2d(evals), 0, None)
     kept = np.cumsum(evals.sum(axis=0))
     return int(np.searchsorted(kept / kept[-1], energy_thresh - 1e-12) + 1)
-
-
-def _ifftc_x(ksp: np.ndarray) -> np.ndarray:
-    """Centered, unitary inverse FFT along axis 0 (kx -> x)."""
-    return np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(ksp, axes=0), axis=0, norm='ortho'), axes=0)
-
-
-def _fftc_x(img: np.ndarray) -> np.ndarray:
-    """Centered, unitary forward FFT along axis 0 (x -> kx)."""
-    return np.fft.fftshift(np.fft.fft(np.fft.ifftshift(img, axes=0), axis=0, norm='ortho'), axes=0)
 
 
 def gcc_calibration(
@@ -150,8 +142,19 @@ def apply_gcc_kspace(ksp: np.ndarray, A: np.ndarray) -> np.ndarray:
     ksp: [Nx, ..., Nc] -> [Nx, ..., Nv]. Exact for SENSE whenever the sampling
     pattern does not depend on kx: compressed data then equal the forward model
     of maps compressed with apply_gcc_image."""
-    hyb = _ifftc_x(ksp)
-    return _fftc_x(np.einsum('xvc,x...c->x...v', A, hyb))
+    hyb = ifftc_x(ksp, norm='ortho')
+    return fftc_x(np.einsum('xvc,x...c->x...v', A, hyb), norm='ortho')
+
+
+def apply_gcc_kspace_sampled(ksp: np.ndarray, A: np.ndarray, sampled: np.ndarray) -> np.ndarray:
+    """apply_gcc_kspace of a zero-filled [Nx, Ny, Nz, Nc] frame whose only nonzero
+    (ky, kz) columns are `sampled` [Ny, Nz] (bool), computed on those columns alone.
+    Everything in apply_gcc_kspace is independent per (ky, kz) column -- kx is fully
+    sampled -- and zeros stay zero, so the result is the same as for the whole frame at
+    1/R of the work (R is 6-10 here)."""
+    out = np.zeros(ksp.shape[:-1] + (A.shape[1],), dtype=np.result_type(ksp.dtype, A.dtype))
+    out[:, sampled, :] = apply_gcc_kspace(ksp[:, sampled, :], A)
+    return out
 
 
 def apply_gcc_image(img: np.ndarray, A: np.ndarray) -> np.ndarray:

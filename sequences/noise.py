@@ -8,16 +8,14 @@ scan_info.mat from a prior generate_arbepi() run to match readout geometry.
 Outputs: <output_dir>/noise.seq (Pulseq format).
 """
 
-import copy
 import math
 import os
 
-import hdf5storage
 import pypulseq as pp
 
 from lib.make_excitation_pulse import make_excitation_pulse
-from lib.mask2epi import max_blip_steps
-from lib.readout_from_params import derated_sys, make_readout_grads_from_params
+from lib.readout_from_params import derated_sys, make_readout_grads_from_params, sequence_sys
+from lib.seq_io import finalize_sequence, load_blip_steps
 from params import Params
 
 
@@ -26,10 +24,7 @@ def generate_noise(params: Params, seqname: str = 'noise') -> pp.Sequence:
     sys = derated_sys(params)
 
     # Rebuild readout gradient objects matching the EPI sequence.
-    # scan_info.mat is written as MATLAB v7.3 (HDF5-based, see
-    # sequences/ArbEPI.py) — scipy.io.loadmat cannot read v7.3 at all.
-    schedules = hdf5storage.loadmat(os.path.join(params.output_dir, 'scan_info.mat'))['schedules']
-    max_ky_step, max_kz_step = max_blip_steps(schedules)
+    max_ky_step, max_kz_step = load_blip_steps(params)
     rg = make_readout_grads_from_params(max_ky_step, max_kz_step, params)
     rf, _, _ = make_excitation_pulse(params.fa, params.rf_dur, params.rf_tb, params.fov, sys, params.crt)
 
@@ -52,9 +47,7 @@ def generate_noise(params: Params, seqname: str = 'noise') -> pp.Sequence:
     # derate). This sequence has no gradients, so the choice has no
     # observable effect here, but keeping it consistent avoids a gratuitous
     # divergence for readers comparing the four sequence files.
-    sys_seq = copy.deepcopy(params.sys)
-    sys_seq.adc_dead_time = 0  # suppress warnings; no back-to-back ADC blocks
-    seq = pp.Sequence(system=sys_seq)
+    seq = pp.Sequence(system=sequence_sys(params))
     for _ in range(Nreps):
         seq.add_block(rg.adc, pp.make_label('TRID', 'SET', 1))
         if delay_block is not None:
@@ -64,19 +57,6 @@ def generate_noise(params: Params, seqname: str = 'noise') -> pp.Sequence:
     seq.add_block(rf, pp.make_label('TRID', 'SET', 2))
 
     # Check sequence timing
-    print('Validating sequence...')
-    ok, error_report = seq.check_timing()
-    if ok:
-        print('  Timing check PASSED.\n')
-    else:
-        print('  Timing check WARNINGS/ERRORS:')
-        print(error_report)
-
-    # Write Pulseq .seq file
-    seq.set_definition('FOV', params.fov)
-    seq.set_definition('Name', seqname)
-    fn_seq = os.path.join(params.output_dir, f'{seqname}.seq')
-    seq.write(fn_seq)
-    print(f'Sequence written to: {fn_seq}')
+    finalize_sequence(seq, params, seqname, params.fov)
 
     return seq

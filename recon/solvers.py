@@ -24,7 +24,7 @@ _EPS = torch.finfo(torch.float32).eps
 
 
 def _gr_restart(fgrad: torch.Tensor, ynew_yold: torch.Tensor, restart_cutoff: float) -> bool:
-    inner = -torch.vdot(fgrad.reshape(-1), ynew_yold.reshape(-1)).real.item()
+    inner = -_vdot(fgrad, ynew_yold)
     return inner <= restart_cutoff * fgrad.norm().item() * ynew_yold.norm().item()
 
 
@@ -168,7 +168,7 @@ def pogm_restart(
                     tnew = 1.0
                     sig = 1.0
                     is_restart = True
-                elif torch.vdot(Fgrad.reshape(-1), Fgradold.reshape(-1)).real.item() < 0:
+                elif _vdot(Fgrad, Fgradold) < 0:
                     sig = bsig * sig
                 Fcostold = Fcostnew
                 Fgradold, Fgrad = Fgrad, Fgradold
@@ -281,8 +281,8 @@ def cg(
         if reg_normal is not None:
             AHAP = AHAP + reg_normal(P)
         alpha = rsold / _vdot(P, AHAP)
-        X = X + alpha * P
-        R = R - alpha * AHAP
+        X.add_(P, alpha=alpha)
+        R.sub_(AHAP, alpha=alpha)
         rsnew = _vdot(R, R)
         rel_res = (rsnew / rs0) ** 0.5
         residuals.append(rel_res)
@@ -292,7 +292,7 @@ def cg(
         if rel_res < tol:
             break
         beta = rsnew / rsold
-        P = R + beta * P
+        P.mul_(beta).add_(R)
         rsold = rsnew
 
     if bar is not None:

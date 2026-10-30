@@ -192,6 +192,12 @@ class Params:
         go stale under dataclasses.replace(discard_duration=...)."""
         return round(self.discard_duration / self.volume_tr)
 
+    @property
+    def n_dummy_shots(self) -> int:
+        """The same warm-up in shots (to the nearest one), which is how
+        sequences/EPIcal.py plays it; derived for the same reason."""
+        return round(self.discard_duration / self.TR)
+
 
 def load_params(output_dir: str = 'output') -> Params:
     # =================================================================

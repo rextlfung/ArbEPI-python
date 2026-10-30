@@ -304,7 +304,7 @@ trajectory tests use the same factory) but sets all blip scale factors to
 correction. Its `gx_pre` must carry the same `rg.gx_pre_scale` factor as
 ArbEPI's (enforced by `test_arbepi_kxoe_matches_epical`). Its dummy
 (ADC-off) shots are not a parameter of their own: it plays
-`round(params.discard_duration / params.TR)` of them, the same warm-up
+`Params.n_dummy_shots` (`round(discard_duration / TR)`) of them, the same warm-up
 ArbEPI acquires and discards (`Params.Ndummyshots` was removed
 2026-10-06; it was that same value stored as a field, which went stale
 under `dataclasses.replace(discard_duration=...)`). Likewise `n_frames_discard`
@@ -1208,6 +1208,12 @@ below ~3e-4 of the largest, which is where beta sits on high-SNR data); 64 CPU
 threads. Not done: pruning the (ky, kz) transform to the sampled lines, a
 vectorized patch gather/scatter (~5% after the SVD fix), splitting SVD batches
 between GPU and CPU.
+
+Measured 2026-10-30 and left alone: a scratch-buffer `znew` in `pogm_restart` is bitwise
+identical but does not lower the GPU peak (17.22 GB either way in a toy POGM with a cheap
+prox), so that sum is not where the memory goes; the per-frame wavelet/TV loop is 3.6 ms
+per frame against 4.8 ms for plain SENSE (43% of a no-B0 evaluation) but about 4% with
+B0 at L = 16, so batching frames is not worth bitwise risk for production runs.
 
 **`recon/utils.py`'s `read_frames_cropped` (behind `load_array`) reads chunked HDF5 datasets
 chunk-by-chunk along the last axis, not via a single `d[()]` call.** Measured

@@ -12,7 +12,6 @@ are intentionally not ported here — see ge/ge_export.py and
 plot/plotting.py respectively.
 """
 
-import copy
 import os
 from concurrent.futures import ProcessPoolExecutor
 from typing import Tuple
@@ -22,12 +21,10 @@ import numpy as np
 import pypulseq as pp
 from tqdm import tqdm
 
-from lib.calc_te_tr_delays import calc_te_tr_delays
-from lib.make_excitation_pulse import make_excitation_from_params
-from lib.make_prephasers import make_prephasers
-from lib.make_spoilers import make_spoilers
+from lib.epi_shot import build_epi_shot_parts, new_spoil_rng
 from lib.mask2epi import mask2epi_laminar, mask2epi_radial, max_blip_steps
-from lib.readout_from_params import derated_sys, make_readout_grads_from_params
+from lib.readout_from_params import sequence_sys
+from lib.seq_io import finalize_sequence
 from lib.shot_start import add_fatsat_and_excitation, draw_spoil_scales
 from params import Params
 
@@ -59,8 +56,10 @@ def _compute_schedules(
     omegas[:, :, frame], a TSP-ish optimization over Nshots shots) --
     parallelized over a process pool once there's more than one frame to
     amortize its startup cost (measured ~21.7s of a 46.8s full ArbEPI
-    build serially; small/test builds with Nframes == 1 fall back to a
-    plain call with no pool overhead at all).
+    build serially on the old 240x240x45 protocol; on today's 90x60,
+    ETL 54, 10-shot frames mask2epi_radial takes ~0.13 s per frame;
+    small/test builds with Nframes == 1 fall back to a plain call with
+    no pool overhead at all).
 
     Returns 0-based schedules/parts (see lib/mask2epi.py)."""
     if trajectory not in _MASK2EPI:
@@ -105,21 +104,6 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     seq : the assembled pypulseq Sequence.
     """
     os.makedirs(params.output_dir, exist_ok=True)
-    # Derated system for all non-readout gradients (excitation, fat-sat,
-    # prephasers, spoilers), from the params.slew_derate knob: this
-    # sequence is slew-, not amplitude-, PNS-limited (measured on a full
-    # build of the earlier 240x240x45 GE_UHP protocol: capping max_grad
-    # alone barely moved peak PNS, 125.9% -> 124.6%, while a symmetric
-    # max_slew=100 T/m/s brought it to 84.3%; the asymmetric POPE readout
-    # ramps -- see lib/make_readout_grads.py's module docstring and
-    # params.py's ro_slew_rise/ro_slew_fall -- took it under the 80%
-    # normal-mode limit). See CLAUDE.md's PNS section.
-    sys = derated_sys(params)
-
-    # Excitation, and the fat-sat pulse (None for water excitation, see
-    # params.excitation)
-    rf, gz_ss, gz_ssr, rfsat = make_excitation_from_params(params, sys)
-
     # Generate EPI sampling schedule from mask
     schedules, parts = _compute_schedules(
         omegas, params.ETL, params.Nshots, params.epi_trajectory,
@@ -129,43 +113,10 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # Infer maximum ky and kz blip steps across all frames and shots
     max_ky_step, max_kz_step = max_blip_steps(schedules)
 
-    # Readout gradients and ADC event (asymmetric POPE ramps + blip slew
-    # from params -- see lib/readout_from_params.py)
-    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, params)
-    print(
-        f'Selected ADC dwell: {rg.adc.dwell * 1e6:.1f} us '
-        f'(fastest feasible for Nx={params.Nx}, fov_x={params.fov[0] * 1e3:.1f} mm -- '
-        'see lib/readout_from_params.py\'s find_min_feasible_dwell)'
-    )
-
-    # Prephasers and spoilers
-    gx_pre, gy_pre, gz_pre = make_prephasers(params.Nx, params.Ny, params.Nz, params.fov, sys, params.crt)
-
-    # Net kx moment left by gx_pre + the full readout train (gro1 + ETL
-    # echoes + gro2), measured once (fixed for the whole scan -- the kx
-    # trajectory never depends on the schedule, only on params.ETL's
-    # parity). gx_pre pre-winds to -S/2; a back-and-forth EPI readout of
-    # ETL echoes returns exactly to that same point for even ETL (net
-    # readout contribution 0) and to its mirror +S/2 for odd ETL (net
-    # readout contribution +S) -- confirmed by direct calculate_kspace()
-    # measurement, not derived by hand. Both cases reduce to this one
-    # closed form:
-    gx_residual = gx_pre.area * rg.gx_pre_scale * (1 if params.ETL % 2 == 0 else -1)
-    # Built at the maximum cycles/voxel value on every axis; the per-shot
-    # loop below scales each down (via pp.scale_grad) to that shot's
-    # randomly-drawn cycles/voxel, so these fixed trapezoids' duration
-    # (and therefore calc_te_tr_delays' min_te/min_tr) never changes
-    # shot-to-shot -- only the amplitude does.
-    gx_spoil, gy_spoil, gz_spoil = make_spoilers(
-        params.res, [params.spoil_cycles_max] * 3, sys, params.crt
-    )
-
-    # Delays to achieve desired TE and TR. echo_offset anchors the
-    # prescribed TE at the true kx = 0 crossing (see calc_te_tr_delays).
-    te_delay, tr_delay, min_te, min_tr = calc_te_tr_delays(
-        rf, rfsat, gz_ss, gz_ssr, gx_pre, gy_pre, gz_pre, rg.gro, gx_spoil, gy_spoil, gz_spoil,
-        params.ETL, params.TE, params.TR, sys, echo_offset=rg.echo_offset,
-    )
+    # The pulses, gradients and delays of a shot (shared with EPIcal, see lib/epi_shot.py)
+    (sys, rf, gz_ss, gz_ssr, rfsat, rg, gx_pre, gy_pre, gz_pre, gx_spoil, gy_spoil, gz_spoil,
+     gx_residual, te_delay, tr_delay, min_te, min_tr) = build_epi_shot_parts(
+        params, max_ky_step, max_kz_step)
 
     # Per-echo acquisition time (s since RF excitation), for a future
     # off-resonance-correction consumer (recon/) that needs per-sampled-
@@ -195,22 +146,26 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # the readout's POPE fall ramp deliberately runs above the derate
     # (params.ro_slew_fall, still within hardware limits, which
     # ge/check.py verifies against params.spec).
-    sys_seq = copy.deepcopy(params.sys)
-    sys_seq.adc_dead_time = 0  # suppress warnings; no back-to-back ADC blocks
+    sys_seq = sequence_sys(params)
     seq = pp.Sequence(system=sys_seq)
 
     rf_count = 1
     Ny, Nz = params.Ny, params.Nz
-    # Deliberately unseeded (fresh entropy every run/process, independent of
-    # params.seed): per-shot spoiler cycles/voxel draws only need to break a
-    # residual coherence pathway within this sequence's own repeated TR
-    # structure (see params.py's spoil_cycles_min/max comment for why this
-    # varies rather than staying constant), not to be reproducible run-to-run
-    # like the sampling mask (params.seed) is -- unlike the mask, no test or
-    # downstream consumer depends on a specific spoiler draw sequence, and
-    # reproducibility here would only make it easier to accidentally rely on
-    # one (docs/review-findings.md item 176).
-    spoil_rng = np.random.default_rng()
+    spoil_rng = new_spoil_rng()
+
+    # scale_grad deep-copies, and the readout/blip scalings repeat across
+    # ~ Nframes * Nshots * ETL echoes while taking only a few dozen distinct
+    # values (blip steps are bounded by max_ky_step/max_kz_step): build each
+    # once, on first use.
+    gro_signed = {s: pp.scale_grad(rg.gro, s) for s in (1, -1)}
+    gx_pre_scaled = pp.scale_grad(gx_pre, rg.gx_pre_scale)
+    blip_cache = {}
+
+    def _blip(axis, step):
+        key = (axis, int(step))
+        if key not in blip_cache:
+            blip_cache[key] = pp.scale_grad(rg.gy_blip if axis == 'y' else rg.gz_blip, key[1])
+        return blip_cache[key]
 
     for frame in tqdm(range(params.Nframes), desc='Writing frames'):
 
@@ -237,16 +192,16 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             # about kx = 0 and reach +-kmax -- see ReadoutGrads.gx_pre_scale.
             gy_pre_tmp = pp.scale_grad(gy_pre, (y_locs[0] - Ny / 2) / (-Ny / 2))
             gz_pre_tmp = pp.scale_grad(gz_pre, (z_locs[0] - Nz / 2) / (-Nz / 2))
-            seq.add_block(pp.scale_grad(gx_pre, rg.gx_pre_scale), gy_pre_tmp, gz_pre_tmp)
+            seq.add_block(gx_pre_scaled, gy_pre_tmp, gz_pre_tmp)
 
             # EPI readout — zip through k-space with alternating readout polarity
             seq.add_block(rg.gro1)
             for echo in range(len(y_locs) - 1):
                 seq.add_block(
                     rg.adc,
-                    pp.scale_grad(rg.gro, (-1) ** echo),
-                    pp.scale_grad(rg.gy_blip, y_locs[echo + 1] - y_locs[echo]),
-                    pp.scale_grad(rg.gz_blip, z_locs[echo + 1] - z_locs[echo]),
+                    gro_signed[(-1) ** echo],
+                    _blip('y', y_locs[echo + 1] - y_locs[echo]),
+                    _blip('z', z_locs[echo + 1] - z_locs[echo]),
                 )
             # Last echo line (no blip needed). Sign is (-1)**(ETL-1): this
             # equals the MATLAB original's final `echo` loop-variable value
@@ -290,14 +245,6 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             # TR padding delay
             if params.TR > min_tr:
                 seq.add_block(pp.make_delay(tr_delay))
-
-    # Check sequence timing
-    ok, error_report = seq.check_timing()
-    if ok:
-        print('Timing check passed successfully')
-    else:
-        print('Timing check failed! Error listing follows:')
-        print(error_report)
 
     # Odd/even echo k-space trajectories for ghost correction. This used to
     # be computed by EPIcal.py from its own separately-built sequence, but
@@ -397,8 +344,6 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     )
 
     # Write Pulseq .seq file
-    seq.set_definition('FOV', params.fov)
-    seq.set_definition('Name', seqname)
-    seq.write(os.path.join(params.output_dir, f'{seqname}.seq'))
+    finalize_sequence(seq, params, seqname, params.fov)
 
     return seq

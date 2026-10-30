@@ -37,12 +37,14 @@ class GLMResult:
     contrast_beta: NDArray  # (V,) c' beta
 
 
-def whiten(a: NDArray, rho: float, axis: int = -1) -> NDArray:
-    """The AR(1) prewhitening filter along `axis`."""
+def whiten(a: NDArray, rho: float, axis: int = -1, starts=(0,)) -> NDArray:
+    """The AR(1) prewhitening filter along `axis`, restarted (the Prais-Winsten
+    first-sample scaling) at each index of `starts`: more than the first frame
+    only for a series made of separate stretches of frames."""
     a = np.moveaxis(np.asarray(a), axis, -1)
     out = np.empty_like(a, dtype=np.result_type(a.dtype, np.float32))
-    out[..., 0] = np.sqrt(1 - rho**2) * a[..., 0]
     out[..., 1:] = a[..., 1:] - rho * a[..., :-1]
+    out[..., list(starts)] = np.sqrt(1 - rho**2) * a[..., list(starts)]
     return np.moveaxis(out, -1, axis)
 
 
@@ -60,11 +62,6 @@ def t_to_p(t: NDArray, dof: float, two_tailed: bool = True) -> NDArray:
     return 2 * p if two_tailed else p
 
 
-def z_to_p(z: NDArray, two_tailed: bool = True) -> NDArray:
-    p = stats.norm.sf(np.abs(np.asarray(z, dtype=np.float64)))
-    return 2 * p if two_tailed else p
-
-
 def t_threshold(dof: float, p: float = 0.001, two_sided: bool = True) -> float:
     """The |t| of significance p on `dof` degrees of freedom."""
     return float(stats.t.ppf(1 - (p / 2 if two_sided else p), dof))
@@ -77,40 +74,42 @@ def fdr_threshold(p: NDArray, q: float = 0.05) -> float:
     return float(p[ok[-1]]) if ok.size else 0.0
 
 
-def bonferroni_threshold(n: int, alpha: float = 0.05) -> float:
-    return alpha / n
-
-
 def _blocks(n: int):
     for s in range(0, n, _CHUNK):
         yield slice(s, min(s + _CHUNK, n))
 
 
-def _estimate_rho(Y: NDArray, X: NDArray, rho: float) -> float:
+def _estimate_rho(Y: NDArray, X: NDArray, rho: float, starts=(0,)) -> float:
     """Pooled lag-1 autocorrelation of the residuals of the GLS fit at `rho`,
     in the original (unwhitened) frame, each voxel normalised to unit variance
-    so that bright voxels do not set it."""
-    Xw = whiten(X, rho, axis=0)
+    so that bright voxels do not set it. The pair (i-1, i) is no lag-1 pair at
+    a restart `i` in `starts`."""
+    lag_ok = np.ones(X.shape[0] - 1, bool)
+    lag_ok[np.asarray(starts[1:], dtype=int) - 1] = False
+    Xw = whiten(X, rho, axis=0, starts=starts)
     pinv = np.linalg.pinv(Xw)
     num = den = 0.0
     for sl in _blocks(Y.shape[0]):
         y = Y[sl].astype(np.float64)
-        beta = whiten(y, rho) @ pinv.T
+        beta = whiten(y, rho, starts=starts) @ pinv.T
         r = y - beta @ X.T
         r -= r.mean(axis=1, keepdims=True)
         sd = np.sqrt((r**2).mean(axis=1, keepdims=True))
         r = r / np.maximum(sd, 1e-30)
-        num += float((r[:, 1:] * r[:, :-1]).sum())
+        lagged = r[:, 1:] * r[:, :-1]
+        num += float((lagged if lag_ok.all() else lagged[:, lag_ok]).sum())
         den += float((r**2).sum())
     return num / den
 
 
 def fit_glm(Y: NDArray, X: NDArray, contrast: NDArray, ar1: bool = True,
-            max_iter: int = 5) -> GLMResult:
+            max_iter: int = 5, starts=(0,)) -> GLMResult:
     """GLM of every row of Y (V, nt) on X (nt, P); t-score of `contrast` (P,).
 
     ar1: prewhiten with a pooled AR(1) coefficient (iterated until it moves by
-    less than 1e-3, at most max_iter times)."""
+    less than 1e-3, at most max_iter times). starts: the frames that begin a
+    new stretch when the nt frames are not all adjacent in time (a subset of
+    cycles); the AR(1) filter restarts at each."""
     Y = np.asarray(Y)
     X = np.asarray(X, dtype=np.float64)
     c = np.asarray(contrast, dtype=np.float64)
@@ -126,12 +125,12 @@ def fit_glm(Y: NDArray, X: NDArray, contrast: NDArray, ar1: bool = True,
     rho = 0.0
     if ar1:
         for _ in range(max_iter):
-            new = _estimate_rho(Y, X, rho)
+            new = _estimate_rho(Y, X, rho, starts)
             done = abs(new - rho) < 1e-3
             rho = new
             if done:
                 break
-    Xw = whiten(X, rho, axis=0) if rho else X
+    Xw = whiten(X, rho, axis=0, starts=starts) if rho else X
     XtXi = np.linalg.pinv(Xw.T @ Xw)
     var_c = float(c @ XtXi @ c)
     dof = nt - rank
@@ -142,7 +141,7 @@ def fit_glm(Y: NDArray, X: NDArray, contrast: NDArray, ar1: bool = True,
     for sl in _blocks(V):
         y = Y[sl].astype(np.float64)
         if rho:
-            y = whiten(y, rho)
+            y = whiten(y, rho, starts=starts)
         b = y @ Xw @ XtXi
         r = y - b @ Xw.T
         beta[sl] = b

@@ -52,6 +52,7 @@ from preprocess.coils import (
     align_gcc,
     apply_gcc_image,
     apply_gcc_kspace,
+    apply_gcc_kspace_sampled,
     apply_whitening,
     compute_whitening_matrix,
     gcc_calibration,
@@ -183,9 +184,7 @@ def compute_oephase(
     applied in (docs/review-findings.md item 251).
     """
     oephase_data = rampsampepi2cart(ksp_cal, kxo, kxe, nx, fov_x_cm, grid_method)
-    oephase_data = np.fft.fftshift(
-        np.fft.ifft(np.fft.ifftshift(oephase_data, axes=0), n=nx, axis=0), axes=0
-    )
+    oephase_data = utils.ifftc_x(oephase_data, n=nx)
     return getoephase(np.mean(oephase_data, axis=2))  # average over cal shots
 
 
@@ -395,19 +394,24 @@ def resume_start_frame(mf: h5py.File, epi_reader, shots_per_frame: int) -> int:
     return start_frame
 
 
-def _iy_iz(schedules: np.ndarray, frame: int) -> tuple[np.ndarray, np.ndarray]:
-    """Flattened (ky, kz) indices of one frame -- shared by _build_omegas and
-    _build_echo_times so the two can't drift apart (review item 58)."""
-    return schedules[frame, :, :, 0].ravel(), schedules[frame, :, :, 1].ravel()
+def _require_multi_echo(te: np.ndarray | None, what: str) -> None:
+    if te is None or te.size < 2:
+        raise ValueError(f'{what} needs a multi-echo deGRE (TE_degre in scan_info.mat)')
+
+
+def _iy_iz(schedules: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(ky, kz, frame) index arrays, each [Nframes, Nshots * ETL], of every
+    acquisition -- shared by _build_omegas and _build_echo_times so the two
+    can't drift apart (review item 58)."""
+    Nframes = schedules.shape[0]
+    flat = schedules.reshape(Nframes, -1, schedules.shape[-1])
+    return flat[..., 0], flat[..., 1], np.arange(Nframes)[:, None]
 
 
 def _build_omegas(schedules: np.ndarray, Ny: int, Nz: int) -> np.ndarray:
     """[Ny, Nz, Nframes] bool sampling mask from the 0-based schedule."""
-    Nframes = schedules.shape[0]
-    omegas = np.zeros((Ny, Nz, Nframes), dtype=bool)
-    for frame in range(Nframes):
-        iy, iz = _iy_iz(schedules, frame)
-        omegas[iy, iz, frame] = True
+    omegas = np.zeros((Ny, Nz, schedules.shape[0]), dtype=bool)
+    omegas[_iy_iz(schedules)] = True
     return omegas
 
 
@@ -418,9 +422,7 @@ def _build_echo_times(
     (ky, kz); 0 where unsampled (check 'omegas')."""
     Nframes = schedules.shape[0]
     t = np.zeros((Ny, Nz, Nframes), dtype=np.float64)
-    for frame in range(Nframes):
-        iy, iz = _iy_iz(schedules, frame)
-        t[iy, iz, frame] = echo_times[frame].ravel()
+    t[_iy_iz(schedules)] = echo_times.reshape(Nframes, -1)
     return t
 
 
@@ -594,7 +596,12 @@ def load_gre(cfg: PreprocessConfig, sp: utils.SeqParams, W: np.ndarray) -> np.nd
     ksp = unflatten_gre_echoes(
         utils.read_archive(cfg.fn_gre), sp.Ny_degre, sp.Nz_degre, sp.n_echoes_degre
     )
-    return apply_whitening(ksp, W).astype(np.complex64)
+    # Per echo: the complex128 whitening matrix upcasts its input, and a
+    # 20-echo volume would need ~5 GB at once.
+    return np.stack(
+        [apply_whitening(ksp[..., e, :], W).astype(np.complex64) for e in range(ksp.shape[3])],
+        axis=3,
+    )
 
 
 def coil_compression(
@@ -697,8 +704,7 @@ def estimate_maps(
 
     mask_degre = None
     if cfg.estimate_b0:
-        if te is None or te.size < 2:
-            raise ValueError('estimate_b0 needs a multi-echo deGRE (TE_degre in scan_info.mat)')
+        _require_multi_echo(te, 'estimate_b0')
         print('B0 field map (MRIFieldmaps.jl)...')
         r = estimate_b0map(
             ksp_gre, te, smaps_degre, emap_degre, crop=cfg.crop,
@@ -716,8 +722,7 @@ def estimate_maps(
         })
 
     if cfg.estimate_r2star:
-        if te is None or te.size < 2:
-            raise ValueError('estimate_r2star needs a multi-echo deGRE (TE_degre in scan_info.mat)')
+        _require_multi_echo(te, 'estimate_r2star')
         if mask_degre is None:
             mask_degre = fit_mask(img_fit[..., 0], cfg.b0map_mask_thresh, emap_degre, cfg.crop,
                                   cfg.b0map_min_component)
@@ -790,7 +795,7 @@ def write_output(
             ys, zs = region
             f.create_dataset(
                 'ksp_calib', shape=(Nx, ys.stop - ys.start, zs.stop - zs.start, Nc_out, Nframes),
-                dtype=np.complex64,
+                dtype=np.complex64, chunks=(Nx, ys.stop - ys.start, zs.stop - zs.start, Nc_out, 1),
             )
             f['ksp_calib'].attrs['calib_y_range'] = (ys.start, ys.stop)
             f['ksp_calib'].attrs['calib_z_range'] = (zs.start, zs.stop)
@@ -803,7 +808,9 @@ def write_output(
                 for frame in range(Nframes):
                     ksp = d[..., frame]
                     if GCC is not None:
-                        ksp = compress_kspace(ksp, GCC).astype(np.complex64)
+                        # only the sampled (ky, kz) columns are nonzero: compress those
+                        ksp = apply_gcc_kspace_sampled(ksp, GCC, omegas[..., frame])
+                        ksp = ksp.astype(np.complex64)
                         f['ksp_epi_zf'][..., frame] = ksp
                     if region is not None:
                         f['ksp_calib'][..., frame] = ksp[:, region[0], region[1], :]

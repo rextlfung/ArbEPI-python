@@ -30,6 +30,7 @@ from scipy import ndimage
 
 from analyze.design import dct_matrix
 from analyze.glm import fit_glm
+from analyze.io import read_frames
 
 
 def object_masks(x0_abs: np.ndarray, thresh: float = 0.4):
@@ -42,10 +43,6 @@ def object_masks(x0_abs: np.ndarray, thresh: float = 0.4):
     sizes[0] = 0
     obj = lab == np.argmax(sizes)
     return obj, ndimage.binary_erosion(obj, iterations=2)
-
-
-def _dct(nt: int) -> np.ndarray:
-    return dct_matrix(nt)
 
 
 def _glm(s: np.ndarray, w: np.ndarray):
@@ -71,7 +68,7 @@ def score(fn_truth: str, fn_recon: str, cutoff_hz: float = 0.15,
         amps = np.broadcast_to(np.asarray(g.attrs.get("amps", amp), float), (len(rois),))
     obj, interior = object_masks(x0, object_thresh)
     with h5py.File(fn_recon, "r") as f:
-        X = np.abs(f["X_recon"][()]).astype(np.float64)
+        X = np.abs(read_frames(f["X_recon"], slice(None))).astype(np.float64)
     nt = X.shape[-1]
     T = np.repeat(x0[..., None], nt, -1)
     for m, w, a in zip(rois, waves, amps):
@@ -88,7 +85,7 @@ def score(fn_truth: str, fn_recon: str, cutoff_hz: float = 0.15,
     near_roi = ndimage.binary_dilation(rois.any(0), iterations=3)
     bg = interior & ~near_roi
     R = (M[bg] - T[bg]) / x0[bg][:, None]  # relative residual, (V, nt)
-    Rc = R @ _dct(nt).T
+    Rc = R @ dct_matrix(nt).T
     keep = int((np.arange(nt) / (2 * nt * tr) <= cutoff_hz).sum())
     out["fluct_pct"] = 100 * float(np.median(R.std(1)))
     out["fluct_inband_pct"] = 100 * float(np.median(np.sqrt((Rc[:, 1:keep] ** 2).sum(1) / nt)))

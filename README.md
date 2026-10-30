@@ -193,6 +193,8 @@ lib/
                               (mask2epi_laminar / mask2epi_radial, selected by params.epi_trajectory)
   trap4ge.py                 GE-raster trapezoid rounding (from ../PulCeq)
   shot_start.py              Per-shot spoiler draws + fat-sat/excitation block shared by ArbEPI and EPIcal
+  epi_shot.py                The pulses, gradients and delays of one EPI shot, built once for ArbEPI and EPIcal
+  seq_io.py                  Every generator's epilogue (timing check, .seq write) and scan_info.mat access
   (RF/gradient helpers, TE/TR delay calculation)
 sequences/                  ArbEPI, EPIcal, deGRE, noise sequence assembly
   meGRE.py                       20-echo monopolar GRE prototype (B0 + R2* + coil maps); `main.py --gre megre`

@@ -5,6 +5,7 @@ from preprocess.coils import (
     align_gcc,
     apply_gcc_image,
     apply_gcc_kspace,
+    apply_gcc_kspace_sampled,
     apply_whitening,
     compute_whitening_matrix,
     gcc_calibration,
@@ -187,3 +188,18 @@ def test_gcc_calibration_evaluates_a_larger_source_fov_at_the_target_x_positions
     blk = ksp[m, 1:5, 1:5].reshape(-1, nc)
     expected = np.exp(2j * np.pi * (5 / fov_src) * x)[:, None, None] * blk[None] / np.sqrt(nx)
     np.testing.assert_allclose(calib, expected, atol=1e-12)
+
+
+def test_gcc_on_the_sampled_columns_equals_gcc_of_the_zero_filled_frame():
+    """Stage B compresses only the (ky, kz) columns that were acquired (kx is fully
+    sampled, so the columns are independent and zeros stay zero): the same output,
+    bit for bit, at 1/R of the work."""
+    rng = np.random.default_rng(0)
+    nx, ny, nz, nc, nv = 16, 12, 10, 6, 3
+    A = _crandn(rng, nx, nv, nc)
+    sampled = rng.random((ny, nz)) < 0.2
+    ksp = np.zeros((nx, ny, nz, nc), dtype=np.complex64)
+    ksp[:, sampled, :] = _crandn(rng, nx, int(sampled.sum()), nc)
+    np.testing.assert_array_equal(
+        apply_gcc_kspace_sampled(ksp, A, sampled), apply_gcc_kspace(ksp, A)
+    )

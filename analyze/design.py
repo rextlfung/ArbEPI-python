@@ -141,3 +141,16 @@ def contrast_vector(params: ExperimentParams, names: list[str]) -> NDArray[np.fl
     w = np.zeros(len(names))
     w[:n] = (1.0,) + (0.0,) * (n - 1) if params.contrast is None else params.contrast
     return w
+
+
+def parse_scale(s: str):
+    """A --scales value: 'sum', 'all' or a component index."""
+    return s if s in ("sum", "all") else int(s)
+
+
+def params_from_args(a) -> ExperimentParams:
+    """The one-condition ExperimentParams of the command-line interfaces
+    (analyze, analyze.compare): a.tr, a.onsets, a.duration, a.n_discard and
+    a.drift_cutoff (0 -> a linear trend instead of DCT drift terms)."""
+    return ExperimentParams(a.tr, [Condition("task", tuple(a.onsets), tuple(a.duration))],
+                            n_discard=a.n_discard, drift_cutoff_s=a.drift_cutoff or None)

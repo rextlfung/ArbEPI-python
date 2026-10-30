@@ -11,7 +11,6 @@ mean of the motion-corrected EPI with FSL `flirt` and moving the mask with that 
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import tempfile
 
@@ -19,7 +18,7 @@ import h5py
 import numpy as np
 from numpy.typing import NDArray
 
-from analyze.mask import brain_mask
+from analyze.mask import brain_mask, find_fsl_tool, fsl_affine, fsl_env
 
 
 def load_gre(preprocessed: str, echo: int = 0):
@@ -38,14 +37,8 @@ def gre_brain_mask(preprocessed: str, method: str = "auto", frac: float = 0.5, e
 
 
 def find_flirt() -> str | None:
-    """Path of FSL's flirt: PATH, then $FSLDIR/bin, then ~/fsl/bin."""
-    exe = shutil.which("flirt")
-    if exe:
-        return exe
-    for d in (os.environ.get("FSLDIR"), os.path.expanduser("~/fsl")):
-        if d and os.access(os.path.join(d, "bin", "flirt"), os.X_OK):
-            return os.path.join(d, "bin", "flirt")
-    return None
+    """Path of FSL's flirt (see motion.find_fsl_tool)."""
+    return find_fsl_tool("flirt")
 
 
 def register_mask(gre: NDArray, mask: NDArray, epi_mean: NDArray, voxel_size_mm,
@@ -60,18 +53,16 @@ def register_mask(gre: NDArray, mask: NDArray, epi_mean: NDArray, voxel_size_mm,
     flirt = find_flirt()
     if flirt is None:
         raise RuntimeError("register_mask needs FSL's flirt (PATH, $FSLDIR/bin or ~/fsl/bin)")
-    # det < 0: FSL works in voxel * size coordinates with no x flip (as postprocess/motion.py)
-    affine = np.diag([-voxel_size_mm[0], voxel_size_mm[1], voxel_size_mm[2], 1.0])
-    env = dict(os.environ, FSLOUTPUTTYPE="NIFTI_GZ")
-    env.setdefault("FSLDIR", os.path.dirname(os.path.dirname(flirt)))
+    affine = fsl_affine(voxel_size_mm)
+    env = fsl_env(flirt)
     with tempfile.TemporaryDirectory() as d:
         p = lambda n: os.path.join(d, n)  # noqa: E731
         for name, vol in (("gre", gre * mask), ("epi", epi_mean), ("mask", mask)):
             nib.save(nib.Nifti1Image(np.asarray(vol, np.float32), affine), p(name + ".nii.gz"))
-        r = f"{-max_rot_deg:g} {max_rot_deg:g}"
+        rng = [f"{-max_rot_deg:g}", f"{max_rot_deg:g}"]
         subprocess.run([flirt, "-in", p("gre"), "-ref", p("epi"), "-omat", p("m.mat"), "-out", p("o"),
-                        "-dof", "6", "-cost", "normmi", "-searchrx", *r.split(), "-searchry", *r.split(),
-                        "-searchrz", *r.split()], check=True, env=env, capture_output=True)
+                        "-dof", "6", "-cost", "normmi", "-searchrx", *rng, "-searchry", *rng,
+                        "-searchrz", *rng], check=True, env=env, capture_output=True)
         subprocess.run([flirt, "-in", p("mask"), "-ref", p("epi"), "-applyxfm", "-init", p("m.mat"),
                         "-interp", "nearestneighbour", "-out", p("mo")], check=True, env=env, capture_output=True)
         reg = np.asanyarray(nib.load(p("mo.nii.gz")).dataobj) > 0

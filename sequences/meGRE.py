@@ -42,17 +42,17 @@ any `n_echoes_degre`.
 """
 
 import argparse
-import copy
 import math
-import os
 from dataclasses import dataclass
 
-import hdf5storage
 import numpy as np
 import pypulseq as pp
 from tqdm import tqdm
 
-from lib.trap4ge import trap4ge
+from lib.make_prephasers import prephase_rewinders, stretched_prephasers
+from lib.readout_from_params import degre_sys
+from lib.seq_io import finalize_sequence, patch_scan_info
+from lib.trap4ge import ceil_to_raster, trap4ge
 from params import Params, load_params
 
 # T2* used for the R2* precision figure of merit in `precision_table`: gray
@@ -111,14 +111,13 @@ def design_megre(
         if abs(n * r - f) > 1e-9:
             raise ValueError(f'fov {f} m is not a whole number of {r} m voxels')
     Nx, Ny, Nz = N
-    sys = copy.deepcopy(params.sys)
-    sys.max_slew = params.slew_degre * sys.gamma
+    sys = degre_sys(params)
     crt = params.crt
     raster = sys.grad_raster_time
     T1 = -params.TR_degre / math.log(math.cos(math.radians(params.alpha_degre)))  # params.py's T1
 
     def _up(t):
-        return math.ceil(t / crt - 1e-9) * crt
+        return ceil_to_raster(t, crt)
 
     T_esp = round((echo_spacing or 1 / params.fat_offres_freq) / raster) * raster
     dk = [1 / f for f in fov]
@@ -192,47 +191,26 @@ def design_megre(
     gx_full_area = g_read * (t_read + t_ramp)  # trapezoid without the dead-time tail
     pre_areas = {'x': -gx_full_area / 2, 'y': Ny * dk[1] / 2, 'z': Nz * dk[2] / 2}
 
-    def _pre(duration):
-        return tuple(
-            trap4ge(pp.make_trapezoid(ax, system=sys, area=a, duration=duration), crt, sys)
-            for ax, a in pre_areas.items()
-        )
-
     te_base = (
         max(pp.calc_duration(rf), pp.calc_duration(gz_ss)) - (rf.delay + pp.calc_rf_center(rf)[0])
         + pp.calc_duration(gz_ssr) + adc.delay + t_read / 2
     )
-    t_pre_min = _up(max(
-        pp.calc_duration(pp.make_trapezoid(ax, system=sys, area=a))
-        for ax, a in pre_areas.items()
-    ))
-    t_pre = max(t_pre_min, math.floor((T_esp - te_base) / crt + 1e-9) * crt)
-    gx_pre, gy_pre, gz_pre = _pre(t_pre)
-
-    def _pre_dur():
-        return max(pp.calc_duration(g) for g in (gx_pre, gy_pre, gz_pre))
-
-    while t_pre > t_pre_min and te_base + _pre_dur() > T_esp + 1e-9:
-        t_pre -= crt
-        gx_pre, gy_pre, gz_pre = _pre(t_pre)
-    te_min = te_base + _pre_dur()
+    gx_pre, gy_pre, gz_pre, t_pre_block = stretched_prephasers(pre_areas, te_base, T_esp, sys, crt)
+    te_min = te_base + t_pre_block
     if te_min > T_esp + 1e-9:
         raise ValueError(
             f'TE1 minimum {te_min * 1e3:.3f} ms exceeds echo spacing {T_esp * 1e3:.3f} ms'
         )
-    delay_te = math.ceil((T_esp - te_min) / raster - 1e-9) * raster
+    delay_te = ceil_to_raster(T_esp - te_min, raster)
     te1 = te_min + delay_te
     TE = te1 + T_esp * np.arange(n_echoes)
 
-    gy_rew, gz_rew = (
-        trap4ge(pp.make_trapezoid(ax, system=sys, area=-pre_areas[ax], duration=t_spoil), crt, sys)
-        for ax in ('y', 'z')
-    )
+    gy_rew, gz_rew = prephase_rewinders(pre_areas, t_spoil, sys, crt)
 
     # TR: RF block + ssr + TE1 padding + prephasers + train + spoiler.
     tr_min = (
         max(pp.calc_duration(rf), pp.calc_duration(gz_ss)) + pp.calc_duration(gz_ssr)
-        + delay_te + _pre_dur() + n_echoes * t_gx + (n_echoes - 1) * (T_esp - t_gx)
+        + delay_te + t_pre_block + n_echoes * t_gx + (n_echoes - 1) * (T_esp - t_gx)
         + max(t_spoil, pp.calc_duration(gy_rew), pp.calc_duration(gz_rew))
     )
     tr = _up(tr_min) if TR is None else TR
@@ -311,14 +289,8 @@ def generate_megre(
         seq.add_block(b['gx_spoil'], pp.scale_grad(b['gy_rew'], y), pp.scale_grad(b['gz_rew'], z))
         if b['delay_tr'] > 0:
             seq.add_block(pp.make_delay(b['delay_tr']))
-    ok, report = seq.check_timing()
-    if verbose:
-        print('Timing check passed' if ok else f'Timing check FAILED:\n{report}')
-    seq.set_definition('FOV', list(d.fov))
-    seq.set_definition('Name', seqname)
+    finalize_sequence(seq, params, seqname, list(d.fov), write=write, verbose=verbose)
     if write:
-        os.makedirs(params.output_dir, exist_ok=True)
-        seq.write(os.path.join(params.output_dir, f'{seqname}.seq'))
         _patch_scan_info(params, d)
     return seq, d
 
@@ -326,21 +298,16 @@ def generate_megre(
 def _patch_scan_info(params: Params, d: MEGREDesign) -> None:
     """Overwrite scan_info.mat's *_degre keys with this scan's (the realized
     TE/TR/flip, not the prescribed ones). Like sequences/deGRE.py, skipped
-    (not an error) when generate_arbepi has not created the file yet.
-    hdf5storage.savemat updates just these keys in place."""
-    fn = os.path.join(params.output_dir, 'scan_info.mat')
-    if not os.path.exists(fn):
-        print(f"  '{fn}' not found -- run generate_arbepi first if preprocess/ needs it.")
-        return
-    hdf5storage.savemat(
-        fn,
+    (not an error) when generate_arbepi has not created the file yet."""
+    patch_scan_info(
+        params,
         {
             'Nx_degre': d.N[0], 'Ny_degre': d.N[1], 'Nz_degre': d.N[2],
             'fov_degre': np.asarray(d.fov), 'n_echoes_degre': d.n_echoes,
             'TE_degre': d.TE, 'TR_degre': d.TR, 'alpha_degre': d.flip_deg,
             'dwell_degre': d.dwell,
         },
-        fmt='7.3',
+        'run generate_arbepi first if preprocess/ needs it.',
     )
 
 

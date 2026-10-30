@@ -25,6 +25,32 @@ def mean_image(series: NDArray) -> NDArray[np.float32]:
     return np.asarray(series, dtype=np.float32).mean(axis=-1)
 
 
+def find_fsl_tool(name: str) -> str | None:
+    """Path of an FSL executable: PATH, then $FSLDIR/bin, then ~/fsl/bin."""
+    exe = shutil.which(name)
+    if exe:
+        return exe
+    for d in (os.environ.get("FSLDIR"), os.path.expanduser("~/fsl")):
+        if d and os.access(os.path.join(d, "bin", name), os.X_OK):
+            return os.path.join(d, "bin", name)
+    return None
+
+
+def fsl_env(exe: str | None = None) -> dict:
+    """Environment for an FSL subprocess: NIfTI-gz output, and FSLDIR taken from
+    `exe` (<FSLDIR>/bin/<tool>) when it is not already set."""
+    env = dict(os.environ, FSLOUTPUTTYPE="NIFTI_GZ")
+    if exe:
+        env.setdefault("FSLDIR", os.path.dirname(os.path.dirname(exe)))
+    return env
+
+
+def fsl_affine(voxel_size_mm) -> NDArray:
+    """Diagonal affine for an image FSL reads: det < 0 makes FSL work in
+    voxel * size coordinates with no x flip, which is our frame."""
+    return np.diag([-voxel_size_mm[0], voxel_size_mm[1], voxel_size_mm[2], 1.0])
+
+
 def _nifti(vol: NDArray, voxel_size_mm: tuple[float, float, float]):
     import nibabel as nib
 
@@ -37,7 +63,7 @@ def bet_fsl(mean_vol: NDArray, voxel_size_mm, frac: float = 0.5) -> NDArray[np.b
 
     with tempfile.TemporaryDirectory() as d:
         nib.save(_nifti(mean_vol, voxel_size_mm), os.path.join(d, "mean.nii.gz"))
-        env = dict(os.environ, FSLOUTPUTTYPE="NIFTI_GZ")
+        env = fsl_env()
         subprocess.run(["bet", os.path.join(d, "mean.nii.gz"), os.path.join(d, "brain"),
                         "-m", "-f", str(frac)], check=True, env=env, capture_output=True)
         return np.asanyarray(nib.load(os.path.join(d, "brain_mask.nii.gz")).dataobj) > 0

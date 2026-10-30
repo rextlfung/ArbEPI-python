@@ -31,9 +31,9 @@ imaginary parts, which keeps the phase (B0 and coil phase are smooth).
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -41,7 +41,10 @@ from numpy.typing import NDArray
 from scipy import ndimage, optimize
 from scipy.spatial.transform import Rotation
 
+from analyze.mask import find_fsl_tool, fsl_affine, fsl_env
+
 _PYRAMID = (4, 2, 1)  # downsampling factors, coarse to fine
+_MAX_THREADS = 16  # apply_transforms: each holds a few frame-sized temporaries
 _MIN_DIM = 12  # a pyramid level whose smallest side would be below this is skipped
 
 
@@ -97,9 +100,11 @@ def _warp(vol: NDArray, T: NDArray, vox, order: int = 1, out_shape=None) -> NDAr
 
 def apply_transforms(series: NDArray, matrices: NDArray, voxel_size_mm, order: int = 3) -> NDArray:
     """Resample every frame of `series` (Nx, Ny, Nz, Nt) by its matrix. Complex
-    data is resampled as real and imaginary parts."""
+    data is resampled as real and imaginary parts. Frames are independent and
+    scipy.ndimage releases the GIL, so they run on a thread pool."""
     out = np.empty_like(series)
-    for t in range(series.shape[3]):
+
+    def one(t):
         f = series[:, :, :, t]
         if np.allclose(matrices[t], np.eye(4)):
             out[:, :, :, t] = f
@@ -108,6 +113,10 @@ def apply_transforms(series: NDArray, matrices: NDArray, voxel_size_mm, order: i
                                + 1j * _warp(f.imag, matrices[t], voxel_size_mm, order))
         else:
             out[:, :, :, t] = _warp(f, matrices[t], voxel_size_mm, order)
+
+    nt = series.shape[3]
+    with ThreadPoolExecutor(max_workers=max(1, min(nt, os.cpu_count() or 1, _MAX_THREADS))) as pool:
+        list(pool.map(one, range(nt)))  # list(): re-raise a worker's exception
     return out
 
 
@@ -125,15 +134,14 @@ def _downsample(vol: NDArray, f: int) -> NDArray:
     return np.ascontiguousarray(sm[::f, ::f, ::f])
 
 
-def register_volume(mov: NDArray, ref: NDArray, voxel_size_mm, p0=None) -> NDArray:
-    """Least-squares rigid registration of `mov` to `ref` (both float, same grid),
-    coarse to fine. Returns the 6 params (about the volume center) of T."""
+def _reference_levels(ref: NDArray, voxel_size_mm) -> list:
+    """What register_volume needs of the reference at each pyramid level:
+    (stride, voxel size, mask, masked unit-norm values, parameter scale). Depends
+    on `ref` alone, so a series registered to one reference computes it once."""
     vox = np.asarray(voxel_size_mm, float)
-    p = np.zeros(6) if p0 is None else np.array(p0, float)
-    c = _center_mm(ref.shape, vox)
+    out = []
     for f in _levels(ref.shape):
         r = _downsample(ref, f)
-        m = _downsample(mov, f)
         vf = vox * f
         sel = r > 0.1 * np.percentile(r, 98)
         sel = ndimage.binary_dilation(sel, iterations=2)
@@ -142,6 +150,19 @@ def register_volume(mov: NDArray, ref: NDArray, voxel_size_mm, p0=None) -> NDArr
         radius = 0.5 * float(np.min(np.asarray(r.shape) * vf)) / vf.mean()  # voxels, ~ half FOV
         # unknowns in about-equal units: rotation * radius (voxels), translation (voxels)
         scale = np.concatenate([np.full(3, radius), 1.0 / vf])
+        out.append((f, vf, sel, rv, scale))
+    return out
+
+
+def register_volume(mov: NDArray, ref: NDArray, voxel_size_mm, p0=None, levels=None) -> NDArray:
+    """Least-squares rigid registration of `mov` to `ref` (both float, same grid),
+    coarse to fine. Returns the 6 params (about the volume center) of T.
+    levels: `_reference_levels(ref, voxel_size_mm)`, when already computed."""
+    vox = np.asarray(voxel_size_mm, float)
+    p = np.zeros(6) if p0 is None else np.array(p0, float)
+    c = _center_mm(ref.shape, vox)
+    for f, vf, sel, rv, scale in levels or _reference_levels(ref, vox):
+        m = _downsample(mov, f)
 
         def resid(q, m=m, sel=sel, rv=rv, vf=vf, c=c, scale=scale):
             T = params_to_matrix(q / scale, c)
@@ -160,8 +181,9 @@ def _estimate_python(mag: NDArray, voxel_size_mm, ref_vol: NDArray, progress=Non
     c = _center_mm(mag.shape[:3], voxel_size_mm)
     P = np.zeros((nt, 6))
     p_prev = None
+    levels = _reference_levels(ref_vol, voxel_size_mm)
     for t in range(nt):
-        P[t] = register_volume(mag[..., t], ref_vol, voxel_size_mm, p0=p_prev)
+        P[t] = register_volume(mag[..., t], ref_vol, voxel_size_mm, p0=p_prev, levels=levels)
         p_prev = P[t]
         if progress:
             progress(t + 1, nt)
@@ -172,34 +194,23 @@ def _estimate_python(mag: NDArray, voxel_size_mm, ref_vol: NDArray, progress=Non
 
 
 def find_mcflirt() -> str | None:
-    """Path of FSL's mcflirt: PATH, then $FSLDIR/bin, then ~/fsl/bin."""
-    exe = shutil.which("mcflirt")
-    if exe:
-        return exe
-    for d in (os.environ.get("FSLDIR"), os.path.expanduser("~/fsl")):
-        if d and os.access(os.path.join(d, "bin", "mcflirt"), os.X_OK):
-            return os.path.join(d, "bin", "mcflirt")
-    return None
+    """Path of FSL's mcflirt (see find_fsl_tool)."""
+    return find_fsl_tool("mcflirt")
 
 
 def _estimate_fsl(mag: NDArray, voxel_size_mm, ref, mcflirt: str, cost: str = "normcorr"):
     import nibabel as nib
 
-    # det < 0 makes FSL work in voxel * size coordinates with no x flip: our frame
-    affine = np.diag([-voxel_size_mm[0], voxel_size_mm[1], voxel_size_mm[2], 1.0])
+    affine = fsl_affine(voxel_size_mm)
     nt = mag.shape[3]
     with tempfile.TemporaryDirectory() as d:
         inp, out = os.path.join(d, "in.nii.gz"), os.path.join(d, "mc")
         nib.save(nib.Nifti1Image(np.asarray(mag, np.float32), affine), inp)
-        env = dict(os.environ, FSLOUTPUTTYPE="NIFTI_GZ")
-        env.setdefault("FSLDIR", os.path.dirname(os.path.dirname(mcflirt)))
+        env = fsl_env(mcflirt)
         args = [mcflirt, "-in", inp, "-out", out, "-mats", "-cost", cost]
         args += ["-meanvol"] if ref == "mean" else ["-refvol", str(ref)]
         subprocess.run(args, check=True, env=env, capture_output=True)
-        mats = []
-        for t in range(nt):
-            M = np.loadtxt(os.path.join(out + ".mat", f"MAT_{t:04d}"))
-            mats.append(M)
+        mats = [np.loadtxt(os.path.join(out + ".mat", f"MAT_{t:04d}")) for t in range(nt)]
         ref_vol = nib.load(out + "_meanvol.nii.gz").get_fdata() if ref == "mean" else None
     return np.stack(mats), ref_vol
 
@@ -221,7 +232,7 @@ def correct_motion(series: NDArray, voxel_size_mm=(1.0, 1.0, 1.0), ref="middle",
     """
     if series.ndim != 4:
         raise ValueError("series must be (Nx, Ny, Nz, Nt)")
-    mag = np.abs(series).astype(np.float32)
+    mag = np.abs(series).astype(np.float32, copy=False)
     nt = mag.shape[3]
     if method == "auto":
         method = "fsl" if find_mcflirt() else "python"
