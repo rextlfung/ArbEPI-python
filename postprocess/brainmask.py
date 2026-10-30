@@ -18,8 +18,7 @@ import h5py
 import numpy as np
 from numpy.typing import NDArray
 
-from analyze.mask import brain_mask
-from postprocess.motion import find_fsl_tool
+from analyze.mask import brain_mask, find_fsl_tool, fsl_affine, fsl_env
 
 
 def load_gre(preprocessed: str, echo: int = 0):
@@ -54,18 +53,16 @@ def register_mask(gre: NDArray, mask: NDArray, epi_mean: NDArray, voxel_size_mm,
     flirt = find_flirt()
     if flirt is None:
         raise RuntimeError("register_mask needs FSL's flirt (PATH, $FSLDIR/bin or ~/fsl/bin)")
-    # det < 0: FSL works in voxel * size coordinates with no x flip (as postprocess/motion.py)
-    affine = np.diag([-voxel_size_mm[0], voxel_size_mm[1], voxel_size_mm[2], 1.0])
-    env = dict(os.environ, FSLOUTPUTTYPE="NIFTI_GZ")
-    env.setdefault("FSLDIR", os.path.dirname(os.path.dirname(flirt)))
+    affine = fsl_affine(voxel_size_mm)
+    env = fsl_env(flirt)
     with tempfile.TemporaryDirectory() as d:
         p = lambda n: os.path.join(d, n)  # noqa: E731
         for name, vol in (("gre", gre * mask), ("epi", epi_mean), ("mask", mask)):
             nib.save(nib.Nifti1Image(np.asarray(vol, np.float32), affine), p(name + ".nii.gz"))
-        r = f"{-max_rot_deg:g} {max_rot_deg:g}"
+        rng = [f"{-max_rot_deg:g}", f"{max_rot_deg:g}"]
         subprocess.run([flirt, "-in", p("gre"), "-ref", p("epi"), "-omat", p("m.mat"), "-out", p("o"),
-                        "-dof", "6", "-cost", "normmi", "-searchrx", *r.split(), "-searchry", *r.split(),
-                        "-searchrz", *r.split()], check=True, env=env, capture_output=True)
+                        "-dof", "6", "-cost", "normmi", "-searchrx", *rng, "-searchry", *rng,
+                        "-searchrz", *rng], check=True, env=env, capture_output=True)
         subprocess.run([flirt, "-in", p("mask"), "-ref", p("epi"), "-applyxfm", "-init", p("m.mat"),
                         "-interp", "nearestneighbour", "-out", p("mo")], check=True, env=env, capture_output=True)
         reg = np.asanyarray(nib.load(p("mo.nii.gz")).dataobj) > 0

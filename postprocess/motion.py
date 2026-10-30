@@ -31,7 +31,6 @@ imaginary parts, which keeps the phase (B0 and coil phase are smooth).
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -40,6 +39,8 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import ndimage, optimize
 from scipy.spatial.transform import Rotation
+
+from analyze.mask import find_fsl_tool, fsl_affine, fsl_env
 
 _PYRAMID = (4, 2, 1)  # downsampling factors, coarse to fine
 _MIN_DIM = 12  # a pyramid level whose smallest side would be below this is skipped
@@ -125,15 +126,14 @@ def _downsample(vol: NDArray, f: int) -> NDArray:
     return np.ascontiguousarray(sm[::f, ::f, ::f])
 
 
-def register_volume(mov: NDArray, ref: NDArray, voxel_size_mm, p0=None) -> NDArray:
-    """Least-squares rigid registration of `mov` to `ref` (both float, same grid),
-    coarse to fine. Returns the 6 params (about the volume center) of T."""
+def _reference_levels(ref: NDArray, voxel_size_mm) -> list:
+    """What register_volume needs of the reference at each pyramid level:
+    (stride, voxel size, mask, masked unit-norm values, parameter scale). Depends
+    on `ref` alone, so a series registered to one reference computes it once."""
     vox = np.asarray(voxel_size_mm, float)
-    p = np.zeros(6) if p0 is None else np.array(p0, float)
-    c = _center_mm(ref.shape, vox)
+    out = []
     for f in _levels(ref.shape):
         r = _downsample(ref, f)
-        m = _downsample(mov, f)
         vf = vox * f
         sel = r > 0.1 * np.percentile(r, 98)
         sel = ndimage.binary_dilation(sel, iterations=2)
@@ -142,6 +142,19 @@ def register_volume(mov: NDArray, ref: NDArray, voxel_size_mm, p0=None) -> NDArr
         radius = 0.5 * float(np.min(np.asarray(r.shape) * vf)) / vf.mean()  # voxels, ~ half FOV
         # unknowns in about-equal units: rotation * radius (voxels), translation (voxels)
         scale = np.concatenate([np.full(3, radius), 1.0 / vf])
+        out.append((f, vf, sel, rv, scale))
+    return out
+
+
+def register_volume(mov: NDArray, ref: NDArray, voxel_size_mm, p0=None, levels=None) -> NDArray:
+    """Least-squares rigid registration of `mov` to `ref` (both float, same grid),
+    coarse to fine. Returns the 6 params (about the volume center) of T.
+    levels: `_reference_levels(ref, voxel_size_mm)`, when already computed."""
+    vox = np.asarray(voxel_size_mm, float)
+    p = np.zeros(6) if p0 is None else np.array(p0, float)
+    c = _center_mm(ref.shape, vox)
+    for f, vf, sel, rv, scale in levels or _reference_levels(ref, vox):
+        m = _downsample(mov, f)
 
         def resid(q, m=m, sel=sel, rv=rv, vf=vf, c=c, scale=scale):
             T = params_to_matrix(q / scale, c)
@@ -160,8 +173,9 @@ def _estimate_python(mag: NDArray, voxel_size_mm, ref_vol: NDArray, progress=Non
     c = _center_mm(mag.shape[:3], voxel_size_mm)
     P = np.zeros((nt, 6))
     p_prev = None
+    levels = _reference_levels(ref_vol, voxel_size_mm)
     for t in range(nt):
-        P[t] = register_volume(mag[..., t], ref_vol, voxel_size_mm, p0=p_prev)
+        P[t] = register_volume(mag[..., t], ref_vol, voxel_size_mm, p0=p_prev, levels=levels)
         p_prev = P[t]
         if progress:
             progress(t + 1, nt)
@@ -169,17 +183,6 @@ def _estimate_python(mag: NDArray, voxel_size_mm, ref_vol: NDArray, progress=Non
 
 
 # ---------------------------------------------------------------- FSL backend
-
-
-def find_fsl_tool(name: str) -> str | None:
-    """Path of an FSL executable: PATH, then $FSLDIR/bin, then ~/fsl/bin."""
-    exe = shutil.which(name)
-    if exe:
-        return exe
-    for d in (os.environ.get("FSLDIR"), os.path.expanduser("~/fsl")):
-        if d and os.access(os.path.join(d, "bin", name), os.X_OK):
-            return os.path.join(d, "bin", name)
-    return None
 
 
 def find_mcflirt() -> str | None:
@@ -190,14 +193,12 @@ def find_mcflirt() -> str | None:
 def _estimate_fsl(mag: NDArray, voxel_size_mm, ref, mcflirt: str, cost: str = "normcorr"):
     import nibabel as nib
 
-    # det < 0 makes FSL work in voxel * size coordinates with no x flip: our frame
-    affine = np.diag([-voxel_size_mm[0], voxel_size_mm[1], voxel_size_mm[2], 1.0])
+    affine = fsl_affine(voxel_size_mm)
     nt = mag.shape[3]
     with tempfile.TemporaryDirectory() as d:
         inp, out = os.path.join(d, "in.nii.gz"), os.path.join(d, "mc")
         nib.save(nib.Nifti1Image(np.asarray(mag, np.float32), affine), inp)
-        env = dict(os.environ, FSLOUTPUTTYPE="NIFTI_GZ")
-        env.setdefault("FSLDIR", os.path.dirname(os.path.dirname(mcflirt)))
+        env = fsl_env(mcflirt)
         args = [mcflirt, "-in", inp, "-out", out, "-mats", "-cost", cost]
         args += ["-meanvol"] if ref == "mean" else ["-refvol", str(ref)]
         subprocess.run(args, check=True, env=env, capture_output=True)

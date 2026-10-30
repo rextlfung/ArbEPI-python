@@ -21,7 +21,7 @@ import shutil
 import h5py
 import numpy as np
 
-from analyze.io import _read_t, voxel_size_from_sidecar
+from analyze.io import read_frames, voxel_size_from_sidecar
 from analyze.mask import brain_mask
 from postprocess.brainmask import apply_brain_mask, load_gre, mask_shift_mm, register_mask
 from postprocess.motion import apply_transforms, correct_motion
@@ -49,8 +49,8 @@ def main(argv=None) -> None:
         raise SystemExit("no voxel size: no .json sidecar next to the recon, pass --voxel-size")
     ref = a.ref if a.ref in ("middle", "mean") else int(a.ref)
     with h5py.File(a.recon, "r") as f:
-        X_recon = _read_t(f["X_recon"], slice(a.n_discard, None))
-        X = _read_t(f["X"], slice(a.n_discard, None)) if "X" in f and f["X"].ndim == 5 else None
+        X_recon = read_frames(f["X_recon"], slice(a.n_discard, None))
+        X = read_frames(f["X"], slice(a.n_discard, None)) if "X" in f and f["X"].ndim == 5 else None
 
     last = [0]
 

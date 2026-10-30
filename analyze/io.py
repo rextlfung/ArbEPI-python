@@ -35,7 +35,7 @@ class Recon:
     n_scales: int
 
 
-def _read_t(ds: h5py.Dataset, frames: slice) -> NDArray:
+def read_frames(ds: h5py.Dataset, frames: slice) -> NDArray:
     """ds[..., frames] along the time axis (axis 3), a block of frames at a time."""
     idx = range(*frames.indices(ds.shape[3]))
     out = np.empty(ds.shape[:3] + (len(idx),) + ds.shape[4:], dtype=ds.dtype)
@@ -67,7 +67,7 @@ def read_recon(path: str, scales: tuple = ("sum",), n_discard: int = 0,
     'scale<i>'."""
     with h5py.File(path, "r") as f:
         frames = slice(n_discard, None)
-        X_recon = _read_t(f["X_recon"], frames)
+        X_recon = read_frames(f["X_recon"], frames)
         mag = np.abs(X_recon)
         has_scales = "X" in f and f["X"].ndim == 5
         n_scales = f["X"].shape[4] if has_scales else 1
@@ -89,7 +89,7 @@ def read_recon(path: str, scales: tuple = ("sum",), n_discard: int = 0,
                 m = X_recon.mean(axis=3)
                 phi = m / np.maximum(np.abs(m), 1e-30)
             if comps is None:
-                comps = _read_t(f["X"], frames)
+                comps = read_frames(f["X"], frames)
             series[f"scale{s}"] = (comps[..., s] * np.conj(phi)[..., None]).real.astype(np.float32)
     mean_signal = mag.mean(axis=3).astype(np.float32)
     if voxel_size_mm is None:
