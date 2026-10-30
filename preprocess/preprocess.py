@@ -183,9 +183,7 @@ def compute_oephase(
     applied in (docs/review-findings.md item 251).
     """
     oephase_data = rampsampepi2cart(ksp_cal, kxo, kxe, nx, fov_x_cm, grid_method)
-    oephase_data = np.fft.fftshift(
-        np.fft.ifft(np.fft.ifftshift(oephase_data, axes=0), n=nx, axis=0), axes=0
-    )
+    oephase_data = utils.ifftc_x(oephase_data, n=nx)
     return getoephase(np.mean(oephase_data, axis=2))  # average over cal shots
 
 

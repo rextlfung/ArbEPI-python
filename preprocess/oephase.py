@@ -7,7 +7,7 @@ than redesigned.
 
 import numpy as np
 
-from preprocess.utils import matlab_round
+from preprocess.utils import fftc_x, ifftc_x, matlab_round
 
 
 def smooth_custom(x: np.ndarray, span: int = 5) -> np.ndarray:
@@ -141,7 +141,7 @@ def epiphasecorrect(d: np.ndarray, a: np.ndarray) -> np.ndarray:
     d_shape = d.shape
     d = d.reshape(nx, etl, -1)
 
-    x = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(d, axes=0), axis=0), axes=0)
+    x = ifftc_x(d)
 
     a = np.asarray(a, dtype=float)
     if a.shape == (2,):
@@ -155,5 +155,4 @@ def epiphasecorrect(d: np.ndarray, a: np.ndarray) -> np.ndarray:
 
     x[:, 1::2, :] = x[:, 1::2, :] * np.exp(-1j * th)[:, :, None]
 
-    dc = np.fft.fftshift(np.fft.fft(np.fft.ifftshift(x, axes=0), axis=0), axes=0)
-    return dc.reshape(d_shape)
+    return fftc_x(x).reshape(d_shape)

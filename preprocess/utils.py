@@ -7,7 +7,7 @@
 - scan_info.mat (written by sequences/ArbEPI.py): SeqParams, load_seq_params,
   load_kxoe, load_schedules, nominal_te_s
 - NIfTI export: save_recon_nifti
-- Numerics: matlab_round, ift3c, rss_echo_images
+- Numerics: matlab_round, ifftc_x, fftc_x, ift3c, rss_echo_images
 - QA figures: plot_gre_b0_diagnostics
 
 Only numpy and h5py are imported at module level, so this module loads in both
@@ -277,6 +277,20 @@ def matlab_round(x: float) -> int:
     """MATLAB's round(): halves round away from zero (Python/numpy round them
     to even). Used wherever a ported index boundary must match MATLAB."""
     return int(np.floor(x + 0.5)) if x >= 0 else int(np.ceil(x - 0.5))
+
+
+def ifftc_x(d: np.ndarray, norm: str | None = None, n: int | None = None) -> np.ndarray:
+    """Centered inverse FFT along axis 0 (kx -> x): fftshift(ifft(ifftshift(d))).
+    The one spelling of the x transform that oephase's estimate (compute_oephase)
+    and its correction (epiphasecorrect) must share so `a` is estimated in the
+    pixel frame it is applied in (docs/review-findings.md item 251). `norm` and
+    `n` are numpy.fft.ifft's."""
+    return np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(d, axes=0), n=n, axis=0, norm=norm), axes=0)
+
+
+def fftc_x(d: np.ndarray, norm: str | None = None) -> np.ndarray:
+    """Centered forward FFT along axis 0 (x -> kx), the inverse of ifftc_x."""
+    return np.fft.fftshift(np.fft.fft(np.fft.ifftshift(d, axes=0), axis=0, norm=norm), axes=0)
 
 
 def ift3c(d: np.ndarray) -> np.ndarray:
