@@ -46,9 +46,10 @@ import numpy as np
 import pypulseq as pp
 from tqdm import tqdm
 
+from lib.make_prephasers import prephase_rewinders, stretched_prephasers
 from lib.readout_from_params import degre_sys
 from lib.seq_io import finalize_sequence, patch_scan_info
-from lib.trap4ge import ceil_to_raster, trap4ge
+from lib.trap4ge import trap4ge
 from params import Params
 
 
@@ -153,17 +154,8 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         sys,
     )
 
-    # Prephasers: all three share one duration t_pre, the *longest* that
-    # still reaches params.TE_degre[0] -- i.e. they absorb echo 0's TE
-    # padding instead of playing at full slew and then waiting. TE is fixed
-    # by TE_degre, so a longer prephaser costs no time, and it lowers their
-    # amplitude and slew-time, lowering PNS: at the 3 mm/175 T/m/s default,
-    # shortest-duration prephasers (all three ramping at full slew
-    # together) measured 85.5% peak PNS vs 79.2% stretched (2026-09-30).
-    # Floored at the shortest duration that fits the
-    # largest area; the TE guard below then raises if even that is too long.
-    # The y/z rewinders are separate trapezoids sized to gx_spoil's duration
-    # (they play in its block), so t_pre never lengthens TR.
+    # Prephasers stretched to fill echo 0's TE padding (see stretched_prephasers), and
+    # separate y/z rewinders sized to gx_spoil's duration (they play in its block).
     te_base = (
         max(pp.calc_duration(rf), pp.calc_duration(gz_ss)) - (rf.delay + pp.calc_rf_center(rf)[0])
         + pp.calc_duration(gz_ssr)
@@ -176,33 +168,10 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
         'z': params.Nz_degre * deltak[2] / 2,
     }
 
-    def _make_pre(duration):
-        return tuple(
-            trap4ge(pp.make_trapezoid(ax, system=sys, area=area, duration=duration), crt, sys)
-            for ax, area in pre_areas.items()
-        )
-
-    t_pre_min = max(
-        pp.calc_duration(pp.make_trapezoid(ax, system=sys, area=area))
-        for ax, area in pre_areas.items()
+    gx_pre, gy_pre, gz_pre, t_pre_block = stretched_prephasers(
+        pre_areas, te_base, params.TE_degre[0], sys, crt
     )
-    t_pre_min = ceil_to_raster(t_pre_min, crt)
-    t_pre = max(t_pre_min, math.floor((params.TE_degre[0] - te_base) / crt + 1e-9) * crt)
-    gx_pre, gy_pre, gz_pre = _make_pre(t_pre)
-    # trap4ge rounds each ramp/flat segment up to crt, which can overshoot
-    # t_pre by a raster step or two; back off until echo 0 fits.
-    def _pre_block_duration():
-        return max(pp.calc_duration(g) for g in (gx_pre, gy_pre, gz_pre))
-
-    while t_pre > t_pre_min and te_base + _pre_block_duration() > params.TE_degre[0] + 1e-9:
-        t_pre -= crt
-        gx_pre, gy_pre, gz_pre = _make_pre(t_pre)
-
-    t_spoil = pp.calc_duration(gx_spoil)
-    gy_rew, gz_rew = (
-        trap4ge(pp.make_trapezoid(ax, system=sys, area=-pre_areas[ax], duration=t_spoil), crt, sys)
-        for ax in ('y', 'z')
-    )
+    gy_rew, gz_rew = prephase_rewinders(pre_areas, pp.calc_duration(gx_spoil), sys, crt)
 
     # Phase-encode step vectors
     pe1_steps = (np.arange(params.Ny_degre) - params.Ny_degre / 2) / params.Ny_degre * 2
@@ -211,7 +180,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     # TE and TR delays, one pair per echo (TE_degre is a 2-element array --
     # see params.py). te_min doesn't depend on which echo, since both
     # echoes share the same excitation/prephasing timing.
-    te_min = te_base + _pre_block_duration()
+    te_min = te_base + t_pre_block
     raster = sys.grad_raster_time
     # Echo 0 anchors the pair: ceil'd so its realized TE is never earlier
     # than prescribed, same as before. Every later echo's delay is derived
