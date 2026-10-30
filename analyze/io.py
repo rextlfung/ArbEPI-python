@@ -35,13 +35,18 @@ class Recon:
     n_scales: int
 
 
-def read_frames(ds: h5py.Dataset, frames: slice) -> NDArray:
-    """ds[..., frames] along the time axis (axis 3), a block of frames at a time."""
+def read_frames(ds: h5py.Dataset, frames: slice, scale: int | None = None) -> NDArray:
+    """ds[..., frames] along the time axis (axis 3), a block of frames at a time
+    (a bare ds[()] on these chunked datasets is two orders of magnitude slower:
+    CLAUDE.md, recon/utils.py's read_frames_cropped). scale: take just that index
+    of the trailing component axis of a 5-D dataset."""
     idx = range(*frames.indices(ds.shape[3]))
-    out = np.empty(ds.shape[:3] + (len(idx),) + ds.shape[4:], dtype=ds.dtype)
+    trailing = () if scale is not None else ds.shape[4:]
+    out = np.empty(ds.shape[:3] + (len(idx),) + trailing, dtype=ds.dtype)
     for s in range(0, len(idx), _FRAME_BLOCK):
         blk = list(idx[s : s + _FRAME_BLOCK])
-        out[:, :, :, s : s + len(blk)] = ds[:, :, :, blk[0] : blk[-1] + 1]
+        sl = (slice(None),) * 3 + (slice(blk[0], blk[-1] + 1),) + (() if scale is None else (scale,))
+        out[:, :, :, s : s + len(blk)] = ds[sl]
     return out
 
 
@@ -75,7 +80,7 @@ def read_recon(path: str, scales: tuple = ("sum",), n_discard: int = 0,
         if "all" in want:
             want = ["sum", *range(n_scales)]
         series: dict[str, NDArray] = {}
-        phi = comps = None
+        phi = None
         for s in want:
             if s == "sum":
                 series["sum"] = mag.astype(np.float32, copy=False)
@@ -88,9 +93,8 @@ def read_recon(path: str, scales: tuple = ("sum",), n_discard: int = 0,
             if phi is None:
                 m = X_recon.mean(axis=3)
                 phi = m / np.maximum(np.abs(m), 1e-30)
-            if comps is None:
-                comps = read_frames(f["X"], frames)
-            series[f"scale{s}"] = (comps[..., s] * np.conj(phi)[..., None]).real.astype(np.float32)
+            comp = read_frames(f["X"], frames, scale=s)  # just this component
+            series[f"scale{s}"] = (comp * np.conj(phi)[..., None]).real.astype(np.float32)
     mean_signal = mag.mean(axis=3).astype(np.float32)
     if voxel_size_mm is None:
         voxel_size_mm = voxel_size_from_sidecar(path) or (1.0, 1.0, 1.0)

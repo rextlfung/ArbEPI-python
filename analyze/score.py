@@ -30,6 +30,7 @@ from scipy import ndimage
 
 from analyze.design import dct_matrix
 from analyze.glm import fit_glm
+from analyze.io import read_frames
 
 
 def object_masks(x0_abs: np.ndarray, thresh: float = 0.4):
@@ -67,7 +68,7 @@ def score(fn_truth: str, fn_recon: str, cutoff_hz: float = 0.15,
         amps = np.broadcast_to(np.asarray(g.attrs.get("amps", amp), float), (len(rois),))
     obj, interior = object_masks(x0, object_thresh)
     with h5py.File(fn_recon, "r") as f:
-        X = np.abs(f["X_recon"][()]).astype(np.float64)
+        X = np.abs(read_frames(f["X_recon"], slice(None))).astype(np.float64)
     nt = X.shape[-1]
     T = np.repeat(x0[..., None], nt, -1)
     for m, w, a in zip(rois, waves, amps):
