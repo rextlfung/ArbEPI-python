@@ -6200,6 +6200,21 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   ArbEPI's and EPIcal's setup; (e) `T1` as a `Params` field instead of
   re-deriving it from `alpha_degre` in meGRE, and `n_dummy_shots` as a property.
 
+  **Update 2026-10-30 (follow-up pass on the open list).** (b) done: `lib/seq_io.py`
+  (`finalize_sequence`, `patch_scan_info`, `load_blip_steps`). (c) done:
+  `make_prephasers.stretched_prephasers`/`prephase_rewinders` for deGRE and meGRE.
+  (d) done: `lib/epi_shot.build_epi_shot_parts` (and `new_spoil_rng`) for ArbEPI and
+  EPIcal. (f) done: `Params.n_dummy_shots`, `readout_from_params.readout_kx_residual`.
+  Each checked by the seeded `.seq` byte-compare (the five sequences, `scan_info.mat`
+  keys and values, and for (c) the default plus four meGRE designs). (e) not done.
+  **(a) declined, on a measurement:** one real default frame (90 x 60, ETL 54, 10 shots)
+  takes 0.13 s in `mask2epi_radial` and 0.01 s in `mask2epi_laminar`, so 119 frames are
+  about 16 s serial and the schedule step already runs on a process pool. The "21.7 s of
+  a 46.8 s build" in `ArbEPI._compute_schedules`' docstring is the old 240 x 240 x 45
+  protocol. `_euclidean_uncross_refine` is 0.1 s of the 0.16 s, so vectorizing it could
+  save about 0.1 s per frame, not the estimated 5-20x of a multi-second step, and would
+  need an oracle test for the tie-breaking. Revisit only if a protocol makes it slow.
+
 - [x] **266. `preprocess/`: per-frame Python loops, full-size temporaries and
   restated defaults.** [resolved 2026-10-29, `/simplify` pass 2]
   `_build_omegas`/`_build_echo_times` looped over frames (`_iy_iz` now returns
@@ -6230,6 +6245,23 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   cache/output helpers; (g) one shared NIfTI+JSON writer for
   `preprocess/utils.py`, `analyze/io.py` and `postprocess/`.
 
+  **Update 2026-10-30 (follow-up pass on the open list).** (b) done:
+  `coils.apply_gcc_kspace_sampled` equals `apply_gcc_kspace` of the zero-filled frame bit
+  for bit (unit test) and took 0.05 s against 0.4 s at 90 x 90 x 60 x 32 with 10% of the
+  columns sampled. (d) done: `preprocess.utils.ifftc_x`/`fftc_x` (oephase estimate and
+  correction, GCC), same operations so identical. **Evaluated, not done:** (c) the
+  delay sweep's 241 candidates each have a different trajectory, so
+  `_spline_matrix_cached` never hits and a larger `maxsize` would change nothing;
+  (a) a gzip level-4 write of one 124 MB frame (10% of columns sampled) measures
+  0.54 s, about 6 minutes over 660 frames, but overlapping it needs an ordered writer
+  thread that keeps resume's `last_completed_frame` invariant, and the rest of Stage A
+  cannot be timed without raw archives, so the gain is unproven; (e) `resize_masked`
+  would save about four lines between two sites that differ in their pre/post steps;
+  (f) `grid_epi`/`write_output` cache helpers. Also: the sigpy-gated preprocess tests
+  (125, including the end-to-end pipeline) were skipped in the first round of this work
+  for lack of `sigpy` and were run here (`uv pip install --python .venv/bin/python
+  sigpy`); they pass on the pass-2 changes too.
+
 - [x] **267. `recon/`: a duplicated DCT, inline `vdot`s and a transient k-space
   copy.** [resolved 2026-10-29, `/simplify` pass 3] `regularizers.dct_matrix`
   re-implemented `analyze.design.dct_matrix` (the high-pass penalty here and the
@@ -6258,6 +6290,21 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   (e) the strided frame views reused L times in `SENSE_B0._apply`
   (`x.contiguous()`, measure first).
 
+  **Update 2026-10-30 (follow-up pass on the open list).** (d) done: `_build_b0` behind
+  both B0 builders, `ReconResult` defaults, CG's in-place updates; CG and both operators'
+  forward/adjoint bitwise identical on CPU and on the GPU. (c) partly: `_build_operator`
+  and `_make_highpass` are out of `run_sense` (six configurations, CG / mslr /
+  wavelet-tv per frame and joint, with and without B0, R2* and the high-pass penalty:
+  `X_recon`, cost traces and sigma1A bitwise identical on CPU and GPU); the per-
+  regularizer option split is not done. **Tried or measured, not kept:** (b) a scratch-
+  buffer `znew` in `pogm_restart` is bitwise identical (all of pogm/fpgm/pgm with gr/fr
+  restart, CPU and GPU) but peak GPU memory is unchanged (17.22 GB in a 160 x 160 x 48 x
+  100 toy with a cheap prox), so the one-line sum is not the peak and it was reverted;
+  (a) the per-frame wavelet/TV loop costs 3.6 ms per frame against 4.8 ms for plain
+  SENSE (23 coils, R = 10), i.e. 43% of a no-B0 evaluation but about 4% with B0 at
+  L = 16, the production case, and batching frames risks bitwise differences in the
+  batched `conv1d`.
+
 - [x] **268. `postprocess/`: the FSL executable lookup was written twice.**
   [resolved 2026-10-29, `/simplify` pass 4] `find_mcflirt` and
   `brainmask.find_flirt` were the same PATH / `$FSLDIR/bin` / `~/fsl/bin` search
@@ -6283,6 +6330,16 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   place); (f) one `fsl_env`/`fsl_affine` pair for `motion`, `brainmask` and
   `analyze/mask.bet_fsl`; (g) `postprocess/__main__.py` imports the private
   `analyze.io._read_t` and re-inlines `brainmask.gre_brain_mask`.
+
+  **Update 2026-10-30 (follow-up pass on the open list).** Done: (a) the per-level
+  reference preparation is computed once per series (matrices and corrected series
+  bitwise identical); (b) `apply_transforms` runs frames on a thread pool, and (c) the
+  deGRE brain mask is estimated while the series is registered (`python -m postprocess`
+  output, including the per-scale components, mask, registration matrix and motion
+  parameters, bitwise identical on a synthetic moving head); (f) `find_fsl_tool`/
+  `fsl_env`/`fsl_affine` in `analyze/mask.py`; (g) `analyze.io.read_frames` is public.
+  Not done: filling `comps` in place, (d) uncompressed FSL input, (e) `apply_brain_mask`
+  in place.
 
 - [x] **269. `analyze/`: `report.py` carried its own copy of the AR(1) GLM.**
   [resolved 2026-10-29, `/simplify` pass 5] `fit_glm_segmented` and
@@ -6315,3 +6372,14 @@ forward from an earlier pass. The previous baseline (2026-09-24, against
   `_brain_spec`); per the one-off-investigation rule that dataset-specific
   tooling belongs in the dataset folder; (g) output file names are derived by
   hand in `run.py`, `report.py` and `postprocess/__main__.py`.
+
+  **Update 2026-10-30 (follow-up pass on the open list).** (a) `score.py` reads
+  `X_recon` chunk by chunk and (b) `read_recon` reads only the requested scale
+  (`read_frames(scale=)`), bitwise identical on a chunked 5-D recon; (d) `analyze_recon`
+  is `_resolve_brain` + `_fit_series` + `_write_maps` (maps, `series_psc`, NIfTIs and
+  `summary.json` identical but for the temp path in `file`); (e) `params_from_args` and
+  `parse_scale` are shared by both CLIs, whose `--help` output is byte-identical (the
+  argparse declarations stay separate on purpose: `compare`'s have no help strings).
+  Not done: (c) the `_estimate_rho` pass reduction (changes float rounding), (g) shared
+  naming helpers, (f) `report.py`, which per the one-off-investigation rule is the
+  user's call.

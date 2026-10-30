@@ -56,8 +56,10 @@ def _compute_schedules(
     omegas[:, :, frame], a TSP-ish optimization over Nshots shots) --
     parallelized over a process pool once there's more than one frame to
     amortize its startup cost (measured ~21.7s of a 46.8s full ArbEPI
-    build serially; small/test builds with Nframes == 1 fall back to a
-    plain call with no pool overhead at all).
+    build serially on the old 240x240x45 protocol; on today's 90x60,
+    ETL 54, 10-shot frames mask2epi_radial takes ~0.13 s per frame;
+    small/test builds with Nframes == 1 fall back to a plain call with
+    no pool overhead at all).
 
     Returns 0-based schedules/parts (see lib/mask2epi.py)."""
     if trajectory not in _MASK2EPI:

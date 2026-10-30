@@ -1209,6 +1209,12 @@ threads. Not done: pruning the (ky, kz) transform to the sampled lines, a
 vectorized patch gather/scatter (~5% after the SVD fix), splitting SVD batches
 between GPU and CPU.
 
+Measured 2026-10-30 and left alone: a scratch-buffer `znew` in `pogm_restart` is bitwise
+identical but does not lower the GPU peak (17.22 GB either way in a toy POGM with a cheap
+prox), so that sum is not where the memory goes; the per-frame wavelet/TV loop is 3.6 ms
+per frame against 4.8 ms for plain SENSE (43% of a no-B0 evaluation) but about 4% with
+B0 at L = 16, so batching frames is not worth bitwise risk for production runs.
+
 **`recon/utils.py`'s `read_frames_cropped` (behind `load_array`) reads chunked HDF5 datasets
 chunk-by-chunk along the last axis, not via a single `d[()]` call.** Measured
 on real `ArbEPI_epi_zf.h5` data (chunked one time-frame per chunk, ~373MB
