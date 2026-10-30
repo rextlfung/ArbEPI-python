@@ -15,19 +15,10 @@ timing/area at all), so there's no need for a second, redundant copy.
 
 import os
 
-import numpy as np
 import pypulseq as pp
 
-from lib.calc_te_tr_delays import calc_te_tr_delays
-from lib.make_excitation_pulse import make_excitation_from_params
-from lib.make_prephasers import make_prephasers
-from lib.make_spoilers import make_spoilers
-from lib.readout_from_params import (
-    derated_sys,
-    make_readout_grads_from_params,
-    readout_kx_residual,
-    sequence_sys,
-)
+from lib.epi_shot import build_epi_shot_parts, new_spoil_rng
+from lib.readout_from_params import sequence_sys
 from lib.seq_io import finalize_sequence, load_blip_steps
 from lib.shot_start import add_fatsat_and_excitation, draw_spoil_scales
 from params import Params
@@ -35,52 +26,20 @@ from params import Params
 
 def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) -> pp.Sequence:
     os.makedirs(params.output_dir, exist_ok=True)
-    # Derated system for the non-readout gradients, matching ArbEPI's
-    # (same gradient design, see sequences/ArbEPI.py's sys comment).
-    sys = derated_sys(params)
-
-    # The EPI schedule's largest blips size the readout gradients (see load_blip_steps).
-    # Excitation and fat-sat pulse (identical to ArbEPI; rfsat None for water
-    # excitation)
-    rf, gz_ss, gz_ssr, rfsat = make_excitation_from_params(params, sys)
-
-    # Readout gradients — sized to match ArbEPI so calibration trajectory applies
+    # Readout gradients are sized to match ArbEPI's, from the schedule it saved, so the
+    # calibration trajectory applies; everything else is built exactly as ArbEPI builds it
+    # (lib/epi_shot.py).
     max_ky_step, max_kz_step = load_blip_steps(params)
-    rg = make_readout_grads_from_params(max_ky_step, max_kz_step, params)
-
-    # Prephasers and spoilers (identical to ArbEPI)
-    gx_pre, gy_pre, gz_pre = make_prephasers(params.Nx, params.Ny, params.Nz, params.fov, sys, params.crt)
-    # Built at the maximum cycles/voxel value on every axis; the per-shot
-    # loop below scales each down to that shot's randomly-drawn
-    # cycles/voxel (see sequences/ArbEPI.py's identical pattern).
-    gx_spoil, gy_spoil, gz_spoil = make_spoilers(
-        params.res, [params.spoil_cycles_max] * 3, sys, params.crt
-    )
-
-    # Net kx moment left by gx_pre + the full readout train (EPIcal's own kx
-    # trajectory is identical to ArbEPI's, see this module's docstring).
-    gx_residual = readout_kx_residual(gx_pre, rg, params.ETL)
-
-    # TE and TR delays (identical to ArbEPI)
-    te_delay, tr_delay, min_te, min_tr = calc_te_tr_delays(
-        rf, rfsat, gz_ss, gz_ssr, gx_pre, gy_pre, gz_pre, rg.gro, gx_spoil, gy_spoil, gz_spoil,
-        params.ETL, params.TE, params.TR, sys, echo_offset=rg.echo_offset,
-    )
+    (sys, rf, gz_ss, gz_ssr, rfsat, rg, gx_pre, gy_pre, gz_pre, gx_spoil, gy_spoil, gz_spoil,
+     gx_residual, te_delay, tr_delay, min_te, min_tr) = build_epi_shot_parts(
+        params, max_ky_step, max_kz_step)
 
     # Assemble sequence (full-hardware system, matching ArbEPI -- the POPE
     # fall ramp deliberately exceeds the derate; see ArbEPI.py's comment)
     seq = pp.Sequence(system=sequence_sys(params))
 
     rf_count = 1
-    # Deliberately unseeded (fresh entropy every run/process, independent of
-    # params.seed): per-shot spoiler cycles/voxel draws only need to break a
-    # residual coherence pathway within this sequence's own repeated TR
-    # structure (see params.py's spoil_cycles_min/max comment), not to be
-    # reproducible run-to-run like the sampling mask (params.seed) is --
-    # unlike the mask, no test or downstream consumer depends on a specific
-    # spoiler draw sequence, and reproducibility here would only make it
-    # easier to accidentally rely on one (docs/review-findings.md item 176).
-    spoil_rng = np.random.default_rng()
+    spoil_rng = new_spoil_rng()
 
     # n_frames > 1 repeats the real (ADC-on) shots for that many volumes,
     # e.g. as a phase-encode-free time series for readout/hardware
