@@ -43,15 +43,14 @@ any `n_echoes_degre`.
 
 import argparse
 import math
-import os
 from dataclasses import dataclass
 
-import hdf5storage
 import numpy as np
 import pypulseq as pp
 from tqdm import tqdm
 
 from lib.readout_from_params import degre_sys
+from lib.seq_io import finalize_sequence, patch_scan_info
 from lib.trap4ge import ceil_to_raster, trap4ge
 from params import Params, load_params
 
@@ -310,14 +309,8 @@ def generate_megre(
         seq.add_block(b['gx_spoil'], pp.scale_grad(b['gy_rew'], y), pp.scale_grad(b['gz_rew'], z))
         if b['delay_tr'] > 0:
             seq.add_block(pp.make_delay(b['delay_tr']))
-    ok, report = seq.check_timing()
-    if verbose:
-        print('Timing check passed' if ok else f'Timing check FAILED:\n{report}')
-    seq.set_definition('FOV', list(d.fov))
-    seq.set_definition('Name', seqname)
+    finalize_sequence(seq, params, seqname, list(d.fov), write=write, verbose=verbose)
     if write:
-        os.makedirs(params.output_dir, exist_ok=True)
-        seq.write(os.path.join(params.output_dir, f'{seqname}.seq'))
         _patch_scan_info(params, d)
     return seq, d
 
@@ -325,21 +318,16 @@ def generate_megre(
 def _patch_scan_info(params: Params, d: MEGREDesign) -> None:
     """Overwrite scan_info.mat's *_degre keys with this scan's (the realized
     TE/TR/flip, not the prescribed ones). Like sequences/deGRE.py, skipped
-    (not an error) when generate_arbepi has not created the file yet.
-    hdf5storage.savemat updates just these keys in place."""
-    fn = os.path.join(params.output_dir, 'scan_info.mat')
-    if not os.path.exists(fn):
-        print(f"  '{fn}' not found -- run generate_arbepi first if preprocess/ needs it.")
-        return
-    hdf5storage.savemat(
-        fn,
+    (not an error) when generate_arbepi has not created the file yet."""
+    patch_scan_info(
+        params,
         {
             'Nx_degre': d.N[0], 'Ny_degre': d.N[1], 'Nz_degre': d.N[2],
             'fov_degre': np.asarray(d.fov), 'n_echoes_degre': d.n_echoes,
             'TE_degre': d.TE, 'TR_degre': d.TR, 'alpha_degre': d.flip_deg,
             'dwell_degre': d.dwell,
         },
-        fmt='7.3',
+        'run generate_arbepi first if preprocess/ needs it.',
     )
 
 

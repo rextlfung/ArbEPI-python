@@ -27,6 +27,7 @@ from lib.make_prephasers import make_prephasers
 from lib.make_spoilers import make_spoilers
 from lib.mask2epi import mask2epi_laminar, mask2epi_radial, max_blip_steps
 from lib.readout_from_params import derated_sys, make_readout_grads_from_params, sequence_sys
+from lib.seq_io import finalize_sequence
 from lib.shot_start import add_fatsat_and_excitation, draw_spoil_scales
 from params import Params
 
@@ -303,14 +304,6 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
             if params.TR > min_tr:
                 seq.add_block(pp.make_delay(tr_delay))
 
-    # Check sequence timing
-    ok, error_report = seq.check_timing()
-    if ok:
-        print('Timing check passed successfully')
-    else:
-        print('Timing check failed! Error listing follows:')
-        print(error_report)
-
     # Odd/even echo k-space trajectories for ghost correction. This used to
     # be computed by EPIcal.py from its own separately-built sequence, but
     # EPIcal is just this sequence's readout with ky/kz blips zeroed -- the
@@ -409,8 +402,6 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     )
 
     # Write Pulseq .seq file
-    seq.set_definition('FOV', params.fov)
-    seq.set_definition('Name', seqname)
-    seq.write(os.path.join(params.output_dir, f'{seqname}.seq'))
+    finalize_sequence(seq, params, seqname, params.fov)
 
     return seq

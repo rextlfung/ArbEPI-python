@@ -42,12 +42,12 @@ analogue of test_epical_trajectory_is_centered).
 import math
 import os
 
-import hdf5storage
 import numpy as np
 import pypulseq as pp
 from tqdm import tqdm
 
 from lib.readout_from_params import degre_sys
+from lib.seq_io import finalize_sequence, patch_scan_info
 from lib.trap4ge import ceil_to_raster, trap4ge
 from params import Params
 
@@ -294,18 +294,7 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
                 )
                 seq.add_block(pp.make_delay(delay_tr[c]))
 
-    # Check sequence timing
-    ok, error_report = seq.check_timing()
-    if ok:
-        print('Timing check passed successfully')
-    else:
-        print('Timing check failed! Error listing follows:')
-        print(error_report)
-
-    # Write Pulseq .seq file
-    seq.set_definition('FOV', params.fov_degre)
-    seq.set_definition('Name', seqname)
-    seq.write(os.path.join(params.output_dir, f'{seqname}.seq'))
+    finalize_sequence(seq, params, seqname, params.fov_degre)
 
     # Patch scan_info.mat: add this sequence's ADC dwell (simulate_fmri/ scales
     # the deGRE's noise by it), and replace TE_degre with the realized pair
@@ -313,21 +302,12 @@ def generate_degre(params: Params, seqname: str = 'deGRE') -> pp.Sequence:
     # b0map.jl divides the echo phase difference by this value to get Hz,
     # so exporting the prescribed pair carries the ΔTE rounding error this
     # function otherwise fixes (see docs/review-findings.md item 62).
-    # hdf5storage.savemat's default truncate_existing=False updates just
-    # this one key in place, leaving everything ArbEPI.py wrote untouched.
-    # main.py always runs generate_arbepi (which creates scan_info.mat)
-    # before generate_degre, but this function can also be called
-    # standalone -- skip the patch (not an error) if the file isn't there
-    # yet, since generate_degre() itself still needs nothing from it.
-    fn_scan_info = os.path.join(params.output_dir, 'scan_info.mat')
-    if os.path.exists(fn_scan_info):
-        hdf5storage.savemat(
-            fn_scan_info, {'TE_degre': te_realized, 'dwell_degre': dwell_degre}, fmt='7.3'
-        )
-    else:
-        print(
-            f"  '{fn_scan_info}' not found -- run generate_arbepi first if you need "
-            "scan_info.mat's TE_degre updated to the realized (not prescribed) pair."
-        )
+    # generate_degre() itself needs nothing from the file, so a missing one is
+    # skipped (see patch_scan_info).
+    patch_scan_info(
+        params, {'TE_degre': te_realized, 'dwell_degre': dwell_degre},
+        "run generate_arbepi first if you need scan_info.mat's TE_degre updated to the "
+        'realized (not prescribed) pair.',
+    )
 
     return seq

@@ -15,7 +15,6 @@ timing/area at all), so there's no need for a second, redundant copy.
 
 import os
 
-import hdf5storage
 import numpy as np
 import pypulseq as pp
 
@@ -23,8 +22,8 @@ from lib.calc_te_tr_delays import calc_te_tr_delays
 from lib.make_excitation_pulse import make_excitation_from_params
 from lib.make_prephasers import make_prephasers
 from lib.make_spoilers import make_spoilers
-from lib.mask2epi import max_blip_steps
 from lib.readout_from_params import derated_sys, make_readout_grads_from_params, sequence_sys
+from lib.seq_io import finalize_sequence, load_blip_steps
 from lib.shot_start import add_fatsat_and_excitation, draw_spoil_scales
 from params import Params
 
@@ -35,19 +34,13 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
     # (same gradient design, see sequences/ArbEPI.py's sys comment).
     sys = derated_sys(params)
 
-    # Load EPI schedule to match readout gradient design. Index base
-    # doesn't matter here: only consecutive-echo differences are used.
-    # scan_info.mat is written as MATLAB v7.3 (HDF5-based, see
-    # sequences/ArbEPI.py) — scipy.io.loadmat cannot read v7.3 at all, so
-    # this must use hdf5storage too.
-    schedules = hdf5storage.loadmat(os.path.join(params.output_dir, 'scan_info.mat'))['schedules']
-
+    # The EPI schedule's largest blips size the readout gradients (see load_blip_steps).
     # Excitation and fat-sat pulse (identical to ArbEPI; rfsat None for water
     # excitation)
     rf, gz_ss, gz_ssr, rfsat = make_excitation_from_params(params, sys)
 
     # Readout gradients — sized to match ArbEPI so calibration trajectory applies
-    max_ky_step, max_kz_step = max_blip_steps(schedules)
+    max_ky_step, max_kz_step = load_blip_steps(params)
     rg = make_readout_grads_from_params(max_ky_step, max_kz_step, params)
 
     # Prephasers and spoilers (identical to ArbEPI)
@@ -146,17 +139,6 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
         if params.TR > min_tr:
             seq.add_block(pp.make_delay(tr_delay))
 
-    # Check sequence timing
-    ok, error_report = seq.check_timing()
-    if ok:
-        print('Timing check passed successfully')
-    else:
-        print('Timing check failed! Error listing follows:')
-        print(error_report)
-
-    # Write Pulseq .seq file
-    seq.set_definition('FOV', params.fov)
-    seq.set_definition('Name', seqname)
-    seq.write(os.path.join(params.output_dir, f'{seqname}.seq'))
+    finalize_sequence(seq, params, seqname, params.fov)
 
     return seq
