@@ -146,6 +146,17 @@ def apply_gcc_kspace(ksp: np.ndarray, A: np.ndarray) -> np.ndarray:
     return fftc_x(np.einsum('xvc,x...c->x...v', A, hyb), norm='ortho')
 
 
+def apply_gcc_kspace_sampled(ksp: np.ndarray, A: np.ndarray, sampled: np.ndarray) -> np.ndarray:
+    """apply_gcc_kspace of a zero-filled [Nx, Ny, Nz, Nc] frame whose only nonzero
+    (ky, kz) columns are `sampled` [Ny, Nz] (bool), computed on those columns alone.
+    Everything in apply_gcc_kspace is independent per (ky, kz) column -- kx is fully
+    sampled -- and zeros stay zero, so the result is the same as for the whole frame at
+    1/R of the work (R is 6-10 here)."""
+    out = np.zeros(ksp.shape[:-1] + (A.shape[1],), dtype=np.result_type(ksp.dtype, A.dtype))
+    out[:, sampled, :] = apply_gcc_kspace(ksp[:, sampled, :], A)
+    return out
+
+
 def apply_gcc_image(img: np.ndarray, A: np.ndarray) -> np.ndarray:
     """Compress image-domain data (e.g. sensitivity maps) [Nx, ..., Nc] with
     per-x matrices A [Nx, Nv, Nc] -> [Nx, ..., Nv]."""

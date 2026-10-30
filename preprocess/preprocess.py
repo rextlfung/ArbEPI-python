@@ -52,6 +52,7 @@ from preprocess.coils import (
     align_gcc,
     apply_gcc_image,
     apply_gcc_kspace,
+    apply_gcc_kspace_sampled,
     apply_whitening,
     compute_whitening_matrix,
     gcc_calibration,
@@ -807,7 +808,9 @@ def write_output(
                 for frame in range(Nframes):
                     ksp = d[..., frame]
                     if GCC is not None:
-                        ksp = compress_kspace(ksp, GCC).astype(np.complex64)
+                        # only the sampled (ky, kz) columns are nonzero: compress those
+                        ksp = apply_gcc_kspace_sampled(ksp, GCC, omegas[..., frame])
+                        ksp = ksp.astype(np.complex64)
                         f['ksp_epi_zf'][..., frame] = ksp
                     if region is not None:
                         f['ksp_calib'][..., frame] = ksp[:, region[0], region[1], :]
