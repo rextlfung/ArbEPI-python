@@ -304,7 +304,7 @@ trajectory tests use the same factory) but sets all blip scale factors to
 correction. Its `gx_pre` must carry the same `rg.gx_pre_scale` factor as
 ArbEPI's (enforced by `test_arbepi_kxoe_matches_epical`). Its dummy
 (ADC-off) shots are not a parameter of their own: it plays
-`round(params.discard_duration / params.TR)` of them, the same warm-up
+`Params.n_dummy_shots` (`round(discard_duration / TR)`) of them, the same warm-up
 ArbEPI acquires and discards (`Params.Ndummyshots` was removed
 2026-10-06; it was that same value stored as a field, which went stale
 under `dataclasses.replace(discard_duration=...)`). Likewise `n_frames_discard`

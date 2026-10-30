@@ -22,7 +22,12 @@ from lib.calc_te_tr_delays import calc_te_tr_delays
 from lib.make_excitation_pulse import make_excitation_from_params
 from lib.make_prephasers import make_prephasers
 from lib.make_spoilers import make_spoilers
-from lib.readout_from_params import derated_sys, make_readout_grads_from_params, sequence_sys
+from lib.readout_from_params import (
+    derated_sys,
+    make_readout_grads_from_params,
+    readout_kx_residual,
+    sequence_sys,
+)
 from lib.seq_io import finalize_sequence, load_blip_steps
 from lib.shot_start import add_fatsat_and_excitation, draw_spoil_scales
 from params import Params
@@ -52,10 +57,9 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
         params.res, [params.spoil_cycles_max] * 3, sys, params.crt
     )
 
-    # Net kx moment left by gx_pre + the full readout train -- identical
-    # formula/reasoning to sequences/ArbEPI.py's gx_residual (EPIcal's own
-    # kx trajectory is identical to ArbEPI's, see this module's docstring).
-    gx_residual = gx_pre.area * rg.gx_pre_scale * (1 if params.ETL % 2 == 0 else -1)
+    # Net kx moment left by gx_pre + the full readout train (EPIcal's own kx
+    # trajectory is identical to ArbEPI's, see this module's docstring).
+    gx_residual = readout_kx_residual(gx_pre, rg, params.ETL)
 
     # TE and TR delays (identical to ArbEPI)
     te_delay, tr_delay, min_te, min_tr = calc_te_tr_delays(
@@ -84,7 +88,6 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
     # Dummy (ADC-off) shots first, for params.discard_duration to the nearest
     # shot: the same steady-state warm-up ArbEPI plays as its discarded
     # frames, so the calibration is taken in the state the time series is.
-    n_dummy = round(params.discard_duration / params.TR)
     # Loop-invariant scaled gradients (scale_grad deep-copies): every shot
     # plays the same unencoded waveform, blips scaled to zero.
     gx_pre_scaled = pp.scale_grad(gx_pre, rg.gx_pre_scale)
@@ -93,7 +96,7 @@ def generate_epical(params: Params, seqname: str = 'EPIcal', n_frames: int = 1) 
     gro_signed = {s: pp.scale_grad(rg.gro, s) for s in (1, -1)}
     gro2_line = pp.scale_grad(rg.gro2, (-1) ** (params.ETL - 1))
 
-    for shot in range(-n_dummy, params.Nshots * n_frames):
+    for shot in range(-params.n_dummy_shots, params.Nshots * n_frames):
         is_dummy = shot < 0
         TRID = 1 if is_dummy else 2  # TRID 1 = dummy, TRID 2 = real (see Pulseq on GE manual)
 

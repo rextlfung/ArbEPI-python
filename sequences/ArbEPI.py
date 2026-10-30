@@ -26,7 +26,12 @@ from lib.make_excitation_pulse import make_excitation_from_params
 from lib.make_prephasers import make_prephasers
 from lib.make_spoilers import make_spoilers
 from lib.mask2epi import mask2epi_laminar, mask2epi_radial, max_blip_steps
-from lib.readout_from_params import derated_sys, make_readout_grads_from_params, sequence_sys
+from lib.readout_from_params import (
+    derated_sys,
+    make_readout_grads_from_params,
+    readout_kx_residual,
+    sequence_sys,
+)
 from lib.seq_io import finalize_sequence
 from lib.shot_start import add_fatsat_and_excitation, draw_spoil_scales
 from params import Params
@@ -141,16 +146,8 @@ def generate_arbepi(omegas: np.ndarray, params: Params, seqname: str = 'ArbEPI')
     # Prephasers and spoilers
     gx_pre, gy_pre, gz_pre = make_prephasers(params.Nx, params.Ny, params.Nz, params.fov, sys, params.crt)
 
-    # Net kx moment left by gx_pre + the full readout train (gro1 + ETL
-    # echoes + gro2), measured once (fixed for the whole scan -- the kx
-    # trajectory never depends on the schedule, only on params.ETL's
-    # parity). gx_pre pre-winds to -S/2; a back-and-forth EPI readout of
-    # ETL echoes returns exactly to that same point for even ETL (net
-    # readout contribution 0) and to its mirror +S/2 for odd ETL (net
-    # readout contribution +S) -- confirmed by direct calculate_kspace()
-    # measurement, not derived by hand. Both cases reduce to this one
-    # closed form:
-    gx_residual = gx_pre.area * rg.gx_pre_scale * (1 if params.ETL % 2 == 0 else -1)
+    # Net kx moment left by gx_pre + the full readout train, fixed for the whole scan.
+    gx_residual = readout_kx_residual(gx_pre, rg, params.ETL)
     # Built at the maximum cycles/voxel value on every axis; the per-shot
     # loop below scales each down (via pp.scale_grad) to that shot's
     # randomly-drawn cycles/voxel, so these fixed trapezoids' duration

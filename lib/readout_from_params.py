@@ -80,6 +80,18 @@ def blip_sys(params: Params) -> pp.Opts:
     return _sys_with_slew(params, params.blip_slew)
 
 
+def readout_kx_residual(gx_pre, rg: ReadoutGrads, ETL: int) -> float:
+    """Net kx moment left by gx_pre plus the full readout train (gro1 + ETL
+    echoes + gro2), which the post-readout x spoiler must rewind. Fixed for
+    the whole scan: the kx trajectory never depends on the schedule, only on
+    ETL's parity. gx_pre pre-winds to -S/2; a back-and-forth EPI readout of
+    ETL echoes returns exactly to that same point for even ETL (net readout
+    contribution 0) and to its mirror +S/2 for odd ETL (net readout
+    contribution +S) -- confirmed by direct calculate_kspace() measurement,
+    not derived by hand. Both cases reduce to one closed form."""
+    return gx_pre.area * rg.gx_pre_scale * (1 if ETL % 2 == 0 else -1)
+
+
 def _echo_spacing_in_forbidden_band(echo_us: float, ge_coil: str) -> bool:
     """True if `echo_us` (the readout block's own repeat period -- what
     drives the EPI train's fundamental gradient-switching frequency) falls
