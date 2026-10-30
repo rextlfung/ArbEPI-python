@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 
 import h5py
 import numpy as np
@@ -25,6 +26,14 @@ from analyze.io import read_frames, voxel_size_from_sidecar
 from analyze.mask import brain_mask
 from postprocess.brainmask import apply_brain_mask, load_gre, mask_shift_mm, register_mask
 from postprocess.motion import apply_transforms, correct_motion
+
+
+def _gre_mask(path: str, shape: tuple, frac: float):
+    """(deGRE echo image, its voxel size, BET brain mask) of a preprocessed file."""
+    gre, vox = load_gre(path)
+    if gre.shape != shape:
+        raise SystemExit(f"deGRE {gre.shape} is not on the EPI grid {shape}")
+    return gre, vox, brain_mask(gre, vox, frac=frac)
 
 
 def main(argv=None) -> None:
@@ -52,6 +61,13 @@ def main(argv=None) -> None:
         X_recon = read_frames(f["X_recon"], slice(a.n_discard, None))
         X = read_frames(f["X"], slice(a.n_discard, None)) if "X" in f and f["X"].ndim == 5 else None
 
+    # The deGRE brain mask depends on the deGRE alone, so it is estimated (BET is a
+    # subprocess or numpy) while the series is registered; only its registration
+    # to the corrected series' mean has to wait.
+    pool = ThreadPoolExecutor(max_workers=1)
+    pending_mask = pool.submit(_gre_mask, a.brain_mask_from, X_recon.shape[:3], a.bet_frac) \
+        if a.brain_mask_from else None
+
     last = [0]
 
     def progress(i, n):
@@ -69,12 +85,10 @@ def main(argv=None) -> None:
     if X is not None:
         comps = np.stack([apply_transforms(X[..., s], res.matrices, vox, a.order)
                           for s in range(X.shape[4])], axis=4)
+    pool.shutdown(wait=False)
     mask = None
-    if a.brain_mask_from:
-        gre, mvox = load_gre(a.brain_mask_from)
-        if gre.shape != series.shape[:3]:
-            raise SystemExit(f"deGRE {gre.shape} is not on the EPI grid {series.shape[:3]}")
-        mask = brain_mask(gre, mvox, frac=a.bet_frac)
+    if pending_mask is not None:
+        gre, mvox, mask = pending_mask.result()
         xfm = None
         if not a.no_mask_registration:
             n0 = int(mask.sum())

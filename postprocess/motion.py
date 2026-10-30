@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -43,6 +44,7 @@ from scipy.spatial.transform import Rotation
 from analyze.mask import find_fsl_tool, fsl_affine, fsl_env
 
 _PYRAMID = (4, 2, 1)  # downsampling factors, coarse to fine
+_MAX_THREADS = 16  # apply_transforms: each holds a few frame-sized temporaries
 _MIN_DIM = 12  # a pyramid level whose smallest side would be below this is skipped
 
 
@@ -98,9 +100,11 @@ def _warp(vol: NDArray, T: NDArray, vox, order: int = 1, out_shape=None) -> NDAr
 
 def apply_transforms(series: NDArray, matrices: NDArray, voxel_size_mm, order: int = 3) -> NDArray:
     """Resample every frame of `series` (Nx, Ny, Nz, Nt) by its matrix. Complex
-    data is resampled as real and imaginary parts."""
+    data is resampled as real and imaginary parts. Frames are independent and
+    scipy.ndimage releases the GIL, so they run on a thread pool."""
     out = np.empty_like(series)
-    for t in range(series.shape[3]):
+
+    def one(t):
         f = series[:, :, :, t]
         if np.allclose(matrices[t], np.eye(4)):
             out[:, :, :, t] = f
@@ -109,6 +113,10 @@ def apply_transforms(series: NDArray, matrices: NDArray, voxel_size_mm, order: i
                                + 1j * _warp(f.imag, matrices[t], voxel_size_mm, order))
         else:
             out[:, :, :, t] = _warp(f, matrices[t], voxel_size_mm, order)
+
+    nt = series.shape[3]
+    with ThreadPoolExecutor(max_workers=max(1, min(nt, os.cpu_count() or 1, _MAX_THREADS))) as pool:
+        list(pool.map(one, range(nt)))  # list(): re-raise a worker's exception
     return out
 
 
