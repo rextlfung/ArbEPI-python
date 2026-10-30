@@ -46,22 +46,8 @@ def analyze_recon(path: str, params: ExperimentParams, scales: tuple = ("sum",),
     keep_series: also keep each masked series, in percent of the summed image's
     mean signal, on Maps.series_psc (for analyze.compare)."""
     rec = read_recon(path, scales=scales, n_discard=params.n_discard, voxel_size_mm=voxel_size_mm)
-    shape = rec.mean_signal.shape
     nt = next(iter(rec.series.values())).shape[-1]
-
-    if isinstance(brain, str) and os.path.exists(brain):
-        brain = mask.load_mask(brain)
-    elif isinstance(brain, str):
-        brain = mask.brain_mask(rec.mean_signal, rec.voxel_size_mm, method=brain, frac=bet_frac)
-    brain = np.asarray(brain, dtype=bool)
-    if brain.shape != shape:
-        raise ValueError(f"mask {brain.shape} does not match the image {shape}")
-    base = np.maximum(rec.mean_signal[brain], 1e-30)
-    keep = base > 0.01 * base.max()  # a voxel with no signal has no percent change
-    idx = np.flatnonzero(brain.ravel())[keep]
-    sel = np.zeros(brain.size, bool)
-    sel[idx] = True
-    brain = sel.reshape(shape)
+    brain = _resolve_brain(brain, rec, bet_frac)
     base = rec.mean_signal[brain]
 
     X, names = build_design_matrix(params, nt)
@@ -73,32 +59,62 @@ def analyze_recon(path: str, params: ExperimentParams, scales: tuple = ("sum",),
                "n_mask_voxels": int(brain.sum()),
                "voxel_size_mm": list(rec.voxel_size_mm), "scales": {}}
     for label, series in rec.series.items():
-        Y = series[brain]
-        r = glm.fit_glm(Y, X, c, ar1=ar1)
-        p = glm.t_to_p(r.t, r.dof)
-        p_thr = glm.fdr_threshold(p, q)
-        surv = p <= p_thr if p_thr > 0 else np.zeros_like(p, bool)
-        t_fdr = float(np.abs(r.t[surv]).min()) if surv.any() else float("inf")
-        m = Maps(label=label, t=glm.to_volume(r.t, brain), z=glm.to_volume(r.z, brain),
-                 psc=glm.to_volume(100 * r.contrast_beta / base, brain), dof=r.dof, rho=r.rho,
-                 t_fdr=t_fdr, n_fdr=int(surv.sum()), n_voxels=int(brain.sum()),
-                 brain=brain, underlay=rec.mean_signal)
-        if keep_series:
-            m.series_psc = (100 * (Y - Y.mean(axis=1, keepdims=True))
-                            / base[:, None]).astype(np.float32)
-        out[label] = m
-        summary["scales"][label] = dict(dof=m.dof, rho=m.rho, t_fdr=m.t_fdr, n_fdr=m.n_fdr,
-                                        t_p001=glm.t_threshold(m.dof, 0.001),
-                                        t_max=float(r.t.max()), t_min=float(r.t.min()))
-        if out_dir:
-            os.makedirs(out_dir, exist_ok=True)
-            for kind in ("t", "z", "psc"):
-                save_stat_nifti(os.path.join(out_dir, f"{tag}_{label}_{kind}.nii.gz"),
-                                getattr(m, kind), rec.voxel_size_mm, label=label, dof=m.dof,
-                                rho=m.rho, ar1=ar1, contrast=c.tolist(), design=names)
+        out[label], summary["scales"][label] = _fit_series(
+            label, series[brain], X, c, brain, base, rec.mean_signal, ar1, q, keep_series)
     if out_dir:
-        save_stat_nifti(os.path.join(out_dir, f"{tag}_mask.nii.gz"), brain.astype(np.uint8),
-                        rec.voxel_size_mm)
-        with open(os.path.join(out_dir, f"{tag}_summary.json"), "w") as f:
-            json.dump(summary, f, indent=2)
+        _write_maps(out_dir, tag, out, summary, brain, rec.voxel_size_mm, ar1, c, names)
     return out
+
+
+def _resolve_brain(brain, rec, bet_frac: float) -> NDArray:
+    """The voxels to fit, as a bool mask on the image grid: `brain` (an array, a NIfTI
+    path or an analyze.mask.brain_mask method) minus voxels with no signal, which have
+    no percent change."""
+    shape = rec.mean_signal.shape
+    if isinstance(brain, str) and os.path.exists(brain):
+        brain = mask.load_mask(brain)
+    elif isinstance(brain, str):
+        brain = mask.brain_mask(rec.mean_signal, rec.voxel_size_mm, method=brain, frac=bet_frac)
+    brain = np.asarray(brain, dtype=bool)
+    if brain.shape != shape:
+        raise ValueError(f"mask {brain.shape} does not match the image {shape}")
+    base = np.maximum(rec.mean_signal[brain], 1e-30)
+    keep = base > 0.01 * base.max()
+    idx = np.flatnonzero(brain.ravel())[keep]
+    sel = np.zeros(brain.size, bool)
+    sel[idx] = True
+    return sel.reshape(shape)
+
+
+def _fit_series(label, Y, X, c, brain, base, underlay, ar1, q, keep_series):
+    """GLM of one series' masked voxels Y (V, nt): (its Maps, its summary entry)."""
+    r = glm.fit_glm(Y, X, c, ar1=ar1)
+    p = glm.t_to_p(r.t, r.dof)
+    p_thr = glm.fdr_threshold(p, q)
+    surv = p <= p_thr if p_thr > 0 else np.zeros_like(p, bool)
+    t_fdr = float(np.abs(r.t[surv]).min()) if surv.any() else float("inf")
+    m = Maps(label=label, t=glm.to_volume(r.t, brain), z=glm.to_volume(r.z, brain),
+             psc=glm.to_volume(100 * r.contrast_beta / base, brain), dof=r.dof, rho=r.rho,
+             t_fdr=t_fdr, n_fdr=int(surv.sum()), n_voxels=int(brain.sum()),
+             brain=brain, underlay=underlay)
+    if keep_series:
+        m.series_psc = (100 * (Y - Y.mean(axis=1, keepdims=True))
+                        / base[:, None]).astype(np.float32)
+    entry = dict(dof=m.dof, rho=m.rho, t_fdr=m.t_fdr, n_fdr=m.n_fdr,
+                 t_p001=glm.t_threshold(m.dof, 0.001),
+                 t_max=float(r.t.max()), t_min=float(r.t.min()))
+    return m, entry
+
+
+def _write_maps(out_dir, tag, maps, summary, brain, voxel_size_mm, ar1, c, names) -> None:
+    """<tag>_<label>_{t,z,psc}.nii.gz per series, <tag>_mask.nii.gz, <tag>_summary.json."""
+    os.makedirs(out_dir, exist_ok=True)
+    for label, m in maps.items():
+        for kind in ("t", "z", "psc"):
+            save_stat_nifti(os.path.join(out_dir, f"{tag}_{label}_{kind}.nii.gz"),
+                            getattr(m, kind), voxel_size_mm, label=label, dof=m.dof,
+                            rho=m.rho, ar1=ar1, contrast=c.tolist(), design=names)
+    save_stat_nifti(os.path.join(out_dir, f"{tag}_mask.nii.gz"), brain.astype(np.uint8),
+                    voxel_size_mm)
+    with open(os.path.join(out_dir, f"{tag}_summary.json"), "w") as f:
+        json.dump(summary, f, indent=2)

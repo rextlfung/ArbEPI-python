@@ -12,12 +12,8 @@ from __future__ import annotations
 
 import argparse
 
-from analyze.design import Condition, ExperimentParams
+from analyze.design import params_from_args, parse_scale
 from analyze.run import analyze_recon
-
-
-def _scale(s: str):
-    return s if s in ("sum", "all") else int(s)
 
 
 def main(argv=None) -> None:
@@ -31,7 +27,7 @@ def main(argv=None) -> None:
     ap.add_argument("--drift-cutoff", type=float, default=128.0,
                     help="DCT drift cutoff period (s); 0 -> a linear trend instead")
     ap.add_argument("--no-ar1", action="store_true", help="ordinary least squares, no prewhitening")
-    ap.add_argument("--scales", nargs="+", default=["sum"], type=_scale,
+    ap.add_argument("--scales", nargs="+", default=["sum"], type=parse_scale,
                     help="'sum', 'all', or component indices (mslr runs)")
     ap.add_argument("--mask", default="auto",
                     help="'auto' (FSL bet if on PATH, else brainextractor), 'fsl', "
@@ -45,11 +41,9 @@ def main(argv=None) -> None:
     ap.add_argument("--tag", help="output file prefix (default: the recon's name)")
     a = ap.parse_args(argv)
 
-    params = ExperimentParams(a.tr, [Condition("task", tuple(a.onsets), tuple(a.duration))],
-                              n_discard=a.n_discard, drift_cutoff_s=a.drift_cutoff or None)
-    maps = analyze_recon(a.recon, params, scales=tuple(a.scales), brain=a.mask, out_dir=a.out,
-                         ar1=not a.no_ar1, q=a.q, tag=a.tag, voxel_size_mm=a.voxel_size,
-                         bet_frac=a.bet_frac)
+    maps = analyze_recon(a.recon, params_from_args(a), scales=tuple(a.scales), brain=a.mask,
+                         out_dir=a.out, ar1=not a.no_ar1, q=a.q, tag=a.tag,
+                         voxel_size_mm=a.voxel_size, bet_frac=a.bet_frac)
     for label, m in maps.items():
         print(f"{label}: dof {m.dof:.0f}, rho {m.rho:.3f}, "
               f"{m.n_fdr}/{m.n_voxels} voxels survive FDR q={a.q} (|t| >= {m.t_fdr:.2f})")
