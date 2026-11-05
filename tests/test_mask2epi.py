@@ -367,16 +367,17 @@ def test_mask2epi_laminar_hillclimb_never_worse_than_pass1_alone():
     assert pass2_max <= pass1_max + 1e-9
 
 
-def _naive_radial_schedule(mask, ETL, Nshots):
+def _naive_radial_schedule(mask, ETL, Nshots, deltak=(1.0, 1.0)):
     """Reproduce the pre-optimization mask2epi_radial ordering (plain
     projection sort + center splice, no 2-opt) as a baseline to compare
-    against."""
+    against. Angles, projections and center distances are in physical
+    k-space (index offsets scaled by deltak), as mask2epi_radial's are."""
     import math
 
     Ny, Nz = mask.shape
     cy, cz = Ny / 2, Nz / 2
     ys, zs = np.nonzero(mask)
-    theta = np.arctan2(zs - cz, ys - cy)
+    theta = np.arctan2((zs - cz) * deltak[1], (ys - cy) * deltak[0])
     theta_folded = np.mod(theta, np.pi)
     angle_order = np.argsort(theta_folded, kind='stable')
 
@@ -387,10 +388,11 @@ def _naive_radial_schedule(mask, ETL, Nshots):
         shot_y, shot_z = ys[idx], zs[idx]
         th = theta[idx]
         axis_angle = 0.5 * math.atan2(np.sin(2 * th).mean(), np.cos(2 * th).mean())
-        proj = (shot_y - cy) * math.cos(axis_angle) + (shot_z - cz) * math.sin(axis_angle)
+        proj = ((shot_y - cy) * deltak[0] * math.cos(axis_angle)
+                + (shot_z - cz) * deltak[1] * math.sin(axis_angle))
         proj_order = np.argsort(proj, kind='stable')
         shot_y, shot_z = shot_y[proj_order], shot_z[proj_order]
-        dist2 = (shot_y - cy) ** 2 + (shot_z - cz) ** 2
+        dist2 = ((shot_y - cy) * deltak[0]) ** 2 + ((shot_z - cz) * deltak[1]) ** 2
         center_idx = int(np.argmin(dist2))
         if center_idx != target:
             y_c, z_c = shot_y[center_idx], shot_z[center_idx]
@@ -489,7 +491,7 @@ def test_mask2epi_radial_2opt_no_worse_than_plain_projection_sort():
     deltak = (1.0, 1.3)  # anisotropic weighting, matching real FOV usage
 
     schedule, _ = mask2epi_radial(mask, ETL, Nshots, deltak)
-    naive_schedule = _naive_radial_schedule(mask, ETL, Nshots)
+    naive_schedule = _naive_radial_schedule(mask, ETL, Nshots, deltak)
 
     optimized_max = _max_weighted_step(schedule, Nshots, deltak)
     naive_max = _max_weighted_step(naive_schedule, Nshots, deltak)
@@ -628,3 +630,100 @@ def test_mask2epi_radial_full_shot_crossings_no_worse_than_per_half_only():
         per_half_max = _max_weighted_step(per_half, Nshots, deltak)
         full_max = _max_weighted_step(full, Nshots, deltak)
         assert full_max <= per_half_max + 1e-9
+
+
+# --- golden-angle progression through the whole sequence (radial_golden_chain) ---------------------
+
+def _pd_frames(n_frames, shape=(90, 60), R=6, seed=0):
+    """n_frames Poisson-disc masks with exactly Ny*Nz/R samples each."""
+    from sample.pd_sample import pd_sample
+
+    rng = np.random.default_rng(seed)
+    frames = []
+    while len(frames) < n_frames:
+        m = pd_sample(shape, R, rng, decay=1.4)
+        if m.sum() == shape[0] * shape[1] // R:
+            frames.append(m)
+    return np.stack(frames, axis=-1)
+
+
+def _circ_dist(a, b, period):
+    d = abs(a - b) % period
+    return min(d, period - d)
+
+
+def test_radial_chain_continues_golden_angle_across_frames():
+    """Frame f's first-acquired wedge sits one golden angle after frame f-1's last-acquired
+    wedge (physical k-space angle), and the wedge set moves from frame to frame instead of
+    repeating -- the per-frame restart this replaces gave the same wedges every frame."""
+    import math
+
+    from lib.mask2epi import GOLDEN_ANGLE, _radial_plan, radial_golden_chain
+
+    ETL, Nshots = 75, 12
+    deltak = (1 / 0.216, 1 / 0.144)  # 90x60 at 2.4 mm: anisotropic, so index != physical angle
+    omegas = _pd_frames(24)
+    tau0s, last = radial_golden_chain(omegas, ETL, Nshots, deltak)
+    assert tau0s[0] is None
+    plans = [_radial_plan(omegas[:, :, f], ETL, Nshots, deltak, tau0s[f]) for f in range(24)]
+    for f in range(1, 24):
+        first = plans[f]['centers'][plans[f]['shot_order'][0]]
+        step = (first - last[f - 1]) % math.pi
+        assert _circ_dist(step, GOLDEN_ANGLE % math.pi, math.pi) < math.radians(2)
+        assert _circ_dist(first, tau0s[f], math.pi) < math.radians(2)
+    # wedge-set offset modulo the wedge pitch changes between frames (about 0.4 pitch per frame)
+    pitch = math.pi / Nshots
+    off = np.array([p['centers'].min() % pitch / pitch for p in plans])
+    steps = np.abs((np.diff(off) + 0.5) % 1 - 0.5)
+    assert 0.2 < steps.mean() < 0.5
+    assert len(set(np.round(off, 1))) >= 7
+
+
+def test_radial_chain_wedges_partition_each_frame_exactly():
+    from lib.mask2epi import _radial_plan, radial_golden_chain
+
+    ETL, Nshots = 75, 12
+    deltak = (1 / 0.216, 1 / 0.144)
+    omegas = _pd_frames(6)
+    tau0s, _ = radial_golden_chain(omegas, ETL, Nshots, deltak)
+    for f in range(6):
+        plan = _radial_plan(omegas[:, :, f], ETL, Nshots, deltak, tau0s[f])
+        idx = plan['wedge_idx']
+        assert idx.shape == (Nshots, ETL)
+        assert sorted(idx.ravel()) == list(range(Nshots * ETL))  # every sample in exactly one wedge
+        assert sorted(plan['shot_order']) == list(range(Nshots))
+
+
+def test_compute_schedules_radial_matches_chained_per_frame_calls():
+    """_compute_schedules (process pool) gives exactly what chaining mask2epi_radial by hand does,
+    with the global shot counter, and every shot keeps its ETL samples."""
+    from lib.mask2epi import radial_golden_chain
+    from sequences.ArbEPI import _compute_schedules
+
+    ETL, Nshots = 75, 12
+    deltak = (1 / 0.216, 1 / 0.144)
+    omegas = _pd_frames(3)
+    schedules, parts = _compute_schedules(omegas, ETL, Nshots, 'radial', deltak)
+    tau0s, _ = radial_golden_chain(omegas, ETL, Nshots, deltak)
+    for f in range(3):
+        sch, prt = mask2epi_radial(omegas[:, :, f], ETL, Nshots, deltak, tau0=tau0s[f], shot_offset=f * Nshots)
+        np.testing.assert_array_equal(schedules[f], sch)
+        np.testing.assert_array_equal(parts[:, :, f], prt)
+        assert all((prt == s + 1).sum() == ETL for s in range(Nshots))
+
+
+def test_radial_physical_deltak_changes_angles_not_membership():
+    """Scaling ky/kz by deltak keeps each sample's ray from the center in the same cyclic order,
+    so wedge membership is (nearly) unchanged; only the golden-angle targets move."""
+    from lib.mask2epi import _radial_plan
+
+    ETL, Nshots = 75, 12
+    m = _pd_frames(1)[:, :, 0]
+    a = _radial_plan(m, ETL, Nshots, (1.0, 1.0), None)
+    b = _radial_plan(m, ETL, Nshots, (1 / 0.216, 1 / 0.144), None)
+    moved = 0
+    for w in range(Nshots):  # best-matching wedge of b for each wedge of a
+        counts = [len(set(a['wedge_idx'][w]) & set(b['wedge_idx'][v])) for v in range(Nshots)]
+        moved += ETL - max(counts)
+    assert moved <= 40  # ties on the calibration grid only; observed ~4 of 900 on average
+    assert not np.allclose(a['centers'], b['centers'])

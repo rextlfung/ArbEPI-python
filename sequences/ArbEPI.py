@@ -22,7 +22,9 @@ import pypulseq as pp
 from tqdm import tqdm
 
 from lib.epi_shot import build_epi_shot_parts, new_spoil_rng
-from lib.mask2epi import mask2epi_laminar, mask2epi_radial, max_blip_steps
+from lib.mask2epi import (
+    _mask2epi_radial, mask2epi_laminar, mask2epi_radial, max_blip_steps, radial_golden_chain,
+)
 from lib.readout_from_params import sequence_sys
 from lib.seq_io import finalize_sequence
 from lib.shot_start import add_fatsat_and_excitation, draw_spoil_scales
@@ -35,10 +37,19 @@ _MASK2EPI = {
 
 
 def _compute_one_frame_schedule(
-    omega_frame: np.ndarray, ETL: int, Nshots: int, trajectory: str, deltak: Tuple[float, float]
+    omega_frame: np.ndarray, ETL: int, Nshots: int, trajectory: str, deltak: Tuple[float, float],
+    tau0=None, shot_offset: int = 0, expect_last=None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """One frame's mask2epi_{trajectory} call -- module-level (not a
-    closure) so ProcessPoolExecutor can pickle it."""
+    closure) so ProcessPoolExecutor can pickle it. For the radial
+    trajectory, `tau0`/`shot_offset` come from `radial_golden_chain` and the
+    last wedge angle the call realizes must match the chain's (`expect_last`),
+    since the next frame's start angle was computed from it."""
+    if trajectory == 'radial':
+        schedule, parts, last = _mask2epi_radial(omega_frame, ETL, Nshots, deltak, tau0, shot_offset)
+        if expect_last is not None:
+            assert abs(last - expect_last) < 1e-9, (last, expect_last)
+        return schedule, parts
     return _MASK2EPI[trajectory](omega_frame, ETL, Nshots, deltak)
 
 
@@ -52,8 +63,15 @@ def _compute_schedules(
     make_readout_grads.py sizes the two blip axes independently (see
     lib/mask2epi.py's module docstring).
 
-    Frames are fully independent (each is its own mask2epi_* call on
-    omegas[:, :, frame], a TSP-ish optimization over Nshots shots) --
+    Laminar frames are fully independent. Radial frames are chained by the
+    golden-angle progression (`lib.mask2epi.radial_golden_chain`: frame f's
+    wedge cut starts one golden angle after frame f-1's last-acquired wedge),
+    so the chain's start angles are computed serially first (an angle sort
+    per frame) and the per-frame calls below stay independent given them --
+    which also means `omegas` must be the complete sequence: a slice of it
+    would give a different chain than the built sequence. Each frame is its
+    own mask2epi_* call on omegas[:, :, frame], a TSP-ish optimization over
+    Nshots shots --
     parallelized over a process pool once there's more than one frame to
     amortize its startup cost (measured ~21.7s of a 46.8s full ArbEPI
     build serially on the old 240x240x45 protocol; on today's 90x60,
@@ -71,20 +89,23 @@ def _compute_schedules(
     schedules = np.zeros((Nframes, Nshots, ETL, 2), dtype=int)
     parts = np.zeros((Ny, Nz, Nframes), dtype=int)
 
+    if trajectory == 'radial':
+        tau0s, last_centers = radial_golden_chain(omegas, ETL, Nshots, deltak)
+    else:
+        tau0s, last_centers = [None] * Nframes, [None] * Nframes
+
+    def frame_args(frame):
+        return (omegas[:, :, frame], ETL, Nshots, trajectory, deltak,
+                tau0s[frame], frame * Nshots, last_centers[frame])
+
     if Nframes <= 1:
         for frame in range(Nframes):
-            schedules[frame], parts[:, :, frame] = _compute_one_frame_schedule(
-                omegas[:, :, frame], ETL, Nshots, trajectory, deltak
-            )
+            schedules[frame], parts[:, :, frame] = _compute_one_frame_schedule(*frame_args(frame))
         return schedules, parts
 
     with ProcessPoolExecutor(max_workers=min(Nframes, os.cpu_count() or 1)) as pool:
-        futures = [
-            pool.submit(
-                _compute_one_frame_schedule, omegas[:, :, frame], ETL, Nshots, trajectory, deltak
-            )
-            for frame in range(Nframes)
-        ]
+        futures = [pool.submit(_compute_one_frame_schedule, *frame_args(frame))
+                   for frame in range(Nframes)]
         for frame, future in enumerate(futures):
             schedules[frame], parts[:, :, frame] = future.result()
     return schedules, parts
