@@ -826,7 +826,7 @@ def mask2epi_laminar(
     return schedule, parts
 
 
-def _golden_angle_shot_order(wedge_centers: np.ndarray) -> np.ndarray:
+def _golden_angle_shot_order(wedge_centers: np.ndarray, start: float = 0.0) -> np.ndarray:
     """Golden-angle-like temporal ordering of `mask2epi_radial`'s `Nshots`
     angular wedges (see that function's docstring for how the wedges
     themselves -- the spatial partition -- are formed; this only decides
@@ -857,7 +857,11 @@ def _golden_angle_shot_order(wedge_centers: np.ndarray) -> np.ndarray:
     ----------
     wedge_centers : (Nshots,) representative folded angle (radians,
         [0, pi)) of each wedge, indexed in the same order as the spatial
-        partition (ascending by angle, i.e. wedge_centers is sorted).
+        partition (ascending by angle from the cut origin, circularly).
+    start : angle (radians) that shot 0's target `t * GOLDEN_ANGLE` is
+        measured from, i.e. shot `t` targets `start + t * GOLDEN_ANGLE mod
+        pi`. 0 reproduces the per-frame restart; `mask2epi_radial`'s `tau0`
+        continues the golden-angle sequence from the previous frame instead.
 
     Returns
     -------
@@ -868,7 +872,7 @@ def _golden_angle_shot_order(wedge_centers: np.ndarray) -> np.ndarray:
     order = np.empty(n, dtype=int)
     available = list(range(n))
     for t in range(n):
-        target = (t * GOLDEN_ANGLE) % np.pi
+        target = (start + t * GOLDEN_ANGLE) % np.pi
         avail_centers = wedge_centers[available]
         d = np.abs(avail_centers - target)
         d = np.minimum(d, np.pi - d)
@@ -907,7 +911,7 @@ def _order_half_anchored(
     if n == 0:
         return far_side_coords
 
-    dist2 = (far_side_coords[:, 0] - cy) ** 2 + (far_side_coords[:, 1] - cz) ** 2
+    dist2 = ((far_side_coords[:, 0] - cy) * deltak[0]) ** 2 + ((far_side_coords[:, 1] - cz) * deltak[1]) ** 2
     outer_idx = int(np.argmax(dist2))
     interior = np.delete(far_side_coords, outer_idx, axis=0)
     outer_coord = far_side_coords[outer_idx : outer_idx + 1]
@@ -961,9 +965,88 @@ def _golden_angle_flip_start(shot: int, axis_angle: float) -> bool:
     return d_pos < d_neg
 
 
+def _radial_plan(mask: np.ndarray, ETL: int, Nshots: int, deltak: Sequence[float], tau0):
+    """Cheap, order-independent part of `mask2epi_radial` for one frame: the
+    angular partition into `Nshots` equal-count wedges, the golden-angle
+    shot order, and the angle of the wedge acquired last. Split out so
+    `radial_golden_chain` can run it serially over all frames (each frame's
+    start angle depends on the previous frame's last wedge) while the
+    expensive per-shot ordering stays parallel across frames.
+
+    Angles are measured in physical k-space: a (ky, kz) index offset is
+    scaled by `deltak` = (1/fov_y, 1/fov_z). A sample's ray from the plane
+    center keeps its cyclic order under that linear stretch, so the
+    partition is essentially unchanged (only exact ties on the calibration
+    grid can fall on the other side of a wedge boundary); what changes is the
+    angle values, so the golden-angle targets, spoke axes and start ends are
+    golden in physical k-space rather than in index space. The default
+    `deltak = (1, 1)` is the index-space behavior.
+
+    tau0 : None -> the cut starts at angle 0 and shot 0 targets angle 0 (the
+        per-frame behavior). Otherwise the cut is rotated so wedge 0's
+        center is as close as the samples allow to `tau0` (radians, mod pi),
+        and shot `t` targets `tau0 + t * GOLDEN_ANGLE`. The wedges are still
+        consecutive equal-count chunks of the angle-sorted samples, taken
+        circularly from the chosen start sample, so every shot has exactly
+        `ETL` samples. Wedge centers are means of *unwrapped* folded angles
+        (a chunk that straddles the 0/pi fold is continuous, not split).
+    """
+    Ny, Nz = mask.shape
+    cy, cz = Ny / 2, Nz / 2
+    ys, zs = np.nonzero(mask)
+    theta = np.arctan2((zs - cz) * deltak[1], (ys - cy) * deltak[0])  # (-pi, pi]
+    folded = np.mod(theta, np.pi)  # [0, pi); folds opposite points together
+    sort_idx = np.argsort(folded, kind='stable')
+    n = len(sort_idx)
+    fs = folded[sort_idx]
+    unwrapped = np.concatenate([fs, fs + np.pi])
+    if tau0 is None:
+        r, start = 0, 0.0
+    else:
+        csum = np.concatenate([[0.0], np.cumsum(unwrapped)])
+        first_center = np.mod((csum[ETL:ETL + n] - csum[:n]) / ETL, np.pi)  # wedge 0 center per start sample
+        d = np.abs(first_center - tau0)
+        r, start = int(np.argmin(np.minimum(d, np.pi - d))), float(tau0)
+    wedge_idx = np.concatenate([sort_idx, sort_idx])[r:r + n].reshape(Nshots, ETL)
+    centers = np.mod(unwrapped[r:r + n].reshape(Nshots, ETL).mean(axis=1), np.pi)
+    shot_order = _golden_angle_shot_order(centers, start)
+    return dict(ys=ys, zs=zs, theta=theta, wedge_idx=wedge_idx, centers=centers,
+                shot_order=shot_order, last_center=float(centers[shot_order[-1]]))
+
+
+def radial_golden_chain(omegas: np.ndarray, ETL: int, Nshots: int, deltak: Sequence[float]):
+    """Per-frame `tau0` for `mask2epi_radial` so that the golden-angle
+    progression runs through the whole sequence, not just within a frame:
+    frame f's cut starts at the angle of frame f-1's last-acquired wedge plus
+    one golden angle, and its shots continue the golden sequence from there.
+    Frame 0 uses the per-frame behavior (`tau0 = None`).
+
+    Returns (tau0s, last_centers): `tau0s[f]` is None for frame 0, else the
+    start angle (radians mod pi); `last_centers[f]` is frame f's last wedge
+    angle, which `mask2epi_radial`'s own result must reproduce. Cheap (an angle sort
+    per frame), so it runs serially in front of the parallel per-frame calls.
+    """
+    tau0s, last_centers = [], []
+    tau0 = None
+    for f in range(omegas.shape[2]):
+        plan = _radial_plan(omegas[:, :, f], ETL, Nshots, deltak, tau0)
+        tau0s.append(tau0)
+        last_centers.append(plan['last_center'])
+        tau0 = (plan['last_center'] + GOLDEN_ANGLE) % np.pi
+    return tau0s, last_centers
+
+
 def mask2epi_radial(
-    mask: np.ndarray, ETL: int, Nshots: int, deltak: Sequence[float] = (1.0, 1.0)
+    mask: np.ndarray, ETL: int, Nshots: int, deltak: Sequence[float] = (1.0, 1.0),
+    *, tau0=None, shot_offset: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
+    schedule, parts, _ = _mask2epi_radial(mask, ETL, Nshots, deltak, tau0, shot_offset)
+    return schedule, parts
+
+
+def _mask2epi_radial(
+    mask: np.ndarray, ETL: int, Nshots: int, deltak: Sequence[float], tau0, shot_offset: int,
+) -> tuple[np.ndarray, np.ndarray, float]:
     """Radial-like variant of `mask2epi_laminar`: each shot's echo train is
     a single spoke through k-space center (an opposite pair of angular
     wedges about the mask's center) instead of a raster of ky rows. `ky`
@@ -977,7 +1060,27 @@ def mask2epi_radial(
     same reference-scan way.
 
     Parameters/returns match `mask2epi_laminar` exactly (including the new
-    `deltak` parameter).
+    `deltak` parameter), plus two keyword-only options that continue the
+    golden-angle progression through a whole sequence instead of restarting
+    it every frame (see `radial_golden_chain`, which computes them for a
+    full (Ny, Nz, Nframes) mask):
+
+    * `tau0` (radians mod pi, default None): start the angular cut so wedge 0
+      is centered at `tau0` and target `tau0 + t * GOLDEN_ANGLE` for shot `t`.
+      `radial_golden_chain` sets it to the previous frame's last-acquired
+      wedge angle plus one golden angle, so the step between the last shot
+      of one frame and the first of the next is the golden angle too. None
+      (the default, and frame 0 of a chain) cuts at angle 0 and targets
+      `t * GOLDEN_ANGLE` from 0, exactly the per-frame behavior; note that a
+      chain with `tau0` set centers wedge 0 on `tau0`, whereas the None cut
+      *starts* wedge 0 at angle 0.
+    * `shot_offset` (default 0): global index of this frame's first shot
+      (`frame * Nshots`), so `_golden_angle_flip_start`'s running full-circle
+      target also continues across frames.
+
+    Angles are measured in physical k-space (index offsets scaled by
+    `deltak`), see `_radial_plan`. Pass `deltak = (1/fov_y, 1/fov_z)`; the
+    default `(1, 1)` is the index-space behavior.
 
     Pass 1 — angular partitioning: every sampled point's angle about
     k-space center is folded into [0, pi) (`theta mod pi`), so a point and
@@ -1109,33 +1212,24 @@ def mask2epi_radial(
     Ny, Nz = mask.shape
     cy, cz = Ny / 2, Nz / 2
 
-    ys, zs = np.nonzero(mask)
-    dy = ys - cy
-    dz = zs - cz
-    theta = np.arctan2(dz, dy)  # (-pi, pi]
-    theta_folded = np.mod(theta, np.pi)  # [0, pi); folds opposite points together
-
-    angle_order = np.argsort(theta_folded, kind='stable')
-
-    wedge_centers = np.array([
-        theta_folded[angle_order[w * ETL:(w + 1) * ETL]].mean() for w in range(Nshots)
-    ])
-    shot_order = _golden_angle_shot_order(wedge_centers)
+    plan = _radial_plan(mask, ETL, Nshots, deltak, tau0)
+    ys, zs, theta = plan['ys'], plan['zs'], plan['theta']
+    wedge_idx, shot_order = plan['wedge_idx'], plan['shot_order']
 
     parts = np.zeros((Ny, Nz), dtype=int)
     schedule = np.zeros((Nshots, ETL, 2), dtype=int)
     target = (ETL - 1) // 2
 
     for shot in range(Nshots):
-        w = shot_order[shot]
-        idx = angle_order[w * ETL:(w + 1) * ETL]
+        idx = wedge_idx[shot_order[shot]]
         shot_y, shot_z = ys[idx], zs[idx]
         parts[shot_y, shot_z] = shot + 1
 
         th = theta[idx]
         axis_angle = 0.5 * math.atan2(np.sin(2 * th).mean(), np.cos(2 * th).mean())
-        proj = (shot_y - cy) * math.cos(axis_angle) + (shot_z - cz) * math.sin(axis_angle)
-        if _golden_angle_flip_start(shot, axis_angle):
+        proj = ((shot_y - cy) * deltak[0] * math.cos(axis_angle)
+                + (shot_z - cz) * deltak[1] * math.sin(axis_angle))
+        if _golden_angle_flip_start(shot_offset + shot, axis_angle):
             proj = -proj
 
         proj_order = np.argsort(proj, kind='stable')
@@ -1145,7 +1239,7 @@ def mask2epi_radial(
         # can have a near-zero projection onto the spoke axis while still
         # sitting well off that axis (large perpendicular offset), so
         # minimizing |proj| would not reliably pick the true closest point.
-        dist2 = (shot_y - cy) ** 2 + (shot_z - cz) ** 2
+        dist2 = ((shot_y - cy) * deltak[0]) ** 2 + ((shot_z - cz) * deltak[1]) ** 2
         center_idx = int(np.argmin(dist2))
         center_coord = np.array([[shot_y[center_idx], shot_z[center_idx]]], dtype=float)
 
@@ -1194,4 +1288,7 @@ def mask2epi_radial(
         )
         schedule[shot, :, :] = shot_coords[uncrossed_order].astype(int)
 
-    return schedule, parts
+    return schedule, parts, plan['last_center']
+
+
+mask2epi_radial.__doc__ = _mask2epi_radial.__doc__

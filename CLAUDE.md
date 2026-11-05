@@ -253,6 +253,21 @@ ghost correction this repo relies on, and for how it forces the
 k-space-center sample to land at echo index `(ETL - 1) // 2`, matching
 `calc_te_tr_delays.py`'s definition of the nominal TE echo).
 
+**Radial golden-angle progression across frames** (`radial_golden_chain`,
+`_radial_plan`, `mask2epi_radial`'s `tau0`/`shot_offset`): angles are in
+physical k-space (index offsets × `deltak`), and `_compute_schedules`
+chains the frames — frame f's wedge cut starts one golden angle after the
+wedge acquired last in frame f−1, and the start-end flip counter is global
+(`frame * Nshots + shot`). The chain is computed serially first (cheap), then
+the expensive per-frame ordering runs in the process pool and asserts it
+reproduced the chain's last-wedge angle. **`omegas` passed to
+`_compute_schedules` must be the whole sequence** (a slice builds a different
+chain). Wedge centers are means of *unwrapped* folded angles: a chunk that
+straddles the 0/π fold must not be averaged naively. A bare
+`mask2epi_radial(mask, ETL, Nshots)` (default `deltak`, no `tau0`) is
+bit-identical to the pre-change per-frame behavior. Changing this alters
+every radial build's blip steps, so re-check PNS and min TR after pulling it.
+
 **Ordering within each shot** (both variants) is a two-pass optimization —
 pass 1 minimizes total weighted path length (min-sum TSP), pass 2 refines
 that tour to minimize the worst-case single step (bottleneck/min-max) —
