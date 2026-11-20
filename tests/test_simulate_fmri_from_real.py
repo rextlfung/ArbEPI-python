@@ -9,7 +9,7 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("mirtorch")
 
-from analyze.score import _dct  # noqa: E402
+from analyze.design import dct_matrix  # noqa: E402
 from recon.sense import run_sense  # noqa: E402
 from simulate_fmri import from_real as testbed  # noqa: E402
 
@@ -73,7 +73,7 @@ def test_waveforms_are_zero_mean_unit_peak_and_in_or_out_of_band():
     for kind in ("block", "sin0.10", "sin0.25"):
         w = testbed.waveform(kind, 120, 0.5)
         assert abs(w.mean()) < 1e-12 and np.isclose(np.abs(w).max(), 1)
-    C = _dct(120)
+    C = dct_matrix(120)
     keep = int((np.arange(120) / (2 * 120 * 0.5) <= 0.15).sum())
     for kind, inband in (("block", True), ("sin0.10", True), ("sin0.25", False)):
         c = C @ testbed.waveform(kind, 120, 0.5)
