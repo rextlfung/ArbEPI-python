@@ -150,3 +150,31 @@ def test_scoring_detects_noise_attenuation_and_blur(truth):
         T.imag, (1.5, 1.5, 1.5, 0))
     _write_recon(str(tmp / "blur.h5"), blur)
     assert score(fn, str(tmp / "blur.h5"))["edge_sharpness_ratio"] < 0.8
+
+
+def test_scoring_a_no_activation_truth(truth, tmp_path):
+    """A resting-brain truth (no ROIs) scores without a regressor; the false-positive
+    fraction needs one from the task truth, and is ~0 on white noise."""
+    _, fn_task = truth
+    with h5py.File(fn_task, "r") as f:
+        x0 = f["truth/x0"][()]
+    fn_null = str(tmp_path / "null_truth.h5")
+    with h5py.File(fn_null, "w") as f:
+        f.attrs["volume_tr"] = TR
+        t_ = f.create_group("truth")
+        t_["x0"] = x0
+        t_["roi_masks"] = np.zeros((0, *N), dtype=bool)
+        t_["waveforms"] = np.zeros((0, NT))
+        t_.attrs["roi_names"] = []
+        t_.attrs["amp"] = 0.0
+    rng = np.random.default_rng(0)
+    fn_rec = str(tmp_path / "recon.h5")
+    _write_recon(fn_rec, np.abs(x0)[..., None] * (1 + 0.01 * rng.standard_normal((*N, NT))))
+    out = score(fn_null, fn_rec)
+    assert "false_pos_frac_t3.29" not in out
+    assert 0.5 < out["nrmse_frame_pct"] < 1.5
+    out = score(fn_null, fn_rec, regressor_truth=fn_task)
+    assert out["false_pos_frac_t3.29"] < 0.02
+    with pytest.raises(ValueError, match="frames"):
+        _write_recon(fn_rec, np.abs(x0)[..., None] * np.ones(NT + 2))
+        score(fn_null, fn_rec, regressor_truth=fn_task)
