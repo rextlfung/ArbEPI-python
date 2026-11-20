@@ -55,7 +55,10 @@ def _glm(s: np.ndarray, w: np.ndarray):
 
 
 def score(fn_truth: str, fn_recon: str, cutoff_hz: float = 0.15,
-          object_thresh: float = 0.1) -> dict:
+          object_thresh: float = 0.1, regressor_truth: str | None = None) -> dict:
+    """regressor_truth: a truth file whose first waveform is the block regressor for
+    the false-positive fraction when fn_truth has no ROIs (a no-activation run: score
+    it with the task run's truth, same frames). Without it that key is omitted."""
     with h5py.File(fn_truth, "r") as f:
         tr = float(f.attrs["volume_tr"])
         g = f["truth"]
@@ -103,8 +106,15 @@ def score(fn_truth: str, fn_recon: str, cutoff_hz: float = 0.15,
         out[f"{name}_corr"] = (float(np.corrcoef(roi_mean, w)[0, 1])
                                if roi_mean.std() > 1e-12 else 0.0)
         out[f"{name}_leak_ratio"] = float(np.median(beta_shell) / a)
-    _, t_bg = _glm(M[bg] / x0[bg][:, None], waves[0])
-    out["false_pos_frac_t3.29"] = float(np.mean(np.abs(t_bg) > 3.29))
+    reg = waves[0] if len(waves) else None
+    if reg is None and regressor_truth is not None:
+        with h5py.File(regressor_truth, "r") as f:
+            reg = f["truth/waveforms"][0]
+        if reg.shape[0] != nt:
+            raise ValueError(f"regressor has {reg.shape[0]} frames, recon {nt}")
+    if reg is not None:
+        _, t_bg = _glm(M[bg] / x0[bg][:, None], reg)
+        out["false_pos_frac_t3.29"] = float(np.mean(np.abs(t_bg) > 3.29))
 
     edge = ndimage.binary_dilation(obj, iterations=1) & ~ndimage.binary_erosion(obj, iterations=2)
     gm = np.linalg.norm(np.stack(np.gradient(M.mean(-1))), axis=0)
@@ -169,13 +179,21 @@ def _cli() -> None:
     p.add_argument("--title", default="")
     p.add_argument("--roi", type=int, default=0,
                    help="which ROI the --png panel shows (index into roi_names)")
+    p.add_argument("--regressor-from", default=None, metavar="TRUTH.h5",
+                   help="no-activation truth: take the false-positive regressor from this "
+                   "truth's first ROI waveform (same frames)")
     a = p.parse_args()
-    out = score(a.truth, a.recon)
+    out = score(a.truth, a.recon, regressor_truth=a.regressor_from)
     print(json.dumps(out, indent=2))
     if a.json:
         with open(a.json, "w") as f:
             json.dump(out, f, indent=2)
     if a.png:
+        with h5py.File(a.truth, "r") as f:
+            n_rois = f["truth/roi_masks"].shape[0]
+        if n_rois == 0:
+            print("no ROIs in the truth: --png skipped")
+            return
         panel(a.truth, a.recon, a.png, a.title, a.roi)
 
 

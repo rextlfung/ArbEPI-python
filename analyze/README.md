@@ -88,6 +88,7 @@ survivors. Python: `analyze.compare.compare_recons`, `plot_maps`,
 
 ```
 uv run python -m analyze.score <truth.h5> <recon.h5> [--json out.json] [--png out.png] [--roi N]
+                           [--regressor-from task_truth.h5]
 ```
 
 Compares a reconstruction with the `truth` group of a file that has one, on
@@ -99,7 +100,9 @@ amplitude (GLM; 1 = exact), t-score and leakage into a surrounding shell, the
 false-positive rate (|t| > 3.29) of the block regressor elsewhere, and edge
 sharpness relative to the truth. `--png` adds a panel (truth and recon mean,
 temporal std, the block t-map) through the first ROI, or through ROI `--roi N`
-with that ROI's regressor. Python: `analyze.score.score`,
+with that ROI's regressor. A truth with no ROIs (a no-activation run) has no regressor of its
+own: `--regressor-from` takes the false-positive regressor from the task run's truth (same
+frames), and without it that key is omitted and `--png` is skipped. Python: `analyze.score.score`,
 `panel`.
 
 The truth file has, in `truth/`: `x0` (the noise-free mean image), `roi_masks`
